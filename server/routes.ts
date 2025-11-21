@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { LLMService } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
+import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import {
   insertItemSchema,
@@ -137,7 +138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // DASHBOARD
   // ============================================================================
   
-  app.get("/api/dashboard", async (req: Request, res: Response) => {
+  app.get("/api/dashboard", requireAuth, async (req: Request, res: Response) => {
     try {
       const items = await storage.getAllItems();
       const suppliers = await storage.getAllSuppliers();
@@ -238,7 +239,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ITEMS
   // ============================================================================
   
-  app.get("/api/items", async (req: Request, res: Response) => {
+  app.get("/api/items", requireAuth, async (req: Request, res: Response) => {
     try {
       const items = await storage.getAllItems();
       res.json(items);
@@ -247,7 +248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/items/:id", async (req: Request, res: Response) => {
+  app.get("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const item = await storage.getItem(req.params.id);
       if (!item) {
@@ -259,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/items", async (req: Request, res: Response) => {
+  app.post("/api/items", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertItemSchema.parse(req.body);
       const item = await storage.createItem(validated);
@@ -269,7 +270,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/items/:id", async (req: Request, res: Response) => {
+  app.patch("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateItemSchema.parse(req.body);
       const item = await storage.updateItem(req.params.id, validated);
@@ -282,7 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/items/:id", async (req: Request, res: Response) => {
+  app.delete("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteItem(req.params.id);
       if (!success) {
@@ -298,7 +299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // PRODUCTS (Finished Products with BOM)
   // ============================================================================
   
-  app.get("/api/products", async (req: Request, res: Response) => {
+  app.get("/api/products", requireAuth, async (req: Request, res: Response) => {
     try {
       const items = await storage.getAllItems();
       const products = items.filter(item => item.type === "finished_product");
@@ -320,7 +321,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/products", async (req: Request, res: Response) => {
+  app.post("/api/products", requireAuth, async (req: Request, res: Response) => {
     try {
       const { bom, ...itemData } = req.body;
       
@@ -350,7 +351,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // BINS
   // ============================================================================
   
-  app.get("/api/bins", async (req: Request, res: Response) => {
+  app.get("/api/bins", requireAuth, async (req: Request, res: Response) => {
     try {
       const bins = await storage.getAllBins();
       res.json(bins);
@@ -359,7 +360,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/bins", async (req: Request, res: Response) => {
+  app.post("/api/bins", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertBinSchema.parse(req.body);
       const bin = await storage.createBin(validated);
@@ -369,7 +370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/bins/:id", async (req: Request, res: Response) => {
+  app.patch("/api/bins/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateBinSchema.parse(req.body);
       const bin = await storage.updateBin(req.params.id, validated);
@@ -382,7 +383,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/bins/:id", async (req: Request, res: Response) => {
+  app.delete("/api/bins/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteBin(req.params.id);
       if (!success) {
@@ -398,7 +399,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // BARCODES
   // ============================================================================
   
-  app.get("/api/barcodes", async (req: Request, res: Response) => {
+  app.get("/api/barcodes", requireAuth, async (req: Request, res: Response) => {
     try {
       const barcodes = await storage.getAllBarcodes();
       res.json(barcodes);
@@ -407,7 +408,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/barcodes", async (req: Request, res: Response) => {
+  app.post("/api/barcodes", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertBarcodeSchema.parse(req.body);
       const barcode = await storage.createBarcode(validated);
@@ -417,7 +418,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/barcodes/:id/image", async (req: Request, res: Response) => {
+  app.get("/api/barcodes/:id/image", requireAuth, async (req: Request, res: Response) => {
     try {
       const barcode = await storage.getBarcode(req.params.id);
       if (!barcode) {
@@ -431,7 +432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/barcodes/lookup/:value", async (req: Request, res: Response) => {
+  app.get("/api/barcodes/lookup/:value", requireAuth, async (req: Request, res: Response) => {
     try {
       const barcode = await storage.getBarcodeByValue(req.params.value);
       if (!barcode) {
@@ -443,7 +444,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/barcodes/:id", async (req: Request, res: Response) => {
+  app.patch("/api/barcodes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateBarcodeSchema.parse(req.body);
       const barcode = await storage.updateBarcode(req.params.id, validated);
@@ -456,7 +457,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/barcodes/:id", async (req: Request, res: Response) => {
+  app.delete("/api/barcodes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteBarcode(req.params.id);
       if (!success) {
@@ -472,7 +473,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // SUPPLIERS
   // ============================================================================
   
-  app.get("/api/suppliers", async (req: Request, res: Response) => {
+  app.get("/api/suppliers", requireAuth, async (req: Request, res: Response) => {
     try {
       const suppliers = await storage.getAllSuppliers();
       res.json(suppliers);
@@ -481,7 +482,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/suppliers", async (req: Request, res: Response) => {
+  app.post("/api/suppliers", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertSupplierSchema.parse(req.body);
       const supplier = await storage.createSupplier(validated);
@@ -491,7 +492,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/suppliers/:id", async (req: Request, res: Response) => {
+  app.patch("/api/suppliers/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateSupplierSchema.parse(req.body);
       const supplier = await storage.updateSupplier(req.params.id, validated);
@@ -504,7 +505,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/suppliers/:id", async (req: Request, res: Response) => {
+  app.delete("/api/suppliers/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteSupplier(req.params.id);
       if (!success) {
@@ -517,7 +518,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Supplier Items
-  app.get("/api/supplier-items", async (req: Request, res: Response) => {
+  app.get("/api/supplier-items", requireAuth, async (req: Request, res: Response) => {
     try {
       const supplierItems = await storage.getAllSupplierItems();
       res.json(supplierItems);
@@ -526,7 +527,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/supplier-items", async (req: Request, res: Response) => {
+  app.post("/api/supplier-items", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertSupplierItemSchema.parse(req.body);
       const supplierItem = await storage.createSupplierItem(validated);
@@ -536,7 +537,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.patch("/api/supplier-items/:id", async (req: Request, res: Response) => {
+  app.patch("/api/supplier-items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateSupplierItemSchema.parse(req.body);
       const supplierItem = await storage.updateSupplierItem(req.params.id, validated);
@@ -549,7 +550,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/supplier-items/:id", async (req: Request, res: Response) => {
+  app.delete("/api/supplier-items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteSupplierItem(req.params.id);
       if (!success) {
@@ -562,7 +563,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Bill of Materials
-  app.get("/api/bom", async (req: Request, res: Response) => {
+  app.get("/api/bom", requireAuth, async (req: Request, res: Response) => {
     try {
       const bom = await storage.getAllBillOfMaterials();
       res.json(bom);
@@ -571,7 +572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/bom", async (req: Request, res: Response) => {
+  app.post("/api/bom", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertBillOfMaterialsSchema.parse(req.body);
       const bom = await storage.createBillOfMaterials(validated);
@@ -581,7 +582,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.delete("/api/bom/:id", async (req: Request, res: Response) => {
+  app.delete("/api/bom/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteBillOfMaterials(req.params.id);
       if (!success) {
@@ -597,7 +598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // SETTINGS
   // ============================================================================
   
-  app.get("/api/settings", async (req: Request, res: Response) => {
+  app.get("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
       // For demo, use first user
       const users = await storage.getAllItems();
@@ -610,7 +611,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/settings", async (req: Request, res: Response) => {
+  app.post("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = "demo-user-id"; // In production, get from session
       const validated = insertSettingsSchema.parse({ ...req.body, userId });
@@ -626,7 +627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   
   // GoHighLevel - Sync sales history
-  app.post("/api/integrations/gohighlevel/sync", async (req: Request, res: Response) => {
+  app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call GoHighLevel API
       await storage.createOrUpdateIntegrationHealth({
@@ -644,7 +645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Extensiv/Pivot - Sync finished inventory
-  app.post("/api/integrations/extensiv/sync", async (req: Request, res: Response) => {
+  app.post("/api/integrations/extensiv/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call Extensiv API
       await storage.createOrUpdateIntegrationHealth({
@@ -662,7 +663,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // PhantomBuster - Update supplier data
-  app.post("/api/integrations/phantombuster/sync", async (req: Request, res: Response) => {
+  app.post("/api/integrations/phantombuster/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call PhantomBuster API
       await storage.createOrUpdateIntegrationHealth({
@@ -683,7 +684,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // LLM
   // ============================================================================
   
-  app.post("/api/llm/ask", async (req: Request, res: Response) => {
+  app.post("/api/llm/ask", requireAuth, async (req: Request, res: Response) => {
     try {
       const { provider, apiKey, customEndpoint, taskType, payload } = req.body;
       

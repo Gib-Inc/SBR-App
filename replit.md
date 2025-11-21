@@ -6,6 +6,16 @@ This is a production-ready full-stack inventory management web application desig
 
 **Core Purpose**: Enable manufacturing operations to manage inventory levels, predict stockouts, track production capacity, and automate ordering processes with AI-assisted recommendations.
 
+## Recent Changes
+
+**November 21, 2025**:
+- ✅ Implemented session-based authentication with PostgreSQL session store (connect-pg-simple)
+- ✅ Protected 35 business API routes with requireAuth middleware (90% coverage)
+- ✅ Created Zod partial validation schemas for all PATCH endpoints
+- ✅ Made database seeding fully idempotent with existence checks
+- ✅ Fixed LSP errors in storage layer (finishedInventorySnapshot table reference)
+- 🔜 Integration webhooks protected with requireAuth (should use HMAC signatures in production)
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

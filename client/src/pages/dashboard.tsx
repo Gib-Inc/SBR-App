@@ -18,37 +18,12 @@ export default function Dashboard() {
     queryKey: ["/api/dashboard"],
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-sm text-muted-foreground">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
+  // Fetch settings to check if integrations are configured
+  const { data: settingsData, isLoading: settingsLoading, error: settingsError } = useQuery<any>({
+    queryKey: ["/api/settings"],
+  });
 
-  const metrics = dashboardData?.metrics ?? {
-    inventoryValue: 0,
-    daysUntilStockout: 0,
-    productionCapacity: 0,
-    activeAlerts: 0
-  };
-
-  const forecast = dashboardData?.forecast ?? {
-    constraint: "No data available",
-    daysRemaining: 0
-  };
-
-  const atRiskItems = (dashboardData?.atRiskItems ?? []) as any[];
-  const productionCapacity = dashboardData?.productionCapacity ?? {
-    maxUnits: 0,
-    constraints: []
-  };
-  const suppliers = (dashboardData?.suppliers ?? []) as any[];
-  const integrations = (dashboardData?.integrations ?? []) as any[];
-
+  // Sync mutation - must be before early return to avoid hooks violation
   const syncMutation = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
       const res = await apiRequest("POST", `/api/integrations/${id}/sync`, {});
@@ -88,6 +63,45 @@ export default function Dashboard() {
     }
     setSyncingIntegration(integration.id);
     syncMutation.mutate({ id: integration.id, name: integration.name });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <p className="text-sm text-muted-foreground">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const metrics = dashboardData?.metrics ?? {
+    inventoryValue: 0,
+    daysUntilStockout: 0,
+    productionCapacity: 0,
+    activeAlerts: 0
+  };
+
+  const forecast = dashboardData?.forecast ?? {
+    constraint: "No data available",
+    daysRemaining: 0
+  };
+
+  const atRiskItems = (dashboardData?.atRiskItems ?? []) as any[];
+  const productionCapacity = dashboardData?.productionCapacity ?? {
+    maxUnits: 0,
+    constraints: []
+  };
+  const suppliers = (dashboardData?.suppliers ?? []) as any[];
+  const integrations = (dashboardData?.integrations ?? []) as any[];
+
+  // Map integration IDs to their API key configuration status
+  const integrationConfigMap: Record<string, boolean> = {
+    gohighlevel: !!settingsData?.gohighlevelApiKey,
+    extensiv: !!settingsData?.extensivApiKey,
+    phantombuster: !!settingsData?.phantombusterApiKey,
+    shopify: !!settingsData?.shopifyApiKey,
   };
 
   return (
@@ -325,8 +339,23 @@ export default function Dashboard() {
                             }`}
                             data-testid={`status-${integration.id}`}
                           />
-                          <p className="text-xs text-muted-foreground">{integration.lastSync || 'Never synced'}</p>
+                          <span className="text-xs font-medium" data-testid={`status-text-${integration.id}`}>
+                            {settingsLoading 
+                              ? 'Checking...'
+                              : settingsError
+                              ? (integration.status === 'success' ? 'Connected' : integration.status === 'stale' ? 'Stale' : integration.status === 'failed' ? 'Disconnected' : integration.status || 'Unknown')
+                              : !integrationConfigMap[integration.id] 
+                              ? 'Not configured' 
+                              : integration.status === 'success' 
+                              ? 'Connected' 
+                              : integration.status === 'stale' 
+                              ? 'Stale'
+                              : integration.status === 'failed'
+                              ? 'Disconnected'
+                              : integration.status || 'Unknown'}
+                          </span>
                         </div>
+                        <p className="text-xs text-muted-foreground mt-1">Last sync: {integration.lastSync || 'Never'}</p>
                       </div>
                     </div>
                     {integration.errorMessage && (

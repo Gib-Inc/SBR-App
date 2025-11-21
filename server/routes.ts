@@ -22,6 +22,89 @@ const SALT_ROUNDS = 10;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
+  // AUTHENTICATION
+  // ============================================================================
+
+  app.post("/api/auth/register", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) {
+        return res.status(409).json({ error: "User already exists" });
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+      // Create user
+      const user = await storage.createUser({
+        email,
+        password: hashedPassword,
+      });
+
+      // Don't send password back
+      const { password: _, ...userWithoutPassword } = user;
+      
+      res.status(201).json(userWithoutPassword);
+    } catch (error) {
+      console.error("Error registering user:", error);
+      res.status(500).json({ error: "Failed to register user" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
+
+      // Find user
+      const user = await storage.getUserByEmail(email);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      // Verify password
+      const isValidPassword = await bcrypt.compare(password, user.password);
+      if (!isValidPassword) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+
+      // Don't send password back
+      const { password: _, ...userWithoutPassword } = user;
+      
+      res.json(userWithoutPassword);
+    } catch (error) {
+      console.error("Error logging in:", error);
+      res.status(500).json({ error: "Failed to log in" });
+    }
+  });
+
+  app.get("/api/auth/me", async (req: Request, res: Response) => {
+    try {
+      // For now, return demo user - in production this would check session
+      const users = await storage.getUserByEmail("demo@example.com");
+      if (!users) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      const { password: _, ...userWithoutPassword } = users;
+      res.json(userWithoutPassword);
+    } catch (error) {
+      console.error("Error getting current user:", error);
+      res.status(500).json({ error: "Failed to get user" });
+    }
+  });
+
+  // ============================================================================
   // DASHBOARD
   // ============================================================================
   

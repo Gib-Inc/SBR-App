@@ -1,9 +1,25 @@
 import { storage } from "./storage";
+import bcrypt from "bcrypt";
+
+const SALT_ROUNDS = 10;
 
 async function seed() {
   console.log("Seeding database...");
 
   try {
+    // Create demo user
+    const existingUser = await storage.getUserByEmail("demo@example.com");
+    if (!existingUser) {
+      const hashedPassword = await bcrypt.hash("demo123", SALT_ROUNDS);
+      await storage.createUser({
+        email: "demo@example.com",
+        password: hashedPassword,
+      });
+      console.log("✓ Created demo user (email: demo@example.com, password: demo123)");
+    } else {
+      console.log("✓ Demo user already exists");
+    }
+
     // Create demo items (components)
     const nut = await storage.createItem({
       name: "Hex Nut M8",

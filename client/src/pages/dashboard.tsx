@@ -323,11 +323,24 @@ export default function Dashboard() {
                                 ? 'bg-status-away'
                                 : 'bg-status-busy'
                             }`}
+                            data-testid={`status-${integration.id}`}
                           />
                           <p className="text-xs text-muted-foreground">{integration.lastSync || 'Never synced'}</p>
                         </div>
                       </div>
                     </div>
+                    {integration.errorMessage && (
+                      <div className="rounded-md bg-destructive/10 border border-destructive/20 p-2">
+                        <p className="text-xs text-destructive" data-testid={`error-${integration.id}`}>
+                          {integration.errorMessage}
+                        </p>
+                      </div>
+                    )}
+                    {integration.lastAlertAt && !integration.errorMessage && (
+                      <div className="text-xs text-muted-foreground">
+                        Last alert: {integration.lastAlertAt}
+                      </div>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"

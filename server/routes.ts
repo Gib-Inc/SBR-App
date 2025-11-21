@@ -211,6 +211,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastSync: integration.lastSuccessAt 
           ? new Date(integration.lastSuccessAt).toLocaleString()
           : "Never",
+        errorMessage: integration.errorMessage || null,
+        lastAlertAt: integration.lastAlertAt 
+          ? new Date(integration.lastAlertAt).toLocaleString()
+          : null,
       }));
 
       res.json({

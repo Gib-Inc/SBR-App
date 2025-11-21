@@ -18,10 +18,23 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 const barcodeFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
   value: z.string().min(1, "Barcode value is required"),
-  purpose: z.enum(["item", "bin"]),
+  purpose: z.enum(["item", "bin", "finished_product"]),
   sku: z.string().optional(),
   referenceId: z.string().optional(),
 });
+
+function formatPurposeLabel(purpose: string): string {
+  switch (purpose) {
+    case "bin":
+      return "Bin location";
+    case "finished_product":
+      return "Finished product";
+    case "item":
+      return "Item Inventory";
+    default:
+      return purpose;
+  }
+}
 
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -123,7 +136,7 @@ export default function Barcodes() {
                     )}
                   </div>
                   <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
-                    {barcode.purpose}
+                    {formatPurposeLabel(barcode.purpose)}
                   </Badge>
                 </div>
 
@@ -271,8 +284,9 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="item">Item</SelectItem>
-                  <SelectItem value="bin">Bin Location</SelectItem>
+                  <SelectItem value="bin">Bin location</SelectItem>
+                  <SelectItem value="finished_product">Finished product</SelectItem>
+                  <SelectItem value="item">Item Inventory</SelectItem>
                 </SelectContent>
               </Select>
               <FormMessage />

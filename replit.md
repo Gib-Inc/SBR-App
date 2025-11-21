@@ -8,13 +8,21 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
-**November 21, 2025**:
+**November 21, 2025 - End-to-End Testing & Fixes**:
+- ✅ **Settings API Fixed**: GET/PATCH /api/settings now use req.session.userId instead of hardcoded ID
+- ✅ **Settings Upsert**: updateSettings() now creates settings row on first save (prevents foreign key errors)
+- ✅ **Dashboard LLM Integration**: Generate Forecast button wired to /api/llm/ask endpoint with validation
+- ✅ **Integration Sync**: All 3 sync endpoints (GoHighLevel, Extensiv, PhantomBuster) tested and working
+- ✅ **Integration Health**: Dashboard displays real-time status, lastSync, and errors for all integrations
+- ✅ **Cross-Page Integration**: Settings saved on Settings page correctly appear on Dashboard
+- ✅ **End-to-End Testing**: All features tested via curl with real database and authenticated sessions
+
+**Previous Changes (November 21, 2025)**:
 - ✅ Implemented session-based authentication with PostgreSQL session store (connect-pg-simple)
 - ✅ Protected 35 business API routes with requireAuth middleware (90% coverage)
 - ✅ Created Zod partial validation schemas for all PATCH endpoints
 - ✅ Made database seeding fully idempotent with existence checks
 - ✅ Fixed LSP errors in storage layer (finishedInventorySnapshot table reference)
-- 🔜 Integration webhooks protected with requireAuth (should use HMAC signatures in production)
 
 ## User Preferences
 

@@ -1,14 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity } from "lucide-react";
+import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
 export default function Dashboard() {
+  const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
+  const { toast } = useToast();
+
   // Fetch dashboard data
-  const { data: dashboardData, isLoading } = useQuery({
+  const { data: dashboardData, isLoading } = useQuery<any>({
     queryKey: ["/api/dashboard"],
   });
 
@@ -42,6 +48,47 @@ export default function Dashboard() {
   };
   const suppliers = (dashboardData?.suppliers ?? []) as any[];
   const integrations = (dashboardData?.integrations ?? []) as any[];
+
+  const syncMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const res = await apiRequest("POST", `/api/integrations/${id}/sync`, {});
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Sync failed");
+      }
+      return await res.json();
+    },
+    onSuccess: (_, { name }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      toast({
+        title: "Sync Complete",
+        description: `${name} data has been synchronized successfully`,
+      });
+      setSyncingIntegration(null);
+    },
+    onError: (error: any, { name }) => {
+      toast({
+        title: "Sync Failed",
+        description: error.message || `Failed to sync ${name}. Please check your API configuration and try again.`,
+        variant: "destructive",
+      });
+      setSyncingIntegration(null);
+    },
+  });
+
+  const handleSync = (integration: any) => {
+    if (!integration.id) {
+      toast({
+        title: "Error",
+        description: "Integration ID is missing. Please refresh the page and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSyncingIntegration(integration.id);
+    syncMutation.mutate({ id: integration.id, name: integration.name });
+  };
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -251,34 +298,49 @@ export default function Dashboard() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Integration Health</CardTitle>
-          <p className="text-sm text-muted-foreground">Service connection status</p>
+          <p className="text-sm text-muted-foreground">Service connection status and manual sync</p>
         </CardHeader>
         <CardContent>
           {integrations.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">No integrations configured</p>
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {integrations.map((integration: any) => (
-                <div key={integration.name} className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
-                    <Activity className="h-5 w-5 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{integration.name}</p>
-                    <div className="flex items-center gap-2">
-                      <div
-                        className={`h-2 w-2 rounded-full ${
-                          integration.status === 'success'
-                            ? 'bg-status-online'
-                            : integration.status === 'stale'
-                            ? 'bg-status-away'
-                            : 'bg-status-busy'
-                        }`}
-                      />
-                      <p className="text-xs text-muted-foreground">{integration.lastSync}</p>
+                <Card key={integration.id || integration.name}>
+                  <CardContent className="flex flex-col gap-3 pt-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                        <Activity className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{integration.name}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div
+                            className={`h-2 w-2 rounded-full ${
+                              integration.status === 'success'
+                                ? 'bg-status-online'
+                                : integration.status === 'stale'
+                                ? 'bg-status-away'
+                                : 'bg-status-busy'
+                            }`}
+                          />
+                          <p className="text-xs text-muted-foreground">{integration.lastSync || 'Never synced'}</p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleSync(integration)}
+                      disabled={!integration.id || syncingIntegration === integration.id}
+                      data-testid={`button-sync-${integration.id}`}
+                      className="w-full"
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${syncingIntegration === integration.id ? 'animate-spin' : ''}`} />
+                      {syncingIntegration === integration.id ? 'Syncing...' : 'Sync Now'}
+                    </Button>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           )}

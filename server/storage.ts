@@ -96,6 +96,7 @@ export interface IStorage {
   // Settings
   getSettings(userId: string): Promise<Settings | undefined>;
   createOrUpdateSettings(settings: InsertSettings): Promise<Settings>;
+  updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined>;
 
   // Barcodes
   getAllBarcodes(): Promise<Barcode[]>;
@@ -887,6 +888,18 @@ export class PostgresStorage implements IStorage {
       return results[0];
     }
     const results = await this.db.insert(schema.settings).values(insertSettings).returning();
+    return results[0];
+  }
+
+  async updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined> {
+    // Only update if settings exist
+    const existing = await this.getSettings(userId);
+    if (!existing) {
+      return undefined;
+    }
+    
+    // Apply only the validated updates (Drizzle only updates provided columns)
+    const results = await this.db.update(schema.settings).set(updates).where(eq(schema.settings.userId, userId)).returning();
     return results[0];
   }
 

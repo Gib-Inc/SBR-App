@@ -185,7 +185,9 @@ export const settings = pgTable("settings", {
 });
 
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
+export const patchSettingsSchema = insertSettingsSchema.partial().omit({ userId: true });
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
+export type PatchSettings = z.infer<typeof patchSettingsSchema>;
 export type Settings = typeof settings.$inferSelect;
 
 // ============================================================================

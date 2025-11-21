@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Key, Zap, CheckCircle2, XCircle } from "lucide-react";
+import { User, Key, Zap, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -111,44 +111,114 @@ function AccountSettings() {
 
 function IntegrationSettings() {
   const [testingConnection, setTestingConnection] = useState<string | null>(null);
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({
+    gohighlevel: '',
+    shopify: '',
+    extensiv: '',
+    phantombuster: '',
+  });
   const { toast } = useToast();
 
+  // Load existing settings
+  const { data: settings } = useQuery<any>({
+    queryKey: ["/api/settings"],
+  });
+
+  // Load integration health status
+  const { data: integrationHealth } = useQuery<any[]>({
+    queryKey: ["/api/integrations/health"],
+  });
+
+  useEffect(() => {
+    if (settings) {
+      setApiKeys({
+        gohighlevel: settings.gohighlevelApiKey || '',
+        shopify: settings.shopifyApiKey || '',
+        extensiv: settings.extensivApiKey || '',
+        phantombuster: settings.phantombusterApiKey || '',
+      });
+    }
+  }, [settings]);
+
+  const healthData = integrationHealth || [];
+  
   const integrations = [
     {
       id: "gohighlevel",
       name: "GoHighLevel",
       description: "Sync sales history and trigger SMS alerts",
-      status: "connected",
+      status: healthData.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "pending_setup",
+      apiKeyField: "gohighlevelApiKey",
     },
     {
       id: "shopify",
       name: "Shopify",
       description: "E-commerce platform integration",
-      status: "disconnected",
+      status: healthData.find((h: any) => h.integrationName === "shopify")?.lastStatus || "pending_setup",
+      apiKeyField: "shopifyApiKey",
     },
     {
       id: "extensiv",
       name: "Extensiv/Pivot",
       description: "Finished goods inventory snapshot",
-      status: "connected",
+      status: healthData.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "pending_setup",
+      apiKeyField: "extensivApiKey",
     },
     {
       id: "phantombuster",
       name: "PhantomBuster",
       description: "Supplier availability and lead times",
-      status: "disconnected",
+      status: healthData.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "pending_setup",
+      apiKeyField: "phantombusterApiKey",
     },
   ];
 
+  const saveApiKeyMutation = useMutation({
+    mutationFn: async ({ integrationId, apiKey, apiKeyField }: { integrationId: string; apiKey: string; apiKeyField: string }) => {
+      const res = await apiRequest("PATCH", "/api/settings", {
+        [apiKeyField]: apiKey,
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to save API key");
+      }
+      return await res.json();
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      toast({
+        title: "Success",
+        description: `${integrations.find(i => i.id === variables.integrationId)?.name} API key saved`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save API key",
+        variant: "destructive",
+      });
+    },
+  });
+
   const testConnection = async (integrationId: string) => {
     setTestingConnection(integrationId);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setTestingConnection(null);
-    toast({
-      title: "Connection successful",
-      description: "Integration is working properly",
-    });
+    try {
+      const res = await apiRequest("POST", `/api/integrations/${integrationId}/sync`, {});
+      await res.json();
+      toast({
+        title: "Connection successful",
+        description: "Integration is working properly",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Connection failed",
+        description: error.message || "Could not connect to integration",
+        variant: "destructive",
+      });
+    } finally {
+      setTestingConnection(null);
+    }
   };
 
   return (
@@ -161,16 +231,30 @@ function IntegrationSettings() {
                 <CardTitle className="text-lg">{integration.name}</CardTitle>
                 <CardDescription>{integration.description}</CardDescription>
               </div>
-              <Badge variant={integration.status === "connected" ? "default" : "secondary"}>
-                {integration.status === "connected" ? (
+              <Badge variant={
+                integration.status === "success" || integration.status === "connected" ? "default" : 
+                integration.status === "failed" || integration.status === "error" ? "destructive" : 
+                "secondary"
+              }>
+                {integration.status === "success" || integration.status === "connected" ? (
                   <>
                     <CheckCircle2 className="mr-1 h-3 w-3" />
                     Connected
                   </>
-                ) : (
+                ) : integration.status === "failed" || integration.status === "error" ? (
                   <>
                     <XCircle className="mr-1 h-3 w-3" />
-                    Disconnected
+                    Failed
+                  </>
+                ) : integration.status === "stale" ? (
+                  <>
+                    <AlertCircle className="mr-1 h-3 w-3" />
+                    Stale
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="mr-1 h-3 w-3" />
+                    {integration.status === "pending_setup" ? "Pending Setup" : integration.status || "Unknown"}
                   </>
                 )}
               </Badge>
@@ -183,6 +267,8 @@ function IntegrationSettings() {
                 id={`${integration.id}-api-key`}
                 type="password"
                 placeholder="••••••••••••••••"
+                value={apiKeys[integration.id] || ''}
+                onChange={(e) => setApiKeys({ ...apiKeys, [integration.id]: e.target.value })}
                 data-testid={`input-api-key-${integration.id}`}
               />
               <p className="text-xs text-muted-foreground">
@@ -193,13 +279,21 @@ function IntegrationSettings() {
               <Button
                 variant="outline"
                 onClick={() => testConnection(integration.id)}
-                disabled={testingConnection === integration.id}
+                disabled={testingConnection === integration.id || !apiKeys[integration.id]}
                 data-testid={`button-test-${integration.id}`}
               >
                 {testingConnection === integration.id ? "Testing..." : "Test Connection"}
               </Button>
-              <Button data-testid={`button-save-${integration.id}`}>
-                Save Configuration
+              <Button
+                onClick={() => saveApiKeyMutation.mutate({ 
+                  integrationId: integration.id, 
+                  apiKey: apiKeys[integration.id] || '',
+                  apiKeyField: integration.apiKeyField,
+                })}
+                disabled={saveApiKeyMutation.isPending || !apiKeys[integration.id]}
+                data-testid={`button-save-${integration.id}`}
+              >
+                {saveApiKeyMutation.isPending ? "Saving..." : "Save Configuration"}
               </Button>
             </div>
           </CardContent>
@@ -210,10 +304,73 @@ function IntegrationSettings() {
 }
 
 function LLMSettings() {
+  const { toast } = useToast();
   const [llmProvider, setLlmProvider] = useState("chatgpt");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [customEndpoint, setCustomEndpoint] = useState("");
   const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
   const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
   const [enableForecasting, setEnableForecasting] = useState(false);
+
+  // Load existing LLM settings
+  const { data: settings } = useQuery<any>({
+    queryKey: ["/api/settings"],
+  });
+
+  useEffect(() => {
+    if (settings) {
+      setLlmProvider(settings.llmProvider || 'chatgpt');
+      setLlmApiKey(settings.llmApiKey || '');
+      setCustomEndpoint(settings.llmCustomEndpoint || '');
+      setEnableOrderRecommendations(settings.enableLlmOrderRecommendations || false);
+      setEnableSupplierRanking(settings.enableLlmSupplierRanking || false);
+      setEnableForecasting(settings.enableLlmForecasting || false);
+    }
+  }, [settings]);
+
+  const saveSettingMutation = useMutation({
+    mutationFn: async (data: Record<string, any>) => {
+      const res = await apiRequest("PATCH", "/api/settings", data);
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to save settings");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Success",
+        description: "Settings saved successfully",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save settings",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const saveLLMProvider = async () => {
+    const updates: Record<string, any> = {
+      llmProvider,
+      llmApiKey,
+    };
+    if (llmProvider === 'custom') {
+      updates.llmCustomEndpoint = customEndpoint;
+    }
+    await saveSettingMutation.mutateAsync(updates);
+  };
+
+  const saveLLMFeatures = async () => {
+    await saveSettingMutation.mutateAsync({
+      enableLlmOrderRecommendations: enableOrderRecommendations,
+      enableLlmSupplierRanking: enableSupplierRanking,
+      enableLlmForecasting: enableForecasting,
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -248,6 +405,8 @@ function LLMSettings() {
                   id="custom-endpoint"
                   type="url"
                   placeholder="https://api.example.com/v1"
+                  value={customEndpoint}
+                  onChange={(e) => setCustomEndpoint(e.target.value)}
                   data-testid="input-custom-endpoint"
                 />
               </div>
@@ -257,6 +416,8 @@ function LLMSettings() {
                   id="custom-api-key"
                   type="password"
                   placeholder="••••••••••••••••"
+                  value={llmApiKey}
+                  onChange={(e) => setLlmApiKey(e.target.value)}
                   data-testid="input-custom-api-key"
                 />
               </div>
@@ -272,6 +433,8 @@ function LLMSettings() {
                 id="llm-api-key"
                 type="password"
                 placeholder="••••••••••••••••"
+                value={llmApiKey}
+                onChange={(e) => setLlmApiKey(e.target.value)}
                 data-testid="input-llm-api-key"
               />
               <p className="text-xs text-muted-foreground">
@@ -284,7 +447,13 @@ function LLMSettings() {
           )}
 
           <div className="flex justify-end">
-            <Button data-testid="button-save-llm-provider">Save Provider</Button>
+            <Button
+              onClick={saveLLMProvider}
+              disabled={saveSettingMutation.isPending}
+              data-testid="button-save-llm-provider"
+            >
+              {saveSettingMutation.isPending ? "Saving..." : "Save Provider"}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -343,7 +512,13 @@ function LLMSettings() {
           </div>
 
           <div className="flex justify-end">
-            <Button data-testid="button-save-llm-features">Save Features</Button>
+            <Button
+              onClick={saveLLMFeatures}
+              disabled={saveSettingMutation.isPending}
+              data-testid="button-save-llm-features"
+            >
+              {saveSettingMutation.isPending ? "Saving..." : "Save Features"}
+            </Button>
           </div>
         </CardContent>
       </Card>

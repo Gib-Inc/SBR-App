@@ -16,6 +16,7 @@ import {
   insertFinishedInventorySnapshotSchema,
   insertIntegrationHealthSchema,
   insertSettingsSchema,
+  patchSettingsSchema,
   insertBarcodeSchema,
   updateItemSchema,
   updateBinSchema,
@@ -204,6 +205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Format integrations
       const formattedIntegrations = integrations.map(integration => ({
+        id: integration.integrationName, // Use raw integration name as ID for sync endpoints
         name: integration.integrationName.charAt(0).toUpperCase() + integration.integrationName.slice(1),
         status: integration.lastStatus || "unknown",
         lastSync: integration.lastSuccessAt 
@@ -600,9 +602,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   app.get("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
-      // For demo, use first user
-      const users = await storage.getAllItems();
-      const userId = "demo-user-id"; // In production, get from session
+      // For demo, use first user - in production get from req.session.userId
+      const userId = "demo-user-id";
       
       const settings = await storage.getSettings(userId);
       res.json(settings || {});
@@ -611,13 +612,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/settings", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = "demo-user-id"; // In production, get from session
-      const validated = insertSettingsSchema.parse({ ...req.body, userId });
-      const settings = await storage.createOrUpdateSettings(validated);
-      res.json(settings);
+      const userId = "demo-user-id"; // In production, get from req.session.userId
+      
+      // Validate partial updates (only allowed fields, no userId)
+      const validated = patchSettingsSchema.parse(req.body);
+      
+      // Ensure settings exist, create with full defaults if needed
+      let existing = await storage.getSettings(userId);
+      if (!existing) {
+        existing = await storage.createOrUpdateSettings({ 
+          userId,
+          gohighlevelApiKey: null,
+          shopifyApiKey: null,
+          extensivApiKey: null,
+          phantombusterApiKey: null,
+          llmProvider: null,
+          llmApiKey: null,
+          llmCustomEndpoint: null,
+          enableLlmOrderRecommendations: false,
+          enableLlmSupplierRanking: false,
+          enableLlmForecasting: false,
+        });
+      }
+      
+      // Apply validated partial updates (no id or userId in update)
+      const updated = await storage.updateSettings(userId, validated);
+      
+      if (!updated) {
+        return res.status(500).json({ error: "Failed to update settings" });
+      }
+      
+      res.json(updated);
     } catch (error: any) {
+      console.error("Settings update error:", error);
       res.status(400).json({ error: error.message || "Invalid settings data" });
     }
   });
@@ -625,6 +654,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // INTEGRATIONS (Stubs)
   // ============================================================================
+  
+  // Get integration health status
+  app.get("/api/integrations/health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const health = await storage.getAllIntegrationHealth();
+      res.json(health);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch integration health" });
+    }
+  });
   
   // GoHighLevel - Sync sales history
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {

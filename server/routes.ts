@@ -203,10 +203,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Count active alerts
       const activeAlerts = atRiskItems.filter(item => item.daysOfCover < 7).length;
 
+      // Map integration names to their settings keys
+      const integrationSettingsMap: Record<string, string> = {
+        gohighlevel: "gohighlevelApiKey",
+        extensiv: "extensivApiKey",
+        extensiv_wh: "extensivApiKey", // Warehouse variant uses same key
+        phantombuster: "phantombusterApiKey",
+        shopify: "shopifyApiKey",
+        shopify_pos: "shopifyApiKey", // POS variant uses same key
+      };
+
       // Format integrations
       const formattedIntegrations = integrations.map(integration => ({
         id: integration.integrationName, // Use raw integration name as ID for sync endpoints
-        name: integration.integrationName.charAt(0).toUpperCase() + integration.integrationName.slice(1),
+        name: integration.integrationName.charAt(0).toUpperCase() + integration.integrationName.slice(1).replace(/_/g, ' '),
         status: integration.lastStatus || "unknown",
         lastSync: integration.lastSuccessAt 
           ? new Date(integration.lastSuccessAt).toLocaleString()
@@ -215,6 +225,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastAlertAt: integration.lastAlertAt 
           ? new Date(integration.lastAlertAt).toLocaleString()
           : null,
+        settingsKey: integrationSettingsMap[integration.integrationName] || null,
       }));
 
       res.json({

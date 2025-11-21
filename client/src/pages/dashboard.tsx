@@ -11,6 +11,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 
 export default function Dashboard() {
   const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
+  const [llmRecommendation, setLlmRecommendation] = useState<string | null>(null);
+  const [isGeneratingForecast, setIsGeneratingForecast] = useState(false);
   const { toast } = useToast();
 
   // Fetch dashboard data
@@ -65,6 +67,59 @@ export default function Dashboard() {
     syncMutation.mutate({ id: integration.id, name: integration.name });
   };
 
+  const generateLLMForecast = async () => {
+    if (!settingsData) {
+      toast({
+        title: "Configuration Required",
+        description: "Please configure an LLM provider in Settings first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!settingsData.llmProvider || !settingsData.llmApiKey) {
+      toast({
+        title: "LLM Not Configured",
+        description: "Please add your LLM provider and API key in Settings.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGeneratingForecast(true);
+    try {
+      const payload = {
+        atRiskItems: atRiskItems.slice(0, 5),
+        inventoryValue: metrics.inventoryValue,
+        daysUntilStockout: metrics.daysUntilStockout,
+        productionCapacity: metrics.productionCapacity,
+      };
+
+      const res = await apiRequest("POST", "/api/llm/ask", {
+        provider: settingsData.llmProvider,
+        apiKey: settingsData.llmApiKey,
+        customEndpoint: settingsData.llmCustomEndpoint,
+        taskType: "forecast",
+        payload,
+      });
+
+      const data = await res.json();
+      setLlmRecommendation(data.answer || data.result || "No recommendation generated");
+      toast({
+        title: "Forecast Generated",
+        description: "AI-powered recommendations are ready",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Forecast Failed",
+        description: error.message || "Failed to generate AI forecast",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingForecast(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -96,12 +151,10 @@ export default function Dashboard() {
   const suppliers = (dashboardData?.suppliers ?? []) as any[];
   const integrations = (dashboardData?.integrations ?? []) as any[];
 
-  // Map integration IDs to their API key configuration status
-  const integrationConfigMap: Record<string, boolean> = {
-    gohighlevel: !!settingsData?.gohighlevelApiKey,
-    extensiv: !!settingsData?.extensivApiKey,
-    phantombuster: !!settingsData?.phantombusterApiKey,
-    shopify: !!settingsData?.shopifyApiKey,
+  // Helper to check if an integration is configured (has API key)
+  const isIntegrationConfigured = (integration: any): boolean => {
+    if (!integration.settingsKey || !settingsData) return false;
+    return !!settingsData[integration.settingsKey];
   };
 
   return (
@@ -184,6 +237,42 @@ export default function Dashboard() {
               </>
             )}
           </p>
+        </CardContent>
+      </Card>
+
+      {/* AI-Powered Recommendations */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-lg">AI-Powered Recommendations</CardTitle>
+            <p className="text-sm text-muted-foreground">Get intelligent inventory insights</p>
+          </div>
+          <Button
+            onClick={generateLLMForecast}
+            disabled={isGeneratingForecast}
+            size="sm"
+            data-testid="button-generate-forecast"
+          >
+            {isGeneratingForecast ? (
+              <>
+                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>Generate Forecast</>
+            )}
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {llmRecommendation ? (
+            <div className="rounded-md bg-muted p-4" data-testid="text-llm-recommendation">
+              <p className="whitespace-pre-wrap text-sm">{llmRecommendation}</p>
+            </div>
+          ) : (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              Click "Generate Forecast" to get AI-powered inventory recommendations based on your current stock levels and usage patterns.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -344,8 +433,10 @@ export default function Dashboard() {
                               ? 'Checking...'
                               : settingsError
                               ? (integration.status === 'success' ? 'Connected' : integration.status === 'stale' ? 'Stale' : integration.status === 'failed' ? 'Disconnected' : integration.status || 'Unknown')
-                              : !integrationConfigMap[integration.id] 
+                              : !isIntegrationConfigured(integration)
                               ? 'Not configured' 
+                              : integration.lastSync === 'Never' && !integration.errorMessage
+                              ? 'Configured, never synced'
                               : integration.status === 'success' 
                               ? 'Connected' 
                               : integration.status === 'stale' 

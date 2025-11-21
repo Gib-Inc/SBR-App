@@ -1,0 +1,74 @@
+You are Replit Agent 3 acting as my senior full-stack engineer.
+
+Goal:
+Build a production-ready full-stack inventory web app for a manufacturing company. It must track component inventory (nuts, bolts, springs, bars), finished products (Sticker Bur Rollers), and integrate with GoHighLevel for sales history. The app must also support internal barcodes for items/bins and use a pluggable LLM (ChatGPT / Claude / Grok / others) for inventory decisions.
+
+Tech stack:
+- Backend: Node.js with Express
+- Frontend: React or simple vanilla JS + HTML
+- Database: SQLite (or similar SQL)
+- Target devices: desktop and tablets with USB/Bluetooth barcode scanners (HID keyboard mode)
+
+High-level requirements (don’t implement all details yet, just plan and scaffold):
+
+1. Pages and routes
+   - /dashboard: operational view only (no settings). It will show:
+     - A forecast like “you will stock out in X days, constraint = [component]”.
+     - Top 5 at-risk items (lowest days of cover).
+     - Production capacity: how many finished products can be built with current components.
+     - Snapshot of finished goods at Pivot/Extensiv (we can stub the API).
+     - Supplier panel with “Order” buttons that open supplier product/cart URLs in a new tab.
+     - Integrations health status (GoHighLevel, Shopify, Extensiv, PhantomBuster).
+
+   - /products: product + bill of materials builder.
+     - Create/edit finished products (like Katana).
+     - Define BOM: e.g. 1 Roller uses 4 nuts, 4 bolts, 3 bars, etc.
+     - Later, the backend will use this BOM so that when 1 unit is sold, the correct components are deducted.
+
+   - /barcodes: barcode management.
+     - List all barcodes for items and bins with:
+       - Barcode image
+       - Download/print button (plain paper layout)
+       - Name
+       - SKU or bin code
+       - Purpose (component, finished product, bin location)
+     - Ability to create new barcodes and attach them to items/bins.
+
+   - /settings: account + integrations + LLM selection.
+     - User auth (email + password, bcrypt hashing, sessions or JWT).
+     - Store API keys/config for:
+       - GoHighLevel
+       - Shopify (optional)
+       - Extensiv/Pivot
+       - PhantomBuster
+     - LLM provider dropdown (ChatGPT, Claude, Grok, Custom) plus API keys.
+     - Flags for “use LLM for order recommendations, supplier ranking, forecasting”.
+
+2. Data model (design this clearly before coding)
+   - Users for auth.
+   - Items (components + finished products), bins, inventory_by_bin.
+   - Bill_of_materials for mapping finished products → components.
+   - Suppliers and supplier_items (price, available qty, lead time, designated supplier flag).
+   - Sales_history table for orders pulled from GoHighLevel.
+   - Finished_inventory_snapshot for Extensiv/Pivot.
+   - LLM-related tables (e.g. supplier_recommendations).
+   - Integration health tracking (last_success_at, last_status, last_alert_at per integration).
+
+3. Integrations (stubs are fine in this first pass)
+   - GoHighLevel: endpoint to sync recent sales into sales_history.
+   - Extensiv/Pivot: endpoint to sync finished-goods snapshot.
+   - PhantomBuster: endpoint to update supplier availability and lead times.
+   - A health-check job that marks integrations stale/failing when out of date and (later) will call a GoHighLevel webhook/API to trigger an SMS when inventory data is stale.
+
+4. LLM behavior (structure only for now)
+   - Implement a helper like askLLM(taskType, payload) that:
+     - Reads LLM provider + keys from settings.
+     - Routes the request to the correct provider (ChatGPT / Claude / Grok / Custom).
+   - We will later use this for order recommendations and supplier ranking.
+
+5. Barcode behavior (structure only)
+   - Assume scanners act like keyboards into an input field.
+   - Backend routes to generate barcode images from a stored barcode_value.
+   - A print-friendly view for each barcode (so I can print on plain paper).
+
+First, generate a clear project plan: file/folder structure, DB schema, and route map. Then scaffold the project (routes, basic pages, models) without over-implementing every detail. Stay in planning/architecture mode until you have shown me the plan and initial scaffolding.

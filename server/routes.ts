@@ -339,6 +339,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.patch("/api/bins/:id", async (req: Request, res: Response) => {
+    try {
+      const bin = await storage.updateBin(req.params.id, req.body);
+      if (!bin) {
+        return res.status(404).json({ error: "Bin not found" });
+      }
+      res.json(bin);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to update bin" });
+    }
+  });
+
+  app.delete("/api/bins/:id", async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteBin(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Bin not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete bin" });
+    }
+  });
+
   // ============================================================================
   // BARCODES
   // ============================================================================
@@ -388,6 +412,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.patch("/api/barcodes/:id", async (req: Request, res: Response) => {
+    try {
+      const barcode = await storage.updateBarcode(req.params.id, req.body);
+      if (!barcode) {
+        return res.status(404).json({ error: "Barcode not found" });
+      }
+      res.json(barcode);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to update barcode" });
+    }
+  });
+
+  app.delete("/api/barcodes/:id", async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteBarcode(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Barcode not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete barcode" });
+    }
+  });
+
   // ============================================================================
   // SUPPLIERS
   // ============================================================================
@@ -408,6 +456,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(supplier);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid supplier data" });
+    }
+  });
+
+  app.patch("/api/suppliers/:id", async (req: Request, res: Response) => {
+    try {
+      const supplier = await storage.updateSupplier(req.params.id, req.body);
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found" });
+      }
+      res.json(supplier);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to update supplier" });
+    }
+  });
+
+  app.delete("/api/suppliers/:id", async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteSupplier(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Supplier not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete supplier" });
+    }
+  });
+
+  // Supplier Items
+  app.get("/api/supplier-items", async (req: Request, res: Response) => {
+    try {
+      const supplierItems = await storage.getAllSupplierItems();
+      res.json(supplierItems);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch supplier items" });
+    }
+  });
+
+  app.post("/api/supplier-items", async (req: Request, res: Response) => {
+    try {
+      const validated = insertSupplierItemSchema.parse(req.body);
+      const supplierItem = await storage.createSupplierItem(validated);
+      res.status(201).json(supplierItem);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid supplier item data" });
+    }
+  });
+
+  app.patch("/api/supplier-items/:id", async (req: Request, res: Response) => {
+    try {
+      const supplierItem = await storage.updateSupplierItem(req.params.id, req.body);
+      if (!supplierItem) {
+        return res.status(404).json({ error: "Supplier item not found" });
+      }
+      res.json(supplierItem);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to update supplier item" });
+    }
+  });
+
+  app.delete("/api/supplier-items/:id", async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteSupplierItem(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Supplier item not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete supplier item" });
+    }
+  });
+
+  // Bill of Materials
+  app.get("/api/bom", async (req: Request, res: Response) => {
+    try {
+      const bom = await storage.getAllBillOfMaterials();
+      res.json(bom);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch bill of materials" });
+    }
+  });
+
+  app.post("/api/bom", async (req: Request, res: Response) => {
+    try {
+      const validated = insertBillOfMaterialsSchema.parse(req.body);
+      const bom = await storage.createBillOfMaterials(validated);
+      res.status(201).json(bom);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid BOM data" });
+    }
+  });
+
+  app.delete("/api/bom/:id", async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteBillOfMaterials(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "BOM entry not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete BOM entry" });
     }
   });
 

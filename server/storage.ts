@@ -25,6 +25,10 @@ import {
   type InsertBarcode,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+import { eq } from "drizzle-orm";
+import * as schema from "@shared/schema";
 
 export interface IStorage {
   // Users
@@ -58,7 +62,7 @@ export interface IStorage {
 
   // Bill of Materials
   getAllBillOfMaterials(): Promise<BillOfMaterials[]>;
-  getBillOfMaterialsByProductId(productId: string): Promise<BillOfMaterials[]>;
+  getBillOfMaterialsByProductId(finishedProductId: string): Promise<BillOfMaterials[]>;
   createBillOfMaterials(bom: InsertBillOfMaterials): Promise<BillOfMaterials>;
   deleteBillOfMaterials(id: string): Promise<boolean>;
 
@@ -415,15 +419,20 @@ export class MemStorage implements IStorage {
     return Array.from(this.billOfMaterials.values());
   }
 
-  async getBillOfMaterialsByProductId(productId: string): Promise<BillOfMaterials[]> {
+  async getBillOfMaterialsByProductId(finishedProductId: string): Promise<BillOfMaterials[]> {
     return Array.from(this.billOfMaterials.values()).filter(
-      (bom) => bom.finishedProductId === productId
+      (bom) => bom.finishedProductId === finishedProductId
     );
   }
 
   async createBillOfMaterials(insertBom: InsertBillOfMaterials): Promise<BillOfMaterials> {
     const id = randomUUID();
-    const bom: BillOfMaterials = { ...insertBom, id };
+    const bom: BillOfMaterials = {
+      id,
+      finishedProductId: insertBom.finishedProductId,
+      componentId: insertBom.componentId,
+      quantityRequired: insertBom.quantityRequired,
+    };
     this.billOfMaterials.set(id, bom);
     return bom;
   }
@@ -644,4 +653,275 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export class PostgresStorage implements IStorage {
+  private db;
+
+  constructor(connectionString: string) {
+    const sql = neon(connectionString);
+    this.db = drizzle(sql, { schema });
+  }
+
+  // Users
+  async getUser(id: string): Promise<User | undefined> {
+    const results = await this.db.select().from(schema.users).where(eq(schema.users.id, id));
+    return results[0];
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const results = await this.db.select().from(schema.users).where(eq(schema.users.email, email));
+    return results[0];
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const results = await this.db.insert(schema.users).values(insertUser).returning();
+    return results[0];
+  }
+
+  async updateUser(id: string, updateData: Partial<InsertUser>): Promise<User | undefined> {
+    const results = await this.db.update(schema.users).set(updateData).where(eq(schema.users.id, id)).returning();
+    return results[0];
+  }
+
+  // Items
+  async getAllItems(): Promise<Item[]> {
+    return await this.db.select().from(schema.items);
+  }
+
+  async getItem(id: string): Promise<Item | undefined> {
+    const results = await this.db.select().from(schema.items).where(eq(schema.items.id, id));
+    return results[0];
+  }
+
+  async getItemBySku(sku: string): Promise<Item | undefined> {
+    const results = await this.db.select().from(schema.items).where(eq(schema.items.sku, sku));
+    return results[0];
+  }
+
+  async createItem(insertItem: InsertItem): Promise<Item> {
+    const results = await this.db.insert(schema.items).values(insertItem).returning();
+    return results[0];
+  }
+
+  async updateItem(id: string, updateData: Partial<InsertItem>): Promise<Item | undefined> {
+    const results = await this.db.update(schema.items).set(updateData).where(eq(schema.items.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteItem(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.items).where(eq(schema.items.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Bins
+  async getAllBins(): Promise<Bin[]> {
+    return await this.db.select().from(schema.bins);
+  }
+
+  async getBin(id: string): Promise<Bin | undefined> {
+    const results = await this.db.select().from(schema.bins).where(eq(schema.bins.id, id));
+    return results[0];
+  }
+
+  async createBin(insertBin: InsertBin): Promise<Bin> {
+    const results = await this.db.insert(schema.bins).values(insertBin).returning();
+    return results[0];
+  }
+
+  async updateBin(id: string, updateData: Partial<InsertBin>): Promise<Bin | undefined> {
+    const results = await this.db.update(schema.bins).set(updateData).where(eq(schema.bins.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteBin(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.bins).where(eq(schema.bins.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Inventory By Bin
+  async getAllInventoryByBin(): Promise<InventoryByBin[]> {
+    return await this.db.select().from(schema.inventoryByBin);
+  }
+
+  async getInventoryByBin(id: string): Promise<InventoryByBin | undefined> {
+    const results = await this.db.select().from(schema.inventoryByBin).where(eq(schema.inventoryByBin.id, id));
+    return results[0];
+  }
+
+  async getInventoryByItemId(itemId: string): Promise<InventoryByBin[]> {
+    return await this.db.select().from(schema.inventoryByBin).where(eq(schema.inventoryByBin.itemId, itemId));
+  }
+
+  async createInventoryByBin(insertInventory: InsertInventoryByBin): Promise<InventoryByBin> {
+    const results = await this.db.insert(schema.inventoryByBin).values(insertInventory).returning();
+    return results[0];
+  }
+
+  async updateInventoryByBin(id: string, updateData: Partial<InsertInventoryByBin>): Promise<InventoryByBin | undefined> {
+    const results = await this.db.update(schema.inventoryByBin).set(updateData).where(eq(schema.inventoryByBin.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteInventoryByBin(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.inventoryByBin).where(eq(schema.inventoryByBin.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Bill of Materials
+  async getAllBillOfMaterials(): Promise<BillOfMaterials[]> {
+    return await this.db.select().from(schema.billOfMaterials);
+  }
+
+  async getBillOfMaterialsByProductId(finishedProductId: string): Promise<BillOfMaterials[]> {
+    return await this.db.select().from(schema.billOfMaterials).where(eq(schema.billOfMaterials.finishedProductId, finishedProductId));
+  }
+
+  async createBillOfMaterials(insertBom: InsertBillOfMaterials): Promise<BillOfMaterials> {
+    const results = await this.db.insert(schema.billOfMaterials).values(insertBom).returning();
+    return results[0];
+  }
+
+  async deleteBillOfMaterials(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.billOfMaterials).where(eq(schema.billOfMaterials.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Suppliers
+  async getAllSuppliers(): Promise<Supplier[]> {
+    return await this.db.select().from(schema.suppliers);
+  }
+
+  async getSupplier(id: string): Promise<Supplier | undefined> {
+    const results = await this.db.select().from(schema.suppliers).where(eq(schema.suppliers.id, id));
+    return results[0];
+  }
+
+  async createSupplier(insertSupplier: InsertSupplier): Promise<Supplier> {
+    const results = await this.db.insert(schema.suppliers).values(insertSupplier).returning();
+    return results[0];
+  }
+
+  async updateSupplier(id: string, updateData: Partial<InsertSupplier>): Promise<Supplier | undefined> {
+    const results = await this.db.update(schema.suppliers).set(updateData).where(eq(schema.suppliers.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteSupplier(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.suppliers).where(eq(schema.suppliers.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Supplier Items
+  async getAllSupplierItems(): Promise<SupplierItem[]> {
+    return await this.db.select().from(schema.supplierItems);
+  }
+
+  async getSupplierItemsByItemId(itemId: string): Promise<SupplierItem[]> {
+    return await this.db.select().from(schema.supplierItems).where(eq(schema.supplierItems.itemId, itemId));
+  }
+
+  async createSupplierItem(insertSupplierItem: InsertSupplierItem): Promise<SupplierItem> {
+    const results = await this.db.insert(schema.supplierItems).values(insertSupplierItem).returning();
+    return results[0];
+  }
+
+  async updateSupplierItem(id: string, updateData: Partial<InsertSupplierItem>): Promise<SupplierItem | undefined> {
+    const results = await this.db.update(schema.supplierItems).set(updateData).where(eq(schema.supplierItems.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteSupplierItem(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.supplierItems).where(eq(schema.supplierItems.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Sales History
+  async getAllSalesHistory(): Promise<SalesHistory[]> {
+    return await this.db.select().from(schema.salesHistory);
+  }
+
+  async createSalesHistory(insertSale: InsertSalesHistory): Promise<SalesHistory> {
+    const results = await this.db.insert(schema.salesHistory).values(insertSale).returning();
+    return results[0];
+  }
+
+  // Finished Inventory Snapshot
+  async getAllFinishedInventorySnapshots(): Promise<FinishedInventorySnapshot[]> {
+    return await this.db.select().from(schema.finishedInventorySnapshots);
+  }
+
+  async createFinishedInventorySnapshot(insertSnapshot: InsertFinishedInventorySnapshot): Promise<FinishedInventorySnapshot> {
+    const results = await this.db.insert(schema.finishedInventorySnapshots).values(insertSnapshot).returning();
+    return results[0];
+  }
+
+  // Integration Health
+  async getAllIntegrationHealth(): Promise<IntegrationHealth[]> {
+    return await this.db.select().from(schema.integrationHealth);
+  }
+
+  async getIntegrationHealth(integrationName: string): Promise<IntegrationHealth | undefined> {
+    const results = await this.db.select().from(schema.integrationHealth).where(eq(schema.integrationHealth.integrationName, integrationName));
+    return results[0];
+  }
+
+  async createOrUpdateIntegrationHealth(health: InsertIntegrationHealth): Promise<IntegrationHealth> {
+    const existing = await this.getIntegrationHealth(health.integrationName);
+    if (existing) {
+      const results = await this.db.update(schema.integrationHealth).set(health).where(eq(schema.integrationHealth.integrationName, health.integrationName)).returning();
+      return results[0];
+    }
+    const results = await this.db.insert(schema.integrationHealth).values(health).returning();
+    return results[0];
+  }
+
+  // Settings
+  async getSettings(userId: string): Promise<Settings | undefined> {
+    const results = await this.db.select().from(schema.settings).where(eq(schema.settings.userId, userId));
+    return results[0];
+  }
+
+  async createOrUpdateSettings(insertSettings: InsertSettings): Promise<Settings> {
+    const existing = await this.getSettings(insertSettings.userId);
+    if (existing) {
+      const results = await this.db.update(schema.settings).set(insertSettings).where(eq(schema.settings.userId, insertSettings.userId)).returning();
+      return results[0];
+    }
+    const results = await this.db.insert(schema.settings).values(insertSettings).returning();
+    return results[0];
+  }
+
+  // Barcodes
+  async getAllBarcodes(): Promise<Barcode[]> {
+    return await this.db.select().from(schema.barcodes);
+  }
+
+  async getBarcode(id: string): Promise<Barcode | undefined> {
+    const results = await this.db.select().from(schema.barcodes).where(eq(schema.barcodes.id, id));
+    return results[0];
+  }
+
+  async getBarcodeByValue(value: string): Promise<Barcode | undefined> {
+    const results = await this.db.select().from(schema.barcodes).where(eq(schema.barcodes.value, value));
+    return results[0];
+  }
+
+  async createBarcode(insertBarcode: InsertBarcode): Promise<Barcode> {
+    const results = await this.db.insert(schema.barcodes).values(insertBarcode).returning();
+    return results[0];
+  }
+
+  async updateBarcode(id: string, updateData: Partial<InsertBarcode>): Promise<Barcode | undefined> {
+    const results = await this.db.update(schema.barcodes).set(updateData).where(eq(schema.barcodes.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteBarcode(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.barcodes).where(eq(schema.barcodes.id, id)).returning();
+    return results.length > 0;
+  }
+}
+
+// Use PostgreSQL storage with DATABASE_URL from environment
+export const storage = process.env.DATABASE_URL 
+  ? new PostgresStorage(process.env.DATABASE_URL)
+  : new MemStorage();

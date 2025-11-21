@@ -617,8 +617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   app.get("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
-      // For demo, use first user - in production get from req.session.userId
-      const userId = "demo-user-id";
+      const userId = req.session.userId!;
       
       const settings = await storage.getSettings(userId);
       res.json(settings || {});
@@ -629,7 +628,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = "demo-user-id"; // In production, get from req.session.userId
+      const userId = req.session.userId!;
       
       // Validate partial updates (only allowed fields, no userId)
       const validated = patchSettingsSchema.parse(req.body);

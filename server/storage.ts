@@ -892,10 +892,16 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined> {
-    // Only update if settings exist
+    // Check if settings exist
     const existing = await this.getSettings(userId);
     if (!existing) {
-      return undefined;
+      // Create new settings row with the updates
+      const insertData: InsertSettings = {
+        userId,
+        ...updates
+      };
+      const results = await this.db.insert(schema.settings).values(insertData).returning();
+      return results[0];
     }
     
     // Apply only the validated updates (Drizzle only updates provided columns)

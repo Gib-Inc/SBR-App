@@ -20,184 +20,227 @@ async function seed() {
       console.log("✓ Demo user already exists");
     }
 
-    // Create demo items (components)
-    const nut = await storage.createItem({
-      name: "Hex Nut M8",
-      sku: "NUT-M8",
-      type: "component",
-      unit: "units",
-      currentStock: 500,
-      minStock: 100,
-      dailyUsage: 25,
-    });
+    // Create demo items (components) - idempotent
+    let nut = await storage.getItemBySku("NUT-M8");
+    if (!nut) {
+      nut = await storage.createItem({
+        name: "Hex Nut M8",
+        sku: "NUT-M8",
+        type: "component",
+        unit: "units",
+        currentStock: 500,
+        minStock: 100,
+        dailyUsage: 25,
+      });
+    }
 
-    const bolt = await storage.createItem({
-      name: "Hex Bolt M8x50",
-      sku: "BOLT-M8-50",
-      type: "component",
-      unit: "units",
-      currentStock: 450,
-      minStock: 100,
-      dailyUsage: 30,
-    });
+    let bolt = await storage.getItemBySku("BOLT-M8-50");
+    if (!bolt) {
+      bolt = await storage.createItem({
+        name: "Hex Bolt M8x50",
+        sku: "BOLT-M8-50",
+        type: "component",
+        unit: "units",
+        currentStock: 450,
+        minStock: 100,
+        dailyUsage: 30,
+      });
+    }
 
-    const spring = await storage.createItem({
-      name: "Compression Spring 20mm",
-      sku: "SPRING-20",
-      type: "component",
-      unit: "units",
-      currentStock: 200,
-      minStock: 50,
-      dailyUsage: 15,
-    });
+    let spring = await storage.getItemBySku("SPRING-20");
+    if (!spring) {
+      spring = await storage.createItem({
+        name: "Compression Spring 20mm",
+        sku: "SPRING-20",
+        type: "component",
+        unit: "units",
+        currentStock: 200,
+        minStock: 50,
+        dailyUsage: 15,
+      });
+    }
 
-    const bar = await storage.createItem({
-      name: "Steel Bar 500mm",
-      sku: "BAR-500",
-      type: "component",
-      unit: "units",
-      currentStock: 150,
-      minStock: 30,
-      dailyUsage: 10,
-    });
+    let bar = await storage.getItemBySku("BAR-500");
+    if (!bar) {
+      bar = await storage.createItem({
+        name: "Steel Bar 500mm",
+        sku: "BAR-500",
+        type: "component",
+        unit: "units",
+        currentStock: 150,
+        minStock: 30,
+        dailyUsage: 10,
+      });
+    }
 
-    console.log("✓ Created components");
+    console.log("✓ Components ready");
 
-    // Create finished products
-    const widgetA = await storage.createItem({
-      name: "Widget A",
-      sku: "WIDGET-A",
-      type: "finished_product",
-      unit: "units",
-      currentStock: 25,
-      minStock: 10,
-      dailyUsage: 5,
-    });
+    // Create finished products - idempotent
+    let widgetA = await storage.getItemBySku("WIDGET-A");
+    if (!widgetA) {
+      widgetA = await storage.createItem({
+        name: "Widget A",
+        sku: "WIDGET-A",
+        type: "finished_product",
+        unit: "units",
+        currentStock: 25,
+        minStock: 10,
+        dailyUsage: 5,
+      });
+    }
 
-    const gadgetB = await storage.createItem({
-      name: "Gadget B",
-      sku: "GADGET-B",
-      type: "finished_product",
-      unit: "units",
-      currentStock: 15,
-      minStock: 5,
-      dailyUsage: 3,
-    });
+    let gadgetB = await storage.getItemBySku("GADGET-B");
+    if (!gadgetB) {
+      gadgetB = await storage.createItem({
+        name: "Gadget B",
+        sku: "GADGET-B",
+        type: "finished_product",
+        unit: "units",
+        currentStock: 15,
+        minStock: 5,
+        dailyUsage: 3,
+      });
+    }
 
-    console.log("✓ Created finished products");
+    console.log("✓ Finished products ready");
 
-    // Create BOM for Widget A (4 nuts, 4 bolts, 2 springs, 1 bar)
-    await storage.createBillOfMaterials({
-      finishedProductId: widgetA.id,
-      componentId: nut.id,
-      quantityRequired: 4,
-    });
+    // Create BOM - idempotent (skip if BOMs already exist for products)
+    const existingWidgetABom = await storage.getBillOfMaterialsByProductId(widgetA.id);
+    if (existingWidgetABom.length === 0) {
+      await storage.createBillOfMaterials({
+        finishedProductId: widgetA.id,
+        componentId: nut.id,
+        quantityRequired: 4,
+      });
 
-    await storage.createBillOfMaterials({
-      finishedProductId: widgetA.id,
-      componentId: bolt.id,
-      quantityRequired: 4,
-    });
+      await storage.createBillOfMaterials({
+        finishedProductId: widgetA.id,
+        componentId: bolt.id,
+        quantityRequired: 4,
+      });
 
-    await storage.createBillOfMaterials({
-      finishedProductId: widgetA.id,
-      componentId: spring.id,
-      quantityRequired: 2,
-    });
+      await storage.createBillOfMaterials({
+        finishedProductId: widgetA.id,
+        componentId: spring.id,
+        quantityRequired: 2,
+      });
 
-    await storage.createBillOfMaterials({
-      finishedProductId: widgetA.id,
-      componentId: bar.id,
-      quantityRequired: 1,
-    });
+      await storage.createBillOfMaterials({
+        finishedProductId: widgetA.id,
+        componentId: bar.id,
+        quantityRequired: 1,
+      });
+    }
 
-    // Create BOM for Gadget B (2 nuts, 2 bolts, 3 springs)
-    await storage.createBillOfMaterials({
-      finishedProductId: gadgetB.id,
-      componentId: nut.id,
-      quantityRequired: 2,
-    });
+    const existingGadgetBBom = await storage.getBillOfMaterialsByProductId(gadgetB.id);
+    if (existingGadgetBBom.length === 0) {
+      await storage.createBillOfMaterials({
+        finishedProductId: gadgetB.id,
+        componentId: nut.id,
+        quantityRequired: 2,
+      });
 
-    await storage.createBillOfMaterials({
-      finishedProductId: gadgetB.id,
-      componentId: bolt.id,
-      quantityRequired: 2,
-    });
+      await storage.createBillOfMaterials({
+        finishedProductId: gadgetB.id,
+        componentId: bolt.id,
+        quantityRequired: 2,
+      });
 
-    await storage.createBillOfMaterials({
-      finishedProductId: gadgetB.id,
-      componentId: spring.id,
-      quantityRequired: 3,
-    });
+      await storage.createBillOfMaterials({
+        finishedProductId: gadgetB.id,
+        componentId: spring.id,
+        quantityRequired: 3,
+      });
+    }
 
-    console.log("✓ Created Bill of Materials");
+    console.log("✓ Bill of Materials ready");
 
-    // Create bins
-    const binA1 = await storage.createBin({
-      code: "A-01",
-      name: "Shelf A Row 1",
-      location: "Warehouse 1",
-    });
+    // Create bins - idempotent (skip if bins already exist)
+    const existingBins = await storage.getAllBins();
+    let binA1, binA2, binB1;
+    
+    if (existingBins.length === 0) {
+      binA1 = await storage.createBin({
+        code: "A-01",
+        name: "Shelf A Row 1",
+        location: "Warehouse 1",
+      });
 
-    const binA2 = await storage.createBin({
-      code: "A-02",
-      name: "Shelf A Row 2",
-      location: "Warehouse 1",
-    });
+      binA2 = await storage.createBin({
+        code: "A-02",
+        name: "Shelf A Row 2",
+        location: "Warehouse 1",
+      });
 
-    const binB1 = await storage.createBin({
-      code: "B-01",
-      name: "Shelf B Row 1",
-      location: "Warehouse 1",
-    });
+      binB1 = await storage.createBin({
+        code: "B-01",
+        name: "Shelf B Row 1",
+        location: "Warehouse 1",
+      });
+    } else {
+      binA1 = existingBins.find(b => b.code === "A-01") || existingBins[0];
+      binA2 = existingBins.find(b => b.code === "A-02") || existingBins[1] || existingBins[0];
+      binB1 = existingBins.find(b => b.code === "B-01") || existingBins[2] || existingBins[0];
+    }
 
-    console.log("✓ Created bins");
+    console.log("✓ Bins ready");
 
-    // Create inventory by bin
-    await storage.createInventoryByBin({
-      itemId: nut.id,
-      binId: binA1.id,
-      quantity: 300,
-    });
+    // Create inventory by bin - idempotent (skip if data exists)
+    const existingInventory = await storage.getAllInventoryByBin();
+    if (existingInventory.length === 0) {
+      await storage.createInventoryByBin({
+        itemId: nut.id,
+        binId: binA1.id,
+        quantity: 300,
+      });
 
-    await storage.createInventoryByBin({
-      itemId: nut.id,
-      binId: binA2.id,
-      quantity: 200,
-    });
+      await storage.createInventoryByBin({
+        itemId: nut.id,
+        binId: binA2.id,
+        quantity: 200,
+      });
 
-    await storage.createInventoryByBin({
-      itemId: bolt.id,
-      binId: binA1.id,
-      quantity: 450,
-    });
+      await storage.createInventoryByBin({
+        itemId: bolt.id,
+        binId: binA1.id,
+        quantity: 450,
+      });
 
-    await storage.createInventoryByBin({
-      itemId: spring.id,
-      binId: binB1.id,
-      quantity: 200,
-    });
+      await storage.createInventoryByBin({
+        itemId: spring.id,
+        binId: binB1.id,
+        quantity: 200,
+      });
 
-    await storage.createInventoryByBin({
-      itemId: bar.id,
-      binId: binB1.id,
-      quantity: 150,
-    });
+      await storage.createInventoryByBin({
+        itemId: bar.id,
+        binId: binB1.id,
+        quantity: 150,
+      });
+    }
 
-    console.log("✓ Created inventory by bin records");
+    console.log("✓ Inventory by bin ready");
 
-    // Create suppliers
-    const acmeCorp = await storage.createSupplier({
-      name: "Acme Corp",
-      catalogUrl: "https://acme-corp.example.com",
-    });
+    // Create suppliers - idempotent (skip if data exists)
+    const existingSuppliers = await storage.getAllSuppliers();
+    let acmeCorp, globalSupply;
+    
+    if (existingSuppliers.length === 0) {
+      acmeCorp = await storage.createSupplier({
+        name: "Acme Corp",
+        catalogUrl: "https://acme-corp.example.com",
+      });
 
-    const globalSupply = await storage.createSupplier({
-      name: "Global Supply Co",
-      catalogUrl: "https://globalsupply.example.com",
-    });
+      globalSupply = await storage.createSupplier({
+        name: "Global Supply Co",
+        catalogUrl: "https://globalsupply.example.com",
+      });
+    } else {
+      acmeCorp = existingSuppliers.find(s => s.name === "Acme Corp") || existingSuppliers[0];
+      globalSupply = existingSuppliers.find(s => s.name === "Global Supply Co") || existingSuppliers[1] || existingSuppliers[0];
+    }
 
-    console.log("✓ Created suppliers");
+    console.log("✓ Suppliers ready");
 
     // Create supplier items
     await storage.createSupplierItem({
@@ -236,39 +279,44 @@ async function seed() {
       isDesignatedSupplier: true,
     });
 
-    console.log("✓ Created supplier items");
+    console.log("✓ Supplier items ready");
 
-    // Create sales history
+    // Define date variables for seeding
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const twoDaysAgo = new Date(today);
-    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-    await storage.createSalesHistory({
-      itemId: widgetA.id,
-      quantitySold: 5,
-      saleDate: today,
-      externalOrderId: "GHL-001",
-    });
+    // Create sales history - idempotent (skip if data exists)
+    const existingSalesHistory = await storage.getAllSalesHistory();
+    if (existingSalesHistory.length === 0) {
+      const twoDaysAgo = new Date(today);
+      twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-    await storage.createSalesHistory({
-      itemId: widgetA.id,
-      quantitySold: 3,
-      saleDate: yesterday,
-      externalOrderId: "GHL-002",
-    });
+      await storage.createSalesHistory({
+        itemId: widgetA.id,
+        quantitySold: 5,
+        saleDate: today,
+        externalOrderId: "GHL-001",
+      });
 
-    await storage.createSalesHistory({
-      itemId: gadgetB.id,
-      quantitySold: 2,
-      saleDate: twoDaysAgo,
-      externalOrderId: "GHL-003",
-    });
+      await storage.createSalesHistory({
+        itemId: widgetA.id,
+        quantitySold: 3,
+        saleDate: yesterday,
+        externalOrderId: "GHL-002",
+      });
 
-    console.log("✓ Created sales history");
+      await storage.createSalesHistory({
+        itemId: gadgetB.id,
+        quantitySold: 2,
+        saleDate: twoDaysAgo,
+        externalOrderId: "GHL-003",
+      });
+    }
 
-    // Create integration health records
+    console.log("✓ Sales history ready");
+
+    // Create integration health records (createOrUpdate is already idempotent)
     await storage.createOrUpdateIntegrationHealth({
       integrationName: "gohighlevel",
       lastSuccessAt: today,
@@ -293,50 +341,56 @@ async function seed() {
       lastStatus: "pending_setup",
     });
 
-    console.log("✓ Created integration health records");
+    console.log("✓ Integration health records ready");
 
-    // Create finished inventory snapshots
-    await storage.createFinishedInventorySnapshot({
-      itemId: widgetA.id,
-      quantity: 50,
-      location: "Extensiv Warehouse",
-      snapshotDate: today,
-    });
+    // Create finished inventory snapshots - idempotent (skip if data exists)
+    const existingSnapshots = await storage.getAllFinishedInventorySnapshots();
+    if (existingSnapshots.length === 0) {
+      await storage.createFinishedInventorySnapshot({
+        itemId: widgetA.id,
+        quantity: 50,
+        location: "Extensiv Warehouse",
+        snapshotDate: today,
+      });
 
-    await storage.createFinishedInventorySnapshot({
-      itemId: gadgetB.id,
-      quantity: 30,
-      location: "Extensiv Warehouse",
-      snapshotDate: today,
-    });
+      await storage.createFinishedInventorySnapshot({
+        itemId: gadgetB.id,
+        quantity: 30,
+        location: "Extensiv Warehouse",
+        snapshotDate: today,
+      });
+    }
 
-    console.log("✓ Created finished inventory snapshots");
+    console.log("✓ Finished inventory snapshots ready");
 
-    // Create barcodes
-    await storage.createBarcode({
-      value: "NUT-M8-BC001",
-      name: "Hex Nut M8 Barcode",
-      sku: "NUT-M8",
-      purpose: "item",
-      referenceId: nut.id,
-    });
+    // Create barcodes - idempotent (skip if data exists)
+    const existingBarcodes = await storage.getAllBarcodes();
+    if (existingBarcodes.length === 0) {
+      await storage.createBarcode({
+        value: "NUT-M8-BC001",
+        name: "Hex Nut M8 Barcode",
+        sku: "NUT-M8",
+        purpose: "item",
+        referenceId: nut.id,
+      });
 
-    await storage.createBarcode({
-      value: "BOLT-M8-50-BC001",
-      name: "Hex Bolt M8x50 Barcode",
-      sku: "BOLT-M8-50",
-      purpose: "item",
-      referenceId: bolt.id,
-    });
+      await storage.createBarcode({
+        value: "BOLT-M8-50-BC001",
+        name: "Hex Bolt M8x50 Barcode",
+        sku: "BOLT-M8-50",
+        purpose: "item",
+        referenceId: bolt.id,
+      });
 
-    await storage.createBarcode({
-      value: "BIN-A01-BC001",
-      name: "Bin A-01 Barcode",
-      purpose: "bin",
-      referenceId: binA1.id,
-    });
+      await storage.createBarcode({
+        value: "BIN-A01-BC001",
+        name: "Bin A-01 Barcode",
+        purpose: "bin",
+        referenceId: binA1.id,
+      });
+    }
 
-    console.log("✓ Created barcodes");
+    console.log("✓ Barcodes ready");
 
     console.log("\n✅ Database seeded successfully!");
   } catch (error) {

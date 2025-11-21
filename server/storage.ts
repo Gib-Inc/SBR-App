@@ -846,11 +846,11 @@ export class PostgresStorage implements IStorage {
 
   // Finished Inventory Snapshot
   async getAllFinishedInventorySnapshots(): Promise<FinishedInventorySnapshot[]> {
-    return await this.db.select().from(schema.finishedInventorySnapshots);
+    return await this.db.select().from(schema.finishedInventorySnapshot);
   }
 
   async createFinishedInventorySnapshot(insertSnapshot: InsertFinishedInventorySnapshot): Promise<FinishedInventorySnapshot> {
-    const results = await this.db.insert(schema.finishedInventorySnapshots).values(insertSnapshot).returning();
+    const results = await this.db.insert(schema.finishedInventorySnapshot).values(insertSnapshot).returning();
     return results[0];
   }
 

@@ -204,3 +204,13 @@ export const barcodes = pgTable("barcodes", {
 export const insertBarcodeSchema = createInsertSchema(barcodes).omit({ id: true });
 export type InsertBarcode = z.infer<typeof insertBarcodeSchema>;
 export type Barcode = typeof barcodes.$inferSelect;
+
+// ============================================================================
+// UPDATE SCHEMAS (Partial validation for PATCH endpoints)
+// ============================================================================
+
+export const updateItemSchema = insertItemSchema.partial();
+export const updateBinSchema = insertBinSchema.partial();
+export const updateSupplierSchema = insertSupplierSchema.partial();
+export const updateSupplierItemSchema = insertSupplierItemSchema.partial();
+export const updateBarcodeSchema = insertBarcodeSchema.partial();

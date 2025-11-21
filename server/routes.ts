@@ -16,6 +16,11 @@ import {
   insertIntegrationHealthSchema,
   insertSettingsSchema,
   insertBarcodeSchema,
+  updateItemSchema,
+  updateBinSchema,
+  updateSupplierSchema,
+  updateSupplierItemSchema,
+  updateBarcodeSchema,
 } from "@shared/schema";
 
 const SALT_ROUNDS = 10;
@@ -48,6 +53,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         password: hashedPassword,
       });
 
+      // Auto-login after registration
+      req.session.userId = user.id;
+
       // Don't send password back
       const { password: _, ...userWithoutPassword } = user;
       
@@ -78,6 +86,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Invalid email or password" });
       }
 
+      // Set session
+      req.session.userId = user.id;
+
       // Don't send password back
       const { password: _, ...userWithoutPassword } = user;
       
@@ -90,17 +101,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     try {
-      // For now, return demo user - in production this would check session
-      const users = await storage.getUserByEmail("demo@example.com");
-      if (!users) {
+      if (!req.session.userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
+
+      const user = await storage.getUser(req.session.userId);
+      if (!user) {
+        return res.status(401).json({ error: "User not found" });
+      }
       
-      const { password: _, ...userWithoutPassword } = users;
+      const { password: _, ...userWithoutPassword } = user;
       res.json(userWithoutPassword);
     } catch (error) {
       console.error("Error getting current user:", error);
       res.status(500).json({ error: "Failed to get user" });
+    }
+  });
+
+  app.post("/api/auth/logout", async (req: Request, res: Response) => {
+    try {
+      req.session.destroy((err) => {
+        if (err) {
+          console.error("Error destroying session:", err);
+          return res.status(500).json({ error: "Failed to logout" });
+        }
+        res.json({ message: "Logged out successfully" });
+      });
+    } catch (error) {
+      console.error("Error logging out:", error);
+      res.status(500).json({ error: "Failed to logout" });
     }
   });
 
@@ -242,7 +271,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/items/:id", async (req: Request, res: Response) => {
     try {
-      const item = await storage.updateItem(req.params.id, req.body);
+      const validated = updateItemSchema.parse(req.body);
+      const item = await storage.updateItem(req.params.id, validated);
       if (!item) {
         return res.status(404).json({ error: "Item not found" });
       }
@@ -341,7 +371,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/bins/:id", async (req: Request, res: Response) => {
     try {
-      const bin = await storage.updateBin(req.params.id, req.body);
+      const validated = updateBinSchema.parse(req.body);
+      const bin = await storage.updateBin(req.params.id, validated);
       if (!bin) {
         return res.status(404).json({ error: "Bin not found" });
       }
@@ -414,7 +445,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/barcodes/:id", async (req: Request, res: Response) => {
     try {
-      const barcode = await storage.updateBarcode(req.params.id, req.body);
+      const validated = updateBarcodeSchema.parse(req.body);
+      const barcode = await storage.updateBarcode(req.params.id, validated);
       if (!barcode) {
         return res.status(404).json({ error: "Barcode not found" });
       }
@@ -461,7 +493,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/suppliers/:id", async (req: Request, res: Response) => {
     try {
-      const supplier = await storage.updateSupplier(req.params.id, req.body);
+      const validated = updateSupplierSchema.parse(req.body);
+      const supplier = await storage.updateSupplier(req.params.id, validated);
       if (!supplier) {
         return res.status(404).json({ error: "Supplier not found" });
       }
@@ -505,7 +538,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.patch("/api/supplier-items/:id", async (req: Request, res: Response) => {
     try {
-      const supplierItem = await storage.updateSupplierItem(req.params.id, req.body);
+      const validated = updateSupplierItemSchema.parse(req.body);
+      const supplierItem = await storage.updateSupplierItem(req.params.id, validated);
       if (!supplierItem) {
         return res.status(404).json({ error: "Supplier item not found" });
       }

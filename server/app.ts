@@ -6,8 +6,25 @@ import express, {
   Response,
   NextFunction,
 } from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import pkg from "pg";
+const { Pool } = pkg;
 
 import { registerRoutes } from "./routes";
+
+const PgSession = connectPgSimple(session);
+
+// Create a separate connection pool for session store
+const sessionPool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+declare module "express-session" {
+  interface SessionData {
+    userId?: string;
+  }
+}
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -33,6 +50,26 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: false }));
+
+// Session configuration
+app.use(
+  session({
+    store: new PgSession({
+      pool: sessionPool,
+      tableName: "session",
+      createTableIfMissing: true,
+    }),
+    secret: process.env.SESSION_SECRET || "inventory-management-secret-key-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === "production",
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    },
+  })
+);
 
 app.use((req, res, next) => {
   const start = Date.now();

@@ -6,19 +6,8 @@ import express, {
   Response,
   NextFunction,
 } from "express";
-import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
-import { pool } from "./storage";
 
 import { registerRoutes } from "./routes";
-
-const PgSession = connectPgSimple(session);
-
-declare module "express-session" {
-  interface SessionData {
-    userId: string;
-  }
-}
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -38,27 +27,6 @@ declare module 'http' {
     rawBody: unknown
   }
 }
-
-// Session middleware
-app.use(
-  session({
-    store: new PgSession({
-      pool,
-      tableName: "session",
-      createTableIfMissing: true,
-    }),
-    secret: process.env.SESSION_SECRET || "fallback-secret-for-dev",
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-    },
-  })
-);
-
 app.use(express.json({
   verify: (req, _res, buf) => {
     req.rawBody = buf;

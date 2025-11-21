@@ -25,10 +25,13 @@ import {
   type InsertBarcode,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { neon } from "@neondatabase/serverless";
+import { neon, Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import { eq } from "drizzle-orm";
 import * as schema from "@shared/schema";
+
+// Export pool for session store
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 export interface IStorage {
   // Users
@@ -846,11 +849,11 @@ export class PostgresStorage implements IStorage {
 
   // Finished Inventory Snapshot
   async getAllFinishedInventorySnapshots(): Promise<FinishedInventorySnapshot[]> {
-    return await this.db.select().from(schema.finishedInventorySnapshots);
+    return await this.db.select().from(schema.finishedInventorySnapshot);
   }
 
   async createFinishedInventorySnapshot(insertSnapshot: InsertFinishedInventorySnapshot): Promise<FinishedInventorySnapshot> {
-    const results = await this.db.insert(schema.finishedInventorySnapshots).values(insertSnapshot).returning();
+    const results = await this.db.insert(schema.finishedInventorySnapshot).values(insertSnapshot).returning();
     return results[0];
   }
 

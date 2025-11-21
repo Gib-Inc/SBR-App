@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +10,18 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Plus, Search, Download, Printer, Barcode as BarcodeIcon } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+
+const barcodeFormSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  value: z.string().min(1, "Barcode value is required"),
+  purpose: z.enum(["item", "bin"]),
+  sku: z.string().optional(),
+  referenceId: z.string().optional(),
+});
 
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -18,7 +32,7 @@ export default function Barcodes() {
     queryKey: ["/api/barcodes"],
   });
 
-  const filteredBarcodes = (barcodes ?? []).filter((barcode: any) =>
+  const filteredBarcodes = ((barcodes as any[]) ?? []).filter((barcode: any) =>
     barcode.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (barcode.sku && barcode.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
@@ -158,6 +172,7 @@ export default function Barcodes() {
 }
 
 function BarcodeForm({ onClose }: { onClose: () => void }) {
+  const { toast } = useToast();
   const { data: items } = useQuery({
     queryKey: ["/api/items"],
   });
@@ -166,57 +181,142 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
     queryKey: ["/api/bins"],
   });
 
+  const form = useForm<z.infer<typeof barcodeFormSchema>>({
+    resolver: zodResolver(barcodeFormSchema),
+    defaultValues: {
+      name: "",
+      value: "",
+      purpose: "bin",
+      sku: "",
+      referenceId: undefined,
+    },
+  });
+
+  const createBarcodeMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof barcodeFormSchema>) => {
+      const res = await apiRequest("POST", "/api/barcodes", data);
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      toast({
+        title: "Success",
+        description: "Barcode created successfully",
+      });
+      onClose();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create barcode",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const onSubmit = (data: z.infer<typeof barcodeFormSchema>) => {
+    createBarcodeMutation.mutate(data);
+  };
+
   return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <Label htmlFor="barcode-name">Name</Label>
-        <Input
-          id="barcode-name"
-          placeholder="e.g., Bin A-1 Barcode"
-          data-testid="input-barcode-name"
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Name</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="e.g., Bin A-1 Barcode"
+                  data-testid="input-barcode-name"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="barcode-value">Barcode Value</Label>
-        <Input
-          id="barcode-value"
-          placeholder="e.g., BIN-A1-001"
-          className="font-mono"
-          data-testid="input-barcode-value"
+        <FormField
+          control={form.control}
+          name="value"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Barcode Value</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="e.g., BIN-A1-001"
+                  className="font-mono"
+                  data-testid="input-barcode-value"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="barcode-purpose">Purpose</Label>
-        <Select defaultValue="bin">
-          <SelectTrigger id="barcode-purpose" data-testid="select-barcode-purpose">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="component">Component</SelectItem>
-            <SelectItem value="finished_product">Finished Product</SelectItem>
-            <SelectItem value="bin">Bin Location</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="barcode-sku">SKU (Optional)</Label>
-        <Input
-          id="barcode-sku"
-          placeholder="e.g., BIN-A1"
-          className="font-mono"
-          data-testid="input-barcode-sku"
+        <FormField
+          control={form.control}
+          name="purpose"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Purpose</FormLabel>
+              <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <FormControl>
+                  <SelectTrigger data-testid="select-barcode-purpose">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="item">Item</SelectItem>
+                  <SelectItem value="bin">Bin Location</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
         />
-      </div>
 
-      <div className="flex justify-end gap-2 pt-4">
-        <Button variant="outline" onClick={onClose} data-testid="button-cancel">
-          Cancel
-        </Button>
-        <Button data-testid="button-save-barcode">Create Barcode</Button>
-      </div>
-    </div>
+        <FormField
+          control={form.control}
+          name="sku"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>SKU (Optional)</FormLabel>
+              <FormControl>
+                <Input
+                  placeholder="e.g., BIN-A1"
+                  className="font-mono"
+                  data-testid="input-barcode-sku"
+                  {...field}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <div className="flex justify-end gap-2 pt-4">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            data-testid="button-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={createBarcodeMutation.isPending}
+            data-testid="button-save-barcode"
+          >
+            {createBarcodeMutation.isPending ? "Creating..." : "Create Barcode"}
+          </Button>
+        </div>
+      </form>
+    </Form>
   );
 }

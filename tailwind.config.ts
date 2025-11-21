@@ -83,9 +83,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["var(--font-sans)"],
+        sans: ["IBM Plex Sans", "system-ui", "-apple-system", "sans-serif"],
         serif: ["var(--font-serif)"],
-        mono: ["var(--font-mono)"],
+        mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
       },
       keyframes: {
         "accordion-down": {

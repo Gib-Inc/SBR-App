@@ -36,6 +36,60 @@ function formatPurposeLabel(purpose: string): string {
   }
 }
 
+function BarcodeCard({ barcode, onPrint }: { barcode: any; onPrint: (barcode: any) => void }) {
+  return (
+    <Card className="hover-elevate">
+      <CardContent className="flex flex-col gap-4 pt-6">
+        {/* Barcode Image Placeholder */}
+        <div className="flex aspect-[3/1] items-center justify-center rounded-md border bg-muted">
+          <div className="flex flex-col items-center gap-2">
+            <BarcodeIcon className="h-8 w-8 text-muted-foreground" />
+            <span className="font-mono text-xs text-muted-foreground">{barcode.value}</span>
+          </div>
+        </div>
+
+        {/* Barcode Details */}
+        <div className="space-y-2">
+          <div>
+            <p className="font-medium" data-testid={`text-barcode-name-${barcode.id}`}>
+              {barcode.name}
+            </p>
+            {barcode.sku && (
+              <p className="font-mono text-sm text-muted-foreground">{barcode.sku}</p>
+            )}
+          </div>
+          <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
+            {formatPurposeLabel(barcode.purpose)}
+          </Badge>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={() => onPrint(barcode)}
+            data-testid={`button-print-${barcode.id}`}
+          >
+            <Printer className="mr-2 h-4 w-4" />
+            Print
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            data-testid={`button-download-${barcode.id}`}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Download
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -49,6 +103,10 @@ export default function Barcodes() {
     barcode.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (barcode.sku && barcode.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product");
+  const itemInventoryBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "item");
+  const binLocationBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "bin");
 
   const handlePrint = (barcode: any) => {
     // Open print dialog with barcode
@@ -98,7 +156,7 @@ export default function Barcodes() {
         </div>
       </div>
 
-      {/* Barcodes Grid */}
+      {/* Barcodes Sections */}
       {isLoading ? (
         <div className="flex h-64 items-center justify-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
@@ -113,58 +171,51 @@ export default function Barcodes() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredBarcodes.map((barcode: any) => (
-            <Card key={barcode.id} className="hover-elevate">
-              <CardContent className="flex flex-col gap-4 pt-6">
-                {/* Barcode Image Placeholder */}
-                <div className="flex aspect-[3/1] items-center justify-center rounded-md border bg-muted">
-                  <div className="flex flex-col items-center gap-2">
-                    <BarcodeIcon className="h-8 w-8 text-muted-foreground" />
-                    <span className="font-mono text-xs text-muted-foreground">{barcode.value}</span>
-                  </div>
-                </div>
+        <div className="flex flex-col gap-8">
+          {/* Finished Products Section */}
+          {finishedProductBarcodes.length > 0 && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Finished Products</h2>
+                <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {finishedProductBarcodes.map((barcode: any) => (
+                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                ))}
+              </div>
+            </div>
+          )}
 
-                {/* Barcode Details */}
-                <div className="space-y-2">
-                  <div>
-                    <p className="font-medium" data-testid={`text-barcode-name-${barcode.id}`}>
-                      {barcode.name}
-                    </p>
-                    {barcode.sku && (
-                      <p className="font-mono text-sm text-muted-foreground">{barcode.sku}</p>
-                    )}
-                  </div>
-                  <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
-                    {formatPurposeLabel(barcode.purpose)}
-                  </Badge>
-                </div>
+          {/* Item Inventory Section */}
+          {itemInventoryBarcodes.length > 0 && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Item Inventory</h2>
+                <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {itemInventoryBarcodes.map((barcode: any) => (
+                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                ))}
+              </div>
+            </div>
+          )}
 
-                {/* Actions */}
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => handlePrint(barcode)}
-                    data-testid={`button-print-${barcode.id}`}
-                  >
-                    <Printer className="mr-2 h-4 w-4" />
-                    Print
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    data-testid={`button-download-${barcode.id}`}
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+          {/* Bin Locations Section */}
+          {binLocationBarcodes.length > 0 && (
+            <div className="flex flex-col gap-4">
+              <div>
+                <h2 className="text-lg font-semibold">Bin Locations</h2>
+                <p className="text-sm text-muted-foreground">Barcodes for storage bin locations</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {binLocationBarcodes.map((barcode: any) => (
+                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

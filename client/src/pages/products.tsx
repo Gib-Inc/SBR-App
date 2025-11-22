@@ -11,6 +11,15 @@ import { Plus, Search, Check, X, Trash2, Package, Edit } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
+const WAREHOUSE_LOCATIONS = [
+  "Warehouse A",
+  "Warehouse B",
+  "Warehouse C",
+  "3PL Extensiv",
+  "3PL Pivot",
+  "External Storage",
+];
+
 function ItemTableRow({ 
   item, 
   onDelete, 
@@ -48,6 +57,23 @@ function ItemTableRow({
         item.id, 
         editingField, 
         numValue,
+        () => {
+          // Success: exit edit mode
+          setEditingField(null);
+          setEditValue("");
+        },
+        () => {
+          // Error: keep edit mode open (error toast handled by parent)
+        }
+      );
+    } else if (editingField === "location") {
+      // Location field allows empty values (to clear location)
+      // Empty string will be normalized to null by storage layer
+      const trimmedValue = editValue.trim();
+      onUpdate(
+        item.id, 
+        editingField, 
+        trimmedValue,
         () => {
           // Success: exit edit mode
           setEditingField(null);
@@ -184,14 +210,22 @@ function ItemTableRow({
         <td className="px-3 align-middle">
           {editingField === "location" ? (
             <div className="flex items-center gap-2">
-              <Input
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="h-8"
-                autoFocus
-                data-testid={`input-edit-location-${item.id}`}
-              />
+              <Select
+                value={editValue || "none"}
+                onValueChange={(value) => setEditValue(value === "none" ? "" : value)}
+              >
+                <SelectTrigger className="h-8" data-testid={`select-edit-location-${item.id}`}>
+                  <SelectValue placeholder="Select location" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— No location —</SelectItem>
+                  {WAREHOUSE_LOCATIONS.map((loc) => (
+                    <SelectItem key={loc} value={loc}>
+                      {loc}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-location-${item.id}`}>
                 <Check className="h-4 w-4" />
               </Button>
@@ -552,13 +586,19 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
           {isFinished && (
             <div className="space-y-2">
               <Label htmlFor="location">Location (Warehouse)</Label>
-              <Input
-                id="location"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g., Warehouse A, Bay 3"
-                data-testid="input-create-location"
-              />
+              <Select value={location || "none"} onValueChange={(value) => setLocation(value === "none" ? "" : value)}>
+                <SelectTrigger id="location" data-testid="select-create-location">
+                  <SelectValue placeholder="Select warehouse location" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— No location —</SelectItem>
+                  {WAREHOUSE_LOCATIONS.map((loc) => (
+                    <SelectItem key={loc} value={loc}>
+                      {loc}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
           {!isFinished && (

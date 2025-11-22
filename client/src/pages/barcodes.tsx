@@ -26,7 +26,7 @@ const barcodeFormSchema = z.object({
 function formatPurposeLabel(purpose: string): string {
   switch (purpose) {
     case "bin":
-      return "Bin location";
+      return "Finished product";
     case "finished_product":
       return "Finished product";
     case "item":
@@ -104,9 +104,8 @@ export default function Barcodes() {
     (barcode.sku && barcode.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product");
+  const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product" || b.purpose === "bin");
   const itemInventoryBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "item");
-  const binLocationBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "bin");
 
   const handlePrint = (barcode: any) => {
     // Open print dialog with barcode
@@ -196,21 +195,6 @@ export default function Barcodes() {
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {itemInventoryBarcodes.map((barcode: any) => (
-                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Bin Locations Section */}
-          {binLocationBarcodes.length > 0 && (
-            <div className="flex flex-col gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Bin Locations</h2>
-                <p className="text-sm text-muted-foreground">Barcodes for storage bin locations</p>
-              </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {binLocationBarcodes.map((barcode: any) => (
                   <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
                 ))}
               </div>

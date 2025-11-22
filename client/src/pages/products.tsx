@@ -179,6 +179,38 @@ function ItemTableRow({
         )}
       </td>
 
+      {/* Location Column (only for finished products) */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle">
+          {editingField === "location" ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="h-8"
+                autoFocus
+                data-testid={`input-edit-location-${item.id}`}
+              />
+              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-location-${item.id}`}>
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-location-${item.id}`}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div 
+              className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+              onClick={() => startEdit("location", item.location || "")}
+              data-testid={`text-item-location-${item.id}`}
+            >
+              {item.location || <span className="text-muted-foreground">—</span>}
+            </div>
+          )}
+        </td>
+      )}
+
       {/* BOM Components Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle text-center">
@@ -435,6 +467,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   const [sku, setSku] = useState("");
   const [currentStock, setCurrentStock] = useState("0");
   const [category, setCategory] = useState("");
+  const [location, setLocation] = useState("");
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -452,6 +485,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       setSku("");
       setCurrentStock("0");
       setCategory("");
+      setLocation("");
     },
     onError: (error: Error) => {
       toast({
@@ -469,6 +503,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       sku,
       currentStock: Number(currentStock),
       category: isFinished ? null : category,
+      location: isFinished ? (location || null) : null,
       type: isFinished ? "finished_product" : "component",
     });
   };
@@ -514,6 +549,18 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
               data-testid="input-create-stock"
             />
           </div>
+          {isFinished && (
+            <div className="space-y-2">
+              <Label htmlFor="location">Location (Warehouse)</Label>
+              <Input
+                id="location"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="e.g., Warehouse A, Bay 3"
+                data-testid="input-create-location"
+              />
+            </div>
+          )}
           {!isFinished && (
             <div className="space-y-2">
               <Label htmlFor="category">Category</Label>
@@ -684,6 +731,7 @@ export default function BOM() {
                   <th className="p-3 text-left text-sm font-medium">Name</th>
                   <th className="p-3 text-left text-sm font-medium">SKU</th>
                   <th className="p-3 text-right text-sm font-medium">Stock</th>
+                  <th className="p-3 text-left text-sm font-medium">Location</th>
                   <th className="p-3 text-center text-sm font-medium">BOM</th>
                   <th className="p-3 text-right text-sm font-medium">Actions</th>
                 </tr>

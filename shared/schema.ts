@@ -31,6 +31,7 @@ export const items = pgTable("items", {
   minStock: integer("min_stock").notNull().default(0),
   dailyUsage: real("daily_usage").notNull().default(0),
   barcode: text("barcode"),
+  location: text("location"), // Warehouse location for finished products
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

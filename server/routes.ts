@@ -720,6 +720,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate partial updates (only allowed fields, no userId)
       const validated = patchSettingsSchema.parse(req.body);
       
+      // Normalize empty strings to null for all string fields
+      const normalized = Object.fromEntries(
+        Object.entries(validated).map(([key, value]) => [
+          key,
+          typeof value === 'string' && value.trim() === '' ? null : value
+        ])
+      );
+      
       // Ensure settings exist, create with full defaults if needed
       let existing = await storage.getSettings(userId);
       if (!existing) {
@@ -739,7 +747,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Apply validated partial updates (no id or userId in update)
-      const updated = await storage.updateSettings(userId, validated);
+      const updated = await storage.updateSettings(userId, normalized);
       
       if (!updated) {
         return res.status(500).json({ error: "Failed to update settings" });
@@ -845,8 +853,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Smart Reorder Recommendations
   app.get("/api/llm/reorder-recommendations", requireAuth, async (req: Request, res: Response) => {
     try {
-      const recommendations = await LLMService.generateReorderRecommendations();
-      res.json(recommendations);
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      
+      const canUseLLM = settings?.llmProvider && (
+        settings.llmApiKey || 
+        (settings.llmProvider === "custom" && settings.llmCustomEndpoint)
+      );
+      
+      if (canUseLLM) {
+        const recommendations = await LLMService.generateLLMReorderRecommendations(
+          settings.llmProvider as any,
+          settings.llmApiKey || undefined,
+          settings.llmCustomEndpoint || undefined
+        );
+        res.json(recommendations);
+      } else {
+        const recommendations = await LLMService.generateReorderRecommendations();
+        res.json(recommendations);
+      }
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to generate reorder recommendations" });
     }

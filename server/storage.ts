@@ -619,6 +619,23 @@ export class MemStorage implements IStorage {
     return settings;
   }
 
+  async updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined> {
+    const existing = await this.getSettings(userId);
+    if (!existing) return undefined;
+    
+    // Normalize empty strings to null
+    const normalized = Object.fromEntries(
+      Object.entries(updates).map(([key, value]) => [
+        key,
+        typeof value === 'string' && value.trim() === '' ? null : value
+      ])
+    ) as Partial<Omit<InsertSettings, 'userId'>>;
+    
+    const updated: Settings = { ...existing, ...normalized };
+    this.settings.set(existing.id, updated);
+    return updated;
+  }
+
   // Barcodes
   async getAllBarcodes(): Promise<Barcode[]> {
     return Array.from(this.barcodes.values());
@@ -901,20 +918,28 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined> {
+    // Normalize empty strings to null
+    const normalized = Object.fromEntries(
+      Object.entries(updates).map(([key, value]) => [
+        key,
+        typeof value === 'string' && value.trim() === '' ? null : value
+      ])
+    ) as Partial<Omit<InsertSettings, 'userId'>>;
+    
     // Check if settings exist
     const existing = await this.getSettings(userId);
     if (!existing) {
       // Create new settings row with the updates
       const insertData: InsertSettings = {
         userId,
-        ...updates
+        ...normalized
       };
       const results = await this.db.insert(schema.settings).values(insertData).returning();
       return results[0];
     }
     
     // Apply only the validated updates (Drizzle only updates provided columns)
-    const results = await this.db.update(schema.settings).set(updates).where(eq(schema.settings.userId, userId)).returning();
+    const results = await this.db.update(schema.settings).set(normalized).where(eq(schema.settings.userId, userId)).returning();
     return results[0];
   }
 

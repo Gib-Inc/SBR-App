@@ -686,6 +686,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get BOM for a specific product
+  app.get("/api/bom/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const bom = await storage.getBillOfMaterialsByProductId(req.params.itemId);
+      res.json(bom);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch BOM for product" });
+    }
+  });
+
+  // Save/Update BOM for a specific product
+  app.post("/api/bom/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { components } = req.body;
+      if (!Array.isArray(components)) {
+        return res.status(400).json({ error: "Components must be an array" });
+      }
+
+      // Delete existing BOM entries for this product
+      const existingBOM = await storage.getBillOfMaterialsByProductId(req.params.itemId);
+      for (const entry of existingBOM) {
+        await storage.deleteBillOfMaterials(entry.id);
+      }
+
+      // Create new BOM entries
+      const newBOM = [];
+      for (const component of components) {
+        if (!component.componentId || !component.quantity) {
+          continue; // Skip invalid entries
+        }
+        const entry = await storage.createBillOfMaterials({
+          finishedProductId: req.params.itemId,
+          componentId: component.componentId,
+          quantityRequired: component.quantity,
+        });
+        newBOM.push(entry);
+      }
+
+      res.json(newBOM);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to update BOM" });
+    }
+  });
+
   app.delete("/api/bom/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const success = await storage.deleteBillOfMaterials(req.params.id);

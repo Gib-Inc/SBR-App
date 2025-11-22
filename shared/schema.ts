@@ -207,6 +207,9 @@ export const settings = pgTable("settings", {
   enableLlmOrderRecommendations: boolean("enable_llm_order_recommendations").notNull().default(false),
   enableLlmSupplierRanking: boolean("enable_llm_supplier_ranking").notNull().default(false),
   enableLlmForecasting: boolean("enable_llm_forecasting").notNull().default(false),
+  enableVisionCapture: boolean("enable_vision_capture").notNull().default(false),
+  visionProvider: text("vision_provider"), // 'gpt-4-vision', 'claude-vision'
+  visionModel: text("vision_model"), // 'gpt-4o', 'gpt-4o-mini', 'claude-3-opus', 'claude-3-sonnet'
 });
 
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });

@@ -961,6 +961,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Vision API: Identify item from image
+  app.post("/api/vision/identify", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { imageDataUrl } = req.body;
+
+      if (!imageDataUrl) {
+        return res.status(400).json({ error: "Image data is required" });
+      }
+
+      // Validate base64 image size (limit to 10MB to prevent DoS)
+      const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+      const base64Data = imageDataUrl.split(',')[1] || imageDataUrl;
+      const sizeBytes = Math.ceil((base64Data.length * 3) / 4);
+      
+      if (sizeBytes > maxSizeBytes) {
+        return res.status(413).json({ error: "Image too large. Maximum size is 10MB." });
+      }
+
+      // Get user's vision settings
+      const settings = await storage.getSettings(userId);
+      
+      if (!settings?.enableVisionCapture) {
+        return res.status(403).json({ error: "Vision capture is not enabled. Please enable it in Settings." });
+      }
+
+      const visionProvider = settings.visionProvider || "gpt-4-vision";
+      const visionModel = settings.visionModel || "gpt-4o";
+      
+      // Determine which API key to use based on provider
+      let apiKey = "";
+      if (visionProvider === "gpt-4-vision") {
+        apiKey = settings.llmApiKey || "";
+        if (!apiKey) {
+          return res.status(400).json({ error: "OpenAI API key is required for GPT-4 Vision. Please configure it in Settings." });
+        }
+      } else if (visionProvider === "claude-vision") {
+        apiKey = settings.llmApiKey || "";
+        if (!apiKey) {
+          return res.status(400).json({ error: "Anthropic API key is required for Claude Vision. Please configure it in Settings." });
+        }
+      }
+
+      const result = await LLMService.identifyItemFromImage({
+        provider: visionProvider as any,
+        apiKey,
+        model: visionModel,
+        imageDataUrl,
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Vision API] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to identify item from image" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

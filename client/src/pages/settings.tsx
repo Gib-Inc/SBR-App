@@ -358,6 +358,9 @@ function LLMSettings() {
   const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
   const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
   const [enableForecasting, setEnableForecasting] = useState(false);
+  const [enableVisionCapture, setEnableVisionCapture] = useState(false);
+  const [visionProvider, setVisionProvider] = useState("gpt-4-vision");
+  const [visionModel, setVisionModel] = useState("gpt-4o");
 
   // Load existing LLM settings
   const { data: settings } = useQuery<any>({
@@ -372,6 +375,9 @@ function LLMSettings() {
       setEnableOrderRecommendations(settings.enableLlmOrderRecommendations || false);
       setEnableSupplierRanking(settings.enableLlmSupplierRanking || false);
       setEnableForecasting(settings.enableLlmForecasting || false);
+      setEnableVisionCapture(settings.enableVisionCapture || false);
+      setVisionProvider(settings.visionProvider || 'gpt-4-vision');
+      setVisionModel(settings.visionModel || 'gpt-4o');
     }
   }, [settings]);
 
@@ -416,6 +422,14 @@ function LLMSettings() {
       enableLlmOrderRecommendations: enableOrderRecommendations,
       enableLlmSupplierRanking: enableSupplierRanking,
       enableLlmForecasting: enableForecasting,
+    });
+  };
+
+  const saveVisionSettings = async () => {
+    await saveSettingMutation.mutateAsync({
+      enableVisionCapture,
+      visionProvider,
+      visionModel,
     });
   };
 
@@ -565,6 +579,87 @@ function LLMSettings() {
               data-testid="button-save-llm-features"
             >
               {saveSettingMutation.isPending ? "Saving..." : "Save Features"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Vision Capture (Camera Scanner)</CardTitle>
+          <CardDescription>
+            Use device camera to identify and add inventory items with AI vision
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="enable-vision-capture">Enable Vision Capture</Label>
+              <p className="text-sm text-muted-foreground">
+                Allow camera-based item scanning and AI identification
+              </p>
+            </div>
+            <Switch
+              id="enable-vision-capture"
+              checked={enableVisionCapture}
+              onCheckedChange={setEnableVisionCapture}
+              data-testid="switch-vision-capture"
+            />
+          </div>
+
+          {enableVisionCapture && (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="vision-provider">Vision Provider</Label>
+                <Select value={visionProvider} onValueChange={setVisionProvider}>
+                  <SelectTrigger id="vision-provider" data-testid="select-vision-provider">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gpt-4-vision">GPT-4 Vision (OpenAI)</SelectItem>
+                    <SelectItem value="claude-vision">Claude Vision (Anthropic)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {visionProvider === "gpt-4-vision"
+                    ? "Uses your OpenAI API key configured above"
+                    : "Uses your Anthropic API key configured above"}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vision-model">Vision Model</Label>
+                <Select value={visionModel} onValueChange={setVisionModel}>
+                  <SelectTrigger id="vision-model" data-testid="select-vision-model">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {visionProvider === "gpt-4-vision" ? (
+                      <>
+                        <SelectItem value="gpt-4o">GPT-4o (Recommended)</SelectItem>
+                        <SelectItem value="gpt-4o-mini">GPT-4o Mini (Faster)</SelectItem>
+                        <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                      </>
+                    ) : (
+                      <>
+                        <SelectItem value="claude-3-opus">Claude 3 Opus</SelectItem>
+                        <SelectItem value="claude-3-sonnet">Claude 3 Sonnet (Recommended)</SelectItem>
+                        <SelectItem value="claude-3-haiku">Claude 3 Haiku (Faster)</SelectItem>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              onClick={saveVisionSettings}
+              disabled={saveSettingMutation.isPending}
+              data-testid="button-save-vision-settings"
+            >
+              {saveSettingMutation.isPending ? "Saving..." : "Save Vision Settings"}
             </Button>
           </div>
         </CardContent>

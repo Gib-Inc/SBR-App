@@ -51,6 +51,24 @@ export interface DemandForecast {
   seasonalPattern?: string;
 }
 
+export interface VisionIdentificationResult {
+  name: string;
+  sku: string | null;
+  quantity: number | null;
+  type: "component" | "finished_product";
+  category: string | null;
+  location: string | null;
+  confidence: number; // 0-1 scale
+  description: string;
+}
+
+export interface VisionRequest {
+  provider: "gpt-4-vision" | "claude-vision";
+  apiKey: string;
+  model: string; // e.g., "gpt-4o", "claude-3-opus"
+  imageDataUrl: string; // base64 encoded image
+}
+
 /**
  * Pluggable LLM helper that routes requests to different providers
  */
@@ -650,5 +668,39 @@ Analyze this inventory situation and reason through the following:
     }
 
     return forecasts;
+  }
+
+  /**
+   * Identify inventory item from image using vision AI
+   */
+  static async identifyItemFromImage(request: VisionRequest): Promise<VisionIdentificationResult> {
+    try {
+      // Stub implementation that would integrate with actual vision APIs
+      // In production, this would call:
+      // - OpenAI GPT-4 Vision API for gpt-4-vision provider
+      // - Anthropic Claude Vision API for claude-vision provider
+      
+      // For now, return a structured mock response
+      const mockResult: VisionIdentificationResult = {
+        name: "M8 Hex Bolt",
+        sku: "BOLT-M8-50",
+        quantity: 25,
+        type: "component",
+        category: "Fasteners",
+        location: null,
+        confidence: 0.85,
+        description: "Standard M8 hex bolt, approximately 50mm length, appears to be zinc-plated steel. Identified from image analysis with high confidence."
+      };
+
+      // Simulate API delay
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      console.log(`[Vision] Identified item: ${mockResult.name} (confidence: ${mockResult.confidence})`);
+      
+      return mockResult;
+    } catch (error: any) {
+      console.error("[Vision] Error identifying item:", error);
+      throw new Error(`Vision API failed: ${error.message}`);
+    }
   }
 }

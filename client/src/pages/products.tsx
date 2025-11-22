@@ -7,9 +7,11 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Camera } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { CameraCaptureModal } from "@/components/camera-capture-modal";
+import { VisionConfirmationDialog } from "@/components/vision-confirmation-dialog";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -628,6 +630,10 @@ export default function BOM() {
   const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
   const [editingBOMItem, setEditingBOMItem] = useState<any>(null);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [isVisionConfirmDialogOpen, setIsVisionConfirmDialogOpen] = useState(false);
+  const [visionResult, setVisionResult] = useState<any>(null);
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -737,14 +743,25 @@ export default function BOM() {
             <h2 className="text-lg font-semibold">Finished Products</h2>
             <p className="text-sm text-muted-foreground">Products with bill of materials</p>
           </div>
-          <Button
-            size="sm"
-            onClick={() => setIsCreateFinishedDialogOpen(true)}
-            data-testid="button-create-finished-product"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Product
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsCameraModalOpen(true)}
+              data-testid="button-scan-item"
+            >
+              <Camera className="mr-2 h-4 w-4" />
+              Scan Item
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setIsCreateFinishedDialogOpen(true)}
+              data-testid="button-create-finished-product"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Product
+            </Button>
+          </div>
         </div>
         {isLoading ? (
           <div className="flex h-48 items-center justify-center">
@@ -863,6 +880,131 @@ export default function BOM() {
           allItems={allItems}
         />
       )}
+      <CameraCaptureModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        onImageCaptured={async (imageDataUrl) => {
+          setIsAnalyzingImage(true);
+          toast({
+            title: "Analyzing image...",
+            description: "AI is identifying the item from your image.",
+          });
+          
+          try {
+            const res = await apiRequest("POST", "/api/vision/identify", { imageDataUrl });
+            if (!res.ok) {
+              const error = await res.json();
+              throw new Error(error.error || "Failed to analyze image");
+            }
+            
+            const result = await res.json();
+            setVisionResult(result);
+            setIsVisionConfirmDialogOpen(true);
+            
+            toast({
+              title: "Item Identified",
+              description: `AI identified: ${result.name}`,
+            });
+          } catch (error: any) {
+            toast({
+              variant: "destructive",
+              title: "Analysis Failed",
+              description: error.message || "Failed to identify item from image",
+            });
+          } finally {
+            setIsAnalyzingImage(false);
+          }
+        }}
+      />
+      <VisionConfirmationDialog
+        isOpen={isVisionConfirmDialogOpen}
+        onClose={() => {
+          setIsVisionConfirmDialogOpen(false);
+          setVisionResult(null);
+        }}
+        visionResult={visionResult}
+        onConfirm={async (action, data) => {
+          if (action === "create") {
+            // Create new item
+            try {
+              const res = await apiRequest("POST", "/api/items", {
+                name: data.name,
+                sku: data.sku || "",
+                currentStock: data.quantity || 0,
+                type: data.type,
+                category: data.category || null,
+                location: data.location || null,
+              });
+              
+              if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.error || "Failed to create item");
+              }
+              
+              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+              
+              toast({
+                title: "Success",
+                description: `Created new ${data.type === "finished_product" ? "product" : "component"}: ${data.name}`,
+              });
+              
+              setIsVisionConfirmDialogOpen(false);
+              setVisionResult(null);
+            } catch (error: any) {
+              toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "Failed to create item",
+              });
+            }
+          } else {
+            // Adjust existing stock
+            // Find item by name or SKU
+            const existingItem = allItems.find((item: any) => 
+              item.name.toLowerCase() === data.name?.toLowerCase() || 
+              (data.sku && item.sku?.toLowerCase() === data.sku.toLowerCase())
+            );
+            
+            if (!existingItem) {
+              toast({
+                variant: "destructive",
+                title: "Item Not Found",
+                description: "Could not find existing item. Please create it instead.",
+              });
+              return;
+            }
+            
+            try {
+              const newStock = existingItem.currentStock + (data.adjustmentQuantity || 0);
+              
+              const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, {
+                currentStock: Math.max(0, newStock),
+              });
+              
+              if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.error || "Failed to adjust stock");
+              }
+              
+              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+              
+              toast({
+                title: "Success",
+                description: `Adjusted stock for ${existingItem.name}: ${existingItem.currentStock} → ${newStock}`,
+              });
+              
+              setIsVisionConfirmDialogOpen(false);
+              setVisionResult(null);
+            } catch (error: any) {
+              toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "Failed to adjust stock",
+              });
+            }
+          }
+        }}
+      />
     </div>
   );
 }

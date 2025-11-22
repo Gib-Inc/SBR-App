@@ -163,6 +163,7 @@ export class MemStorage implements IStorage {
       minStock: 50,
       dailyUsage: 12,
       barcode: "COMP-NUT-001",
+      location: null,
     });
 
     this.items.set(boltId, {
@@ -175,6 +176,7 @@ export class MemStorage implements IStorage {
       minStock: 75,
       dailyUsage: 15,
       barcode: "COMP-BOLT-001",
+      location: null,
     });
 
     this.items.set(springId, {
@@ -187,6 +189,7 @@ export class MemStorage implements IStorage {
       minStock: 40,
       dailyUsage: 8,
       barcode: "COMP-SPR-001",
+      location: null,
     });
 
     this.items.set(barId, {
@@ -199,6 +202,7 @@ export class MemStorage implements IStorage {
       minStock: 30,
       dailyUsage: 6,
       barcode: "COMP-BAR-001",
+      location: null,
     });
 
     // Demo finished product
@@ -213,6 +217,7 @@ export class MemStorage implements IStorage {
       minStock: 10,
       dailyUsage: 3,
       barcode: "PROD-SBR-001",
+      location: "Spanish Fork",
     });
 
     // BOM for Sticker Bur Roller
@@ -328,6 +333,7 @@ export class MemStorage implements IStorage {
       minStock: insertItem.minStock ?? 0,
       dailyUsage: insertItem.dailyUsage ?? 0,
       barcode: insertItem.barcode ?? null,
+      location: insertItem.location ?? null,
     };
     this.items.set(id, item);
     return item;
@@ -610,10 +616,15 @@ export class MemStorage implements IStorage {
       phantombusterApiKey: insertSettings.phantombusterApiKey ?? null,
       llmProvider: insertSettings.llmProvider ?? null,
       llmApiKey: insertSettings.llmApiKey ?? null,
+      llmModel: insertSettings.llmModel ?? null,
       llmCustomEndpoint: insertSettings.llmCustomEndpoint ?? null,
+      llmPromptTemplate: insertSettings.llmPromptTemplate ?? null,
       enableLlmOrderRecommendations: insertSettings.enableLlmOrderRecommendations ?? false,
       enableLlmSupplierRanking: insertSettings.enableLlmSupplierRanking ?? false,
       enableLlmForecasting: insertSettings.enableLlmForecasting ?? false,
+      enableVisionCapture: insertSettings.enableVisionCapture ?? false,
+      visionProvider: insertSettings.visionProvider ?? null,
+      visionModel: insertSettings.visionModel ?? null,
     };
     this.settings.set(id, settings);
     return settings;

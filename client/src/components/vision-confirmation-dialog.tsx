@@ -39,6 +39,7 @@ export function VisionConfirmationDialog({
   visionResult,
   onConfirm,
   isLoading = false,
+  defaultType,
 }: VisionConfirmationDialogProps) {
   const [action, setAction] = useState<"create" | "adjust">("create");
   const [name, setName] = useState("");
@@ -55,11 +56,11 @@ export function VisionConfirmationDialog({
       setSku(visionResult.sku || "");
       setQuantity(visionResult.quantity || 0);
       setAdjustmentQuantity(visionResult.quantity || 0);
-      setItemType(visionResult.type || "component");
+      setItemType(visionResult.type || defaultType || "component");
       setCategory(visionResult.category || "");
       setLocation(visionResult.location || "");
     }
-  }, [visionResult]);
+  }, [visionResult, defaultType]);
 
   const handleConfirm = () => {
     if (action === "create") {

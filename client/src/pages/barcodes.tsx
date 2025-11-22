@@ -11,9 +11,11 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
-import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon } from "lucide-react";
+import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { CameraCaptureModal } from "@/components/camera-capture-modal";
+import { VisionConfirmationDialog } from "@/components/vision-confirmation-dialog";
 
 const barcodeFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -250,7 +252,17 @@ export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isScanDialogOpen, setIsScanDialogOpen] = useState(false);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [isVisionConfirmDialogOpen, setIsVisionConfirmDialogOpen] = useState(false);
+  const [visionResult, setVisionResult] = useState<any>(null);
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [cameraContext, setCameraContext] = useState<"finished_product" | "item">("finished_product");
   const { toast } = useToast();
+  
+  // Fetch items for matching
+  const { data: items } = useQuery({
+    queryKey: ["/api/items"],
+  });
 
   // Fetch barcodes
   const { data: barcodes, isLoading } = useQuery({
@@ -461,9 +473,23 @@ export default function Barcodes() {
           {/* Finished Products Section */}
           {finishedProductBarcodes.length > 0 && (
             <div className="flex flex-col gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Finished Products</h2>
-                <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Finished Products</h2>
+                  <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setCameraContext("finished_product");
+                    setIsCameraModalOpen(true);
+                  }}
+                  data-testid="button-scan-finished-product-barcode"
+                >
+                  <Camera className="mr-2 h-4 w-4" />
+                  Scan Item
+                </Button>
               </div>
               <div className="overflow-hidden rounded-md border">
                 <table className="w-full">
@@ -495,9 +521,23 @@ export default function Barcodes() {
           {/* Item Inventory Section */}
           {itemInventoryBarcodes.length > 0 && (
             <div className="flex flex-col gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Item Inventory</h2>
-                <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">Item Inventory</h2>
+                  <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setCameraContext("item");
+                    setIsCameraModalOpen(true);
+                  }}
+                  data-testid="button-scan-item-inventory-barcode"
+                >
+                  <Camera className="mr-2 h-4 w-4" />
+                  Scan Item
+                </Button>
               </div>
               <div className="overflow-hidden rounded-md border">
                 <table className="w-full">
@@ -540,6 +580,156 @@ export default function Barcodes() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Camera and Vision Dialogs */}
+      <CameraCaptureModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        onImageCaptured={async (imageDataUrl) => {
+          setIsAnalyzingImage(true);
+          toast({
+            title: "Analyzing image...",
+            description: "AI is identifying the item from your image.",
+          });
+          
+          try {
+            const res = await apiRequest("POST", "/api/vision/identify", { imageDataUrl });
+            if (!res.ok) {
+              const error = await res.json();
+              throw new Error(error.error || "Failed to analyze image");
+            }
+            
+            const result = await res.json();
+            setVisionResult(result);
+            setIsVisionConfirmDialogOpen(true);
+            
+            toast({
+              title: "Item Identified",
+              description: `AI identified: ${result.name}`,
+            });
+          } catch (error: any) {
+            toast({
+              variant: "destructive",
+              title: "Analysis Failed",
+              description: error.message || "Failed to identify item from image",
+            });
+          } finally {
+            setIsAnalyzingImage(false);
+          }
+        }}
+      />
+      <VisionConfirmationDialog
+        isOpen={isVisionConfirmDialogOpen}
+        onClose={() => {
+          setIsVisionConfirmDialogOpen(false);
+          setVisionResult(null);
+        }}
+        visionResult={visionResult}
+        defaultType={cameraContext === "finished_product" ? "finished_product" : "component"}
+        onConfirm={async (action, data) => {
+          const allItems = (items as any[]) ?? [];
+          
+          if (action === "create") {
+            // Create new item and barcode
+            try {
+              // First, create the item
+              const itemRes = await apiRequest("POST", "/api/items", {
+                name: data.name,
+                sku: data.sku || "",
+                currentStock: data.quantity || 0,
+                type: data.type,
+                category: data.category || null,
+                location: data.location || null,
+              });
+              
+              if (!itemRes.ok) {
+                const error = await itemRes.json();
+                throw new Error(error.error || "Failed to create item");
+              }
+              
+              const newItem = await itemRes.json();
+              
+              // Then, create the barcode
+              const barcodePurpose = data.type === "finished_product" ? "finished_product" : "item";
+              const barcodeValue = `${data.type === "finished_product" ? "PROD" : "COMP"}-${data.sku || newItem.id}`;
+              
+              const barcodeRes = await apiRequest("POST", "/api/barcodes", {
+                name: data.name,
+                value: barcodeValue,
+                purpose: barcodePurpose,
+                sku: data.sku || "",
+                referenceId: newItem.id,
+              });
+              
+              if (!barcodeRes.ok) {
+                const error = await barcodeRes.json();
+                throw new Error(error.error || "Failed to create barcode");
+              }
+              
+              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+              await queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+              
+              toast({
+                title: "Success",
+                description: `Created new ${data.type === "finished_product" ? "product" : "component"} with barcode: ${data.name}`,
+              });
+              
+              setIsVisionConfirmDialogOpen(false);
+              setVisionResult(null);
+            } catch (error: any) {
+              toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "Failed to create item and barcode",
+              });
+            }
+          } else {
+            // Adjust existing stock
+            const existingItem = allItems.find((item: any) => 
+              item.name.toLowerCase() === data.name?.toLowerCase() || 
+              (data.sku && item.sku?.toLowerCase() === data.sku.toLowerCase())
+            );
+            
+            if (!existingItem) {
+              toast({
+                variant: "destructive",
+                title: "Item Not Found",
+                description: "Could not find existing item. Please create it instead.",
+              });
+              return;
+            }
+            
+            try {
+              const newStock = existingItem.currentStock + (data.adjustmentQuantity || 0);
+              
+              const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, {
+                currentStock: Math.max(0, newStock),
+              });
+              
+              if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.error || "Failed to adjust stock");
+              }
+              
+              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+              
+              toast({
+                title: "Success",
+                description: `Adjusted stock for ${existingItem.name}: ${existingItem.currentStock} → ${newStock}`,
+              });
+              
+              setIsVisionConfirmDialogOpen(false);
+              setVisionResult(null);
+            } catch (error: any) {
+              toast({
+                variant: "destructive",
+                title: "Error",
+                description: error.message || "Failed to adjust stock",
+              });
+            }
+          }
+        }}
+      />
     </div>
   );
 }

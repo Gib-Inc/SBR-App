@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Plus, Search, Download, Printer, Trash2, Barcode as BarcodeIcon } from "lucide-react";
+import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -23,12 +23,12 @@ const barcodeFormSchema = z.object({
   referenceId: z.string().optional(),
 });
 
-function formatPurposeLabel(purpose: string): string {
+function formatTypeLabel(purpose: string): string {
   switch (purpose) {
     case "bin":
-      return "Finished product";
+      return "Finished Product";
     case "finished_product":
-      return "Finished product";
+      return "Finished Product";
     case "item":
       return "Item Inventory";
     default:
@@ -36,62 +36,202 @@ function formatPurposeLabel(purpose: string): string {
   }
 }
 
-function BarcodeListItem({ barcode, onPrint, onDelete }: { barcode: any; onPrint: (barcode: any) => void; onDelete: (barcode: any) => void }) {
+function BarcodeTableRow({ 
+  barcode, 
+  onPrint, 
+  onDelete, 
+  onUpdate 
+}: { 
+  barcode: any; 
+  onPrint: (barcode: any) => void; 
+  onDelete: (barcode: any) => void;
+  onUpdate: (id: string, field: string, value: string) => void;
+}) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const startEdit = (field: string, currentValue: string) => {
+    setEditingField(field);
+    setEditValue(currentValue || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const saveEdit = () => {
+    if (editingField) {
+      onUpdate(barcode.id, editingField, editValue);
+      setEditingField(null);
+      setEditValue("");
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      saveEdit();
+    } else if (e.key === "Escape") {
+      cancelEdit();
+    }
+  };
+
   return (
-    <div className="flex items-center gap-4 rounded-md border bg-card p-4 hover-elevate">
-      {/* Barcode Icon */}
-      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-md border bg-muted">
-        <BarcodeIcon className="h-6 w-6 text-muted-foreground" />
-      </div>
+    <tr className="border-b hover-elevate" data-testid={`row-barcode-${barcode.id}`}>
+      {/* Name Column */}
+      <td className="p-3">
+        {editingField === "name" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8"
+              autoFocus
+              data-testid={`input-edit-name-${barcode.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-name-${barcode.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-name-${barcode.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+            onClick={() => startEdit("name", barcode.name)}
+            data-testid={`text-barcode-name-${barcode.id}`}
+          >
+            {barcode.name}
+          </div>
+        )}
+      </td>
 
-      {/* Barcode Details */}
-      <div className="flex-1 space-y-1">
-        <p className="font-medium" data-testid={`text-barcode-name-${barcode.id}`}>
-          {barcode.name}
-        </p>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm text-muted-foreground">{barcode.value}</span>
-          {barcode.sku && (
-            <>
-              <span className="text-muted-foreground">•</span>
-              <span className="font-mono text-sm text-muted-foreground">{barcode.sku}</span>
-            </>
-          )}
+      {/* Barcode Column */}
+      <td className="p-3">
+        {editingField === "value" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 font-mono"
+              autoFocus
+              data-testid={`input-edit-barcode-${barcode.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-barcode-${barcode.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-barcode-${barcode.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 font-mono text-sm hover-elevate" 
+            onClick={() => startEdit("value", barcode.value)}
+            data-testid={`text-barcode-value-${barcode.id}`}
+          >
+            {barcode.value}
+          </div>
+        )}
+      </td>
+
+      {/* Type Column */}
+      <td className="p-3">
+        {editingField === "purpose" ? (
+          <div className="flex items-center gap-2">
+            <Select value={editValue} onValueChange={setEditValue}>
+              <SelectTrigger className="h-8 w-48" data-testid={`select-edit-type-${barcode.id}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="finished_product">Finished Product</SelectItem>
+                <SelectItem value="item">Item Inventory</SelectItem>
+                <SelectItem value="bin">Bin Location</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-type-${barcode.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-type-${barcode.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+            onClick={() => startEdit("purpose", barcode.purpose)}
+            data-testid={`text-barcode-type-${barcode.id}`}
+          >
+            <Badge variant="secondary">{formatTypeLabel(barcode.purpose)}</Badge>
+          </div>
+        )}
+      </td>
+
+      {/* SKU Column */}
+      <td className="p-3">
+        {editingField === "sku" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 font-mono"
+              autoFocus
+              data-testid={`input-edit-sku-${barcode.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-sku-${barcode.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-sku-${barcode.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 font-mono text-sm hover-elevate" 
+            onClick={() => startEdit("sku", barcode.sku)}
+            data-testid={`text-barcode-sku-${barcode.id}`}
+          >
+            {barcode.sku || <span className="text-muted-foreground">—</span>}
+          </div>
+        )}
+      </td>
+
+      {/* Actions Column */}
+      <td className="p-3">
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onPrint(barcode)}
+            data-testid={`button-print-${barcode.id}`}
+            className="h-8 w-8"
+          >
+            <Printer className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            data-testid={`button-download-${barcode.id}`}
+            className="h-8 w-8"
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onDelete(barcode)}
+            data-testid={`button-delete-${barcode.id}`}
+            className="h-8 w-8"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
-      </div>
-
-      {/* Purpose Badge */}
-      <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
-        {formatPurposeLabel(barcode.purpose)}
-      </Badge>
-
-      {/* Actions */}
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPrint(barcode)}
-          data-testid={`button-print-${barcode.id}`}
-        >
-          <Printer className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid={`button-download-${barcode.id}`}
-        >
-          <Download className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onDelete(barcode)}
-          data-testid={`button-delete-${barcode.id}`}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
+      </td>
+    </tr>
   );
 }
 
@@ -113,11 +253,30 @@ export default function Barcodes() {
   const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product" || b.purpose === "bin");
   const itemInventoryBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "item");
 
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
+      const response = await apiRequest("PATCH", `/api/barcodes/${id}`, updates);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      toast({
+        title: "Success",
+        description: "Barcode updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update barcode",
+      });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async (barcodeId: string) => {
-      const response = await apiRequest(`/api/barcodes/${barcodeId}`, {
-        method: "DELETE",
-      });
+      const response = await apiRequest("DELETE", `/api/barcodes/${barcodeId}`, {});
       return response.json();
     },
     onSuccess: () => {
@@ -135,6 +294,13 @@ export default function Barcodes() {
       });
     },
   });
+
+  const handleUpdate = (id: string, field: string, value: string) => {
+    updateMutation.mutate({
+      id,
+      updates: { [field]: value },
+    });
+  };
 
   const handlePrint = (barcode: any) => {
     // Open print dialog with barcode
@@ -213,10 +379,29 @@ export default function Barcodes() {
                 <h2 className="text-lg font-semibold">Finished Products</h2>
                 <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
               </div>
-              <div className="flex flex-col gap-2">
-                {finishedProductBarcodes.map((barcode: any) => (
-                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} onDelete={handleDelete} />
-                ))}
+              <div className="overflow-hidden rounded-md border">
+                <table className="w-full">
+                  <thead className="bg-muted/50">
+                    <tr className="border-b">
+                      <th className="p-3 text-left text-sm font-medium">Name</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
+                      <th className="p-3 text-left text-sm font-medium">Type</th>
+                      <th className="p-3 text-left text-sm font-medium">SKU</th>
+                      <th className="p-3 text-left text-sm font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {finishedProductBarcodes.map((barcode: any) => (
+                      <BarcodeTableRow 
+                        key={barcode.id} 
+                        barcode={barcode} 
+                        onPrint={handlePrint} 
+                        onDelete={handleDelete}
+                        onUpdate={handleUpdate}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -228,10 +413,29 @@ export default function Barcodes() {
                 <h2 className="text-lg font-semibold">Item Inventory</h2>
                 <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
               </div>
-              <div className="flex flex-col gap-2">
-                {itemInventoryBarcodes.map((barcode: any) => (
-                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} onDelete={handleDelete} />
-                ))}
+              <div className="overflow-hidden rounded-md border">
+                <table className="w-full">
+                  <thead className="bg-muted/50">
+                    <tr className="border-b">
+                      <th className="p-3 text-left text-sm font-medium">Name</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
+                      <th className="p-3 text-left text-sm font-medium">Type</th>
+                      <th className="p-3 text-left text-sm font-medium">SKU</th>
+                      <th className="p-3 text-left text-sm font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemInventoryBarcodes.map((barcode: any) => (
+                      <BarcodeTableRow 
+                        key={barcode.id} 
+                        barcode={barcode} 
+                        onPrint={handlePrint} 
+                        onDelete={handleDelete}
+                        onUpdate={handleUpdate}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -346,16 +550,16 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
           name="purpose"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Purpose</FormLabel>
+              <FormLabel>Type</FormLabel>
               <Select onValueChange={field.onChange} defaultValue={field.value}>
                 <FormControl>
-                  <SelectTrigger data-testid="select-barcode-purpose">
+                  <SelectTrigger data-testid="select-barcode-type">
                     <SelectValue />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="bin">Bin location</SelectItem>
-                  <SelectItem value="finished_product">Finished product</SelectItem>
+                  <SelectItem value="bin">Bin Location</SelectItem>
+                  <SelectItem value="finished_product">Finished Product</SelectItem>
                   <SelectItem value="item">Item Inventory</SelectItem>
                 </SelectContent>
               </Select>

@@ -755,6 +755,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "Failed to update settings" });
       }
       
+      // Update integration health status to "pending_test" when API keys are changed
+      const integrationKeyMap: Record<string, string> = {
+        gohighlevelApiKey: "gohighlevel",
+        extensivApiKey: "extensiv",
+        phantombusterApiKey: "phantombuster",
+        shopifyApiKey: "shopify",
+      };
+      
+      for (const [apiKeyField, integrationName] of Object.entries(integrationKeyMap)) {
+        if (apiKeyField in normalized) {
+          const newValue = normalized[apiKeyField as keyof typeof normalized];
+          const oldValue = existing?.[apiKeyField as keyof typeof existing];
+          
+          // If API key changed, update health status
+          if (newValue !== oldValue) {
+            if (newValue && typeof newValue === 'string' && newValue.trim()) {
+              // New or changed API key - set to pending_test
+              await storage.createOrUpdateIntegrationHealth({
+                integrationName,
+                lastStatus: "pending_test",
+                lastAlertAt: null,
+                errorMessage: null,
+              });
+            } else {
+              // API key removed - set to pending_setup
+              await storage.createOrUpdateIntegrationHealth({
+                integrationName,
+                lastStatus: "pending_setup",
+                lastAlertAt: null,
+                errorMessage: null,
+              });
+            }
+          }
+        }
+      }
+      
       res.json(updated);
     } catch (error: any) {
       console.error("Settings update error:", error);
@@ -780,17 +816,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call GoHighLevel API
+      // In a real implementation, you'd make the API call here and catch errors
+      
+      // Simulate successful connection
       await storage.createOrUpdateIntegrationHealth({
         integrationName: "gohighlevel",
         lastSuccessAt: new Date(),
-        lastStatus: "success",
+        lastStatus: "connected",
         lastAlertAt: null,
         errorMessage: null,
       });
       
       res.json({ success: true, message: "Sales history sync initiated (stub)" });
-    } catch (error) {
-      res.status(500).json({ error: "Integration sync failed" });
+    } catch (error: any) {
+      // Record failure in integration health
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: "gohighlevel",
+        lastStatus: "failed",
+        errorMessage: error.message || "Integration sync failed",
+      });
+      res.status(500).json({ error: error.message || "Integration sync failed" });
     }
   });
 
@@ -798,17 +843,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/integrations/extensiv/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call Extensiv API
+      
+      // Simulate successful connection
       await storage.createOrUpdateIntegrationHealth({
         integrationName: "extensiv",
         lastSuccessAt: new Date(),
-        lastStatus: "success",
+        lastStatus: "connected",
         lastAlertAt: null,
         errorMessage: null,
       });
       
       res.json({ success: true, message: "Finished inventory sync initiated (stub)" });
-    } catch (error) {
-      res.status(500).json({ error: "Integration sync failed" });
+    } catch (error: any) {
+      // Record failure in integration health
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: "extensiv",
+        lastStatus: "failed",
+        errorMessage: error.message || "Integration sync failed",
+      });
+      res.status(500).json({ error: error.message || "Integration sync failed" });
     }
   });
 
@@ -816,17 +869,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/integrations/phantombuster/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       // Stub implementation - would call PhantomBuster API
+      
+      // Simulate successful connection
       await storage.createOrUpdateIntegrationHealth({
         integrationName: "phantombuster",
         lastSuccessAt: new Date(),
-        lastStatus: "success",
+        lastStatus: "connected",
         lastAlertAt: null,
         errorMessage: null,
       });
       
       res.json({ success: true, message: "Supplier data sync initiated (stub)" });
-    } catch (error) {
-      res.status(500).json({ error: "Integration sync failed" });
+    } catch (error: any) {
+      // Record failure in integration health
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: "phantombuster",
+        lastStatus: "failed",
+        errorMessage: error.message || "Integration sync failed",
+      });
+      res.status(500).json({ error: error.message || "Integration sync failed" });
     }
   });
 

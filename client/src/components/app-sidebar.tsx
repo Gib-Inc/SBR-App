@@ -20,7 +20,7 @@ const mainMenuItems = [
     icon: LayoutDashboard,
   },
   {
-    title: "Products",
+    title: "BOM",
     url: "/products",
     icon: Package,
   },

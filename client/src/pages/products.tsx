@@ -1,60 +1,637 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Edit, Trash2, Package } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 
-export default function Products() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+function ItemTableRow({ 
+  item, 
+  onDelete, 
+  onUpdate,
+  onEditBOM
+}: { 
+  item: any; 
+  onDelete: (item: any) => void;
+  onUpdate: (id: string, field: string, value: string | number, onSuccess: () => void, onError: () => void) => void;
+  onEditBOM?: (item: any) => void;
+}) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
 
-  // Fetch products
-  const { data: products, isLoading } = useQuery({
-    queryKey: ["/api/products"],
+  const startEdit = (field: string, currentValue: string | number) => {
+    setEditingField(field);
+    setEditValue(String(currentValue || ""));
+  };
+
+  const cancelEdit = () => {
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const saveEdit = () => {
+    if (!editingField) return;
+
+    // Validate input
+    if (editingField === "currentStock") {
+      const numValue = Number(editValue);
+      if (isNaN(numValue) || numValue < 0) {
+        return; // Keep edit mode open for invalid input
+      }
+      onUpdate(
+        item.id, 
+        editingField, 
+        numValue,
+        () => {
+          // Success: exit edit mode
+          setEditingField(null);
+          setEditValue("");
+        },
+        () => {
+          // Error: keep edit mode open (error toast handled by parent)
+        }
+      );
+    } else {
+      const trimmedValue = editValue.trim();
+      if (!trimmedValue) {
+        return; // Keep edit mode open for empty input
+      }
+      onUpdate(
+        item.id, 
+        editingField, 
+        trimmedValue,
+        () => {
+          // Success: exit edit mode
+          setEditingField(null);
+          setEditValue("");
+        },
+        () => {
+          // Error: keep edit mode open (error toast handled by parent)
+        }
+      );
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      saveEdit();
+    } else if (e.key === "Escape") {
+      cancelEdit();
+    }
+  };
+
+  return (
+    <tr className="h-11 border-b hover-elevate" data-testid={`row-item-${item.id}`}>
+      {/* Name Column */}
+      <td className="px-3 align-middle">
+        {editingField === "name" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8"
+              autoFocus
+              data-testid={`input-edit-name-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-name-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-name-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+            onClick={() => startEdit("name", item.name)}
+            data-testid={`text-item-name-${item.id}`}
+          >
+            {item.name}
+          </div>
+        )}
+      </td>
+
+      {/* SKU Column */}
+      <td className="px-3 align-middle">
+        {editingField === "sku" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 font-mono"
+              autoFocus
+              data-testid={`input-edit-sku-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-sku-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-sku-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 font-mono text-sm hover-elevate" 
+            onClick={() => startEdit("sku", item.sku)}
+            data-testid={`text-item-sku-${item.id}`}
+          >
+            {item.sku || <span className="text-muted-foreground">—</span>}
+          </div>
+        )}
+      </td>
+
+      {/* Current Stock Column */}
+      <td className="px-3 align-middle">
+        {editingField === "currentStock" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 w-24"
+              autoFocus
+              data-testid={`input-edit-stock-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-stock-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-stock-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate text-right" 
+            onClick={() => startEdit("currentStock", item.currentStock)}
+            data-testid={`text-item-stock-${item.id}`}
+          >
+            {item.currentStock ?? 0}
+          </div>
+        )}
+      </td>
+
+      {/* BOM Components Column (only for finished products) */}
+      {item.isFinished && (
+        <td className="px-3 align-middle text-center">
+          {onEditBOM && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onEditBOM(item)}
+              data-testid={`button-edit-bom-${item.id}`}
+            >
+              <Edit className="h-3 w-3 mr-1" />
+              {item.componentsCount || 0} components
+            </Button>
+          )}
+        </td>
+      )}
+
+      {/* Category Column (only for stock inventory) */}
+      {!item.isFinished && (
+        <td className="px-3 align-middle">
+          {editingField === "category" ? (
+            <div className="flex items-center gap-2">
+              <Input
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="h-8"
+                autoFocus
+                data-testid={`input-edit-category-${item.id}`}
+              />
+              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-category-${item.id}`}>
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-category-${item.id}`}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div 
+              className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+              onClick={() => startEdit("category", item.category || "")}
+              data-testid={`text-item-category-${item.id}`}
+            >
+              {item.category || <span className="text-muted-foreground">—</span>}
+            </div>
+          )}
+        </td>
+      )}
+
+      {/* Actions Column */}
+      <td className="px-3 align-middle">
+        <div className="flex gap-1 justify-end">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onDelete(item)}
+            data-testid={`button-delete-${item.id}`}
+            className="h-8 w-8"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function BOMDialog({ 
+  item, 
+  isOpen, 
+  onClose,
+  allItems
+}: { 
+  item: any; 
+  isOpen: boolean; 
+  onClose: () => void;
+  allItems: any[];
+}) {
+  const { toast } = useToast();
+  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number }>>(
+    item?.bom ?? []
+  );
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data: bomData } = useQuery({
+    queryKey: ["/api/bom", item?.id],
+    enabled: !!item?.id,
   });
 
-  // Fetch all items for BOM builder
-  const { data: items } = useQuery({
+  // Sync bomData from query into local state when it loads
+  useEffect(() => {
+    if (bomData && Array.isArray(bomData)) {
+      setBomComponents(bomData);
+      setHasChanges(false);
+    } else if (item?.bom) {
+      setBomComponents(item.bom);
+      setHasChanges(false);
+    }
+  }, [bomData, item?.id]);
+
+  const updateBOMMutation = useMutation({
+    mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {
+      const response = await apiRequest("POST", `/api/bom/${item.id}`, { components });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bom", item.id] });
+      setHasChanges(false);
+      toast({
+        title: "Success",
+        description: "BOM updated successfully",
+      });
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update BOM",
+      });
+    },
+  });
+
+  const addComponent = () => {
+    setBomComponents([...bomComponents, { componentId: "", quantity: 1 }]);
+    setHasChanges(true);
+  };
+
+  const removeComponent = (index: number) => {
+    setBomComponents(bomComponents.filter((_, i) => i !== index));
+    setHasChanges(true);
+  };
+
+  const updateComponent = (index: number, field: string, value: any) => {
+    const updated = [...bomComponents];
+    updated[index] = { ...updated[index], [field]: value };
+    setBomComponents(updated);
+    setHasChanges(true);
+  };
+
+  const handleSave = () => {
+    const validComponents = bomComponents.filter(c => c.componentId && c.quantity > 0);
+    updateBOMMutation.mutate(validComponents);
+  };
+
+  const handleClose = (open: boolean) => {
+    if (!open && hasChanges) {
+      if (confirm("You have unsaved changes. Are you sure you want to close?")) {
+        setHasChanges(false);
+        onClose();
+      }
+    } else if (!open) {
+      onClose();
+    }
+  };
+
+  const componentItems = allItems.filter((i: any) => !i.isFinished);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Edit Bill of Materials - {item?.name}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Define component requirements for this product</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addComponent}
+              data-testid="button-add-bom-component"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Component
+            </Button>
+          </div>
+
+          {bomComponents.length === 0 ? (
+            <Card>
+              <CardContent className="flex h-32 items-center justify-center">
+                <p className="text-sm text-muted-foreground">No components added yet</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {bomComponents.map((component, index) => (
+                <div key={index} className="flex items-end gap-3">
+                  <div className="flex-1 space-y-2">
+                    <Label>Component</Label>
+                    <Select
+                      value={component.componentId}
+                      onValueChange={(value) => updateComponent(index, "componentId", value)}
+                    >
+                      <SelectTrigger data-testid={`select-bom-component-${index}`}>
+                        <SelectValue placeholder="Select component" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {componentItems.map((i: any) => (
+                          <SelectItem key={i.id} value={i.id}>
+                            {i.name} ({i.sku})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="w-32 space-y-2">
+                    <Label>Quantity</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={component.quantity}
+                      onChange={(e) => updateComponent(index, "quantity", parseInt(e.target.value) || 1)}
+                      data-testid={`input-bom-quantity-${index}`}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeComponent(index)}
+                    data-testid={`button-remove-bom-component-${index}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-4">
+            <Button variant="outline" onClick={() => handleClose(false)} data-testid="button-cancel-bom">
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleSave} 
+              disabled={updateBOMMutation.isPending}
+              data-testid="button-save-bom"
+            >
+              {updateBOMMutation.isPending ? "Saving..." : "Save BOM"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; onClose: () => void; isFinished: boolean }) {
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+  const [sku, setSku] = useState("");
+  const [currentStock, setCurrentStock] = useState("0");
+  const [category, setCategory] = useState("");
+
+  const createMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const response = await apiRequest("POST", "/api/items", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Success",
+        description: `${isFinished ? "Finished product" : "Stock item"} created successfully`,
+      });
+      onClose();
+      setName("");
+      setSku("");
+      setCurrentStock("0");
+      setCategory("");
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to create item",
+      });
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    createMutation.mutate({
+      name,
+      sku,
+      currentStock: Number(currentStock),
+      category: isFinished ? null : category,
+      isFinished,
+      type: isFinished ? "finished" : "component",
+    });
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create {isFinished ? "Finished Product" : "Stock Item"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="name">Name</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={isFinished ? "e.g., Sticker Bur Roller" : "e.g., Spring 2.5in"}
+              required
+              data-testid="input-create-name"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="sku">SKU</Label>
+            <Input
+              id="sku"
+              value={sku}
+              onChange={(e) => setSku(e.target.value)}
+              placeholder="e.g., SBR-001"
+              className="font-mono"
+              required
+              data-testid="input-create-sku"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="stock">Current Stock</Label>
+            <Input
+              id="stock"
+              type="number"
+              value={currentStock}
+              onChange={(e) => setCurrentStock(e.target.value)}
+              min="0"
+              data-testid="input-create-stock"
+            />
+          </div>
+          {!isFinished && (
+            <div className="space-y-2">
+              <Label htmlFor="category">Category</Label>
+              <Input
+                id="category"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                placeholder="e.g., Hardware, Springs, Nuts"
+                data-testid="input-create-category"
+              />
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-create">
+              Cancel
+            </Button>
+            <Button type="submit" disabled={createMutation.isPending} data-testid="button-submit-create">
+              {createMutation.isPending ? "Creating..." : "Create"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export default function BOM() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
+  const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
+  const [editingBOMItem, setEditingBOMItem] = useState<any>(null);
+  const { toast } = useToast();
+
+  const { data: items, isLoading } = useQuery({
     queryKey: ["/api/items"],
   });
 
-  const filteredProducts = (products ?? []).filter((product: any) =>
-    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    product.sku.toLowerCase().includes(searchQuery.toLowerCase())
+  const allItems = (items as any[]) ?? [];
+  
+  const filteredItems = allItems.filter((item: any) =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const finishedProducts = filteredItems.filter((item: any) => item.isFinished);
+  const stockInventory = filteredItems.filter((item: any) => !item.isFinished);
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
+      const response = await apiRequest("PATCH", `/api/items/${id}`, updates);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Success",
+        description: "Item updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to update item",
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      const response = await apiRequest("DELETE", `/api/items/${itemId}`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Success",
+        description: "Item deleted successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to delete item",
+      });
+    },
+  });
+
+  const handleUpdate = (id: string, field: string, value: string | number, onSuccess: () => void, onError: () => void) => {
+    updateMutation.mutate(
+      { id, updates: { [field]: value } },
+      {
+        onSuccess: () => {
+          onSuccess();
+        },
+        onError: () => {
+          onError();
+        }
+      }
+    );
+  };
+
+  const handleDelete = (item: any) => {
+    if (confirm(`Delete ${item.name}? This action cannot be undone.`)) {
+      deleteMutation.mutate(item.id);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Products & BOM</h1>
-          <p className="text-sm text-muted-foreground">Manage finished products and bill of materials</p>
+          <h1 className="text-2xl font-semibold">BOM</h1>
+          <p className="text-sm text-muted-foreground">Manage finished products and stock inventory</p>
         </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-create-product">
-              <Plus className="mr-2 h-4 w-4" />
-              Create New Product
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Create New Product</DialogTitle>
-            </DialogHeader>
-            <ProductForm
-              items={items || []}
-              onClose={() => setIsCreateDialogOpen(false)}
-            />
-          </DialogContent>
-        </Dialog>
       </div>
 
       {/* Search Bar */}
@@ -62,225 +639,141 @@ export default function Products() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search products..."
+            placeholder="Search items..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
-            data-testid="input-search-products"
+            data-testid="input-search-items"
           />
         </div>
       </div>
 
-      {/* Products List */}
+      {/* Finished Products Section */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Products</CardTitle>
+        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
+          <CardTitle className="text-lg">Finished Products</CardTitle>
+          <Button
+            size="sm"
+            onClick={() => setIsCreateFinishedDialogOpen(true)}
+            data-testid="button-create-finished-product"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Add Product
+          </Button>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="flex h-48 items-center justify-center">
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
             </div>
-          ) : filteredProducts.length === 0 ? (
+          ) : finishedProducts.length === 0 ? (
             <div className="flex h-48 flex-col items-center justify-center gap-2">
               <Package className="h-12 w-12 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                {searchQuery ? "No products found" : "No products yet. Create your first product to get started."}
+                {searchQuery ? "No finished products found" : "No finished products yet"}
               </p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Product Name</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead className="text-right">Components</TableHead>
-                  <TableHead className="text-right">Current Stock</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredProducts.map((product: any) => (
-                  <TableRow key={product.id}>
-                    <TableCell className="font-medium">{product.name}</TableCell>
-                    <TableCell className="font-mono text-sm">{product.sku}</TableCell>
-                    <TableCell className="text-right">
-                      <Badge variant="secondary">
-                        {product.componentsCount || 0} components
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">{product.currentStock}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Dialog>
-                          <DialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setSelectedProduct(product)}
-                              data-testid={`button-edit-${product.id}`}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          </DialogTrigger>
-                          <DialogContent className="max-w-3xl">
-                            <DialogHeader>
-                              <DialogTitle>Edit Product</DialogTitle>
-                            </DialogHeader>
-                            <ProductForm
-                              product={selectedProduct}
-                              items={items || []}
-                              onClose={() => setSelectedProduct(null)}
-                            />
-                          </DialogContent>
-                        </Dialog>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          data-testid={`button-delete-${product.id}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b">
+                    <th className="px-3 py-2 text-left text-sm font-medium">Name</th>
+                    <th className="px-3 py-2 text-left text-sm font-medium">SKU</th>
+                    <th className="px-3 py-2 text-right text-sm font-medium">Stock</th>
+                    <th className="px-3 py-2 text-center text-sm font-medium">BOM</th>
+                    <th className="px-3 py-2 text-right text-sm font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finishedProducts.map((item: any) => (
+                    <ItemTableRow
+                      key={item.id}
+                      item={item}
+                      onUpdate={handleUpdate}
+                      onDelete={handleDelete}
+                      onEditBOM={setEditingBOMItem}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>
-    </div>
-  );
-}
 
-function ProductForm({ product, items, onClose }: { product?: any; items: any[]; onClose: () => void }) {
-  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number }>>(
-    product?.bom ?? []
-  );
-
-  const addComponent = () => {
-    setBomComponents([...bomComponents, { componentId: "", quantity: 1 }]);
-  };
-
-  const removeComponent = (index: number) => {
-    setBomComponents(bomComponents.filter((_, i) => i !== index));
-  };
-
-  const updateComponent = (index: number, field: string, value: any) => {
-    const updated = [...bomComponents];
-    updated[index] = { ...updated[index], [field]: value };
-    setBomComponents(updated);
-  };
-
-  const componentItems = (items ?? []).filter((item: any) => item.type === "component");
-
-  return (
-    <div className="space-y-6">
-      {/* Product Details */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="product-name">Product Name</Label>
-          <Input
-            id="product-name"
-            placeholder="e.g., Sticker Bur Roller"
-            defaultValue={product?.name}
-            data-testid="input-product-name"
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="product-sku">SKU</Label>
-          <Input
-            id="product-sku"
-            placeholder="e.g., SBR-001"
-            defaultValue={product?.sku}
-            className="font-mono"
-            data-testid="input-product-sku"
-          />
-        </div>
-      </div>
-
-      {/* BOM Components */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-medium">Bill of Materials</h3>
-            <p className="text-sm text-muted-foreground">Define component requirements</p>
-          </div>
+      {/* Stock Inventory Section */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
+          <CardTitle className="text-lg">Stock Inventory</CardTitle>
           <Button
-            type="button"
-            variant="outline"
             size="sm"
-            onClick={addComponent}
-            data-testid="button-add-component"
+            onClick={() => setIsCreateStockDialogOpen(true)}
+            data-testid="button-create-stock-item"
           >
             <Plus className="mr-2 h-4 w-4" />
-            Add Component
+            Add Item
           </Button>
-        </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex h-48 items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            </div>
+          ) : stockInventory.length === 0 ? (
+            <div className="flex h-48 flex-col items-center justify-center gap-2">
+              <Package className="h-12 w-12 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                {searchQuery ? "No stock items found" : "No stock items yet"}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b">
+                    <th className="px-3 py-2 text-left text-sm font-medium">Name</th>
+                    <th className="px-3 py-2 text-left text-sm font-medium">SKU</th>
+                    <th className="px-3 py-2 text-right text-sm font-medium">Stock</th>
+                    <th className="px-3 py-2 text-left text-sm font-medium">Category</th>
+                    <th className="px-3 py-2 text-right text-sm font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockInventory.map((item: any) => (
+                    <ItemTableRow
+                      key={item.id}
+                      item={item}
+                      onUpdate={handleUpdate}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-        {bomComponents.length === 0 ? (
-          <Card>
-            <CardContent className="flex h-32 items-center justify-center">
-              <p className="text-sm text-muted-foreground">No components added yet</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {bomComponents.map((component, index) => (
-              <div key={index} className="flex items-end gap-3">
-                <div className="flex-1 space-y-2">
-                  <Label>Component</Label>
-                  <Select
-                    value={component.componentId}
-                    onValueChange={(value) => updateComponent(index, "componentId", value)}
-                  >
-                    <SelectTrigger data-testid={`select-component-${index}`}>
-                      <SelectValue placeholder="Select component" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {componentItems.map((item: any) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name} ({item.sku})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="w-32 space-y-2">
-                  <Label>Quantity</Label>
-                  <Input
-                    type="number"
-                    min="1"
-                    value={component.quantity}
-                    onChange={(e) => updateComponent(index, "quantity", parseInt(e.target.value) || 1)}
-                    data-testid={`input-quantity-${index}`}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeComponent(index)}
-                  data-testid={`button-remove-component-${index}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Actions */}
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={onClose} data-testid="button-cancel">
-          Cancel
-        </Button>
-        <Button data-testid="button-save-product">
-          {product ? "Update Product" : "Create Product"}
-        </Button>
-      </div>
+      {/* Dialogs */}
+      <CreateItemDialog
+        isOpen={isCreateFinishedDialogOpen}
+        onClose={() => setIsCreateFinishedDialogOpen(false)}
+        isFinished={true}
+      />
+      <CreateItemDialog
+        isOpen={isCreateStockDialogOpen}
+        onClose={() => setIsCreateStockDialogOpen(false)}
+        isFinished={false}
+      />
+      {editingBOMItem && (
+        <BOMDialog
+          item={editingBOMItem}
+          isOpen={!!editingBOMItem}
+          onClose={() => setEditingBOMItem(null)}
+          allItems={allItems}
+        />
+      )}
     </div>
   );
 }

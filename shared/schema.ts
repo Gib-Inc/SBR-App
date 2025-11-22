@@ -200,7 +200,9 @@ export const settings = pgTable("settings", {
   phantombusterApiKey: text("phantombuster_api_key"),
   llmProvider: text("llm_provider"), // 'chatgpt', 'claude', 'grok', 'custom'
   llmApiKey: text("llm_api_key"),
+  llmModel: text("llm_model"), // 'gpt-4', 'gpt-4-turbo', 'claude-3-opus', etc.
   llmCustomEndpoint: text("llm_custom_endpoint"),
+  llmPromptTemplate: text("llm_prompt_template"),
   enableLlmOrderRecommendations: boolean("enable_llm_order_recommendations").notNull().default(false),
   enableLlmSupplierRanking: boolean("enable_llm_supplier_ranking").notNull().default(false),
   enableLlmForecasting: boolean("enable_llm_forecasting").notNull().default(false),

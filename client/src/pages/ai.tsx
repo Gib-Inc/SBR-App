@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,163 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+
+const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
+
+Current Date: {current_date}
+Item: {item_name} (SKU: {item_sku})
+Current Stock: {current_stock} units
+Recent Sales (4 weeks): {sales_data}
+Supplier Lead Time (avg): {lead_time_days} days
+Seasonal Trend: {seasonal_pattern}
+
+Question: If sales continue at this rate for the next 4 weeks, will we have enough inventory? When should we reorder?
+
+Provide a clear recommendation with reasoning.`;
+
+const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  chatgpt: [
+    { value: "gpt-4", label: "GPT-4" },
+    { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
+    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
+  ],
+  claude: [
+    { value: "claude-3-opus", label: "Claude 3 Opus" },
+    { value: "claude-3-sonnet", label: "Claude 3 Sonnet" },
+  ],
+  grok: [
+    { value: "grok-2", label: "Grok-2" },
+    { value: "grok-1", label: "Grok-1" },
+  ],
+};
+
+function LLMConfigTab({ settingsData }: { settingsData: any }) {
+  const { toast } = useToast();
+  const [provider, setProvider] = useState<string>("");
+  const [model, setModel] = useState<string>("");
+  const [promptTemplate, setPromptTemplate] = useState<string>(DEFAULT_PROMPT_TEMPLATE);
+
+  useEffect(() => {
+    if (settingsData) {
+      setProvider(settingsData.llmProvider || "");
+      setModel(settingsData.llmModel || "");
+      setPromptTemplate(settingsData.llmPromptTemplate || DEFAULT_PROMPT_TEMPLATE);
+    }
+  }, [settingsData]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("PATCH", "/api/settings", {
+        llmProvider: provider || null,
+        llmModel: model || null,
+        llmPromptTemplate: promptTemplate || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Configuration Saved",
+        description: "LLM settings have been updated successfully",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Save Failed",
+        description: error.message || "Failed to save LLM configuration",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleProviderChange = (newProvider: string) => {
+    setProvider(newProvider);
+    if (newProvider !== "custom" && !MODEL_OPTIONS[newProvider]?.some(m => m.value === model)) {
+      setModel("");
+    }
+  };
+
+  const availableModels = provider && provider !== "custom" ? MODEL_OPTIONS[provider] || [] : [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>LLM Configuration</CardTitle>
+        <CardDescription>
+          Select your AI provider and customize prompt templates (API keys managed in Settings)
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="llm-provider">AI Provider</Label>
+            <Select value={provider} onValueChange={handleProviderChange}>
+              <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
+                <SelectValue placeholder="Select AI provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chatgpt">OpenAI (ChatGPT)</SelectItem>
+                <SelectItem value="claude">Anthropic (Claude)</SelectItem>
+                <SelectItem value="grok">X.AI (Grok)</SelectItem>
+                <SelectItem value="custom">Custom Endpoint</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Configure API keys in Settings → LLM Configuration
+            </p>
+          </div>
+
+          {provider && provider !== "custom" && (
+            <div className="space-y-2">
+              <Label htmlFor="model-selection">Model</Label>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger id="model-selection" data-testid="select-model">
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((modelOption) => (
+                    <SelectItem key={modelOption.value} value={modelOption.value}>
+                      {modelOption.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {provider === "custom" && (
+            <div className="space-y-2">
+              <Label>Custom Endpoint</Label>
+              <p className="text-sm text-muted-foreground">
+                Configure your custom endpoint URL in Settings → LLM Configuration
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="prompt-template">Reorder Recommendation Prompt Template</Label>
+            <Textarea
+              id="prompt-template"
+              rows={8}
+              placeholder="Enter custom prompt template..."
+              value={promptTemplate}
+              onChange={(e) => setPromptTemplate(e.target.value)}
+              data-testid="textarea-prompt-template"
+            />
+          </div>
+
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={!provider || saveMutation.isPending}
+            data-testid="button-save-llm-config"
+          >
+            <Settings2 className="mr-2 h-4 w-4" />
+            {saveMutation.isPending ? "Saving..." : "Save Configuration"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function AIAgent() {
   const { toast } = useToast();
@@ -273,78 +430,7 @@ export default function AIAgent() {
 
         {/* LLM Config Tab */}
         <TabsContent value="llm-config" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>LLM Configuration</CardTitle>
-              <CardDescription>
-                Select your AI provider and customize prompt templates (API keys managed in Settings)
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="llm-provider">AI Provider</Label>
-                  <Select defaultValue={settingsData?.llmProvider || "chatgpt"}>
-                    <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
-                      <SelectValue placeholder="Select AI provider" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="chatgpt">OpenAI (ChatGPT)</SelectItem>
-                      <SelectItem value="claude">Anthropic (Claude)</SelectItem>
-                      <SelectItem value="grok">X.AI (Grok)</SelectItem>
-                      <SelectItem value="custom">Custom Endpoint</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Configure API keys in Settings → LLM Configuration
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="model-selection">Model</Label>
-                  <Select defaultValue="gpt-4">
-                    <SelectTrigger id="model-selection" data-testid="select-model">
-                      <SelectValue placeholder="Select model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="gpt-4">GPT-4</SelectItem>
-                      <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
-                      <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
-                      <SelectItem value="claude-3-opus">Claude 3 Opus</SelectItem>
-                      <SelectItem value="claude-3-sonnet">Claude 3 Sonnet</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="prompt-template">Reorder Recommendation Prompt Template</Label>
-                  <Textarea
-                    id="prompt-template"
-                    rows={8}
-                    placeholder="Enter custom prompt template..."
-                    defaultValue={`You are an inventory management expert. Analyze the following data:
-
-Current Date: {current_date}
-Item: {item_name} (SKU: {item_sku})
-Current Stock: {current_stock} units
-Recent Sales (4 weeks): {sales_data}
-Supplier Lead Time (avg): {lead_time_days} days
-Seasonal Trend: {seasonal_pattern}
-
-Question: If sales continue at this rate for the next 4 weeks, will we have enough inventory? When should we reorder?
-
-Provide a clear recommendation with reasoning.`}
-                    data-testid="textarea-prompt-template"
-                  />
-                </div>
-
-                <Button data-testid="button-save-llm-config">
-                  <Settings2 className="mr-2 h-4 w-4" />
-                  Save Configuration
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          <LLMConfigTab settingsData={settingsData} />
         </TabsContent>
 
         {/* Insights Tab */}

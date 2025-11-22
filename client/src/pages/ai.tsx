@@ -359,19 +359,19 @@ export default function AIAgent() {
                         <div className="flex items-center justify-between">
                           <Badge
                             variant={
-                              source.status === "success"
-                                ? "default"
-                                : source.status === "not_configured"
+                              !source.configured
                                 ? "outline"
+                                : source.status === "success"
+                                ? "default"
                                 : "destructive"
                             }
                             data-testid={`status-${source.id}`}
                           >
-                            {source.configured
-                              ? source.status === "success"
+                            {!source.configured
+                              ? "Not Configured"
+                              : source.status === "success"
                                 ? "Connected"
-                                : "Error"
-                              : "Not Configured"}
+                                : "Error"}
                           </Badge>
                           <Button
                             size="sm"

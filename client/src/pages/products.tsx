@@ -325,21 +325,22 @@ function BOMDialog({
   );
   const [hasChanges, setHasChanges] = useState(false);
 
-  const { data: bomData } = useQuery({
+  const { data: bomData, isLoading } = useQuery({
     queryKey: ["/api/bom", item?.id],
-    enabled: !!item?.id,
+    enabled: !!item?.id && isOpen,
   });
 
-  // Sync bomData from query into local state when it loads
+  // Sync bomData from query into local state ONLY when dialog first opens
   useEffect(() => {
-    if (bomData && Array.isArray(bomData)) {
-      setBomComponents(bomData);
-      setHasChanges(false);
-    } else if (item?.bom) {
-      setBomComponents(item.bom);
+    if (isOpen && !isLoading) {
+      if (bomData && Array.isArray(bomData)) {
+        setBomComponents(bomData);
+      } else {
+        setBomComponents([]);
+      }
       setHasChanges(false);
     }
-  }, [bomData, item?.id]);
+  }, [isOpen, item?.id]);
 
   const updateBOMMutation = useMutation({
     mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {

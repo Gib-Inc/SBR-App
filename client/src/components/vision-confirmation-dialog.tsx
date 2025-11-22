@@ -25,6 +25,7 @@ interface VisionConfirmationDialogProps {
   visionResult: VisionResult | null;
   onConfirm: (action: "create" | "adjust", data: Partial<VisionResult> & { adjustmentQuantity?: number }) => void;
   isLoading?: boolean;
+  defaultType?: "component" | "finished_product";
 }
 
 const WAREHOUSE_LOCATIONS = [

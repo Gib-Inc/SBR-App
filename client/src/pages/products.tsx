@@ -634,6 +634,7 @@ export default function BOM() {
   const [isVisionConfirmDialogOpen, setIsVisionConfirmDialogOpen] = useState(false);
   const [visionResult, setVisionResult] = useState<any>(null);
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [cameraContext, setCameraContext] = useState<"finished_product" | "component">("finished_product");
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -747,8 +748,11 @@ export default function BOM() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setIsCameraModalOpen(true)}
-              data-testid="button-scan-item"
+              onClick={() => {
+                setCameraContext("finished_product");
+                setIsCameraModalOpen(true);
+              }}
+              data-testid="button-scan-finished-product"
             >
               <Camera className="mr-2 h-4 w-4" />
               Scan Item
@@ -812,14 +816,28 @@ export default function BOM() {
             <h2 className="text-lg font-semibold">Stock Inventory</h2>
             <p className="text-sm text-muted-foreground">Components and raw materials</p>
           </div>
-          <Button
-            size="sm"
-            onClick={() => setIsCreateStockDialogOpen(true)}
-            data-testid="button-create-stock-item"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Item
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setCameraContext("component");
+                setIsCameraModalOpen(true);
+              }}
+              data-testid="button-scan-component"
+            >
+              <Camera className="mr-2 h-4 w-4" />
+              Scan Item
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setIsCreateStockDialogOpen(true)}
+              data-testid="button-create-stock-item"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Item
+            </Button>
+          </div>
         </div>
         {isLoading ? (
           <div className="flex h-48 items-center justify-center">

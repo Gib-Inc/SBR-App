@@ -274,11 +274,20 @@ function IntegrationSettings() {
                 <CardDescription>{integration.description}</CardDescription>
               </div>
               <Badge variant={
-                integration.status === "success" || integration.status === "connected" ? "default" : 
-                integration.status === "failed" || integration.status === "error" ? "destructive" : 
-                "secondary"
+                !hasValidApiKey(integration.apiKeyField)
+                  ? "outline"
+                  : integration.status === "success" || integration.status === "connected"
+                  ? "default"
+                  : integration.status === "failed" || integration.status === "error"
+                  ? "destructive"
+                  : "secondary"
               }>
-                {integration.status === "success" || integration.status === "connected" ? (
+                {!hasValidApiKey(integration.apiKeyField) ? (
+                  <>
+                    <AlertCircle className="mr-1 h-3 w-3" />
+                    Not Configured
+                  </>
+                ) : integration.status === "success" || integration.status === "connected" ? (
                   <>
                     <CheckCircle2 className="mr-1 h-3 w-3" />
                     Connected
@@ -288,15 +297,10 @@ function IntegrationSettings() {
                     <XCircle className="mr-1 h-3 w-3" />
                     Failed
                   </>
-                ) : integration.status === "stale" ? (
-                  <>
-                    <AlertCircle className="mr-1 h-3 w-3" />
-                    Stale
-                  </>
                 ) : (
                   <>
                     <AlertCircle className="mr-1 h-3 w-3" />
-                    {integration.status === "pending_setup" ? "Pending Setup" : integration.status || "Unknown"}
+                    Pending Test
                   </>
                 )}
               </Badge>

@@ -361,17 +361,21 @@ export default function AIAgent() {
                             variant={
                               !source.configured
                                 ? "outline"
-                                : source.status === "success"
+                                : source.status === "success" || source.status === "connected"
                                 ? "default"
-                                : "destructive"
+                                : source.status === "failed" || source.status === "error"
+                                ? "destructive"
+                                : "secondary"
                             }
                             data-testid={`status-${source.id}`}
                           >
                             {!source.configured
                               ? "Not Configured"
-                              : source.status === "success"
+                              : source.status === "success" || source.status === "connected"
                                 ? "Connected"
-                                : "Error"}
+                                : source.status === "failed" || source.status === "error"
+                                ? "Failed"
+                                : "Pending Test"}
                           </Badge>
                           <Button
                             size="sm"

@@ -554,11 +554,15 @@ export default function Dashboard() {
                         <div className="flex items-center gap-2 mt-1">
                           <div
                             className={`h-2 w-2 rounded-full ${
-                              integration.status === 'success'
+                              settingsLoading || settingsError
+                                ? 'bg-muted-foreground'
+                                : !isIntegrationConfigured(integration)
+                                ? 'bg-muted-foreground'
+                                : integration.status === 'success' || integration.status === 'connected'
                                 ? 'bg-status-online'
-                                : integration.status === 'stale'
-                                ? 'bg-status-away'
-                                : 'bg-status-busy'
+                                : integration.status === 'failed' || integration.status === 'error'
+                                ? 'bg-status-busy'
+                                : 'bg-status-away'
                             }`}
                             data-testid={`status-${integration.id}`}
                           />
@@ -566,18 +570,14 @@ export default function Dashboard() {
                             {settingsLoading 
                               ? 'Checking...'
                               : settingsError
-                              ? (integration.status === 'success' ? 'Connected' : integration.status === 'stale' ? 'Stale' : integration.status === 'failed' ? 'Disconnected' : integration.status || 'Unknown')
+                              ? 'Error loading config'
                               : !isIntegrationConfigured(integration)
                               ? 'Not configured' 
-                              : integration.lastSync === 'Never' && !integration.errorMessage
-                              ? 'Configured, never synced'
-                              : integration.status === 'success' 
+                              : integration.status === 'success' || integration.status === 'connected'
                               ? 'Connected' 
-                              : integration.status === 'stale' 
-                              ? 'Stale'
-                              : integration.status === 'failed'
-                              ? 'Disconnected'
-                              : integration.status || 'Unknown'}
+                              : integration.status === 'failed' || integration.status === 'error'
+                              ? 'Failed'
+                              : 'Pending Test'}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">Last sync: {integration.lastSync || 'Never'}</p>

@@ -180,7 +180,7 @@ function ItemTableRow({
       </td>
 
       {/* BOM Components Column (only for finished products) */}
-      {item.isFinished && (
+      {item.type === "finished_product" && (
         <td className="px-3 align-middle text-center">
           {onEditBOM && (
             <Button
@@ -197,7 +197,7 @@ function ItemTableRow({
       )}
 
       {/* Category Column (only for stock inventory) */}
-      {!item.isFinished && (
+      {item.type === "component" && (
         <td className="px-3 align-middle">
           {editingField === "category" ? (
             <div className="flex items-center gap-2">
@@ -336,7 +336,7 @@ function BOMDialog({
     }
   };
 
-  const componentItems = allItems.filter((i: any) => !i.isFinished);
+  const componentItems = allItems.filter((i: any) => i.type === "component");
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -469,8 +469,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       sku,
       currentStock: Number(currentStock),
       category: isFinished ? null : category,
-      isFinished,
-      type: isFinished ? "finished" : "component",
+      type: isFinished ? "finished_product" : "component",
     });
   };
 
@@ -559,8 +558,8 @@ export default function BOM() {
     (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const finishedProducts = filteredItems.filter((item: any) => item.isFinished);
-  const stockInventory = filteredItems.filter((item: any) => !item.isFinished);
+  const finishedProducts = filteredItems.filter((item: any) => item.type === "finished_product");
+  const stockInventory = filteredItems.filter((item: any) => item.type === "component");
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: any }) => {

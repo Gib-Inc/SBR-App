@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { Plus, Search, Download, Printer, Barcode as BarcodeIcon } from "lucide-react";
+import { Plus, Search, Download, Printer, Trash2, Barcode as BarcodeIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -36,7 +36,7 @@ function formatPurposeLabel(purpose: string): string {
   }
 }
 
-function BarcodeListItem({ barcode, onPrint }: { barcode: any; onPrint: (barcode: any) => void }) {
+function BarcodeListItem({ barcode, onPrint, onDelete }: { barcode: any; onPrint: (barcode: any) => void; onDelete: (barcode: any) => void }) {
   return (
     <div className="flex items-center gap-4 rounded-md border bg-card p-4 hover-elevate">
       {/* Barcode Icon */}
@@ -82,6 +82,14 @@ function BarcodeListItem({ barcode, onPrint }: { barcode: any; onPrint: (barcode
         >
           <Download className="h-4 w-4" />
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onDelete(barcode)}
+          data-testid={`button-delete-${barcode.id}`}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
       </div>
     </div>
   );
@@ -90,6 +98,7 @@ function BarcodeListItem({ barcode, onPrint }: { barcode: any; onPrint: (barcode
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const { toast } = useToast();
 
   // Fetch barcodes
   const { data: barcodes, isLoading } = useQuery({
@@ -104,6 +113,29 @@ export default function Barcodes() {
   const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product" || b.purpose === "bin");
   const itemInventoryBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "item");
 
+  const deleteMutation = useMutation({
+    mutationFn: async (barcodeId: string) => {
+      const response = await apiRequest(`/api/barcodes/${barcodeId}`, {
+        method: "DELETE",
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      toast({
+        title: "Success",
+        description: "Barcode deleted successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to delete barcode",
+      });
+    },
+  });
+
   const handlePrint = (barcode: any) => {
     // Open print dialog with barcode
     const printWindow = window.open(`/print/barcode/${barcode.id}`, '_blank');
@@ -111,6 +143,12 @@ export default function Barcodes() {
       printWindow.onload = () => {
         printWindow.print();
       };
+    }
+  };
+
+  const handleDelete = (barcode: any) => {
+    if (confirm(`Are you sure you want to delete barcode "${barcode.name}"?`)) {
+      deleteMutation.mutate(barcode.id);
     }
   };
 
@@ -177,7 +215,7 @@ export default function Barcodes() {
               </div>
               <div className="flex flex-col gap-2">
                 {finishedProductBarcodes.map((barcode: any) => (
-                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} onDelete={handleDelete} />
                 ))}
               </div>
             </div>
@@ -192,7 +230,7 @@ export default function Barcodes() {
               </div>
               <div className="flex flex-col gap-2">
                 {itemInventoryBarcodes.map((barcode: any) => (
-                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} onDelete={handleDelete} />
                 ))}
               </div>
             </div>

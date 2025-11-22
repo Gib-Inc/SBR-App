@@ -79,7 +79,7 @@ function BarcodeTableRow({
   return (
     <tr className="border-b hover-elevate" data-testid={`row-barcode-${barcode.id}`}>
       {/* Name Column */}
-      <td className="p-3">
+      <td className="py-2 px-3">
         {editingField === "name" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -109,7 +109,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Barcode Column */}
-      <td className="p-3">
+      <td className="py-2 px-3">
         {editingField === "value" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -136,7 +136,7 @@ function BarcodeTableRow({
             <img 
               src={`/api/barcodes/${barcode.id}/image`} 
               alt={barcode.value}
-              className="h-16 w-auto"
+              className="h-10 w-auto"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
                 e.currentTarget.nextElementSibling?.removeAttribute('style');
@@ -150,7 +150,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Type Column */}
-      <td className="p-3">
+      <td className="py-2 px-3">
         {editingField === "purpose" ? (
           <div className="flex items-center gap-2">
             <Select value={editValue} onValueChange={setEditValue}>
@@ -182,7 +182,7 @@ function BarcodeTableRow({
       </td>
 
       {/* SKU Column */}
-      <td className="p-3">
+      <td className="py-2 px-3">
         {editingField === "sku" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -212,7 +212,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Actions Column */}
-      <td className="p-3">
+      <td className="py-2 px-3">
         <div className="flex gap-1">
           <Button
             variant="ghost"

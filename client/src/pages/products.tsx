@@ -345,6 +345,10 @@ function BOMDialog({
   const updateBOMMutation = useMutation({
     mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {
       const response = await apiRequest("POST", `/api/bom/${item.id}`, { components });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: "Failed to update BOM" }));
+        throw new Error(errorData.error || "Failed to update BOM");
+      }
       return response.json();
     },
     onSuccess: () => {

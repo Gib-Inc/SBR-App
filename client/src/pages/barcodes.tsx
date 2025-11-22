@@ -36,57 +36,54 @@ function formatPurposeLabel(purpose: string): string {
   }
 }
 
-function BarcodeCard({ barcode, onPrint }: { barcode: any; onPrint: (barcode: any) => void }) {
+function BarcodeListItem({ barcode, onPrint }: { barcode: any; onPrint: (barcode: any) => void }) {
   return (
-    <Card className="hover-elevate">
-      <CardContent className="flex flex-col gap-4 pt-6">
-        {/* Barcode Image Placeholder */}
-        <div className="flex aspect-[3/1] items-center justify-center rounded-md border bg-muted">
-          <div className="flex flex-col items-center gap-2">
-            <BarcodeIcon className="h-8 w-8 text-muted-foreground" />
-            <span className="font-mono text-xs text-muted-foreground">{barcode.value}</span>
-          </div>
-        </div>
+    <div className="flex items-center gap-4 rounded-md border bg-card p-4 hover-elevate">
+      {/* Barcode Icon */}
+      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-md border bg-muted">
+        <BarcodeIcon className="h-6 w-6 text-muted-foreground" />
+      </div>
 
-        {/* Barcode Details */}
-        <div className="space-y-2">
-          <div>
-            <p className="font-medium" data-testid={`text-barcode-name-${barcode.id}`}>
-              {barcode.name}
-            </p>
-            {barcode.sku && (
-              <p className="font-mono text-sm text-muted-foreground">{barcode.sku}</p>
-            )}
-          </div>
-          <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
-            {formatPurposeLabel(barcode.purpose)}
-          </Badge>
+      {/* Barcode Details */}
+      <div className="flex-1 space-y-1">
+        <p className="font-medium" data-testid={`text-barcode-name-${barcode.id}`}>
+          {barcode.name}
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm text-muted-foreground">{barcode.value}</span>
+          {barcode.sku && (
+            <>
+              <span className="text-muted-foreground">•</span>
+              <span className="font-mono text-sm text-muted-foreground">{barcode.sku}</span>
+            </>
+          )}
         </div>
+      </div>
 
-        {/* Actions */}
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            onClick={() => onPrint(barcode)}
-            data-testid={`button-print-${barcode.id}`}
-          >
-            <Printer className="mr-2 h-4 w-4" />
-            Print
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            data-testid={`button-download-${barcode.id}`}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Download
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      {/* Purpose Badge */}
+      <Badge variant="secondary" data-testid={`badge-purpose-${barcode.id}`}>
+        {formatPurposeLabel(barcode.purpose)}
+      </Badge>
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => onPrint(barcode)}
+          data-testid={`button-print-${barcode.id}`}
+        >
+          <Printer className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid={`button-download-${barcode.id}`}
+        >
+          <Download className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -178,9 +175,9 @@ export default function Barcodes() {
                 <h2 className="text-lg font-semibold">Finished Products</h2>
                 <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="flex flex-col gap-2">
                 {finishedProductBarcodes.map((barcode: any) => (
-                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} />
                 ))}
               </div>
             </div>
@@ -193,9 +190,9 @@ export default function Barcodes() {
                 <h2 className="text-lg font-semibold">Item Inventory</h2>
                 <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="flex flex-col gap-2">
                 {itemInventoryBarcodes.map((barcode: any) => (
-                  <BarcodeCard key={barcode.id} barcode={barcode} onPrint={handlePrint} />
+                  <BarcodeListItem key={barcode.id} barcode={barcode} onPrint={handlePrint} />
                 ))}
               </div>
             </div>

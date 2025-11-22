@@ -142,33 +142,48 @@ function IntegrationSettings() {
 
   const healthData = integrationHealth || [];
   
+  // Helper to check if API key is configured
+  const hasValidApiKey = (apiKeyField: string): boolean => {
+    if (!settings) return false;
+    const apiKey = settings[apiKeyField];
+    return !!(apiKey && apiKey.trim());
+  };
+  
   const integrations = [
     {
       id: "gohighlevel",
       name: "GoHighLevel",
       description: "Sync sales history and trigger SMS alerts",
-      status: healthData.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "pending_setup",
+      status: hasValidApiKey("gohighlevelApiKey") 
+        ? (healthData.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "pending_setup")
+        : "pending_setup",
       apiKeyField: "gohighlevelApiKey",
     },
     {
       id: "shopify",
       name: "Shopify",
       description: "E-commerce platform integration",
-      status: healthData.find((h: any) => h.integrationName === "shopify")?.lastStatus || "pending_setup",
+      status: hasValidApiKey("shopifyApiKey")
+        ? (healthData.find((h: any) => h.integrationName === "shopify")?.lastStatus || "pending_setup")
+        : "pending_setup",
       apiKeyField: "shopifyApiKey",
     },
     {
       id: "extensiv",
       name: "Extensiv/Pivot",
       description: "Finished goods inventory snapshot",
-      status: healthData.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "pending_setup",
+      status: hasValidApiKey("extensivApiKey")
+        ? (healthData.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "pending_setup")
+        : "pending_setup",
       apiKeyField: "extensivApiKey",
     },
     {
       id: "phantombuster",
       name: "PhantomBuster",
       description: "Supplier availability and lead times",
-      status: healthData.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "pending_setup",
+      status: hasValidApiKey("phantombusterApiKey")
+        ? (healthData.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "pending_setup")
+        : "pending_setup",
       apiKeyField: "phantombusterApiKey",
     },
   ];

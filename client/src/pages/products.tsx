@@ -649,9 +649,12 @@ export default function BOM() {
       </div>
 
       {/* Finished Products Section */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-          <CardTitle className="text-lg">Finished Products</CardTitle>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Finished Products</h2>
+            <p className="text-sm text-muted-foreground">Products with bill of materials</p>
+          </div>
           <Button
             size="sm"
             onClick={() => setIsCreateFinishedDialogOpen(true)}
@@ -660,52 +663,55 @@ export default function BOM() {
             <Plus className="mr-2 h-4 w-4" />
             Add Product
           </Button>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex h-48 items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-            </div>
-          ) : finishedProducts.length === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center gap-2">
+        </div>
+        {isLoading ? (
+          <div className="flex h-48 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          </div>
+        ) : finishedProducts.length === 0 ? (
+          <Card>
+            <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
               <Package className="h-12 w-12 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
                 {searchQuery ? "No finished products found" : "No finished products yet"}
               </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="px-3 py-2 text-left text-sm font-medium">Name</th>
-                    <th className="px-3 py-2 text-left text-sm font-medium">SKU</th>
-                    <th className="px-3 py-2 text-right text-sm font-medium">Stock</th>
-                    <th className="px-3 py-2 text-center text-sm font-medium">BOM</th>
-                    <th className="px-3 py-2 text-right text-sm font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {finishedProducts.map((item: any) => (
-                    <ItemTableRow
-                      key={item.id}
-                      item={item}
-                      onUpdate={handleUpdate}
-                      onDelete={handleDelete}
-                      onEditBOM={setEditingBOMItem}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="overflow-hidden rounded-md border">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium">Name</th>
+                  <th className="p-3 text-left text-sm font-medium">SKU</th>
+                  <th className="p-3 text-right text-sm font-medium">Stock</th>
+                  <th className="p-3 text-center text-sm font-medium">BOM</th>
+                  <th className="p-3 text-right text-sm font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {finishedProducts.map((item: any) => (
+                  <ItemTableRow
+                    key={item.id}
+                    item={item}
+                    onUpdate={handleUpdate}
+                    onDelete={handleDelete}
+                    onEditBOM={setEditingBOMItem}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Stock Inventory Section */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-          <CardTitle className="text-lg">Stock Inventory</CardTitle>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Stock Inventory</h2>
+            <p className="text-sm text-muted-foreground">Components and raw materials</p>
+          </div>
           <Button
             size="sm"
             onClick={() => setIsCreateStockDialogOpen(true)}
@@ -714,46 +720,46 @@ export default function BOM() {
             <Plus className="mr-2 h-4 w-4" />
             Add Item
           </Button>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex h-48 items-center justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-            </div>
-          ) : stockInventory.length === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center gap-2">
+        </div>
+        {isLoading ? (
+          <div className="flex h-48 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          </div>
+        ) : stockInventory.length === 0 ? (
+          <Card>
+            <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
               <Package className="h-12 w-12 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
                 {searchQuery ? "No stock items found" : "No stock items yet"}
               </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="px-3 py-2 text-left text-sm font-medium">Name</th>
-                    <th className="px-3 py-2 text-left text-sm font-medium">SKU</th>
-                    <th className="px-3 py-2 text-right text-sm font-medium">Stock</th>
-                    <th className="px-3 py-2 text-left text-sm font-medium">Category</th>
-                    <th className="px-3 py-2 text-right text-sm font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockInventory.map((item: any) => (
-                    <ItemTableRow
-                      key={item.id}
-                      item={item}
-                      onUpdate={handleUpdate}
-                      onDelete={handleDelete}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="overflow-hidden rounded-md border">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium">Name</th>
+                  <th className="p-3 text-left text-sm font-medium">SKU</th>
+                  <th className="p-3 text-right text-sm font-medium">Stock</th>
+                  <th className="p-3 text-left text-sm font-medium">Category</th>
+                  <th className="p-3 text-right text-sm font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stockInventory.map((item: any) => (
+                  <ItemTableRow
+                    key={item.id}
+                    item={item}
+                    onUpdate={handleUpdate}
+                    onDelete={handleDelete}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Dialogs */}
       <CreateItemDialog

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,14 +10,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
 const barcodeFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  value: z.string().min(1, "Barcode value is required"),
+  value: z.string().optional(),
   purpose: z.enum(["item", "bin", "finished_product"]),
   sku: z.string().optional(),
   referenceId: z.string().optional(),
@@ -129,11 +129,22 @@ function BarcodeTableRow({
           </div>
         ) : (
           <div 
-            className="cursor-pointer rounded px-2 py-1 font-mono text-sm hover-elevate" 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate" 
             onClick={() => startEdit("value", barcode.value)}
-            data-testid={`text-barcode-value-${barcode.id}`}
+            data-testid={`barcode-image-${barcode.id}`}
           >
-            {barcode.value}
+            <img 
+              src={`/api/barcodes/${barcode.id}/image`} 
+              alt={barcode.value}
+              className="h-16 w-auto"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                e.currentTarget.nextElementSibling?.removeAttribute('style');
+              }}
+            />
+            <div className="font-mono text-sm text-center mt-1" style={{ display: 'none' }}>
+              {barcode.value}
+            </div>
           </div>
         )}
       </td>
@@ -238,6 +249,7 @@ function BarcodeTableRow({
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isScanDialogOpen, setIsScanDialogOpen] = useState(false);
   const { toast } = useToast();
 
   // Fetch barcodes
@@ -303,12 +315,69 @@ export default function Barcodes() {
   };
 
   const handlePrint = (barcode: any) => {
-    // Open print dialog with barcode
-    const printWindow = window.open(`/print/barcode/${barcode.id}`, '_blank');
+    // Create a print-friendly window with the barcode image
+    const printWindow = window.open('', '_blank');
     if (printWindow) {
-      printWindow.onload = () => {
-        printWindow.print();
-      };
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Print Barcode - ${barcode.name}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              min-height: 100vh;
+              margin: 0;
+              padding: 20px;
+            }
+            .barcode-container {
+              text-align: center;
+              border: 2px solid #000;
+              padding: 20px;
+              margin: 20px;
+            }
+            img {
+              max-width: 100%;
+              height: auto;
+            }
+            h2 {
+              margin: 10px 0;
+              font-size: 18px;
+            }
+            .sku {
+              font-family: monospace;
+              color: #666;
+              margin-top: 5px;
+            }
+            @media print {
+              body {
+                display: block;
+              }
+              .no-print {
+                display: none;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="barcode-container">
+            <img src="/api/barcodes/${barcode.id}/image" alt="${barcode.value}" />
+            <h2>${barcode.name}</h2>
+            ${barcode.sku ? `<div class="sku">${barcode.sku}</div>` : ''}
+          </div>
+          <script>
+            window.onload = () => {
+              setTimeout(() => window.print(), 500);
+            };
+          </script>
+        </body>
+        </html>
+      `);
+      printWindow.document.close();
     }
   };
 
@@ -326,20 +395,37 @@ export default function Barcodes() {
           <h1 className="text-2xl font-semibold">Barcodes</h1>
           <p className="text-sm text-muted-foreground">Manage barcodes for items and bins</p>
         </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-create-barcode">
-              <Plus className="mr-2 h-4 w-4" />
-              Create Barcode
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create New Barcode</DialogTitle>
-            </DialogHeader>
-            <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
-          </DialogContent>
-        </Dialog>
+        <div className="flex gap-2">
+          <Dialog open={isScanDialogOpen} onOpenChange={setIsScanDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" data-testid="button-scan-inventory">
+                <BarcodeIcon className="mr-2 h-4 w-4" />
+                Scan Inventory
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Scan Barcode</DialogTitle>
+              </DialogHeader>
+              <ScanDialog onClose={() => setIsScanDialogOpen(false)} />
+            </DialogContent>
+          </Dialog>
+          
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-create-barcode">
+                <Plus className="mr-2 h-4 w-4" />
+                Create Barcode
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create New Barcode</DialogTitle>
+              </DialogHeader>
+              <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -468,6 +554,10 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
     queryKey: ["/api/bins"],
   });
 
+  const { data: barcodes } = useQuery({
+    queryKey: ["/api/barcodes"],
+  });
+
   const form = useForm<z.infer<typeof barcodeFormSchema>>({
     resolver: zodResolver(barcodeFormSchema),
     defaultValues: {
@@ -478,6 +568,27 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
       referenceId: undefined,
     },
   });
+
+  const purpose = useWatch({ control: form.control, name: "purpose" });
+
+  // Generate preview of auto-generated barcode value
+  const getPlaceholder = () => {
+    if (!barcodes) return "e.g., BIN-001";
+    const samePurposeBarcodes = (barcodes as any[]).filter(b => b.purpose === purpose);
+    const counter = samePurposeBarcodes.length + 1;
+    const paddedCounter = counter.toString().padStart(3, '0');
+    
+    switch (purpose) {
+      case 'bin':
+        return `Will auto-generate: BIN-${paddedCounter}`;
+      case 'item':
+        return `Will auto-generate: ITEM-${paddedCounter}`;
+      case 'finished_product':
+        return `Will auto-generate: PROD-${paddedCounter}`;
+      default:
+        return "e.g., BAR-001";
+    }
+  };
 
   const createBarcodeMutation = useMutation({
     mutationFn: async (data: z.infer<typeof barcodeFormSchema>) => {
@@ -531,15 +642,18 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
           name="value"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Barcode Value</FormLabel>
+              <FormLabel>Barcode Value (Optional)</FormLabel>
               <FormControl>
                 <Input
-                  placeholder="e.g., BIN-A1-001"
+                  placeholder={getPlaceholder()}
                   className="font-mono"
                   data-testid="input-barcode-value"
                   {...field}
                 />
               </FormControl>
+              <FormDescription>
+                Leave blank to auto-generate or customize as needed
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
@@ -606,5 +720,165 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
         </div>
       </form>
     </Form>
+  );
+}
+
+function ScanDialog({ onClose }: { onClose: () => void }) {
+  const [barcodeValue, setBarcodeValue] = useState("");
+  const [scanResult, setScanResult] = useState<any>(null);
+  const [bulkMode, setBulkMode] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const { toast } = useToast();
+
+  const scanMutation = useMutation({
+    mutationFn: async (data: { barcodeValue: string; autoConfirm: boolean }) => {
+      const res = await apiRequest("POST", "/api/inventory/scan", data);
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+        toast({
+          title: "Success",
+          description: data.message,
+        });
+        
+        if (bulkMode) {
+          // In bulk mode, just clear the input and keep scanning
+          setBarcodeValue("");
+          setScanResult(null);
+        } else {
+          // In regular mode, show the result
+          setScanResult(data);
+          setBarcodeValue("");
+        }
+      } else if (data.requiresItemSelection) {
+        // Bin scanned, need item selection
+        setScanResult(data);
+        toast({
+          title: "Info",
+          description: data.message,
+          variant: "default",
+        });
+      }
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to scan barcode",
+        variant: "destructive",
+      });
+      setBarcodeValue("");
+    },
+  });
+
+  const handleScan = () => {
+    if (!barcodeValue.trim()) return;
+    scanMutation.mutate({ barcodeValue: barcodeValue.trim(), autoConfirm: bulkMode });
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleScan();
+    }
+  };
+
+  const handleConfirmScan = () => {
+    setScanResult(null);
+    setBarcodeValue("");
+  };
+
+  const handleCancelScan = () => {
+    setScanResult(null);
+    setBarcodeValue("");
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="bulk-mode"
+            checked={bulkMode}
+            onChange={(e) => setBulkMode(e.target.checked)}
+            className="h-4 w-4"
+          />
+          <Label htmlFor="bulk-mode" className="text-sm">
+            Bulk Mode (No Prompts)
+          </Label>
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          ref={inputRef}
+          value={barcodeValue}
+          onChange={(e) => setBarcodeValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Scan or enter barcode..."
+          className="font-mono"
+          autoFocus
+          data-testid="input-scan-barcode"
+        />
+        <Button
+          onClick={handleScan}
+          disabled={!barcodeValue.trim() || scanMutation.isPending}
+          data-testid="button-submit-scan"
+        >
+          {scanMutation.isPending ? "Scanning..." : "Scan"}
+        </Button>
+      </div>
+
+      {scanResult && !bulkMode && scanResult.success && (
+        <Card className="border-green-500">
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Check className="h-5 w-5 text-green-500" />
+                <span className="font-medium">{scanResult.message}</span>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                <p><strong>Item:</strong> {scanResult.item?.name}</p>
+                <p><strong>New Stock:</strong> {scanResult.item?.currentStock}</p>
+                <p><strong>Quantity Added:</strong> +{scanResult.quantityAdded}</p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={handleCancelScan} data-testid="button-close-result">
+                  Close
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {scanResult && scanResult.requiresItemSelection && (
+        <Card className="border-yellow-500">
+          <CardContent className="pt-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <BarcodeIcon className="h-5 w-5 text-yellow-500" />
+                <span className="font-medium">{scanResult.message}</span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Bin scanning requires item selection. Please link this barcode to a specific item in the barcode management interface.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={handleCancelScan} data-testid="button-cancel-bin-scan">
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="text-xs text-muted-foreground">
+        <p><strong>Bulk Mode:</strong> Automatically updates inventory without confirmation prompts for faster processing.</p>
+        <p><strong>Regular Mode:</strong> Shows a confirmation after each scan with details about the update.</p>
+      </div>
+    </div>
   );
 }

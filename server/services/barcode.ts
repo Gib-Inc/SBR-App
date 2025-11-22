@@ -20,11 +20,10 @@ export interface BarcodeImage {
 
 export class BarcodeService {
   /**
-   * Generate a barcode image using bwip-js
+   * Generate a barcode image buffer using bwip-js
    */
-  static async generateBarcode(request: BarcodeGenerationRequest): Promise<BarcodeImage> {
+  static async generateBarcodeBuffer(request: BarcodeGenerationRequest): Promise<Buffer> {
     const format = request.format || "CODE128";
-    const width = request.width || 300;
     const height = request.height || 100;
 
     try {
@@ -37,18 +36,30 @@ export class BarcodeService {
         textxalign: 'center',
       });
 
-      const base64 = png.toString('base64');
-      
-      return {
-        imageData: `data:image/png;base64,${base64}`,
-        format,
-        width,
-        height,
-      };
+      return png;
     } catch (error) {
       console.error('Barcode generation error:', error);
       throw new Error(`Failed to generate barcode: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+  
+  /**
+   * Generate a barcode image with base64 encoding
+   */
+  static async generateBarcode(request: BarcodeGenerationRequest): Promise<BarcodeImage> {
+    const format = request.format || "CODE128";
+    const width = request.width || 300;
+    const height = request.height || 100;
+
+    const png = await this.generateBarcodeBuffer(request);
+    const base64 = png.toString('base64');
+    
+    return {
+      imageData: `data:image/png;base64,${base64}`,
+      format,
+      width,
+      height,
+    };
   }
   
   /**

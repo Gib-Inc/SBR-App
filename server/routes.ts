@@ -312,6 +312,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // INVENTORY SCANNING
+  // ============================================================================
+  
+  app.post("/api/inventory/scan", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { barcodeValue, autoConfirm = false } = req.body;
+      
+      if (!barcodeValue) {
+        return res.status(400).json({ error: "Barcode value is required" });
+      }
+      
+      // Look up the barcode
+      const barcode = await storage.getBarcodeByValue(barcodeValue);
+      if (!barcode) {
+        return res.status(404).json({ error: "Barcode not found" });
+      }
+      
+      // For item and finished_product barcodes, update the item's currentStock
+      if (barcode.purpose === "item" || barcode.purpose === "finished_product") {
+        if (!barcode.referenceId) {
+          return res.status(400).json({ error: "Barcode is not linked to an item" });
+        }
+        
+        const item = await storage.getItem(barcode.referenceId);
+        if (!item) {
+          return res.status(404).json({ error: "Item not found" });
+        }
+        
+        // Increase currentStock by 1
+        const updatedItem = await storage.updateItem(barcode.referenceId, {
+          currentStock: item.currentStock + 1,
+        });
+        
+        return res.json({
+          success: true,
+          message: `Inventory updated for ${item.name}`,
+          item: updatedItem,
+          barcode,
+          quantityAdded: 1,
+        });
+      }
+      
+      // For bin barcodes, return bin info and prompt for item selection
+      if (barcode.purpose === "bin") {
+        if (!barcode.referenceId) {
+          return res.status(400).json({ error: "Barcode is not linked to a bin" });
+        }
+        
+        const bin = await storage.getBin(barcode.referenceId);
+        if (!bin) {
+          return res.status(404).json({ error: "Bin not found" });
+        }
+        
+        // Get items in this bin
+        const allInventoryByBin = await storage.getAllInventoryByBin();
+        const itemsInBin = allInventoryByBin.filter(inv => inv.binId === bin.id);
+        
+        return res.json({
+          success: false,
+          requiresItemSelection: true,
+          bin,
+          barcode,
+          itemsInBin,
+          message: `Scanned bin: ${bin.name}. Please select which item to update.`,
+        });
+      }
+      
+      return res.status(400).json({ error: "Invalid barcode type" });
+    } catch (error: any) {
+      console.error("Error scanning barcode:", error);
+      res.status(500).json({ error: error.message || "Failed to scan barcode" });
+    }
+  });
+
+  // ============================================================================
   // PRODUCTS (Finished Products with BOM)
   // ============================================================================
   
@@ -450,9 +525,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Barcode not found" });
       }
       
-      const image = await BarcodeService.generateBarcode({ value: barcode.value });
-      res.json(image);
+      const pngBuffer = await BarcodeService.generateBarcodeBuffer({ value: barcode.value });
+      
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+      res.send(pngBuffer);
     } catch (error) {
+      console.error('Error generating barcode image:', error);
       res.status(500).json({ error: "Failed to generate barcode image" });
     }
   });

@@ -1,6 +1,7 @@
+import bwipjs from 'bwip-js';
+
 /**
- * Barcode generation service
- * In production, this would use a library like bwip-js or barcode to generate actual barcode images
+ * Barcode generation service using bwip-js for actual barcode image generation
  */
 
 export interface BarcodeGenerationRequest {
@@ -19,30 +20,53 @@ export interface BarcodeImage {
 
 export class BarcodeService {
   /**
-   * Generate a barcode image
+   * Generate a barcode image using bwip-js
    */
   static async generateBarcode(request: BarcodeGenerationRequest): Promise<BarcodeImage> {
     const format = request.format || "CODE128";
     const width = request.width || 300;
     const height = request.height || 100;
 
-    // Stub implementation - would use bwip-js or similar in production
-    // const bwipjs = require('bwip-js');
-    // const png = await bwipjs.toBuffer({
-    //   bcid: format.toLowerCase(),
-    //   text: request.value,
-    //   scale: 3,
-    //   height: height / 10,
-    //   includetext: true,
-    // });
+    try {
+      const png = await bwipjs.toBuffer({
+        bcid: format.toLowerCase().replace('_', ''),
+        text: request.value,
+        scale: 3,
+        height: Math.floor(height / 10),
+        includetext: true,
+        textxalign: 'center',
+      });
+
+      const base64 = png.toString('base64');
+      
+      return {
+        imageData: `data:image/png;base64,${base64}`,
+        format,
+        width,
+        height,
+      };
+    } catch (error) {
+      console.error('Barcode generation error:', error);
+      throw new Error(`Failed to generate barcode: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+  
+  /**
+   * Generate a barcode value based on purpose and counter
+   */
+  static generateBarcodeValue(purpose: string, counter: number): string {
+    const paddedCounter = counter.toString().padStart(3, '0');
     
-    // For now, return a placeholder
-    return {
-      imageData: `data:image/png;base64,placeholder-for-${request.value}`,
-      format,
-      width,
-      height,
-    };
+    switch (purpose) {
+      case 'bin':
+        return `BIN-${paddedCounter}`;
+      case 'item':
+        return `ITEM-${paddedCounter}`;
+      case 'finished_product':
+        return `PROD-${paddedCounter}`;
+      default:
+        return `BAR-${paddedCounter}`;
+    }
   }
 
   /**

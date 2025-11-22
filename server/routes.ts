@@ -427,6 +427,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/barcodes", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertBarcodeSchema.parse(req.body);
+      
+      // Auto-generate barcode value if not provided
+      if (!validated.value || validated.value.trim() === '') {
+        const allBarcodes = await storage.getAllBarcodes();
+        const samePurposeBarcodes = allBarcodes.filter(b => b.purpose === validated.purpose);
+        const counter = samePurposeBarcodes.length + 1;
+        validated.value = BarcodeService.generateBarcodeValue(validated.purpose, counter);
+      }
+      
       const barcode = await storage.createBarcode(validated);
       res.status(201).json(barcode);
     } catch (error: any) {

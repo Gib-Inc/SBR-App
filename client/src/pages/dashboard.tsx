@@ -4,8 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw } from "lucide-react";
+import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -23,6 +24,16 @@ export default function Dashboard() {
   // Fetch settings to check if integrations are configured
   const { data: settingsData, isLoading: settingsLoading, error: settingsError } = useQuery<any>({
     queryKey: ["/api/settings"],
+  });
+
+  // Fetch reorder recommendations
+  const { data: reorderRecommendations, isLoading: isLoadingRecommendations } = useQuery<any[]>({
+    queryKey: ["/api/llm/reorder-recommendations"],
+  });
+
+  // Fetch demand forecasts
+  const { data: demandForecasts, isLoading: isLoadingForecasts } = useQuery<any[]>({
+    queryKey: ["/api/llm/demand-forecast"],
   });
 
   // Sync mutation - must be before early return to avoid hooks violation
@@ -273,6 +284,128 @@ export default function Dashboard() {
               Click "Generate Forecast" to get AI-powered inventory recommendations based on your current stock levels and usage patterns.
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Smart Analytics */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Brain className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Smart Analytics</CardTitle>
+          </div>
+          <p className="text-sm text-muted-foreground">AI-powered insights based on usage patterns and sales data</p>
+        </CardHeader>
+        <CardContent>
+          <Tabs defaultValue="recommendations" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="recommendations" data-testid="tab-recommendations">
+                Reorder Recommendations
+              </TabsTrigger>
+              <TabsTrigger value="forecasts" data-testid="tab-forecasts">
+                Demand Forecasts
+              </TabsTrigger>
+            </TabsList>
+            
+            <TabsContent value="recommendations" className="space-y-4">
+              {isLoadingRecommendations ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Loading recommendations...</p>
+              ) : !reorderRecommendations || reorderRecommendations.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">No reorder recommendations at this time</p>
+              ) : (
+                <div className="space-y-3">
+                  {reorderRecommendations.slice(0, 5).map((rec: any) => (
+                    <Card key={rec.itemId}>
+                      <CardContent className="pt-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-medium">{rec.itemName}</p>
+                              <Badge 
+                                variant={
+                                  rec.urgencyLevel === 'critical' ? 'destructive' :
+                                  rec.urgencyLevel === 'high' ? 'default' : 'secondary'
+                                }
+                                data-testid={`urgency-${rec.itemId}`}
+                              >
+                                {rec.urgencyLevel}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-muted-foreground mb-2">{rec.reason}</p>
+                            <div className="flex gap-4 text-xs">
+                              <span>Current: {rec.currentStock}</span>
+                              <span>Suggested: {rec.suggestedOrderQty}</span>
+                              <span>Days until stockout: {rec.daysUntilStockout}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+            
+            <TabsContent value="forecasts" className="space-y-4">
+              {isLoadingForecasts ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">Loading forecasts...</p>
+              ) : !demandForecasts || demandForecasts.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">No demand forecasts available</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Item</TableHead>
+                      <TableHead className="text-right">Current Usage</TableHead>
+                      <TableHead className="text-right">Forecast</TableHead>
+                      <TableHead className="text-right">Confidence</TableHead>
+                      <TableHead className="text-center">Trend</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {demandForecasts.slice(0, 10).map((forecast: any) => (
+                      <TableRow key={forecast.itemId}>
+                        <TableCell className="font-medium">{forecast.itemName}</TableCell>
+                        <TableCell className="text-right font-mono text-sm">
+                          {forecast.currentDailyUsage}/day
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex flex-col items-end">
+                            <span className="font-mono text-sm font-semibold">
+                              {forecast.forecastedDailyUsage}/day
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              ({forecast.confidenceInterval.low}–{forecast.confidenceInterval.high})
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge 
+                            variant={
+                              forecast.confidence === 'high' ? 'default' :
+                              forecast.confidence === 'medium' ? 'secondary' : 'outline'
+                            }
+                            data-testid={`confidence-${forecast.itemId}`}
+                          >
+                            {forecast.confidence}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {forecast.trend === 'increasing' ? (
+                            <ArrowUp className="h-4 w-4 text-green-600 inline" data-testid={`trend-${forecast.itemId}`} />
+                          ) : forecast.trend === 'decreasing' ? (
+                            <ArrowDown className="h-4 w-4 text-red-600 inline" data-testid={`trend-${forecast.itemId}`} />
+                          ) : (
+                            <Minus className="h-4 w-4 text-muted-foreground inline" data-testid={`trend-${forecast.itemId}`} />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
 

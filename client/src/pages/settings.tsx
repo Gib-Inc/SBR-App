@@ -219,6 +219,7 @@ function IntegrationSettings() {
           }
           await res.json();
           queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
           toast({
             title: "Connection Verified",
             description: `${integrationName} is connected and working`,

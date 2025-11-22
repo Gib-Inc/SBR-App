@@ -26,7 +26,7 @@ const barcodeFormSchema = z.object({
 function formatTypeLabel(purpose: string): string {
   switch (purpose) {
     case "bin":
-      return "Finished Product";
+      return "Bin Location";
     case "finished_product":
       return "Finished Product";
     case "item":

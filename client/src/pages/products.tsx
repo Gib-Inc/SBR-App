@@ -12,12 +12,8 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
 const WAREHOUSE_LOCATIONS = [
-  "Warehouse A",
-  "Warehouse B",
-  "Warehouse C",
-  "3PL Extensiv",
-  "3PL Pivot",
-  "External Storage",
+  "Spanish Fork",
+  "Hildale",
 ];
 
 function ItemTableRow({ 

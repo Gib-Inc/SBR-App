@@ -220,7 +220,7 @@ export default function AIAgent() {
       name: "GoHighLevel",
       description: "CRM and sales data",
       icon: Database,
-      configured: !!settingsData?.gohighlevelApiKey,
+      configured: !!(settingsData?.gohighlevelApiKey && settingsData.gohighlevelApiKey.trim()),
       status: integrationHealth?.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "unknown",
     },
     {
@@ -228,7 +228,7 @@ export default function AIAgent() {
       name: "Extensiv/Pivot",
       description: "3PL warehouse inventory",
       icon: Database,
-      configured: !!settingsData?.extensivApiKey,
+      configured: !!(settingsData?.extensivApiKey && settingsData.extensivApiKey.trim()),
       status: integrationHealth?.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "unknown",
     },
     {
@@ -236,7 +236,7 @@ export default function AIAgent() {
       name: "PhantomBuster",
       description: "Supplier data scraping",
       icon: Database,
-      configured: !!settingsData?.phantombusterApiKey,
+      configured: !!(settingsData?.phantombusterApiKey && settingsData.phantombusterApiKey.trim()),
       status: integrationHealth?.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "unknown",
     },
     {

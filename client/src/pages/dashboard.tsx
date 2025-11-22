@@ -165,7 +165,8 @@ export default function Dashboard() {
   // Helper to check if an integration is configured (has API key)
   const isIntegrationConfigured = (integration: any): boolean => {
     if (!integration.settingsKey || !settingsData) return false;
-    return !!settingsData[integration.settingsKey];
+    const apiKey = settingsData[integration.settingsKey];
+    return !!(apiKey && apiKey.trim());
   };
 
   return (

@@ -195,11 +195,11 @@ export class LLMService {
           ? item.currentStock / item.dailyUsage 
           : 999;
 
-        if (daysUntilStockout < 30) {
+        if (daysUntilStockout < 45) {
           const urgency = 
-            daysUntilStockout < 3 ? 'critical' :
-            daysUntilStockout < 7 ? 'high' :
-            daysUntilStockout < 14 ? 'medium' : 'low';
+            daysUntilStockout < 14 ? 'critical' :
+            daysUntilStockout < 21 ? 'high' :
+            daysUntilStockout < 45 ? 'medium' : 'low';
 
           const safetyStockDays = 30;
           const recommendedQty = Math.max(
@@ -217,8 +217,10 @@ export class LLMService {
             recommendedOrderQty: recommendedQty,
             urgency,
             reason: urgency === 'critical' 
-              ? `Critical: Only ${Math.floor(daysUntilStockout)} days of stock remaining`
-              : `Stock will run out in ${Math.floor(daysUntilStockout)} days at current usage rate`,
+              ? `Critical: Only ${Math.floor(daysUntilStockout)} days of stock remaining - order now`
+              : urgency === 'high'
+              ? `High priority: ${Math.floor(daysUntilStockout)} days of stock remaining - order soon`
+              : `Monitor: ${Math.floor(daysUntilStockout)} days of stock remaining`,
             estimatedStockoutDays: Math.floor(daysUntilStockout),
             suggestedSupplier: designatedSupplier ? 
               (await storage.getSupplier(designatedSupplier.supplierId))?.name : undefined

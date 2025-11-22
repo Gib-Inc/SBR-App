@@ -20,6 +20,7 @@ import { User, LogOut } from "lucide-react";
 import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
+import AIAgent from "@/pages/ai";
 import Settings from "@/pages/settings";
 import Login from "@/pages/login";
 import NotFound from "@/pages/not-found";
@@ -100,6 +101,7 @@ function AuthenticatedApp() {
                     <Route path="/" component={Dashboard} />
                     <Route path="/products" component={Products} />
                     <Route path="/barcodes" component={Barcodes} />
+                    <Route path="/ai" component={AIAgent} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />
                   </Switch>

@@ -117,6 +117,28 @@ export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
 
 // ============================================================================
+// PURCHASE ORDERS (Lead Time Tracking)
+// ============================================================================
+
+export const purchaseOrders = pgTable("purchase_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  orderDate: timestamp("order_date").notNull().default(sql`now()`),
+  expectedDeliveryDate: timestamp("expected_delivery_date"),
+  actualReceiptDate: timestamp("actual_receipt_date"),
+  quantity: integer("quantity").notNull(),
+  unitPrice: real("unit_price"),
+  status: text("status").notNull().default('pending'), // 'pending', 'shipped', 'received', 'cancelled'
+  notes: text("notes"),
+});
+
+export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true });
+export const updatePurchaseOrderSchema = insertPurchaseOrderSchema.partial();
+export type InsertPurchaseOrder = z.infer<typeof insertPurchaseOrderSchema>;
+export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
+
+// ============================================================================
 // SALES HISTORY (from GoHighLevel)
 // ============================================================================
 

@@ -42,11 +42,11 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-6 pb-4">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary">
+        <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary group-data-[collapsible=icon]:mx-auto">
             <Package className="h-5 w-5 text-primary-foreground" />
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col group-data-[collapsible=icon]:hidden">
             <span className="text-lg font-semibold">Inventory</span>
             <span className="text-xs text-muted-foreground">Manufacturing</span>
           </div>

@@ -199,13 +199,40 @@ function IntegrationSettings() {
       }
       return await res.json();
     },
-    onSuccess: (_, variables) => {
+    onSuccess: async (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      
+      const integrationName = integrations.find(i => i.id === variables.integrationId)?.name;
       toast({
-        title: "Success",
-        description: `${integrations.find(i => i.id === variables.integrationId)?.name} API key saved`,
+        title: "API Key Saved",
+        description: `${integrationName} API key saved. Testing connection...`,
       });
+      
+      // Automatically test the connection if API key is not empty
+      if (variables.apiKey && variables.apiKey.trim()) {
+        setTestingConnection(variables.integrationId);
+        try {
+          const res = await apiRequest("POST", `/api/integrations/${variables.integrationId}/sync`, {});
+          if (!res.ok) {
+            throw new Error("Connection test failed");
+          }
+          await res.json();
+          queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+          toast({
+            title: "Connection Verified",
+            description: `${integrationName} is connected and working`,
+          });
+        } catch (error: any) {
+          toast({
+            title: "Connection Failed",
+            description: `${integrationName} API key saved but connection test failed. Please verify your API key.`,
+            variant: "destructive",
+          });
+        } finally {
+          setTestingConnection(null);
+        }
+      }
     },
     onError: (error: any) => {
       toast({

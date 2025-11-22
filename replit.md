@@ -8,6 +8,19 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
+**November 22, 2025 - Production-Ready LLM Reorder Recommendations**:
+- ✅ **LLM Reasoning Implementation**: Replaced formula-based reorder recommendations with actual LLM reasoning
+  - Multi-period analysis: 30-day, 90-day, and historical sales data with seasonal context
+  - Comprehensive prompts include current date, stock levels, usage rates, supplier info, and 4-week projections
+  - Structured JSON responses with robust error handling and fallback to heuristics
+- ✅ **All Provider Stubs Functional**: ChatGPT, Claude, Grok, and Custom endpoint stubs return structured recommendations
+- ✅ **Custom Provider Support**: Custom LLM providers work without API keys when custom endpoint is configured
+- ✅ **Empty String Normalization**: Storage-layer normalization converts empty strings to null, preventing stale "" values
+  - Implemented in both MemStorage and PostgresStorage `updateSettings()` methods
+  - Defense-in-depth: Also normalized in PATCH /api/settings route handler
+- ✅ **Updated Urgency Thresholds**: Critical <14 days (was <7), High 14-21 days (was 7-14), Medium 21-45 days (was 14-30)
+- ✅ **Zero-Quantity Validation**: Fixed handling of items with zero currentStock to prevent division by zero
+
 **November 21, 2025 - End-to-End Testing & Fixes**:
 - ✅ **Settings API Fixed**: GET/PATCH /api/settings now use req.session.userId instead of hardcoded ID
 - ✅ **Settings Upsert**: updateSettings() now creates settings row on first save (prevents foreign key errors)

@@ -82,6 +82,7 @@ export interface IStorage {
 
   // Sales History
   getAllSalesHistory(): Promise<SalesHistory[]>;
+  getSalesHistoryByItemId(itemId: string): Promise<SalesHistory[]>;
   createSalesHistory(sale: InsertSalesHistory): Promise<SalesHistory>;
 
   // Finished Inventory Snapshot
@@ -516,6 +517,10 @@ export class MemStorage implements IStorage {
     return Array.from(this.salesHistory.values());
   }
 
+  async getSalesHistoryByItemId(itemId: string): Promise<SalesHistory[]> {
+    return Array.from(this.salesHistory.values()).filter(s => s.itemId === itemId);
+  }
+
   async createSalesHistory(insertSale: InsertSalesHistory): Promise<SalesHistory> {
     const id = randomUUID();
     const sale: SalesHistory = {
@@ -838,6 +843,10 @@ export class PostgresStorage implements IStorage {
   // Sales History
   async getAllSalesHistory(): Promise<SalesHistory[]> {
     return await this.db.select().from(schema.salesHistory);
+  }
+
+  async getSalesHistoryByItemId(itemId: string): Promise<SalesHistory[]> {
+    return await this.db.select().from(schema.salesHistory).where(eq(schema.salesHistory.itemId, itemId));
   }
 
   async createSalesHistory(insertSale: InsertSalesHistory): Promise<SalesHistory> {

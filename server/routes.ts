@@ -842,6 +842,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Smart Reorder Recommendations
+  app.get("/api/llm/reorder-recommendations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const recommendations = await LLMService.generateReorderRecommendations();
+      res.json(recommendations);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to generate reorder recommendations" });
+    }
+  });
+
+  // Supplier Ranking for specific item
+  app.get("/api/llm/supplier-ranking/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId } = req.params;
+      const rankings = await LLMService.rankSuppliers(itemId);
+      res.json(rankings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to rank suppliers" });
+    }
+  });
+
+  // Demand Forecasting with confidence intervals
+  app.get("/api/llm/demand-forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const forecasts = await LLMService.generateDemandForecast();
+      res.json(forecasts);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to generate demand forecast" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

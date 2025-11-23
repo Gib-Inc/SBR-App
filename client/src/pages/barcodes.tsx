@@ -403,9 +403,40 @@ function ItemTableRow({
         )}
       </td>
       <td className="p-3">
-        <Badge variant="secondary" className="text-xs">
-          {item.barcodeFormat || "Not Set"}
-        </Badge>
+        {editingField === "barcodeFormat" ? (
+          <div className="flex items-center gap-2">
+            <Select value={editValue} onValueChange={setEditValue}>
+              <SelectTrigger className="h-8 w-[140px]" data-testid={`select-edit-format-${item.id}`}>
+                <SelectValue placeholder="Select format" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="CODE128">CODE128</SelectItem>
+                <SelectItem value="EAN13">EAN13</SelectItem>
+                <SelectItem value="EAN8">EAN8</SelectItem>
+                <SelectItem value="UPC">UPC</SelectItem>
+                <SelectItem value="QR">QR Code</SelectItem>
+                <SelectItem value="DATA_MATRIX">Data Matrix</SelectItem>
+                <SelectItem value="CODE39">CODE39</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-format-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-format-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1" 
+            onClick={() => startEdit("barcodeFormat", item.barcodeFormat)}
+            data-testid={`text-item-format-${item.id}`}
+          >
+            <Badge variant="secondary" className="text-xs">
+              {item.barcodeFormat || "Not Set"}
+            </Badge>
+          </div>
+        )}
       </td>
       <td className="p-3">
         {item.barcodeUsage ? (

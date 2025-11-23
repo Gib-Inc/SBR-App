@@ -35,8 +35,9 @@ export const items = pgTable("items", {
   // Enhanced barcode and product tracking fields
   productKind: text("product_kind"), // 'FINISHED' or 'RAW'
   barcodeValue: text("barcode_value"),
-  barcodeType: text("barcode_type"), // 'GS1_FINISHED' or 'INTERNAL_RAW'
-  barcodeSource: text("barcode_source"), // 'GENERATED', 'IMPORTED', 'MANUAL'
+  barcodeFormat: text("barcode_format"), // Physical symbology: 'CODE128', 'EAN13', 'QR', etc.
+  barcodeUsage: text("barcode_usage"), // Business meaning: 'EXTERNAL_GS1' or 'INTERNAL_STOCK'
+  barcodeSource: text("barcode_source"), // 'AUTO_GENERATED', 'IMPORTED', 'MANUAL'
   externalSystem: text("external_system"), // 'shopify', 'amazon', 'csv_generic', etc.
   externalId: text("external_id"), // External system's ID/handle/ASIN
 });

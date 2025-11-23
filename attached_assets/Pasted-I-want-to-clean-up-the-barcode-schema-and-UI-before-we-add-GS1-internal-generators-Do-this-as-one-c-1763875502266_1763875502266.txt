@@ -1,0 +1,53 @@
+I want to clean up the barcode schema and UI before we add GS1/internal generators. Do this as one coherent change, without adding new features beyond what’s described here.
+
+1. Clarify the barcode fields (schema clean-up)
+
+Inspect the models/schema used for inventory items and the Barcodes page. Right now the table shows columns like: Barcode (image), Name, SKU, Barcode Value, Product Kind, Barcode Type, Barcode Source, Stock.
+
+The field currently shown as “Barcode Type” in the UI is actually the barcode format/symbology (e.g. CODE128). Rename this field in the codebase from barcodeType (or whatever it’s called) to barcodeFormat everywhere it is used: models, APIs, seed data, and frontend.
+
+Update the Barcodes UI column header from “Barcode Type” to “Format”, and keep showing values like CODE128 there. This column should represent only the physical barcode format, not business semantics.
+
+Add a new field to the model and API called barcodeUsage (or very similar) that represents the business meaning of the code, with enum/string values such as:
+
+"EXTERNAL_GS1" – for finished products that use external/GS1-style or market-facing codes.
+
+"INTERNAL_STOCK" – for internal/in-house inventory codes used only inside our system.
+
+Expose this new field on the Barcodes page as a separate column labeled “Usage”, and show friendly badges if you like, e.g. “External (GS1)” vs “Internal”.
+
+Make sure all relevant TypeScript types/interfaces and any validation logic are updated to use barcodeFormat and the new barcodeUsage.
+
+2. Seed data and default values
+
+Update the seed script so that:
+
+All existing finished products (the ones listed under Finished Products in the BOM page) have productKind = "FINISHED" and barcodeUsage = "EXTERNAL_GS1".
+
+All existing stock/raw items (the ones listed under Stock Inventory in the BOM page) have productKind = "RAW" and barcodeUsage = "INTERNAL_STOCK".
+
+Existing values like CODE128 are preserved, but now stored in barcodeFormat.
+
+Re-run the seed script and restart the app so the Barcodes page is populated with this updated metadata.
+
+3. Ensure the Barcodes page still shows all items correctly
+
+Verify that the /barcodes page queries and displays all current items (both finished and raw) that we previously saw, and that nothing disappears because of the schema change.
+
+If the query is filtering by any of the new fields, loosen it so that all items appear even if some metadata is missing. Items without a barcodeValue should still show, with a placeholder like “No code yet”.
+
+Confirm that:
+
+The table now has separate columns for Barcode Value, Format (barcodeFormat), Usage (barcodeUsage), Product Kind, and Barcode Source.
+
+The barcode images still render correctly using barcodeValue and barcodeFormat.
+
+Make sure the Dashboard and BOM pages still work and that the schema changes did not break any existing routes or calculations.
+
+When you’re done, give me a short summary:
+
+Which files and models you changed.
+
+How barcodeValue, barcodeFormat, barcodeUsage, productKind, and barcodeSource are now defined and used.
+
+Confirmation that the Barcodes page, BOM page, and Dashboard all load correctly with the new schema and that all previously visible items are still visible.

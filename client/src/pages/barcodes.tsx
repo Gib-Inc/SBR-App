@@ -524,7 +524,8 @@ export default function Barcodes() {
                       <th className="p-3 text-left text-sm font-medium">SKU</th>
                       <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
                       <th className="p-3 text-left text-sm font-medium">Product Kind</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Type</th>
+                      <th className="p-3 text-left text-sm font-medium">Format</th>
+                      <th className="p-3 text-left text-sm font-medium">Usage</th>
                       <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
                       <th className="p-3 text-right text-sm font-medium">Stock</th>
                     </tr>
@@ -562,8 +563,17 @@ export default function Barcodes() {
                         </td>
                         <td className="p-3">
                           <Badge variant="secondary" className="text-xs">
-                            {item.barcodeType || "Not Set"}
+                            {item.barcodeFormat || "Not Set"}
                           </Badge>
+                        </td>
+                        <td className="p-3">
+                          {item.barcodeUsage ? (
+                            <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
+                              {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )}
                         </td>
                         <td className="p-3">
                           <Badge variant="outline" className="text-xs">
@@ -587,7 +597,7 @@ export default function Barcodes() {
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <BarcodeIcon className="h-4 w-4" />
             <p>
-              Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_type, barcode_source, external_system, external_id
+              Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_format, barcode_usage, barcode_source, external_system, external_id
             </p>
           </div>
         </CardContent>

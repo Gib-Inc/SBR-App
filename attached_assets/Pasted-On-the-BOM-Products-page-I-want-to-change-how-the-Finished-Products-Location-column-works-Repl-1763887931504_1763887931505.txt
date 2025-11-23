@@ -1,0 +1,126 @@
+On the BOM / Products page, I want to change how the Finished Products “Location” column works. Replace the single Location text column with two numeric quantity columns: Hildale Qty and Pivot Qty. These must be stored in the data model (not just UI), and they should only ever contain numbers.
+
+1. Update the data model for finished products
+
+
+In the model/interface used for finished products (the records shown in the “Finished Products” table on /products), do the following:
+
+
+Add two numeric fields:
+
+
+hildaleQty (number) – quantity of this finished product at Hildale.
+
+
+pivotQty (number) – quantity of this finished product at Pivot/Extensiv.
+
+
+
+
+Keep the existing stock (total) field, but define it as stock = hildaleQty + pivotQty going forward.
+
+
+The old location string field can be left in the DB for backward compatibility, but it should no longer be shown in the table or used for new logic.
+
+
+
+
+Update TypeScript types, storage (Mem/Postgres), and any validation to treat hildaleQty and pivotQty as required non-negative numbers (default 0).
+
+
+2. Migrate / seed initial data
+
+
+In the seed script, map existing data into the new fields:
+
+
+If location === "Hildale" → set hildaleQty = stock and pivotQty = 0.
+
+
+If location === "Spanish Fork" or represents the Pivot warehouse → set pivotQty = stock and hildaleQty = 0.
+
+
+If location is empty or "-" → set both hildaleQty = 0 and pivotQty = 0.
+
+
+
+
+After seeding, recompute stock = hildaleQty + pivotQty for each finished product so total stock stays consistent.
+
+
+3. Update the Finished Products table UI
+
+
+In the BOM page component (e.g. client/src/pages/products.tsx or wherever the Finished Products table is rendered):
+
+
+Remove the Location column from the Finished Products table.
+
+
+Add two new columns in its place:
+
+
+Hildale Qty → displays hildaleQty.
+
+
+Pivot Qty → displays pivotQty.
+
+
+
+
+These should display only numeric values (no text).
+
+
+Ensure any edit/create flows for finished products use numeric inputs for these fields (type="number", no negative values).
+
+
+
+
+The Stock column should show the total (hildaleQty + pivotQty or the synced stock field).
+
+
+Do not change the Stock Inventory (raw materials) section yet; only modify the Finished Products table.
+
+
+4. Keep Dashboard and other pages consistent
+
+
+Wherever the total stock for a finished product is used (Dashboard metrics, forecasts, etc.), make sure those calculations now rely on the total (stock as hildale + pivot) so numbers remain correct.
+
+
+Verify that Barcodes, AI Agent, and other pages still function and that no code is assuming a string location value.
+
+
+5. Verification
+
+
+Re-run the seed script and restart the app.
+
+
+On the BOM page:
+
+
+Confirm the Finished Products table now shows Stock, Hildale Qty, and Pivot Qty columns, with no Location column.
+
+
+Check that values for existing products were migrated correctly (Hildale items show their quantity in Hildale Qty, Spanish Fork/Pivot items show their quantity in Pivot Qty, totals match the previous Stock).
+
+
+Edit a finished product’s quantities (Hildale and Pivot), save, refresh the page, and confirm:
+
+
+The values persist.
+
+
+The Stock total updates to match Hildale + Pivot.
+
+
+
+
+
+
+Provide a brief summary of which models, APIs, and UI components you changed and how the total stock is now computed from the two location quantities.
+
+
+
+

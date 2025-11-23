@@ -31,7 +31,10 @@ export const items = pgTable("items", {
   minStock: integer("min_stock").notNull().default(0),
   dailyUsage: real("daily_usage").notNull().default(0),
   barcode: text("barcode"),
-  location: text("location"), // Warehouse location for finished products
+  location: text("location"), // Legacy warehouse location (deprecated - use hildaleQty/pivotQty)
+  // Finished product location quantities
+  hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
+  pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse
   // Enhanced barcode and product tracking fields
   productKind: text("product_kind"), // 'FINISHED' or 'RAW'
   barcodeValue: text("barcode_value"),

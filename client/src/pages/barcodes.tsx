@@ -249,16 +249,221 @@ function BarcodeTableRow({
   );
 }
 
+function ItemTableRow({
+  item,
+  testIdPrefix,
+  onUpdate,
+  onDelete,
+  onPrint
+}: {
+  item: any;
+  testIdPrefix: string;
+  onUpdate: (id: string, field: string, value: string) => void;
+  onDelete: (item: any) => void;
+  onPrint: (item: any) => void;
+}) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const startEdit = (field: string, currentValue: string) => {
+    setEditingField(field);
+    setEditValue(currentValue || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingField(null);
+    setEditValue("");
+  };
+
+  const saveEdit = () => {
+    if (editingField) {
+      onUpdate(item.id, editingField, editValue);
+      setEditingField(null);
+      setEditValue("");
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      saveEdit();
+    } else if (e.key === "Escape") {
+      cancelEdit();
+    }
+  };
+
+  return (
+    <tr key={item.id} className="border-b hover-elevate" data-testid={`row-${testIdPrefix}-${item.id}`}>
+      <td className="p-3">
+        {item.barcodeValue ? (
+          <div className="flex flex-col items-center gap-1">
+            <img 
+              src={`/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}`} 
+              alt={item.barcodeValue}
+              className="h-12 w-auto"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">No barcode</span>
+        )}
+      </td>
+      <td className="p-3">
+        {editingField === "name" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8"
+              autoFocus
+              data-testid={`input-edit-name-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-name-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-name-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 text-sm hover-elevate" 
+            onClick={() => startEdit("name", item.name)}
+            data-testid={`text-item-name-${item.id}`}
+          >
+            {item.name}
+          </div>
+        )}
+      </td>
+      <td className="p-3">
+        {editingField === "sku" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 font-mono"
+              autoFocus
+              data-testid={`input-edit-sku-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-sku-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-sku-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 text-sm font-mono hover-elevate" 
+            onClick={() => startEdit("sku", item.sku)}
+            data-testid={`text-item-sku-${item.id}`}
+          >
+            {item.sku}
+          </div>
+        )}
+      </td>
+      <td className="p-3">
+        {editingField === "barcodeValue" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 font-mono"
+              autoFocus
+              data-testid={`input-edit-barcode-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-barcode-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-barcode-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 text-sm font-mono hover-elevate" 
+            onClick={() => startEdit("barcodeValue", item.barcodeValue)}
+            data-testid={`text-item-barcode-${item.id}`}
+          >
+            {item.barcodeValue || "-"}
+          </div>
+        )}
+      </td>
+      <td className="p-3">
+        {item.productKind ? (
+          <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
+            {item.productKind}
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">-</span>
+        )}
+      </td>
+      <td className="p-3">
+        <Badge variant="secondary" className="text-xs">
+          {item.barcodeFormat || "Not Set"}
+        </Badge>
+      </td>
+      <td className="p-3">
+        {item.barcodeUsage ? (
+          <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
+            {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">-</span>
+        )}
+      </td>
+      <td className="p-3">
+        <Badge variant="outline" className="text-xs">
+          {item.barcodeSource || "None"}
+        </Badge>
+      </td>
+      <td className="p-3 text-right text-sm">{item.currentStock}</td>
+      <td className="p-3">
+        <div className="flex gap-1 justify-end">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onPrint(item)}
+            data-testid={`button-print-${item.id}`}
+            className="h-8 w-8"
+          >
+            <Printer className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onDelete(item)}
+            data-testid={`button-delete-${item.id}`}
+            className="h-8 w-8"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function BarcodeItemsSection({ 
   title, 
   items, 
   searchQuery,
-  "data-testid-prefix": testIdPrefix 
+  "data-testid-prefix": testIdPrefix,
+  onUpdate,
+  onDelete,
+  onPrint
 }: { 
   title: string; 
   items: any[]; 
   searchQuery: string;
   "data-testid-prefix": string;
+  onUpdate: (id: string, field: string, value: string) => void;
+  onDelete: (item: any) => void;
+  onPrint: (item: any) => void;
 }) {
   if (items.length === 0) {
     return (
@@ -293,60 +498,19 @@ function BarcodeItemsSection({
                 <th className="p-3 text-left text-sm font-medium">Usage</th>
                 <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
                 <th className="p-3 text-right text-sm font-medium">Stock</th>
+                <th className="p-3 text-right text-sm font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item: any) => (
-                <tr key={item.id} className="border-b hover-elevate" data-testid={`row-${testIdPrefix}-${item.id}`}>
-                  <td className="p-3">
-                    {item.barcodeValue ? (
-                      <div className="flex flex-col items-center gap-1">
-                        <img 
-                          src={`/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}`} 
-                          alt={item.barcodeValue}
-                          className="h-12 w-auto"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">No barcode</span>
-                    )}
-                  </td>
-                  <td className="p-3 text-sm">{item.name}</td>
-                  <td className="p-3 text-sm font-mono">{item.sku}</td>
-                  <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
-                  <td className="p-3">
-                    {item.productKind ? (
-                      <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
-                        {item.productKind}
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">-</span>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    <Badge variant="secondary" className="text-xs">
-                      {item.barcodeFormat || "Not Set"}
-                    </Badge>
-                  </td>
-                  <td className="p-3">
-                    {item.barcodeUsage ? (
-                      <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
-                        {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">-</span>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    <Badge variant="outline" className="text-xs">
-                      {item.barcodeSource || "None"}
-                    </Badge>
-                  </td>
-                  <td className="p-3 text-right text-sm">{item.currentStock}</td>
-                </tr>
+                <ItemTableRow
+                  key={item.id}
+                  item={item}
+                  testIdPrefix={testIdPrefix}
+                  onUpdate={onUpdate}
+                  onDelete={onDelete}
+                  onPrint={onPrint}
+                />
               ))}
             </tbody>
           </table>
@@ -462,7 +626,17 @@ export default function Barcodes() {
     });
   };
 
-  const handlePrint = (barcode: any) => {
+  const handlePrint = (item: any) => {
+    // Check if item has a barcode value
+    if (!item.barcodeValue) {
+      toast({
+        variant: "destructive",
+        title: "Cannot Print",
+        description: "This item does not have a barcode value assigned.",
+      });
+      return;
+    }
+
     // Create a print-friendly window with the barcode image
     const printWindow = window.open('', '_blank');
     if (printWindow) {
@@ -470,7 +644,7 @@ export default function Barcodes() {
         <!DOCTYPE html>
         <html>
         <head>
-          <title>Print Barcode - ${barcode.name}</title>
+          <title>Print Barcode - ${item.name}</title>
           <style>
             body {
               font-family: Arial, sans-serif;
@@ -513,9 +687,9 @@ export default function Barcodes() {
         </head>
         <body>
           <div class="barcode-container">
-            <img src="/api/barcodes/${barcode.id}/image" alt="${barcode.value}" />
-            <h2>${barcode.name}</h2>
-            ${barcode.sku ? `<div class="sku">${barcode.sku}</div>` : ''}
+            <img src="/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}" alt="${item.barcodeValue}" />
+            <h2>${item.name}</h2>
+            ${item.sku ? `<div class="sku">${item.sku}</div>` : ''}
           </div>
           <script>
             window.onload = () => {
@@ -628,6 +802,9 @@ export default function Barcodes() {
             items={finishedItems}
             searchQuery={searchQuery}
             data-testid-prefix="finished"
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onPrint={handlePrint}
           />
 
           {/* Stock Inventory Section */}
@@ -636,6 +813,9 @@ export default function Barcodes() {
             items={rawItems}
             searchQuery={searchQuery}
             data-testid-prefix="stock"
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            onPrint={handlePrint}
           />
         </div>
       )}

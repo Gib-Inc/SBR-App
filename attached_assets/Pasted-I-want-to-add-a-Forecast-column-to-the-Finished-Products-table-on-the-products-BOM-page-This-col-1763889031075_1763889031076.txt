@@ -1,0 +1,141 @@
+I want to add a Forecast column to the Finished Products table on the /products (BOM) page. This column should show, for each finished product, how many more units can be produced with current raw inventory, based on the product’s BOM and the Stock Inventory quantities.
+
+1. Define the forecasting logic
+
+
+For each finished product, we already have:
+
+
+A BOM: list of components (raw items) with requiredQtyPerUnit (or equivalent) for that product.
+
+
+Stock Inventory entries for each component with current stock quantity.
+
+
+
+
+Implement a function (backend domain/service layer) that, given a finished product id:
+
+
+Fetches all BOM components for that product (component id + quantity required per 1 unit of the product).
+
+
+For each component:
+
+
+Look up the corresponding raw inventory item’s current stock.
+
+
+Compute how many units of the finished product that single component would allow:
+
+
+capacityForComponent = floor(componentStock / requiredPerUnit)
+
+
+If there is no stock record or required quantity is 0, treat capacity as 0.
+
+
+
+
+
+
+The product’s forecast (production capacity) is the minimum of all capacityForComponent values across its BOM.
+
+
+If a product has no BOM components, define forecast as 0.
+
+
+
+
+Add tests for this function with simple cases (one component, multiple components, zero stock, missing component, etc.).
+
+
+2. Expose forecast in the backend API
+
+
+When returning finished products for the Products/BOM page (the endpoint that powers the “Finished Products” table), extend the response to include a numeric field, e.g. forecastQty or productionCapacity, for each finished product.
+
+
+For each product in that list, compute the forecast using the function above.
+
+
+Ensure this value is integer, non-negative.
+
+
+Keep existing fields (stock, hildaleQty, pivotQty, BOM count, etc.) unchanged.
+
+
+3. Add the Forecast column to the Finished Products table
+
+
+In the Products/BOM page component (where the Finished Products table is defined):
+
+
+Add a new column labeled “Forecast” between Stock and Hildale Qty (or in another logical place near stock).
+
+
+Bind this column to the backend field (forecastQty / productionCapacity) so it shows the computed value for each finished product.
+
+
+Display it as a plain integer (no units, no text).
+
+
+
+
+Do not add a Forecast column to the Stock Inventory table; this is only for Finished Products.
+
+
+4. Keep Dashboard in sync (if needed)
+
+
+If the Dashboard already has a “Production Capacity” card or similar, refactor it to reuse the same forecast logic/service so there is a single source of truth.
+
+
+Ensure any existing “max units” or production metrics now rely on the same computation you just implemented.
+
+
+5. Verification
+
+
+Seed data:
+
+
+Use the current BOM setup for Gadget B and Widget A plus the raw inventory stocks to create a few known cases where the forecast is easy to verify (e.g. one component clearly limiting).
+
+
+
+
+In the preview, confirm that on the Finished Products table:
+
+
+Each product shows a non-negative integer in the Forecast column.
+
+
+If I change raw component stock (e.g., reduce stock of a limiting component) and reload, the forecast decreases accordingly.
+
+
+If I change a BOM quantity for a component and save, the forecast for that product updates correctly after refresh.
+
+
+Products with no BOM components show forecast = 0.
+
+
+
+
+Ensure the change does not break the Barcodes page, Dashboard, or BOM editor.
+
+
+Finally, give me a brief summary:
+
+
+Which files you changed (service, API handler, React page).
+
+
+The exact formula used for forecast.
+
+
+How to adjust or reuse the forecast logic elsewhere if we want to.
+
+
+
+

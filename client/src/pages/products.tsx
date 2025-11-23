@@ -202,6 +202,18 @@ function ItemTableRow({
         )}
       </td>
 
+      {/* Forecast Column (only for finished products) */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle">
+          <div 
+            className="px-2 py-1 text-right font-medium text-primary" 
+            data-testid={`text-item-forecast-${item.id}`}
+          >
+            {item.forecastQty ?? 0}
+          </div>
+        </td>
+      )}
+
       {/* Hildale Qty Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle">
@@ -873,6 +885,7 @@ export default function BOM() {
                   <th className="p-3 text-left text-sm font-medium">Name</th>
                   <th className="p-3 text-left text-sm font-medium">SKU</th>
                   <th className="p-3 text-right text-sm font-medium">Stock</th>
+                  <th className="p-3 text-right text-sm font-medium">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium">Pivot Qty</th>
                   <th className="p-3 text-center text-sm font-medium">BOM</th>

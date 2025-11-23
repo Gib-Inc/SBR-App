@@ -45,7 +45,7 @@ export interface IStorage {
 
   // Items
   getAllItems(): Promise<Item[]>;
-  getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>>;
+  getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>>;
   getItem(id: string): Promise<Item | undefined>;
   getItemBySku(sku: string): Promise<Item | undefined>;
   createItem(item: InsertItem): Promise<Item>;
@@ -400,17 +400,52 @@ export class MemStorage implements IStorage {
     return Array.from(this.items.values());
   }
 
-  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>> {
+  private calculateProductionForecast(finishedProductId: string): number {
+    // Get BOM entries for this finished product
+    const bomEntries = Array.from(this.billOfMaterials.values()).filter(
+      (bom) => bom.finishedProductId === finishedProductId
+    );
+
+    // If no BOM components, forecast is 0
+    if (bomEntries.length === 0) {
+      return 0;
+    }
+
+    // Calculate capacity for each component
+    let minCapacity = Infinity;
+    
+    for (const bomEntry of bomEntries) {
+      const component = this.items.get(bomEntry.componentId);
+      
+      if (!component || bomEntry.quantityRequired <= 0) {
+        // Missing component or invalid quantity = can't produce any
+        return 0;
+      }
+
+      const componentStock = component.currentStock ?? 0;
+      const requiredPerUnit = bomEntry.quantityRequired;
+      
+      // Calculate how many units this component allows
+      const capacityForComponent = Math.floor(componentStock / requiredPerUnit);
+      
+      minCapacity = Math.min(minCapacity, capacityForComponent);
+    }
+
+    return minCapacity === Infinity ? 0 : minCapacity;
+  }
+
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>> {
     const items = Array.from(this.items.values());
     const itemsWithCounts = items.map((item) => {
       if (item.type === "finished_product") {
         const bomEntries = Array.from(this.billOfMaterials.values()).filter(
           (bom) => bom.finishedProductId === item.id
         );
-        return { ...item, componentsCount: bomEntries.length };
+        const forecast = this.calculateProductionForecast(item.id);
+        return { ...item, componentsCount: bomEntries.length, forecastQty: forecast };
       }
       // For components, explicitly return undefined to match PostgresStorage behavior
-      return { ...item, componentsCount: undefined };
+      return { ...item, componentsCount: undefined, forecastQty: undefined };
     });
     return itemsWithCounts;
   }
@@ -956,7 +991,52 @@ export class PostgresStorage implements IStorage {
     return await this.db.select().from(schema.items);
   }
 
-  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>> {
+  private async calculateProductionForecast(finishedProductId: string): Promise<number> {
+    // Get BOM entries for this finished product with component stock info
+    // Use LEFT JOIN to detect missing components
+    const bomWithStock = await this.db
+      .select({
+        componentId: schema.billOfMaterials.componentId,
+        quantityRequired: schema.billOfMaterials.quantityRequired,
+        currentStock: schema.items.currentStock,
+      })
+      .from(schema.billOfMaterials)
+      .leftJoin(schema.items, eq(schema.billOfMaterials.componentId, schema.items.id))
+      .where(eq(schema.billOfMaterials.finishedProductId, finishedProductId));
+
+    // If no BOM components, forecast is 0
+    if (bomWithStock.length === 0) {
+      return 0;
+    }
+
+    // Calculate capacity for each component
+    let minCapacity = Infinity;
+    
+    for (const bomEntry of bomWithStock) {
+      // Check for missing component (LEFT JOIN returned null)
+      if (bomEntry.currentStock === null) {
+        // Missing component = can't produce any
+        return 0;
+      }
+
+      if (bomEntry.quantityRequired <= 0) {
+        // Invalid quantity = can't produce any
+        return 0;
+      }
+
+      const componentStock = bomEntry.currentStock ?? 0;
+      const requiredPerUnit = bomEntry.quantityRequired;
+      
+      // Calculate how many units this component allows
+      const capacityForComponent = Math.floor(componentStock / requiredPerUnit);
+      
+      minCapacity = Math.min(minCapacity, capacityForComponent);
+    }
+
+    return minCapacity === Infinity ? 0 : minCapacity;
+  }
+
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>> {
     // Use LEFT JOIN + COUNT to efficiently get BOM counts in a single query
     // Cast COUNT to integer explicitly to ensure consistent numeric type
     const results = await this.db
@@ -971,12 +1051,27 @@ export class PostgresStorage implements IStorage {
       )
       .groupBy(schema.items.id);
     
-    // Map results to include componentsCount only for finished products
-    // For components (non-finished products), return undefined instead of 0
-    return results.map((row) => ({
-      ...row.items,
-      componentsCount: row.items.type === "finished_product" ? row.componentsCount : undefined,
-    }));
+    // Calculate forecast for each finished product
+    const itemsWithForecast = await Promise.all(
+      results.map(async (row) => {
+        if (row.items.type === "finished_product") {
+          const forecast = await this.calculateProductionForecast(row.items.id);
+          return {
+            ...row.items,
+            componentsCount: row.componentsCount,
+            forecastQty: forecast,
+          };
+        }
+        // For components (non-finished products), return undefined instead of 0
+        return {
+          ...row.items,
+          componentsCount: undefined,
+          forecastQty: undefined,
+        };
+      })
+    );
+
+    return itemsWithForecast;
   }
 
   async getItem(id: string): Promise<Item | undefined> {

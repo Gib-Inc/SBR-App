@@ -1213,6 +1213,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Batch forecast job: Process all dirty items
+  app.post("/api/llm/batch-forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      
+      // Check if LLM is configured
+      const canUseLLM = settings?.llmProvider && (
+        settings.llmProvider === "custom" && settings.llmCustomEndpoint ||
+        settings.llmApiKey
+      );
+      
+      if (!canUseLLM) {
+        return res.status(400).json({ 
+          error: "LLM provider not configured. Please configure API key or custom endpoint in Settings." 
+        });
+      }
+      
+      // Get all items marked as forecastDirty
+      const allItems = await storage.getAllItems();
+      const dirtyItems = allItems.filter(item => item.forecastDirty === true);
+      
+      if (dirtyItems.length === 0) {
+        return res.json({
+          success: true,
+          processedCount: 0,
+          totalDirty: 0,
+          message: "No dirty items to process",
+        });
+      }
+      
+      // Generate forecasts for dirty items only (efficient batch processing)
+      let allRecommendations: any[] = [];
+      try {
+        allRecommendations = await LLMService.generateLLMReorderRecommendations(
+          settings.llmProvider!,
+          settings.llmApiKey || undefined,
+          settings.llmCustomEndpoint || undefined,
+          dirtyItems // Pass only dirty items to LLM service
+        );
+      } catch (error: any) {
+        return res.status(500).json({ 
+          error: `Failed to generate forecasts: ${error.message}` 
+        });
+      }
+      
+      // Create a map of recommendations by itemId for fast lookup
+      const recommendationMap = new Map(
+        allRecommendations.map(rec => [rec.itemId, rec])
+      );
+      
+      let successCount = 0;
+      let noDataCount = 0;
+      const failures: Array<{ itemId: string; itemName: string; error: string }> = [];
+      
+      // Process each dirty item and store its forecast
+      for (const item of dirtyItems) {
+        try {
+          const recommendation = recommendationMap.get(item.id);
+          
+          if (recommendation) {
+            // Store forecast data and mark as clean ONLY on success
+            await storage.updateItem(item.id, {
+              forecastData: recommendation as any,
+              forecastDirty: false,
+              lastForecastAt: new Date(),
+            });
+            successCount++;
+          } else {
+            // No recommendation generated (insufficient data)
+            // KEEP item dirty - it still needs review/attention
+            // Do not mark clean - absence of forecast is not a success
+            noDataCount++;
+          }
+        } catch (error: any) {
+          // Storage failure - keep item dirty for retry
+          failures.push({
+            itemId: item.id,
+            itemName: item.name,
+            error: error.message || "Failed to store forecast",
+          });
+        }
+      }
+      
+      res.json({
+        success: true,
+        totalDirty: dirtyItems.length,
+        successCount,
+        noDataCount,
+        failureCount: failures.length,
+        failures: failures.length > 0 ? failures : undefined,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to run batch forecast job" });
+    }
+  });
+
   // Vision API: Identify item from image
   app.post("/api/vision/identify", requireAuth, async (req: Request, res: Response) => {
     try {

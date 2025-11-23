@@ -55,7 +55,7 @@ export class TransactionService {
           ? "FINISHED" 
           : "RAW";
 
-      const updates: Partial<Item> = {};
+      const updates: Partial<Omit<Item, 'forecastData'>> & { forecastData?: any; forecastDirty?: boolean } = {};
 
       if (normalizedItemType === "FINISHED") {
         if (transactionType === "TRANSFER_OUT") {

@@ -369,13 +369,18 @@ export class LLMService {
 
   /**
    * Generate LLM-powered reorder recommendations with actual reasoning
+   * @param provider - LLM provider to use
+   * @param apiKey - API key for the provider
+   * @param customEndpoint - Custom endpoint URL
+   * @param itemsToProcess - Optional filtered list of items to process (defaults to all items)
    */
   static async generateLLMReorderRecommendations(
     provider: LLMProvider = "chatgpt",
     apiKey?: string,
-    customEndpoint?: string
+    customEndpoint?: string,
+    itemsToProcess?: any[]
   ): Promise<ReorderRecommendation[]> {
-    const items = await storage.getAllItems();
+    const items = itemsToProcess || await storage.getAllItems();
     const recommendations: ReorderRecommendation[] = [];
     
     const currentDate = new Date().toISOString().split('T')[0];

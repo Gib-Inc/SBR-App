@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -46,6 +46,7 @@ export const items = pgTable("items", {
   // AI Forecast tracking fields
   forecastDirty: boolean("forecast_dirty").notNull().default(true), // Indicates forecast needs refresh
   lastForecastAt: timestamp("last_forecast_at"), // Last time AI forecast was updated
+  forecastData: jsonb("forecast_data"), // Stores last generated forecast (ReorderRecommendation)
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

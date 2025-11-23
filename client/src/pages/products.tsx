@@ -524,7 +524,7 @@ function BOMDialog({
           <DialogTitle>Edit Bill of Materials - {item?.name}</DialogTitle>
         </DialogHeader>
         
-        {isLoading ? (
+        {isLoading || !isInitialized ? (
           <div className="flex h-64 flex-col items-center justify-center gap-4">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             <p className="text-sm text-muted-foreground">Loading bill of materials...</p>

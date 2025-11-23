@@ -1,0 +1,67 @@
+When I produce finished products at Hildale, I want the system to automatically consume BOM components from the raw Stock Inventory. I already have an inventory transaction system with types like TRANSFER, PRODUCE, ADJUST, RECEIVE, and SHIP. I need to make sure PRODUCE is wired correctly end-to-end for both finished products and raw materials.
+
+1. Verify current PRODUCE behavior
+
+Find the service/handler that executes a PRODUCE transaction for finished products.
+
+Confirm whether, on production, it currently:
+
+Increases the finished product’s Hildale quantity, and
+
+Also reduces stock for each BOM component from the Stock Inventory.
+
+If component stock is not being reduced according to the BOM, treat that as a bug to fix now.
+
+2. Implement correct PRODUCE logic using BOM
+
+For a given finished product and a produceQty (number of units to produce at Hildale):
+
+Load that product’s BOM: each component item id + requiredPerUnit.
+
+For each component in the BOM:
+
+Compute totalRequired = requiredPerUnit * produceQty.
+
+Validate there is at least totalRequired stock in the raw item’s Stock Inventory; if not, return a clear error and do not apply any changes.
+
+If validation passes for all components, apply transactions in one operation:
+
+For the finished product at Hildale:
+
+Create an InventoryTransaction of type PRODUCE with itemType = "FINISHED", location = "HILDALE", quantity = produceQty.
+
+Increase its hildaleQty by produceQty.
+
+For each BOM component (raw item):
+
+Create an InventoryTransaction of type PRODUCE with itemType = "RAW", appropriate location (e.g. "HILDALE"), and quantity = totalRequired.
+
+Decrease that raw item’s stock by totalRequired.
+
+All quantity updates must go through the existing transaction system (no direct field edits).
+
+3. UI and validation behavior
+
+In the Produce UI on the BOM page:
+
+When the user enters a quantity to produce, the backend should enforce the BOM/stock validation above.
+
+If there isn’t enough of any component, the user should get a readable error listing which component(s) are short and by how much.
+
+On success, the Finished Products table should show a higher Hildale Qty, and the Stock Inventory table should show reduced raw component stock.
+
+The History/Transactions view for the finished product and each component should show the PRODUCE transactions that were created.
+
+4. Tests and verification
+
+Add or update tests to cover:
+
+Producing 1 unit with sufficient raw stock → finished product Hildale Qty increases; raw component stock decreases by the correct amounts.
+
+Producing multiple units → all component deductions scale correctly.
+
+Producing when one component is short → operation fails with a clear error and no quantities are changed.
+
+In the running app, manually verify these flows using the BOM you’ve set up for Gadget B and Widget A, and confirm the Stock Inventory numbers move exactly according to the BOM.
+
+Finally, summarize what you changed and confirm that every PRODUCE operation now both increases finished product Hildale Qty and consumes BOM components from raw stock via transactions.

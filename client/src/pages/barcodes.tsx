@@ -498,7 +498,7 @@ function BarcodeItemsSection({
 }) {
   if (items.length === 0) {
     return (
-      <Card>
+      <Card className="max-w-full">
         <CardContent className="p-6">
           <h3 className="mb-4 text-lg font-semibold">{title}</h3>
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
@@ -513,7 +513,7 @@ function BarcodeItemsSection({
   }
 
   return (
-    <Card>
+    <Card className="max-w-full">
       <CardContent className="p-6">
         <h3 className="mb-4 text-lg font-semibold">{title}</h3>
         <div className="relative overflow-x-auto rounded-md border">
@@ -741,14 +741,14 @@ export default function Barcodes() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex max-w-full flex-col gap-6 overflow-x-hidden p-6">
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Product Barcodes</h1>
           <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button 
             variant="outline" 
             onClick={handleExport}

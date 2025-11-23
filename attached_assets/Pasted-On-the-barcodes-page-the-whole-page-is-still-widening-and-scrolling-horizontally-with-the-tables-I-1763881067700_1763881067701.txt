@@ -1,0 +1,98 @@
+On the /barcodes page the whole page is still widening and scrolling horizontally with the tables. I need the layout fixed so only the tables scroll horizontally, and the Actions column stays always visible on the right.
+
+Please do the following (most of this will be in client/src/pages/barcodes.tsx and any related table components/styles):
+
+
+Fix page width (no global horizontal scroll)
+
+
+Make the main page container for the Barcodes page a fixed, full-width layout that never grows wider than the viewport.
+
+
+Ensure the body/main wrapper does not cause horizontal scrolling; only the table containers should allow overflow-x.
+
+
+
+
+Wrap each table in its own horizontal scroll container
+
+
+For both sections (“Finished Products” and “Stock Inventory”), wrap the table in a div that:
+
+
+Stretches to 100% of the page content width.
+
+
+Uses overflow-x: auto (or equivalent) so the table itself scrolls horizontally inside that wrapper.
+
+
+
+
+The page should stay fixed; when columns are too wide, only the table area gets a horizontal scrollbar.
+
+
+
+
+Make the Actions column sticky on the right
+
+
+Identify the right-most column that has the action icons/buttons (trash, print, download, etc.).
+
+
+Make that column position: sticky on the right of the scroll container so that:
+
+
+When I scroll horizontally inside the table, all other columns move, but the Actions column stays pinned to the right edge of the scrollable area.
+
+
+The Actions column never scrolls out of view horizontally.
+
+
+
+
+Ensure the sticky column has an appropriate background color and z-index so it doesn’t visually break when overlapping other cells.
+
+
+Apply this behavior to both the Finished Products table and the Stock Inventory table.
+
+
+
+
+Keep everything else working
+
+
+Do not change the existing columns, data, or actions; just adjust layout/containers/CSS.
+
+
+Keep the header (“Product Barcodes”, buttons like Export CSV / Print Labels / Scan Inventory / Create Barcode) fixed and not horizontally scrollable.
+
+
+The search bar should remain full-width and not scroll horizontally.
+
+
+
+
+Verification
+
+
+After the changes:
+
+
+The browser window should no longer have a horizontal scrollbar caused by the page itself.
+
+
+Each of the two tables has its own horizontal scrollbar when needed.
+
+
+As I scroll horizontally inside a table, the Actions column stays visible on the far right at all times.
+
+
+
+
+Summarize which components and style changes you made and confirm that both the Finished Products and Stock Inventory sections behave identically.
+
+
+
+
+
+

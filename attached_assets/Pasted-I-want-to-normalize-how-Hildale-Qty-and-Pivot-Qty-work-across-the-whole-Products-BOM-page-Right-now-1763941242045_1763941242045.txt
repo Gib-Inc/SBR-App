@@ -1,0 +1,135 @@
+I want to normalize how Hildale Qty and Pivot Qty work across the whole Products/BOM page. Right now:
+
+Inline-editing Hildale Qty is throwing a type error (expected number, received string).
+
+The Create Finished Product modal lets me set Hildale/Pivot Qty, but it’s not obvious how those values are saved and it may bypass the inventory transaction/audit system.
+
+I also want inventory changes to batch AI forecasting, not trigger the LLM on every small update.
+
+Please implement the following changes carefully, without breaking working features.
+
+1. Fix the Create Finished Product modal (Hildale/Pivot initial stock)
+
+Find the component that renders the Create Finished Product modal (Name, SKU, Hildale Qty, Pivot Qty).
+
+Improve the UX so it’s clear that Hildale/Pivot fields are initial quantities, for example by:
+
+Making them numeric-only inputs.
+
+Adding helper text like “Initial Hildale stock at the manufacturing site” and “Initial Pivot stock at the warehouse.”
+
+When I click Create:
+
+Validate that Hildale and Pivot quantities are non-negative numbers (or empty/null → treated as 0).
+
+On the backend, do not directly set quantity fields and walk away. Instead:
+
+Create the finished product record with hildaleQty = 0 and pivotQty = 0 as the base state.
+
+If Hildale Qty > 0, create an InventoryTransaction (e.g. type RECEIVE or ADJUST) for that product at location "HILDALE" with the given quantity, and apply it via the existing transaction service so the quantity and audit log stay consistent.
+
+If Pivot Qty > 0, do the same with location "PIVOT".
+
+After these transactions, the new product should appear in the Finished Products table with the correct Hildale/Pivot quantities and the appropriate history entries.
+
+Ensure the modal submits numeric data for Hildale/Pivot (not strings) so the backend schema doesn’t see them as string.
+
+2. Fix inline Hildale/Pivot edits and route them through transactions
+
+On the Finished Products table, when I click into Hildale Qty or Pivot Qty and edit inline:
+
+Parse the input as a number on the frontend before sending it to the backend.
+
+Validate locally (non-negative integer). Show a clear error message if invalid instead of sending bad values.
+
+On save (checkmark):
+
+The backend should not set the fields directly. It should:
+
+Look up the current stored quantity for that location (Hildale or Pivot).
+
+Compute delta = newQty - oldQty.
+
+If delta != 0, create an InventoryTransaction of type ADJUST at the appropriate location with that delta (positive = increase, negative = decrease).
+
+Apply the transaction via the same transaction service used elsewhere (so the audit trail is complete).
+
+Return the updated product so the UI shows the new quantity immediately.
+
+Verify that the previous error (expected number, received string on hildaleQty) is gone.
+
+3. Add and use forecast tracking fields for AI batching
+
+In the finished product data model (or a related model), add fields to control forecasting:
+
+lastForecastAt: Date | null – last time AI forecast was updated.
+
+forecastDirty: boolean – whether recent inventory changes mean the forecast is out of date.
+
+Default existing products to forecastDirty = true and lastForecastAt = null on first migration.
+
+In the inventory transaction service, whenever a transaction affects a finished product (PRODUCE, TRANSFER, RECEIVE, SHIP, ADJUST, etc.):
+
+Set that product’s forecastDirty = true.
+
+Do not call the LLM/AI forecaster directly inside the transaction handler.
+
+This includes transactions coming from:
+
+Initial creation via the Create Finished Product modal.
+
+Inline Hildale/Pivot edits.
+
+Production and transfers that adjust finished quantities.
+
+4. Implement a time-based AI forecast batch job
+
+Implement a backend job (or cron-like handler) that runs on a configurable interval, e.g. FORECAST_REFRESH_HOURS (6 or 12 hours by default):
+
+On each run:
+
+Find all finished products where forecastDirty = true and (lastForecastAt is null or older than FORECAST_REFRESH_HOURS).
+
+For each such product, call the existing AI forecasting logic once, using its current Hildale Qty, Pivot Qty, BOM, and any other relevant stats.
+
+Update the stored forecast value.
+
+Set forecastDirty = false and lastForecastAt = now for successful updates.
+
+If your runtime doesn’t have a built-in scheduler, also expose an endpoint like /cron/forecast that runs the same job so it can be triggered externally.
+
+Handle errors gracefully: log failures, leave forecastDirty = true when AI calls fail, and don’t crash the server.
+
+5. Verification
+
+Manual checks:
+
+Use Add Product to create a finished product with initial Hildale and/or Pivot quantities. Confirm:
+
+New product shows correct quantities.
+
+History shows RECEIVE/ADJUST transactions for those initial quantities.
+
+Inline-edit Hildale and Pivot quantities and hit the checkmark. Confirm:
+
+No type errors.
+
+Quantities update correctly.
+
+History shows ADJUST transactions with the correct deltas.
+
+After a series of quantity changes (create, receive, adjust), confirm forecastDirty = true but no AI calls are fired immediately per change.
+
+Trigger the forecast batch job (by waiting for the interval or hitting the cron endpoint). Confirm:
+
+Forecast values update once per product.
+
+forecastDirty is reset and lastForecastAt is updated.
+
+Finally, summarize:
+
+What you changed in the Create Finished Product flow.
+
+How inline Hildale/Pivot edits now work and how they use transactions.
+
+How the new forecastDirty/lastForecastAt + batch job prevent the AI from being called for every individual stock update while still keeping forecasts up to date.

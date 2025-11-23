@@ -171,6 +171,37 @@ function ItemTableRow({
         )}
       </td>
 
+      {/* Current Stock Column */}
+      <td className="px-3 align-middle">
+        {editingField === "currentStock" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="h-8 w-24"
+              autoFocus
+              data-testid={`input-edit-stock-${item.id}`}
+            />
+            <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-stock-${item.id}`}>
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-stock-${item.id}`}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <div 
+            className="cursor-pointer rounded px-2 py-1 hover-elevate text-right" 
+            onClick={() => startEdit("currentStock", item.currentStock)}
+            data-testid={`text-item-stock-${item.id}`}
+          >
+            {item.currentStock ?? 0}
+          </div>
+        )}
+      </td>
+
       {/* Forecast Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle">
@@ -853,6 +884,7 @@ export default function BOM() {
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium">Name</th>
                   <th className="p-3 text-left text-sm font-medium">SKU</th>
+                  <th className="p-3 text-right text-sm font-medium">Stock</th>
                   <th className="p-3 text-right text-sm font-medium">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium">Pivot Qty</th>

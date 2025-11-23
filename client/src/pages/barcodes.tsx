@@ -453,7 +453,7 @@ function ItemTableRow({
         </Badge>
       </td>
       <td className="p-3 text-right text-sm">{item.currentStock}</td>
-      <td className="p-3">
+      <td className="sticky right-0 z-10 bg-card p-3 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
           <Button
             variant="ghost"
@@ -516,8 +516,8 @@ function BarcodeItemsSection({
     <Card>
       <CardContent className="p-6">
         <h3 className="mb-4 text-lg font-semibold">{title}</h3>
-        <div className="overflow-hidden rounded-md border">
-          <table className="w-full">
+        <div className="relative overflow-x-auto rounded-md border">
+          <table className="w-full min-w-[900px]">
             <thead className="bg-muted/50">
               <tr className="border-b">
                 <th className="p-3 text-left text-sm font-medium">Barcode</th>
@@ -529,7 +529,7 @@ function BarcodeItemsSection({
                 <th className="p-3 text-left text-sm font-medium">Usage</th>
                 <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
                 <th className="p-3 text-right text-sm font-medium">Stock</th>
-                <th className="p-3 text-right text-sm font-medium">Actions</th>
+                <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
               </tr>
             </thead>
             <tbody>

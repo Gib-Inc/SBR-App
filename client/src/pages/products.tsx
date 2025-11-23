@@ -408,23 +408,19 @@ function BOMDialog({
   allItems: any[];
 }) {
   const { toast } = useToast();
-  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number }>>(
-    item?.bom ?? []
-  );
+  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number }>>([]);
   const [hasChanges, setHasChanges] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   const { data: bomData, isLoading } = useQuery({
     queryKey: ["/api/bom", item?.id],
     enabled: !!item?.id && isOpen,
   });
 
-  // Sync bomData from query into local state ONLY when dialog first opens
+  // Initialize form state only once when data is loaded
   useEffect(() => {
-    if (isOpen && !isLoading) {
-      if (bomData && Array.isArray(bomData)) {
-        // Transform backend format to form format
-        // Backend returns: { id, finishedProductId, componentId, quantityRequired }
-        // Form expects: { componentId, quantity }
+    if (isOpen && !isLoading && !isInitialized) {
+      if (bomData && Array.isArray(bomData) && bomData.length > 0) {
         const transformed = bomData.map((bom: any) => ({
           componentId: bom.componentId,
           quantity: bom.quantityRequired
@@ -434,8 +430,18 @@ function BOMDialog({
         setBomComponents([]);
       }
       setHasChanges(false);
+      setIsInitialized(true);
     }
-  }, [isOpen, item?.id, bomData, isLoading]);
+  }, [isOpen, isLoading, bomData, isInitialized]);
+
+  // Reset initialization flag when dialog closes or item changes
+  useEffect(() => {
+    if (!isOpen) {
+      setIsInitialized(false);
+      setBomComponents([]);
+      setHasChanges(false);
+    }
+  }, [isOpen]);
 
   const updateBOMMutation = useMutation({
     mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {
@@ -517,96 +523,113 @@ function BOMDialog({
         <DialogHeader>
           <DialogTitle>Edit Bill of Materials - {item?.name}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Define component requirements for this product</p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={addComponent}
-              data-testid="button-add-bom-component"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add Component
-            </Button>
+        
+        {isLoading ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-4">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+            <p className="text-sm text-muted-foreground">Loading bill of materials...</p>
           </div>
-
-          {bomComponents.length === 0 ? (
-            <Card>
-              <CardContent className="flex h-32 items-center justify-center">
-                <p className="text-sm text-muted-foreground">No components added yet</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {bomComponents.map((component, index) => {
-                const isInvalid = !component.componentId || component.quantity <= 0;
-                return (
-                  <div key={index} className="flex items-end gap-3">
-                    <div className="flex-1 space-y-2">
-                      <Label>Component</Label>
-                      <Select
-                        value={component.componentId}
-                        onValueChange={(value) => updateComponent(index, "componentId", value)}
-                      >
-                        <SelectTrigger 
-                          data-testid={`select-bom-component-${index}`}
-                          className={!component.componentId ? "border-destructive" : ""}
-                        >
-                          <SelectValue placeholder="Select component" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {componentItems.map((i: any) => (
-                            <SelectItem key={i.id} value={i.id}>
-                              {i.name} ({i.sku})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="w-32 space-y-2">
-                      <Label>Quantity</Label>
-                      <Input
-                        type="number"
-                        min="1"
-                        value={component.quantity || ""}
-                        onChange={(e) => {
-                          const parsed = parseInt(e.target.value);
-                          updateComponent(index, "quantity", isNaN(parsed) ? 0 : parsed);
-                        }}
-                        className={component.quantity <= 0 ? "border-destructive" : ""}
-                        data-testid={`input-bom-quantity-${index}`}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeComponent(index)}
-                      data-testid={`button-remove-bom-component-${index}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                );
-              })}
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">Define component requirements for this product</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addComponent}
+                disabled={updateBOMMutation.isPending}
+                data-testid="button-add-bom-component"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Component
+              </Button>
             </div>
-          )}
 
-          <div className="flex justify-end gap-2 pt-4">
-            <Button variant="outline" onClick={() => handleClose(false)} data-testid="button-cancel-bom">
-              Cancel
-            </Button>
-            <Button 
-              onClick={handleSave} 
-              disabled={updateBOMMutation.isPending}
-              data-testid="button-save-bom"
-            >
-              {updateBOMMutation.isPending ? "Saving..." : "Save BOM"}
-            </Button>
+            {bomComponents.length === 0 ? (
+              <Card>
+                <CardContent className="flex h-32 items-center justify-center">
+                  <p className="text-sm text-muted-foreground">No components added yet</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {bomComponents.map((component, index) => {
+                  const isInvalid = !component.componentId || component.quantity <= 0;
+                  return (
+                    <div key={index} className="flex items-end gap-3">
+                      <div className="flex-1 space-y-2">
+                        <Label>Component</Label>
+                        <Select
+                          value={component.componentId}
+                          onValueChange={(value) => updateComponent(index, "componentId", value)}
+                          disabled={updateBOMMutation.isPending}
+                        >
+                          <SelectTrigger 
+                            data-testid={`select-bom-component-${index}`}
+                            className={!component.componentId ? "border-destructive" : ""}
+                          >
+                            <SelectValue placeholder="Select component" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {componentItems.map((i: any) => (
+                              <SelectItem key={i.id} value={i.id}>
+                                {i.name} ({i.sku})
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="w-32 space-y-2">
+                        <Label>Quantity</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={component.quantity || ""}
+                          onChange={(e) => {
+                            const parsed = parseInt(e.target.value);
+                            updateComponent(index, "quantity", isNaN(parsed) ? 0 : parsed);
+                          }}
+                          className={component.quantity <= 0 ? "border-destructive" : ""}
+                          disabled={updateBOMMutation.isPending}
+                          data-testid={`input-bom-quantity-${index}`}
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeComponent(index)}
+                        disabled={updateBOMMutation.isPending}
+                        data-testid={`button-remove-bom-component-${index}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button 
+                variant="outline" 
+                onClick={() => handleClose(false)} 
+                disabled={updateBOMMutation.isPending}
+                data-testid="button-cancel-bom"
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleSave} 
+                disabled={updateBOMMutation.isPending}
+                data-testid="button-save-bom"
+              >
+                {updateBOMMutation.isPending ? "Saving..." : "Save BOM"}
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   );

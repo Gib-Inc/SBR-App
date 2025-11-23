@@ -1,0 +1,69 @@
+On the Products/BOM page, the Edit Bill of Materials modal currently opens with empty fields and then fills in the components/quantities after an async load. I want to change this so that the modal shows a clear loading state (spinner + message) and only renders the form once the BOM data is ready. This should remove the “empty-then-populate” flicker and prevent users from typing into fields before data loads.
+
+Please implement the following behavior inside the BOM modal, without refactoring unrelated pages:
+
+1. Add a proper loading state to the BOM modal
+
+Find the React component that renders the Edit Bill of Materials popup (the modal that appears when I click “Edit BOM” on a finished product).
+
+Introduce an explicit isLoading (or similar) state for BOM data in that component or its hook.
+
+When I click Edit BOM for a product:
+
+The modal should open immediately.
+
+Inside the modal body, while the BOM data is being fetched, show:
+
+A centered spinner / progress indicator, and
+
+A short message like: “Loading bill of materials…”.
+
+During this time, do not render any component/quantity input rows yet and keep the Save/Cancel actions disabled or hidden.
+
+2. Render the form only after data is loaded
+
+Once the BOM fetch for that product finishes:
+
+Set isLoading to false.
+
+Replace the spinner/message with the actual form:
+
+If the product has an existing BOM, render all component + quantity rows populated from the backend data.
+
+If the product has no BOM yet, render a single empty row ready for configuration.
+
+Ensure the initial interactive render of the form always reflects the current BOM data; the user should never see “blank rows that suddenly fill in.”
+
+Enable the Save/Cancel buttons only after the data has been loaded and the form is mounted.
+
+3. Prevent race conditions and stale overwrites
+
+Make sure that if I open the BOM modal and the fetch is in progress:
+
+I cannot start typing into any BOM fields until loading finishes.
+
+The async response cannot overwrite anything the user has typed, because the form is not shown until data is ready.
+
+If I close the modal before the fetch finishes, safely cancel or ignore the response so it doesn’t try to update unmounted state.
+
+Subsequent opens of the modal should still work correctly; if you cache BOM data, it’s fine to skip the loading spinner when data is already available, as long as the UX is smooth and consistent.
+
+4. Verification
+
+In the running app:
+
+Open Edit BOM for a product with existing components → verify the modal opens immediately with a loading indicator, then switches to a fully-populated form with no flicker or empty-first state.
+
+Close and reopen the BOM modal for the same product → fields should appear cleanly again (loading state may be very brief if cached, but should never show empty rows filling in).
+
+Open Edit BOM for a product with no BOM → the modal should show loading briefly, then show one clean, empty row (no flicker).
+
+Edit and Save BOM, then reopen → values round-trip correctly and appear immediately once loaded.
+
+Finally, summarize:
+
+Which component(s)/files you modified.
+
+How the BOM modal’s loading state works now (when spinner is shown vs when the form is shown).
+
+How you ensured the user never sees empty fields that are later overwritten by async data.

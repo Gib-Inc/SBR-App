@@ -33,7 +33,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq } from "drizzle-orm";
+import { eq, count } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -45,6 +45,7 @@ export interface IStorage {
 
   // Items
   getAllItems(): Promise<Item[]>;
+  getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>>;
   getItem(id: string): Promise<Item | undefined>;
   getItemBySku(sku: string): Promise<Item | undefined>;
   createItem(item: InsertItem): Promise<Item>;
@@ -387,6 +388,20 @@ export class MemStorage implements IStorage {
   // Items
   async getAllItems(): Promise<Item[]> {
     return Array.from(this.items.values());
+  }
+
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>> {
+    const items = Array.from(this.items.values());
+    const itemsWithCounts = items.map((item) => {
+      if (item.type === "finished_product") {
+        const bomEntries = Array.from(this.billOfMaterials.values()).filter(
+          (bom) => bom.finishedProductId === item.id
+        );
+        return { ...item, componentsCount: bomEntries.length };
+      }
+      return item;
+    });
+    return itemsWithCounts;
   }
 
   async getItem(id: string): Promise<Item | undefined> {
@@ -926,6 +941,59 @@ export class PostgresStorage implements IStorage {
   // Items
   async getAllItems(): Promise<Item[]> {
     return await this.db.select().from(schema.items);
+  }
+
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>> {
+    // Use LEFT JOIN + COUNT to efficiently get BOM counts in a single query
+    const results = await this.db
+      .select({
+        id: schema.items.id,
+        name: schema.items.name,
+        sku: schema.items.sku,
+        type: schema.items.type,
+        unit: schema.items.unit,
+        currentStock: schema.items.currentStock,
+        minStock: schema.items.minStock,
+        dailyUsage: schema.items.dailyUsage,
+        barcode: schema.items.barcode,
+        location: schema.items.location,
+        productKind: schema.items.productKind,
+        barcodeValue: schema.items.barcodeValue,
+        barcodeFormat: schema.items.barcodeFormat,
+        barcodeUsage: schema.items.barcodeUsage,
+        barcodeSource: schema.items.barcodeSource,
+        externalSystem: schema.items.externalSystem,
+        externalId: schema.items.externalId,
+        componentsCount: count(schema.billOfMaterials.id),
+      })
+      .from(schema.items)
+      .leftJoin(
+        schema.billOfMaterials,
+        eq(schema.items.id, schema.billOfMaterials.finishedProductId)
+      )
+      .groupBy(schema.items.id);
+    
+    // Map results to include componentsCount only for finished products
+    return results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      sku: row.sku,
+      type: row.type,
+      unit: row.unit,
+      currentStock: row.currentStock,
+      minStock: row.minStock,
+      dailyUsage: row.dailyUsage,
+      barcode: row.barcode,
+      location: row.location,
+      productKind: row.productKind,
+      barcodeValue: row.barcodeValue,
+      barcodeFormat: row.barcodeFormat,
+      barcodeUsage: row.barcodeUsage,
+      barcodeSource: row.barcodeSource,
+      externalSystem: row.externalSystem,
+      externalId: row.externalId,
+      componentsCount: row.type === "finished_product" ? Number(row.componentsCount) : undefined,
+    }));
   }
 
   async getItem(id: string): Promise<Item | undefined> {

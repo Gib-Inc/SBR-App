@@ -335,13 +335,20 @@ function BOMDialog({
   useEffect(() => {
     if (isOpen && !isLoading) {
       if (bomData && Array.isArray(bomData)) {
-        setBomComponents(bomData);
+        // Transform backend format to form format
+        // Backend returns: { id, finishedProductId, componentId, quantityRequired }
+        // Form expects: { componentId, quantity }
+        const transformed = bomData.map((bom: any) => ({
+          componentId: bom.componentId,
+          quantity: bom.quantityRequired
+        }));
+        setBomComponents(transformed);
       } else {
         setBomComponents([]);
       }
       setHasChanges(false);
     }
-  }, [isOpen, item?.id]);
+  }, [isOpen, item?.id, bomData, isLoading]);
 
   const updateBOMMutation = useMutation({
     mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {
@@ -390,6 +397,17 @@ function BOMDialog({
 
   const handleSave = () => {
     const validComponents = bomComponents.filter(c => c.componentId && c.quantity > 0);
+    
+    // Validate that we have at least some valid components or user is clearing the BOM
+    if (bomComponents.length > 0 && validComponents.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "Validation Error",
+        description: "Please select a component and enter a quantity greater than 0, or remove empty rows.",
+      });
+      return;
+    }
+    
     updateBOMMutation.mutate(validComponents);
   };
 

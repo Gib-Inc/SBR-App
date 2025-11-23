@@ -1,0 +1,93 @@
+The BOM editor on the /products (BOM) page is not working correctly. I need you to debug and fix it end-to-end so that components and quantities are stored and displayed reliably.
+
+Current bugs I see:
+
+When I open “Edit Bill of Materials” for a product, choose a component and quantity, and click Save BOM, the BOM column in the Finished Products table still shows “0 components” instead of updating (e.g. to “1 component”).
+
+If I click the same BOM cell again to re-open the modal, the Component dropdown is pre-populated with the component I previously chose, but the Quantity field is blank. That suggests the data is either not being saved correctly, or not being loaded correctly back into the form.
+
+I want this fixed thoroughly and professionally. Please debug systematically and then correct the full workflow: storage, API, and UI state.
+
+1. Reproduce and trace the data flow
+
+Reproduce the exact steps I described:
+
+Open BOM page → click a product’s BOM cell → add a component and quantity → Save BOM → re-open.
+
+Identify:
+
+Which backend model(s)/tables represent a product’s BOM (e.g. Product, BomItem, ProductComponent, etc.).
+
+Which API routes are called when saving and when loading BOM data (e.g. GET /api/bom/:productId, POST/PUT /api/bom/:productId).
+
+How the frontend form maps its state to the request payload (component id, quantity, product id).
+
+2. Verify persistence of BOM + quantity
+
+Inspect the API handler that runs when Save BOM is clicked:
+
+Confirm it receives both component id and quantity.
+
+Confirm it creates/updates the correct records in the DB, including the quantity field.
+
+Fix any issues where quantity is not persisted, is always null/0, or the wrong field is used.
+
+Verify that the GET endpoint for loading BOM details returns the full list of components including quantities for a given product.
+
+3. Fix the modal form state (load existing data correctly)
+
+Check how the “Edit Bill of Materials” modal is initialized when opened:
+
+For an existing BOM, the form should be populated with the current list of component+quantity pairs for that product.
+
+Ensure the Quantity field is bound to the same state that comes from the backend, so it is not blank when data exists.
+
+If the modal supports multiple components, make sure the state structure (array of rows) is in sync with what the backend returns and expects.
+
+Add basic validation so you can’t save with a component selected but an empty or zero quantity.
+
+4. Update the BOM column (“X components”) correctly
+
+Identify how the Finished Products table computes and displays the “BOM” column (e.g. “0 components”).
+
+After saving a BOM:
+
+Either re-fetch the updated BOM list for that product from the server, or update the local state in memory so the count reflects the actual number of components stored.
+
+Ensure the count is based on the number of component entries associated with that product in the DB, not a stale local value.
+
+Confirm that after saving, the table updates to “1 component”, “2 components”, etc. without a full page refresh.
+
+5. UX / error handling
+
+Show a small success notification (or at least close the modal and update the table) if the save succeeds.
+
+Show a clear error message if the API returns an error when saving.
+
+Disable the Save button while the request is pending to avoid duplicate submissions.
+
+6. Verification checklist
+
+After implementing the fixes, verify all of the following manually in the preview:
+
+Start with a product that shows “0 components”.
+
+Open “Edit Bill of Materials”, add one component with a quantity, click Save BOM.
+
+The modal closes, and the BOM column now reads “1 component”.
+
+Re-open the same BOM: the component and quantity fields are both pre-filled with the saved values.
+
+Add another component + quantity and save: the column updates to “2 components”, and both entries appear upon reopening.
+
+Refresh the page: the BOM column still shows the correct count, and the modal still loads the correct components and quantities from the backend.
+
+Confirm that no other pages (Dashboard, Barcodes, AI Agent) are broken by these changes.
+
+Finally, summarize for me:
+
+Which files (backend + frontend) you modified.
+
+How BOM data is now stored (model/fields) and which API routes are responsible for create/update/read.
+
+How the modal’s form state is populated from the backend and how the BOM count in the table is updated after a save.

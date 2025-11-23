@@ -453,47 +453,57 @@ function BOMDialog({
             </Card>
           ) : (
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {bomComponents.map((component, index) => (
-                <div key={index} className="flex items-end gap-3">
-                  <div className="flex-1 space-y-2">
-                    <Label>Component</Label>
-                    <Select
-                      value={component.componentId}
-                      onValueChange={(value) => updateComponent(index, "componentId", value)}
+              {bomComponents.map((component, index) => {
+                const isInvalid = !component.componentId || component.quantity <= 0;
+                return (
+                  <div key={index} className="flex items-end gap-3">
+                    <div className="flex-1 space-y-2">
+                      <Label>Component</Label>
+                      <Select
+                        value={component.componentId}
+                        onValueChange={(value) => updateComponent(index, "componentId", value)}
+                      >
+                        <SelectTrigger 
+                          data-testid={`select-bom-component-${index}`}
+                          className={!component.componentId ? "border-destructive" : ""}
+                        >
+                          <SelectValue placeholder="Select component" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {componentItems.map((i: any) => (
+                            <SelectItem key={i.id} value={i.id}>
+                              {i.name} ({i.sku})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="w-32 space-y-2">
+                      <Label>Quantity</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={component.quantity || ""}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value);
+                          updateComponent(index, "quantity", isNaN(parsed) ? 0 : parsed);
+                        }}
+                        className={component.quantity <= 0 ? "border-destructive" : ""}
+                        data-testid={`input-bom-quantity-${index}`}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removeComponent(index)}
+                      data-testid={`button-remove-bom-component-${index}`}
                     >
-                      <SelectTrigger data-testid={`select-bom-component-${index}`}>
-                        <SelectValue placeholder="Select component" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {componentItems.map((i: any) => (
-                          <SelectItem key={i.id} value={i.id}>
-                            {i.name} ({i.sku})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-                  <div className="w-32 space-y-2">
-                    <Label>Quantity</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      value={component.quantity}
-                      onChange={(e) => updateComponent(index, "quantity", parseInt(e.target.value) || 1)}
-                      data-testid={`input-bom-quantity-${index}`}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => removeComponent(index)}
-                    data-testid={`button-remove-bom-component-${index}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

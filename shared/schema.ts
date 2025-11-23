@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -86,7 +86,9 @@ export const billOfMaterials = pgTable("bill_of_materials", {
   finishedProductId: varchar("finished_product_id").notNull().references(() => items.id),
   componentId: varchar("component_id").notNull().references(() => items.id),
   quantityRequired: integer("quantity_required").notNull(),
-});
+}, (table) => ({
+  finishedProductIdIdx: index("bill_of_materials_finished_product_id_idx").on(table.finishedProductId),
+}));
 
 export const insertBillOfMaterialsSchema = createInsertSchema(billOfMaterials).omit({ id: true });
 export type InsertBillOfMaterials = z.infer<typeof insertBillOfMaterialsSchema>;

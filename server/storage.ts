@@ -33,7 +33,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, count } from "drizzle-orm";
+import { eq, count, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -399,7 +399,8 @@ export class MemStorage implements IStorage {
         );
         return { ...item, componentsCount: bomEntries.length };
       }
-      return item;
+      // For components, explicitly return undefined to match PostgresStorage behavior
+      return { ...item, componentsCount: undefined };
     });
     return itemsWithCounts;
   }
@@ -945,26 +946,11 @@ export class PostgresStorage implements IStorage {
 
   async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number }>> {
     // Use LEFT JOIN + COUNT to efficiently get BOM counts in a single query
+    // Cast COUNT to integer explicitly to ensure consistent numeric type
     const results = await this.db
       .select({
-        id: schema.items.id,
-        name: schema.items.name,
-        sku: schema.items.sku,
-        type: schema.items.type,
-        unit: schema.items.unit,
-        currentStock: schema.items.currentStock,
-        minStock: schema.items.minStock,
-        dailyUsage: schema.items.dailyUsage,
-        barcode: schema.items.barcode,
-        location: schema.items.location,
-        productKind: schema.items.productKind,
-        barcodeValue: schema.items.barcodeValue,
-        barcodeFormat: schema.items.barcodeFormat,
-        barcodeUsage: schema.items.barcodeUsage,
-        barcodeSource: schema.items.barcodeSource,
-        externalSystem: schema.items.externalSystem,
-        externalId: schema.items.externalId,
-        componentsCount: count(schema.billOfMaterials.id),
+        items: schema.items,
+        componentsCount: drizzleSql<number>`CAST(COUNT(${schema.billOfMaterials.id}) AS INTEGER)`,
       })
       .from(schema.items)
       .leftJoin(
@@ -974,25 +960,10 @@ export class PostgresStorage implements IStorage {
       .groupBy(schema.items.id);
     
     // Map results to include componentsCount only for finished products
+    // For components (non-finished products), return undefined instead of 0
     return results.map((row) => ({
-      id: row.id,
-      name: row.name,
-      sku: row.sku,
-      type: row.type,
-      unit: row.unit,
-      currentStock: row.currentStock,
-      minStock: row.minStock,
-      dailyUsage: row.dailyUsage,
-      barcode: row.barcode,
-      location: row.location,
-      productKind: row.productKind,
-      barcodeValue: row.barcodeValue,
-      barcodeFormat: row.barcodeFormat,
-      barcodeUsage: row.barcodeUsage,
-      barcodeSource: row.barcodeSource,
-      externalSystem: row.externalSystem,
-      externalId: row.externalId,
-      componentsCount: row.type === "finished_product" ? Number(row.componentsCount) : undefined,
+      ...row.items,
+      componentsCount: row.items.type === "finished_product" ? row.componentsCount : undefined,
     }));
   }
 

@@ -983,18 +983,6 @@ export default function Barcodes() {
         </div>
       )}
 
-      {/* Export Info Card */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <BarcodeIcon className="h-4 w-4" />
-            <p>
-              Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_format, barcode_usage, barcode_source, external_system, external_id
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
         {/* Camera and Vision Dialogs */}
         <CameraCaptureModal
           isOpen={isCameraModalOpen}

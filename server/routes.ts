@@ -5,6 +5,7 @@ import { LLMService } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
 import { ImportService } from "./import-service";
+import { TransactionService } from "./transaction-service";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
@@ -1494,6 +1495,132 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ items: validItems, message: "Ready for printing" });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch items for printing" });
+    }
+  });
+
+  // ============================================================================
+  // INVENTORY TRANSACTIONS
+  // ============================================================================
+
+  const transactionService = new TransactionService(storage);
+
+  app.post("/api/transactions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, itemType, type, location, quantity, notes } = req.body;
+
+      if (!itemId || !itemType || !type || !location || quantity === undefined) {
+        return res.status(400).json({ 
+          error: "itemId, itemType, type, location, and quantity are required" 
+        });
+      }
+
+      if (quantity <= 0) {
+        return res.status(400).json({ error: "Quantity must be positive" });
+      }
+
+      const result = await transactionService.applyTransaction({
+        itemId,
+        itemType,
+        type,
+        location,
+        quantity,
+        notes: notes || null,
+        createdBy: req.session.userId || "system",
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.status(201).json(result.transaction);
+    } catch (error: any) {
+      console.error("[Transaction] Error creating transaction:", error);
+      res.status(500).json({ error: error.message || "Failed to create transaction" });
+    }
+  });
+
+  app.get("/api/transactions/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId } = req.params;
+      const transactions = await transactionService.getTransactionHistory(itemId);
+      res.json(transactions);
+    } catch (error: any) {
+      console.error("[Transaction] Error fetching transaction history:", error);
+      res.status(500).json({ error: "Failed to fetch transaction history" });
+    }
+  });
+
+  app.post("/api/transactions/transfer", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, fromLocation, toLocation, quantity, notes } = req.body;
+
+      if (!itemId || !fromLocation || !toLocation || quantity === undefined) {
+        return res.status(400).json({ 
+          error: "itemId, fromLocation, toLocation, and quantity are required" 
+        });
+      }
+
+      if (quantity <= 0) {
+        return res.status(400).json({ error: "Quantity must be positive" });
+      }
+
+      if (fromLocation === toLocation) {
+        return res.status(400).json({ error: "Cannot transfer to the same location" });
+      }
+
+      if (!['HILDALE', 'PIVOT'].includes(fromLocation) || !['HILDALE', 'PIVOT'].includes(toLocation)) {
+        return res.status(400).json({ error: "Location must be either HILDALE or PIVOT" });
+      }
+
+      const result = await transactionService.applyTransfer({
+        itemId,
+        fromLocation,
+        toLocation,
+        quantity,
+        notes,
+        createdBy: req.session.userId || "system",
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.status(201).json(result.transaction);
+    } catch (error: any) {
+      console.error("[Transaction] Error processing transfer:", error);
+      res.status(500).json({ error: error.message || "Failed to process transfer" });
+    }
+  });
+
+  app.post("/api/transactions/produce", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { finishedProductId, quantity, notes } = req.body;
+
+      if (!finishedProductId || quantity === undefined) {
+        return res.status(400).json({ 
+          error: "finishedProductId and quantity are required" 
+        });
+      }
+
+      if (quantity <= 0) {
+        return res.status(400).json({ error: "Quantity must be positive" });
+      }
+
+      const result = await transactionService.applyProduction({
+        finishedProductId,
+        quantity,
+        notes,
+        createdBy: req.session.userId || "system",
+      });
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.status(201).json(result.transaction);
+    } catch (error: any) {
+      console.error("[Transaction] Error processing production:", error);
+      res.status(500).json({ error: error.message || "Failed to process production" });
     }
   });
 

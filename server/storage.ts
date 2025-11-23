@@ -29,6 +29,8 @@ import {
   type InsertImportProfile,
   type ImportJob,
   type InsertImportJob,
+  type InventoryTransaction,
+  type InsertInventoryTransaction,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -133,6 +135,11 @@ export interface IStorage {
   createImportJob(job: InsertImportJob): Promise<ImportJob>;
   updateImportJob(id: string, job: Partial<InsertImportJob>): Promise<ImportJob | undefined>;
   deleteImportJob(id: string): Promise<boolean>;
+
+  // Inventory Transactions
+  getAllInventoryTransactions(): Promise<InventoryTransaction[]>;
+  getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]>;
+  createInventoryTransaction(transaction: InsertInventoryTransaction): Promise<InventoryTransaction>;
 }
 
 export class MemStorage implements IStorage {
@@ -151,6 +158,7 @@ export class MemStorage implements IStorage {
   private barcodeSettings: BarcodeSettings | null;
   private importProfiles: Map<string, ImportProfile>;
   private importJobs: Map<string, ImportJob>;
+  private inventoryTransactions: Map<string, InventoryTransaction>;
 
   constructor() {
     this.users = new Map();
@@ -168,6 +176,7 @@ export class MemStorage implements IStorage {
     this.barcodeSettings = null;
     this.importProfiles = new Map();
     this.importJobs = new Map();
+    this.inventoryTransactions = new Map();
     this.seedData();
   }
 
@@ -1030,6 +1039,33 @@ export class MemStorage implements IStorage {
   async deleteImportJob(id: string): Promise<boolean> {
     return this.importJobs.delete(id);
   }
+
+  async getAllInventoryTransactions(): Promise<InventoryTransaction[]> {
+    return Array.from(this.inventoryTransactions.values());
+  }
+
+  async getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]> {
+    return Array.from(this.inventoryTransactions.values())
+      .filter(t => t.itemId === itemId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
+    const id = randomUUID();
+    const transaction: InventoryTransaction = {
+      id,
+      itemId: insertTransaction.itemId,
+      itemType: insertTransaction.itemType,
+      type: insertTransaction.type,
+      location: insertTransaction.location,
+      quantity: insertTransaction.quantity,
+      createdAt: new Date(),
+      createdBy: insertTransaction.createdBy ?? null,
+      notes: insertTransaction.notes ?? null,
+    };
+    this.inventoryTransactions.set(id, transaction);
+    return transaction;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -1612,6 +1648,24 @@ export class PostgresStorage implements IStorage {
   async deleteImportJob(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.importJobs).where(eq(schema.importJobs.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getAllInventoryTransactions(): Promise<InventoryTransaction[]> {
+    return await this.db.select().from(schema.inventoryTransactions);
+  }
+
+  async getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]> {
+    const results = await this.db
+      .select()
+      .from(schema.inventoryTransactions)
+      .where(eq(schema.inventoryTransactions.itemId, itemId))
+      .orderBy(drizzleSql`${schema.inventoryTransactions.createdAt} DESC`);
+    return results;
+  }
+
+  async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
+    const results = await this.db.insert(schema.inventoryTransactions).values(insertTransaction).returning();
+    return results[0];
   }
 }
 

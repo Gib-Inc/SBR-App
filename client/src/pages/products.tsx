@@ -7,10 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
+import { TransferDialog } from "@/components/transfer-dialog";
+import { ProductionDialog } from "@/components/production-dialog";
+import { TransactionHistoryDialog } from "@/components/transaction-history-dialog";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",

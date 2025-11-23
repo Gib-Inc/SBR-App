@@ -1244,11 +1244,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
+      // Normalize provider name (handle "Custom Endpoint" → "custom")
+      const normalizedProvider = settings.llmProvider?.toLowerCase().replace(/\s+/g, "_") === "custom_endpoint" 
+        ? "custom" 
+        : settings.llmProvider!;
+      
       // Generate forecasts for dirty items only (efficient batch processing)
       let allRecommendations: any[] = [];
       try {
         allRecommendations = await LLMService.generateLLMReorderRecommendations(
-          settings.llmProvider!,
+          normalizedProvider as any,
           settings.llmApiKey || undefined,
           settings.llmCustomEndpoint || undefined,
           dirtyItems // Pass only dirty items to LLM service

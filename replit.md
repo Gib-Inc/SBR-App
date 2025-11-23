@@ -8,6 +8,31 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
+**November 23, 2025 - AI Batch Forecasting & Transaction System Improvements**:
+- ✅ **Batch Forecast Infrastructure**: Added forecastDirty, lastForecastAt, and forecastData fields to items schema
+  - forecastDirty (boolean): Marks items needing forecast refresh
+  - lastForecastAt (timestamp): Tracks last forecast generation time
+  - forecastData (JSONB): Stores last generated forecast (ReorderRecommendation)
+- ✅ **Production-Ready Batch Forecast Endpoint** (POST /api/llm/batch-forecast):
+  - Processes only items marked forecastDirty=true (efficient filtering)
+  - Calls LLM once for all dirty items (batch processing)
+  - Stores forecasts and marks items clean ONLY on success (proper retry semantics)
+  - Items stay dirty on LLM failure or missing recommendations
+  - Returns detailed results: totalDirty, successCount, noDataCount, failureCount, failures[]
+- ✅ **TransactionService Integration**: All finished product transactions mark forecastDirty=true
+  - Triggers batch forecast recalculation instead of real-time LLM calls
+  - Cost-efficient: Forecasts regenerated in scheduled batches, not per transaction
+- ✅ **Create Item with Transactions**: POST /api/items now uses RECEIVE transactions for initial stock
+  - Creates audit trail from day one
+  - Frontend helper text explains "Initial stock at manufacturing site/warehouse"
+- ✅ **Inline Editing via Transactions**: PATCH /api/items/:id routes hildaleQty/pivotQty changes through ADJUST transactions
+  - Calculates delta between old and new quantities
+  - Frontend parses numeric values correctly (no more string bugs)
+  - Complete audit trail for all manual adjustments
+- ✅ **LLMService Enhancement**: generateLLMReorderRecommendations accepts optional itemsToProcess parameter
+  - Batch forecast job passes only dirty items (prevents processing entire catalog)
+  - Maintains backward compatibility (defaults to all items if not specified)
+
 **November 23, 2025 - Inventory Movement & Transaction Tracking System**:
 - ✅ **Complete Audit Trail**: All inventory quantity changes now tracked via InventoryTransaction table
   - Transaction types: TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP (TRANSFER splits into TRANSFER_IN/TRANSFER_OUT)

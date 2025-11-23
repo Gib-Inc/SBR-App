@@ -609,15 +609,26 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
     const hildaleQtyNum = Number(hildaleQty) || 0;
     const pivotQtyNum = Number(pivotQty) || 0;
     
-    createMutation.mutate({
+    const payload: any = {
       name,
       sku,
-      currentStock: isFinished ? (hildaleQtyNum + pivotQtyNum) : Number(currentStock),
-      category: isFinished ? null : category,
-      hildaleQty: isFinished ? hildaleQtyNum : 0,
-      pivotQty: isFinished ? pivotQtyNum : 0,
       type: isFinished ? "finished_product" : "component",
-    });
+    };
+    
+    if (isFinished) {
+      // Finished products: ONLY pivotQty and hildaleQty
+      payload.hildaleQty = hildaleQtyNum;
+      payload.pivotQty = pivotQtyNum;
+      payload.category = null;
+    } else {
+      // Components: currentStock and category
+      payload.currentStock = Number(currentStock);
+      payload.category = category;
+      payload.hildaleQty = 0;
+      payload.pivotQty = 0;
+    }
+    
+    createMutation.mutate(payload);
   };
 
   return (

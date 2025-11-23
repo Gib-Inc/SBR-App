@@ -1,0 +1,55 @@
+I’ve just refactored finished-product inventory to use hildaleQty and pivotQty instead of a standalone stock field, and I’ve added BOM + Forecast features. Before we add any new logic, I want a stability audit and tests.
+
+1. Code search and schema consistency
+
+Search the codebase for any remaining usages of finished-product stock (ignore raw inventory stock). For each occurrence, confirm whether it’s still valid or needs to be replaced by hildaleQty, pivotQty, or a derived helper (availableToShip, totalOwned). Fix any leftover incorrect references.
+
+Verify that the finished-product model/schema, API responses, and frontend types all agree on the fields for finished products: at minimum hildaleQty, pivotQty, forecast, BOM, etc., and no direct stock field.
+
+2. Automated tests for the new logic
+
+Add or update tests to cover:
+
+The helper that derives availableToShip (Pivot), bufferStock (Hildale), and totalOwned.
+
+The BOM-based forecast calculation (given component requirements + raw stock, compute max producible units).
+
+The BOM editor save/load cycle (components + quantities persist correctly and round-trip through the modal).
+
+Ensure tests cover at least:
+
+A product with multiple components where one component limits production.
+
+Zero stock / missing component cases.
+
+Editing Hildale/Pivot quantities and seeing derived values update.
+
+Make sure the test suite passes end-to-end.
+
+3. Manual flow checks (simulate a user)
+
+In the running app, verify these flows and fix any issues you see:
+
+Create a new finished product with Hildale + Pivot quantities.
+
+Add a BOM for that product (one or more components with quantities).
+
+Confirm the BOM column updates (e.g., “1 component”, “2 components”).
+
+Confirm the Forecast value matches what the raw inventory + BOM imply.
+
+Change raw component stock and verify Forecast updates after refresh.
+
+Change Hildale/Pivot quantities for a finished product and confirm any dashboard/analytics that depend on finished-product inventory still work and show reasonable numbers.
+
+Also quickly sanity-check the Barcodes page and AI Agent page to ensure nothing broke from the inventory changes.
+
+4. Report back
+
+Summarize:
+
+Which files you changed during this stability pass.
+
+What tests you added or updated and how to run them.
+
+Any remaining limitations or TODOs you found that we should handle in future steps (but don’t implement them yet).

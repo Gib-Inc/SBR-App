@@ -1,0 +1,393 @@
+I’ve been building a more advanced barcode system and I can’t remember exactly how much is already implemented. Before doing anything, inspect what exists, then only fill in missing pieces. Do not undo working features or rewrite things that already match this spec.
+
+Assume the current schema already has: barcodeValue, barcodeFormat, barcodeUsage, productKind, barcodeSource, and the Barcodes page is split into Finished Products and Stock Inventory. Do not rename or remove these fields.
+
+1. Inspect existing barcode features first
+
+
+Scan the codebase and determine what already exists for:
+
+
+GS1/company-prefix-style barcode generation for finished products.
+
+
+A separate internal barcode generator for raw/stock items.
+
+
+Import logic for barcodes (CSV/XLSX, mapping, upsert, preview).
+
+
+Export, label printing, and scan functionality.
+
+
+
+
+For each of the behaviors described below, classify them as:
+
+
+Already implemented correctly → leave untouched.
+
+
+Partially implemented → keep the working parts and add only what’s missing.
+
+
+Not implemented → implement now following the spec.
+
+
+
+
+At the end, report which parts were already done and which you added or fixed.
+
+
+
+2. GS1-style generator for finished products
+
+
+Implement (or verify) a backend generator that:
+
+
+Uses configuration stored in something like barcode_settings with fields:
+
+
+gs1_prefix (string of digits)
+
+
+item_ref_digits (number of digits used for item references)
+
+
+next_item_ref (integer counter)
+
+
+
+
+Builds an 11-digit base from prefix + itemRef, then computes and appends a 12th check digit using a standard GTIN-12 / UPC-A style algorithm.
+
+
+Returns the 12-digit string as barcodeValue.
+
+
+Increments and persists next_item_ref after each generation.
+
+
+
+
+Behavior:
+
+
+Auto-generation runs only if gs1_prefix and item_ref_digits are configured; otherwise, the UI should show a clear message telling the user to configure GS1 settings first.
+
+
+When creating or editing a Finished Product barcode on the Barcodes page:
+
+
+If the user chooses auto-generate, set:
+
+
+productKind = "FINISHED"
+
+
+barcodeUsage = "EXTERNAL_GS1"
+
+
+barcodeSource = "GENERATED"
+
+
+barcodeFormat remains the symbology (e.g. CODE128).
+
+
+
+
+If the user manually enters a code, accept it and set:
+
+
+productKind = "FINISHED"
+
+
+barcodeUsage = "EXTERNAL_GS1"
+
+
+barcodeSource = "MANUAL" or "IMPORTED" as appropriate.
+
+
+
+
+
+
+Validate:
+
+
+barcodeValue must be unique across all items.
+
+
+Auto-generated GS1 codes must have the correct length and a valid check digit.
+
+
+
+
+
+
+
+3. Internal generator for raw / stock inventory
+
+
+Implement (or verify) a separate internal generator for items with productKind = "RAW":
+
+
+Use next_internal_code from barcode_settings.
+
+
+Generate clearly internal codes like RAW-000001, RAW-000002, etc., and store them as barcodeValue.
+
+
+Increment and persist next_internal_code after each generation.
+
+
+
+
+Behavior for raw/stock items:
+
+
+Must not depend on GS1 prefix being configured.
+
+
+Default to auto-generated internal codes, with an option for manual override if needed.
+
+
+Always set barcodeUsage = "INTERNAL_STOCK" and the appropriate barcodeSource.
+
+
+Keep barcodeFormat as the symbology (e.g. CODE128).
+
+
+
+
+
+4. Create / edit flows on the Barcodes page
+
+
+On /barcodes, make sure the Create / Edit flows behave like this:
+
+
+For Finished Products:
+
+
+Let the user choose between auto-generating a GS1 code and manually entering a code.
+
+
+Enforce productKind = "FINISHED" and barcodeUsage = "EXTERNAL_GS1".
+
+
+
+
+For Stock Inventory / Raw items:
+
+
+Use the internal generator by default.
+
+
+Enforce productKind = "RAW" and barcodeUsage = "INTERNAL_STOCK".
+
+
+
+
+
+
+Editing rules:
+
+
+Name, SKU, and descriptive fields can be edited.
+
+
+Changing barcodeValue, productKind, or barcodeUsage should either be blocked, or only allowed through a clearly separate, guarded “change code” flow with warnings (do not silently mutate these in normal edits).
+
+
+
+
+
+5. Robust import system for barcodes
+
+
+Implement or refine an import workflow for barcodes (CSV and XLSX):
+
+
+User uploads a file.
+
+
+Parse the header row and auto-suggest mappings from common column names to internal fields:
+
+
+name, sku, barcodeValue, productKind, barcodeUsage, barcodeSource, external_system, external_id, etc.
+
+
+
+
+Provide a column mapping UI where the user can adjust mappings and save them as reusable import_profile records.
+
+
+
+
+Implement upsert behavior:
+
+
+Let the user choose a match strategy:
+
+
+Match by barcodeValue.
+
+
+Match by sku.
+
+
+Match by both sku and barcodeValue.
+
+
+
+
+For each row:
+
+
+If a match is found → update the existing item.
+
+
+If no match → create a new item + barcode metadata.
+
+
+If ambiguous → mark as conflict and skip that row.
+
+
+
+
+
+
+Add a dry-run / preview step:
+
+
+Show counts of new, updated, conflicted, and invalid rows.
+
+
+Let the user cancel or confirm before actually writing to the database.
+
+
+
+
+Track import_job summaries:
+
+
+Store counts for inserted/updated/skipped/failed rows.
+
+
+Provide a downloadable error file listing failed rows and reasons.
+
+
+
+
+
+6. Classification during import
+
+
+During import:
+
+
+If barcodeUsage is provided in the file, respect it.
+
+
+If barcodeUsage is not provided:
+
+
+If productKind = "FINISHED" and barcodeValue looks like a 12–13 digit numeric code, default barcodeUsage = "EXTERNAL_GS1".
+
+
+Otherwise default barcodeUsage = "INTERNAL_STOCK".
+
+
+
+
+
+
+Imports should not auto-generate new barcodes; they should only use barcodeValue from the file. Generation is only for in-app create flows.
+
+
+
+7. Export, labels, and scan
+
+
+Ensure the Export option on the Barcodes page outputs CSV/XLSX with at least:
+
+
+id, name, sku, productKind, barcodeValue, barcodeFormat, barcodeUsage, barcodeSource, external_system, external_id.
+
+
+
+
+Implement or refine Print Labels so that it:
+
+
+Renders barcode images from barcodeValue + barcodeFormat.
+
+
+Includes name, SKU, and a clear tag for Usage (e.g. “External GS1” vs “Internal”).
+
+
+Uses a simple grid layout suitable for standard label printers or label sheets.
+
+
+
+
+Ensure the Scan Inventory view can:
+
+
+Look up items by barcodeValue when a code is scanned or typed.
+
+
+Show item details and log recent scans.
+
+
+
+
+
+8. Validation and safety
+
+
+Enforce uniqueness of barcodeValue across all items.
+
+
+Enforce valid combinations:
+
+
+If productKind = "FINISHED", then barcodeUsage must be EXTERNAL_GS1.
+
+
+If productKind = "RAW", then barcodeUsage must be INTERNAL_STOCK.
+
+
+
+
+Any errors in create/edit/import flows should show user-friendly messages, not stack traces.
+
+
+
+9. Wrap-up
+
+
+When you’re done:
+
+
+List which barcode features were already implemented when you started and which ones you implemented or fixed now.
+
+
+Explain how to create/edit barcodes for Finished vs Raw items (auto vs manual).
+
+
+Explain how to run the import flow step-by-step.
+
+
+Explain how to export barcodes, print labels, and use the Scan Inventory view.
+
+
+
+
+Do not overthink this or refactor stable components; only fill in the missing behavior to match the spec above.
+
+
+
+

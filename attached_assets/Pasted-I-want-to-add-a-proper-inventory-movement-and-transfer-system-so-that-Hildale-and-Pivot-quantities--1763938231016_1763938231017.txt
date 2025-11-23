@@ -1,0 +1,119 @@
+I want to add a proper inventory movement and transfer system so that Hildale and Pivot quantities (and raw materials) are updated through transactions instead of manual edits. This should apply to both finished products and raw inventory, and become the single source of truth for how quantities change.
+
+1. Add an InventoryTransaction model
+
+Create a backend model/table InventoryTransaction with at least:
+
+id
+
+itemId (finished product or raw item id)
+
+itemType ("FINISHED" or "RAW")
+
+type (enum: "RECEIVE", "SHIP", "TRANSFER_IN", "TRANSFER_OUT", "PRODUCE", "ADJUST")
+
+location (enum: "HILDALE", "PIVOT", or "N/A" for raw items without locations if that’s how we treat them)
+
+quantity (positive number)
+
+createdAt
+
+createdBy (string or user id if available)
+
+notes (optional text reason)
+
+Add a simple service function to apply a transaction to the correct fields:
+
+For finished products:
+
+Hildale: change hildaleQty
+
+Pivot: change pivotQty
+
+For raw materials: change their stock field.
+
+All quantity changes for finished/raw items should go through this transaction service instead of directly mutating the fields.
+
+2. Implement a Transfer flow for finished products
+
+On the BOM/Products page for finished products, add an action like “Transfer”:
+
+Opens a modal where I choose:
+
+Product
+
+From: Hildale (source)
+
+To: Pivot (destination)
+
+Quantity
+
+On save, create two transactions via the service:
+
+TRANSFER_OUT from Hildale (decrease hildaleQty)
+
+TRANSFER_IN to Pivot (increase pivotQty)
+
+Validate:
+
+You can’t transfer more than is available at Hildale.
+
+After saving, the Finished Products table should show updated Hildale and Pivot quantities.
+
+3. Implement a simple Production flow for finished products
+
+Add an action like “Produce” for finished products:
+
+Input: product, quantity to produce.
+
+When executed:
+
+Look up the BOM for that product.
+
+For each BOM component (raw item + quantity per unit):
+
+Deduct requiredQty * quantityProduced from the raw item’s stock using InventoryTransaction entries of type PRODUCE at location "HILDALE" (or wherever production happens).
+
+Increase the finished product’s hildaleQty by the produced quantity via a PRODUCE transaction.
+
+Validate that there is enough raw stock to produce the requested quantity; if not, return a clear error.
+
+4. Make all finished/raw quantity changes go through transactions
+
+Remove or refactor any code paths that directly change:
+
+Finished: hildaleQty and pivotQty
+
+Raw: stock
+
+Instead, expose functions like applyReceive, applyShip, applyTransfer, applyProduce, applyAdjust that:
+
+Create an InventoryTransaction
+
+Update the appropriate quantity field(s).
+
+This ensures there is always a transaction record for every quantity change.
+
+5. Add a basic transaction history view
+
+For each item (finished and raw), add a “History” or “Transactions” button that opens a simple table showing:
+
+Date/time, type, location, quantity, notes.
+
+Sort by most recent first.
+
+This doesn’t need to be fancy; it just needs to help us debug inventory changes.
+
+6. Verification
+
+After implementing:
+
+Manually test producing a finished product and see raw stock go down + Hildale quantity go up.
+
+Transfer some units Hildale → Pivot and confirm both locations update correctly.
+
+Check transaction history for those items to see all movements recorded.
+
+Confirm that no UI flow directly edits quantity fields without using transactions.
+
+Summarize which files you changed and how all finished/raw quantity updates now flow through the transaction system.

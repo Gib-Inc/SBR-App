@@ -303,6 +303,32 @@ export type InsertImportJob = z.infer<typeof insertImportJobSchema>;
 export type ImportJob = typeof importJobs.$inferSelect;
 
 // ============================================================================
+// INVENTORY TRANSACTIONS (Movement Audit Trail)
+// ============================================================================
+
+export const inventoryTransactions = pgTable("inventory_transactions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  itemType: text("item_type").notNull(), // 'FINISHED' or 'RAW'
+  type: text("type").notNull(), // 'RECEIVE', 'SHIP', 'TRANSFER_IN', 'TRANSFER_OUT', 'PRODUCE', 'ADJUST'
+  location: text("location").notNull(), // 'HILDALE', 'PIVOT', or 'N/A' for raw items
+  quantity: integer("quantity").notNull(), // Positive number (direction determined by type)
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  createdBy: text("created_by"), // User ID or system identifier
+  notes: text("notes"), // Optional reason/description
+}, (table) => ({
+  itemIdIdx: index("inventory_transactions_item_id_idx").on(table.itemId),
+  createdAtIdx: index("inventory_transactions_created_at_idx").on(table.createdAt),
+}));
+
+export const insertInventoryTransactionSchema = createInsertSchema(inventoryTransactions).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransactionSchema>;
+export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
+
+// ============================================================================
 // UPDATE SCHEMAS (Partial validation for PATCH endpoints)
 // ============================================================================
 

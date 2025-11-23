@@ -138,6 +138,12 @@ export class TransactionService {
 
       const createdTransaction = await this.storage.createInventoryTransaction(transaction);
 
+      // Mark forecastDirty=true for finished products when transactions occur
+      // This triggers batch forecast recalculation instead of real-time LLM calls
+      if (normalizedItemType === "FINISHED") {
+        updates.forecastDirty = true;
+      }
+
       if (Object.keys(updates).length > 0) {
         await this.storage.updateItem(transaction.itemId, updates);
       }

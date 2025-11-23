@@ -1,0 +1,150 @@
+Now review and refine the barcode + import system you just built. Do not add new major features; focus on robustness, UX polish, and tests.
+1. Import UX and clarity
+
+
+Make the import flow clearly step-based in the UI (e.g. “1. Upload → 2. Map Columns → 3. Match Strategy → 4. Preview → 5. Results”).
+
+
+Add concise help text or tooltips explaining:
+
+
+What productKind means (FINISHED vs RAW).
+
+
+Difference between barcodeUsage values (External GS1 vs Internal Stock).
+
+
+What each match strategy does (by SKU, by barcode, by both).
+
+
+
+
+Ensure the preview step can handle large files gracefully (pagination or chunked previews, plus a progress indicator for long jobs).
+
+
+2. Import validation and error handling
+
+
+Strengthen validation:
+
+
+Clear messages for missing required fields (at least name, SKU, and barcode when required by the chosen strategy).
+
+
+Warnings for suspicious data (duplicate barcodes in the file, or codes that don’t look valid for the selected usage).
+
+
+Graceful handling of malformed rows (bad encodings, extra delimiters) by skipping them and logging errors instead of failing the entire import.
+
+
+
+
+Make sure import_job results and error logs:
+
+
+Are readable in the UI with counts per status.
+
+
+Offer a downloadable CSV/XLSX of failed/skipped rows with reasons.
+
+
+
+
+3. Barcodes page navigation and filters
+
+
+Upgrade the Barcodes page so it feels production-ready:
+
+
+Search by name, SKU, and barcodeValue.
+
+
+Filters for productKind, barcodeUsage, and barcodeSource.
+
+
+Sorting by name, SKU, created date, and updated date.
+
+
+Ensure filters/sorting persist when navigating back from item detail or other pages.
+
+
+
+
+4. Label printing and scanning refinements
+
+
+Verify label printing:
+
+
+Layout works with a common label printer or sheet (no clipping; consistent margins).
+
+
+User can specify how many copies of each label to print.
+
+
+Labels clearly indicate Usage (External vs Internal) so warehouse staff can tell at a glance.
+
+
+
+
+Improve the Scan Inventory experience:
+
+
+After each scan, show a quick success banner with item name, SKU, and barcodeValue.
+
+
+Auto-refocus the input field for continuous scanning.
+
+
+Maintain a “recent scans” list with timestamps (e.g. last 10–20 scans).
+
+
+
+
+5. Tests and documentation
+
+
+Add automated tests (unit/integration) for:
+
+
+GS1-style code generation (check-digit correctness, uniqueness, and correct updates to next_item_ref).
+
+
+Internal code generation (barcodeValue format and uniqueness, and updates to next_internal_code).
+
+
+Import mapping and upsert logic (new vs update vs conflict for each match strategy).
+
+
+Import failure scenarios (duplicate barcodes, missing required fields, invalid rows).
+
+
+
+
+Add a short developer doc (markdown file) that explains:
+
+
+The purpose and allowed values of barcodeValue, barcodeFormat, barcodeUsage, productKind, and barcodeSource.
+
+
+How the import system works end-to-end, including profiles, mapping, and job summaries.
+
+
+How to plug in a real GS1 company prefix later by just updating barcode_settings without refactoring the barcode/import module.
+
+
+
+
+When you’re done, summarize:
+
+
+What UX and reliability improvements you made to Barcodes and Import.
+
+
+What tests you added and how to run them.
+
+
+Any remaining limitations or assumptions I should be aware of as I keep building the inventory system.
+
+
+

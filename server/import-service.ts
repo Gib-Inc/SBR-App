@@ -146,30 +146,68 @@ export class ImportService {
     return item;
   }
 
-  validateItem(item: Partial<InsertItem>): { valid: boolean; error?: string } {
-    if (!item.name) {
+  validateItem(item: Partial<InsertItem>, rowNumber?: number): { valid: boolean; error?: string; warnings?: string[] } {
+    const warnings: string[] = [];
+
+    // Required fields
+    if (!item.name || String(item.name).trim().length === 0) {
       return { valid: false, error: "Missing required field: name" };
     }
 
-    if (!item.sku) {
+    if (!item.sku || String(item.sku).trim().length === 0) {
       return { valid: false, error: "Missing required field: sku" };
     }
 
-    if (item.productKind === "FINISHED" && item.barcodeUsage !== "EXTERNAL_GS1") {
+    // Product kind validation
+    if (item.productKind && !["FINISHED", "RAW"].includes(item.productKind)) {
+      return {
+        valid: false,
+        error: `Invalid productKind: "${item.productKind}". Must be FINISHED or RAW`,
+      };
+    }
+
+    // Barcode usage validation
+    if (item.barcodeUsage && !["EXTERNAL_GS1", "INTERNAL_STOCK"].includes(item.barcodeUsage)) {
+      return {
+        valid: false,
+        error: `Invalid barcodeUsage: "${item.barcodeUsage}". Must be EXTERNAL_GS1 or INTERNAL_STOCK`,
+      };
+    }
+
+    // Business rule: FINISHED → EXTERNAL_GS1
+    if (item.productKind === "FINISHED" && item.barcodeUsage && item.barcodeUsage !== "EXTERNAL_GS1") {
       return {
         valid: false,
         error: "FINISHED products must use EXTERNAL_GS1 barcode usage",
       };
     }
 
-    if (item.productKind === "RAW" && item.barcodeUsage !== "INTERNAL_STOCK") {
+    // Business rule: RAW → INTERNAL_STOCK
+    if (item.productKind === "RAW" && item.barcodeUsage && item.barcodeUsage !== "INTERNAL_STOCK") {
       return {
         valid: false,
         error: "RAW inventory must use INTERNAL_STOCK barcode usage",
       };
     }
 
-    return { valid: true };
+    // Suspicious data warnings
+    if (item.barcodeValue && String(item.barcodeValue).length < 4) {
+      warnings.push("Barcode value is very short (less than 4 characters)");
+    }
+
+    if (item.barcodeValue && !/^[A-Z0-9-]+$/i.test(String(item.barcodeValue))) {
+      warnings.push("Barcode contains special characters or spaces");
+    }
+
+    if (item.currentStock && (item.currentStock < 0 || item.currentStock > 1000000)) {
+      warnings.push("Current stock value is outside normal range (0-1,000,000)");
+    }
+
+    if (item.dailyUsage && (item.dailyUsage < 0 || item.dailyUsage > 10000)) {
+      warnings.push("Daily usage value is outside normal range (0-10,000)");
+    }
+
+    return { valid: true, warnings: warnings.length > 0 ? warnings : undefined };
   }
 
   async findMatchingItem(

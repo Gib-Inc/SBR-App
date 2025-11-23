@@ -11,12 +11,14 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
-import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CameraCaptureModal } from "@/components/camera-capture-modal";
 import { VisionConfirmationDialog } from "@/components/vision-confirmation-dialog";
 import { PrintLabelsDialog } from "@/components/print-labels-dialog";
+import { ImportWizard } from "@/components/import-wizard";
 
 const barcodeFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -553,9 +555,15 @@ function BarcodeItemsSection({
 
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [productKindFilter, setProductKindFilter] = useState<string>("all");
+  const [barcodeUsageFilter, setBarcodeUsageFilter] = useState<string>("all");
+  const [barcodeSourceFilter, setBarcodeSourceFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("name");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isScanDialogOpen, setIsScanDialogOpen] = useState(false);
   const [isPrintLabelsDialogOpen, setIsPrintLabelsDialogOpen] = useState(false);
+  const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isVisionConfirmDialogOpen, setIsVisionConfirmDialogOpen] = useState(false);
   const [visionResult, setVisionResult] = useState<any>(null);
@@ -570,11 +578,40 @@ export default function Barcodes() {
 
   const allItems = (items as any[]) ?? [];
   
-  const filteredItems = allItems.filter((item: any) =>
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // Apply filters
+  let filteredItems = allItems.filter((item: any) => {
+    // Search filter
+    const matchesSearch = 
+      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()));
+    
+    // Product kind filter
+    const matchesProductKind = productKindFilter === "all" || item.productKind === productKindFilter;
+    
+    // Barcode usage filter
+    const matchesBarcodeUsage = barcodeUsageFilter === "all" || item.barcodeUsage === barcodeUsageFilter;
+    
+    // Barcode source filter
+    const matchesBarcodeSource = barcodeSourceFilter === "all" || item.barcodeSource === barcodeSourceFilter;
+    
+    return matchesSearch && matchesProductKind && matchesBarcodeUsage && matchesBarcodeSource;
+  });
+
+  // Apply sorting
+  filteredItems = filteredItems.sort((a: any, b: any) => {
+    let aValue = a[sortBy] || "";
+    let bValue = b[sortBy] || "";
+    
+    if (sortBy === "name" || sortBy === "sku") {
+      aValue = String(aValue).toLowerCase();
+      bValue = String(bValue).toLowerCase();
+    }
+    
+    if (aValue < bValue) return sortOrder === "asc" ? -1 : 1;
+    if (aValue > bValue) return sortOrder === "asc" ? 1 : -1;
+    return 0;
+  });
 
   // Split filtered items by productKind
   const finishedItems = filteredItems.filter((item: any) => item.productKind === 'FINISHED');
@@ -622,48 +659,6 @@ export default function Barcodes() {
     },
   });
 
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('columnMapping', JSON.stringify({
-      name: 'name',
-      sku: 'sku',
-      barcodeValue: 'barcodeValue',
-      productKind: 'productKind',
-      currentStock: 'currentStock',
-    }));
-    formData.append('matchStrategy', 'sku');
-
-    try {
-      const response = await fetch("/api/import/execute", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Import failed");
-      }
-
-      const result = await response.json();
-      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-      
-      toast({
-        title: "Import Complete",
-        description: `Inserted: ${result.inserted}, Updated: ${result.updated}, Skipped: ${result.skipped}`,
-      });
-    } catch (error: any) {
-      toast({
-        title: "Import Failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    }
-
-    e.target.value = '';
-  };
 
   const handleExport = async () => {
     try {
@@ -794,19 +789,12 @@ export default function Barcodes() {
         <div className="flex flex-wrap gap-2">
           <Button 
             variant="outline" 
-            onClick={() => document.getElementById('import-file-input')?.click()}
+            onClick={() => setIsImportWizardOpen(true)}
             data-testid="button-import-items"
           >
             <Download className="mr-2 h-4 w-4 rotate-180" />
-            Import CSV
+            Import Items
           </Button>
-          <input
-            id="import-file-input"
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            className="hidden"
-            onChange={handleImportFile}
-          />
           <Button 
             variant="outline" 
             onClick={handleExport}
@@ -855,17 +843,103 @@ export default function Barcodes() {
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search barcodes..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-            data-testid="input-search-barcodes"
-          />
+      {/* Search and Filters */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search by name, SKU, or barcode value..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+              data-testid="input-search-barcodes"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <Label className="text-sm font-medium">Product Kind:</Label>
+            <Select value={productKindFilter} onValueChange={setProductKindFilter}>
+              <SelectTrigger className="w-40" data-testid="select-filter-product-kind">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="FINISHED">Finished</SelectItem>
+                <SelectItem value="RAW">Raw</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label className="text-sm font-medium">Usage:</Label>
+            <Select value={barcodeUsageFilter} onValueChange={setBarcodeUsageFilter}>
+              <SelectTrigger className="w-48" data-testid="select-filter-barcode-usage">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="EXTERNAL_GS1">External GS1</SelectItem>
+                <SelectItem value="INTERNAL_STOCK">Internal Stock</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label className="text-sm font-medium">Source:</Label>
+            <Select value={barcodeSourceFilter} onValueChange={setBarcodeSourceFilter}>
+              <SelectTrigger className="w-48" data-testid="select-filter-barcode-source">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="AUTO_GENERATED">Auto Generated</SelectItem>
+                <SelectItem value="MANUAL_ENTRY">Manual Entry</SelectItem>
+                <SelectItem value="EXTERNAL_SYSTEM">External System</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label className="text-sm font-medium">Sort by:</Label>
+            <Select value={sortBy} onValueChange={setSortBy}>
+              <SelectTrigger className="w-32" data-testid="select-sort-by">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="name">Name</SelectItem>
+                <SelectItem value="sku">SKU</SelectItem>
+                <SelectItem value="barcodeValue">Barcode</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+              data-testid="button-toggle-sort-order"
+            >
+              {sortOrder === "asc" ? "↑" : "↓"}
+            </Button>
+          </div>
+
+          {(searchQuery || productKindFilter !== "all" || barcodeUsageFilter !== "all" || barcodeSourceFilter !== "all") && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSearchQuery("");
+                setProductKindFilter("all");
+                setBarcodeUsageFilter("all");
+                setBarcodeSourceFilter("all");
+              }}
+              data-testid="button-clear-filters"
+            >
+              <X className="mr-2 h-4 w-4" />
+              Clear Filters
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1076,6 +1150,12 @@ export default function Barcodes() {
           isOpen={isPrintLabelsDialogOpen}
           onClose={() => setIsPrintLabelsDialogOpen(false)}
         />
+
+        {/* Import Wizard */}
+        <ImportWizard
+          open={isImportWizardOpen}
+          onOpenChange={setIsImportWizardOpen}
+        />
     </div>
   );
 }
@@ -1263,12 +1343,29 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+interface RecentScan {
+  timestamp: Date;
+  barcodeValue: string;
+  itemName: string;
+  sku: string;
+  success: boolean;
+}
+
 function ScanDialog({ onClose }: { onClose: () => void }) {
   const [barcodeValue, setBarcodeValue] = useState("");
   const [scanResult, setScanResult] = useState<any>(null);
   const [bulkMode, setBulkMode] = useState(false);
+  const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
+  const [showSuccessBanner, setShowSuccessBanner] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
+
+  // Auto-refocus input after each scan
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [recentScans, scanResult]);
 
   const scanMutation = useMutation({
     mutationFn: async (data: { barcodeValue: string; autoConfirm: boolean }) => {
@@ -1278,22 +1375,34 @@ function ScanDialog({ onClose }: { onClose: () => void }) {
     onSuccess: (data) => {
       if (data.success) {
         queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+        
+        // Add to recent scans
+        const newScan: RecentScan = {
+          timestamp: new Date(),
+          barcodeValue: data.item?.barcodeValue || barcodeValue.trim(),
+          itemName: data.item?.name || "Unknown",
+          sku: data.item?.sku || "-",
+          success: true,
+        };
+        setRecentScans(prev => [newScan, ...prev].slice(0, 15));
+        
+        // Show success banner
+        setShowSuccessBanner(true);
+        setTimeout(() => setShowSuccessBanner(false), 3000);
+        
         toast({
-          title: "Success",
-          description: data.message,
+          title: "Scan Successful",
+          description: `${data.item?.name} - SKU: ${data.item?.sku}`,
         });
         
         if (bulkMode) {
-          // In bulk mode, just clear the input and keep scanning
           setBarcodeValue("");
           setScanResult(null);
         } else {
-          // In regular mode, show the result
           setScanResult(data);
           setBarcodeValue("");
         }
       } else if (data.requiresItemSelection) {
-        // Bin scanned, need item selection
         setScanResult(data);
         toast({
           title: "Info",
@@ -1303,9 +1412,18 @@ function ScanDialog({ onClose }: { onClose: () => void }) {
       }
     },
     onError: (error: any) => {
+      const failedScan: RecentScan = {
+        timestamp: new Date(),
+        barcodeValue: barcodeValue.trim(),
+        itemName: "Scan Failed",
+        sku: "-",
+        success: false,
+      };
+      setRecentScans(prev => [failedScan, ...prev].slice(0, 15));
+      
       toast({
-        title: "Error",
-        description: error.message || "Failed to scan barcode",
+        title: "Scan Failed",
+        description: error.message || "Barcode not found",
         variant: "destructive",
       });
       setBarcodeValue("");
@@ -1415,10 +1533,57 @@ function ScanDialog({ onClose }: { onClose: () => void }) {
         </Card>
       )}
 
+      {/* Success Banner */}
+      {showSuccessBanner && recentScans[0] && recentScans[0].success && (
+        <Alert className="border-green-500 bg-green-50 dark:bg-green-950">
+          <CheckCircle2 className="h-4 w-4 text-green-600" />
+          <AlertDescription>
+            <strong>{recentScans[0].itemName}</strong> - SKU: {recentScans[0].sku} - Barcode: {recentScans[0].barcodeValue}
+          </AlertDescription>
+        </Alert>
+      )}
+
       <div className="text-xs text-muted-foreground">
         <p><strong>Bulk Mode:</strong> Automatically updates inventory without confirmation prompts for faster processing.</p>
         <p><strong>Regular Mode:</strong> Shows a confirmation after each scan with details about the update.</p>
       </div>
+
+      {/* Recent Scans List */}
+      {recentScans.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-sm font-medium">Recent Scans ({recentScans.length})</h4>
+          <div className="max-h-60 overflow-y-auto rounded-lg border">
+            <div className="divide-y">
+              {recentScans.map((scan, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between p-3 ${
+                    scan.success ? "bg-background" : "bg-destructive/10"
+                  }`}
+                  data-testid={`recent-scan-${idx}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      {scan.success ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0" />
+                      ) : (
+                        <X className="h-4 w-4 text-destructive flex-shrink-0" />
+                      )}
+                      <span className="font-medium text-sm truncate">{scan.itemName}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      SKU: {scan.sku} • {scan.barcodeValue}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground ml-4 flex-shrink-0">
+                    {scan.timestamp.toLocaleTimeString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

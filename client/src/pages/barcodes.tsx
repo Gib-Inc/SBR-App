@@ -741,283 +741,285 @@ export default function Barcodes() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Product Barcodes</h1>
-          <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
+    <div className="w-full max-w-screen-2xl mx-auto">
+      <div className="flex flex-col gap-6 p-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold">Product Barcodes</h1>
+            <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
+          </div>
+          <div className="flex gap-2">
+            <Button 
+              variant="outline" 
+              onClick={handleExport}
+              data-testid="button-export-barcodes"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Export CSV
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => setIsPrintLabelsDialogOpen(true)}
+              data-testid="button-print-labels"
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Print Labels
+            </Button>
+            <Dialog open={isScanDialogOpen} onOpenChange={setIsScanDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" data-testid="button-scan-inventory">
+                  <BarcodeIcon className="mr-2 h-4 w-4" />
+                  Scan Inventory
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Scan Barcode</DialogTitle>
+                </DialogHeader>
+                <ScanDialog onClose={() => setIsScanDialogOpen(false)} />
+              </DialogContent>
+            </Dialog>
+            
+            <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-create-barcode">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Create Barcode
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New Barcode</DialogTitle>
+                </DialogHeader>
+                <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button 
-            variant="outline" 
-            onClick={handleExport}
-            data-testid="button-export-barcodes"
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={() => setIsPrintLabelsDialogOpen(true)}
-            data-testid="button-print-labels"
-          >
-            <Printer className="mr-2 h-4 w-4" />
-            Print Labels
-          </Button>
-          <Dialog open={isScanDialogOpen} onOpenChange={setIsScanDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" data-testid="button-scan-inventory">
-                <BarcodeIcon className="mr-2 h-4 w-4" />
-                Scan Inventory
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Scan Barcode</DialogTitle>
-              </DialogHeader>
-              <ScanDialog onClose={() => setIsScanDialogOpen(false)} />
-            </DialogContent>
-          </Dialog>
-          
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-create-barcode">
-                <Plus className="mr-2 h-4 w-4" />
-                Create Barcode
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create New Barcode</DialogTitle>
-              </DialogHeader>
-              <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
 
-      {/* Search Bar */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search barcodes..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-            data-testid="input-search-barcodes"
-          />
+        {/* Search Bar */}
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search barcodes..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+              data-testid="input-search-barcodes"
+            />
+          </div>
         </div>
-      </div>
 
-      {/* Items with Barcode Metadata */}
-      {isLoading ? (
-        <div className="flex h-64 items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-        </div>
-      ) : filteredItems.length === 0 ? (
+        {/* Items with Barcode Metadata */}
+        {isLoading ? (
+          <div className="flex h-64 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          </div>
+        ) : filteredItems.length === 0 ? (
+          <Card>
+            <CardContent className="flex h-64 flex-col items-center justify-center gap-2">
+              <BarcodeIcon className="h-12 w-12 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                {searchQuery ? "No items found" : "No items yet. Add items from the Products page to get started."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-6">
+            {/* Finished Products Section */}
+            <BarcodeItemsSection 
+              title="Finished Products"
+              items={finishedItems}
+              searchQuery={searchQuery}
+              data-testid-prefix="finished"
+              onUpdate={handleUpdate}
+              onDelete={handleDelete}
+              onPrint={handlePrint}
+            />
+
+            {/* Stock Inventory Section */}
+            <BarcodeItemsSection 
+              title="Stock Inventory"
+              items={rawItems}
+              searchQuery={searchQuery}
+              data-testid-prefix="stock"
+              onUpdate={handleUpdate}
+              onDelete={handleDelete}
+              onPrint={handlePrint}
+            />
+          </div>
+        )}
+
+        {/* Export Info Card */}
         <Card>
-          <CardContent className="flex h-64 flex-col items-center justify-center gap-2">
-            <BarcodeIcon className="h-12 w-12 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              {searchQuery ? "No items found" : "No items yet. Add items from the Products page to get started."}
-            </p>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <BarcodeIcon className="h-4 w-4" />
+              <p>
+                Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_format, barcode_usage, barcode_source, external_system, external_id
+              </p>
+            </div>
           </CardContent>
         </Card>
-      ) : (
-        <div className="flex flex-col gap-6">
-          {/* Finished Products Section */}
-          <BarcodeItemsSection 
-            title="Finished Products"
-            items={finishedItems}
-            searchQuery={searchQuery}
-            data-testid-prefix="finished"
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onPrint={handlePrint}
-          />
 
-          {/* Stock Inventory Section */}
-          <BarcodeItemsSection 
-            title="Stock Inventory"
-            items={rawItems}
-            searchQuery={searchQuery}
-            data-testid-prefix="stock"
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-            onPrint={handlePrint}
-          />
-        </div>
-      )}
-
-      {/* Export Info Card */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <BarcodeIcon className="h-4 w-4" />
-            <p>
-              Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_format, barcode_usage, barcode_source, external_system, external_id
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Camera and Vision Dialogs */}
-      <CameraCaptureModal
-        isOpen={isCameraModalOpen}
-        onClose={() => setIsCameraModalOpen(false)}
-        onImageCaptured={async (imageDataUrl) => {
-          setIsAnalyzingImage(true);
-          toast({
-            title: "Analyzing image...",
-            description: "AI is identifying the item from your image.",
-          });
-          
-          try {
-            const res = await apiRequest("POST", "/api/vision/identify", { imageDataUrl });
-            if (!res.ok) {
-              const error = await res.json();
-              throw new Error(error.error || "Failed to analyze image");
-            }
-            
-            const result = await res.json();
-            setVisionResult(result);
-            setIsVisionConfirmDialogOpen(true);
-            
-            toast({
-              title: "Item Identified",
-              description: `AI identified: ${result.name}`,
-            });
-          } catch (error: any) {
-            toast({
-              variant: "destructive",
-              title: "Analysis Failed",
-              description: error.message || "Failed to identify item from image",
-            });
-          } finally {
-            setIsAnalyzingImage(false);
-          }
-        }}
-      />
-      <VisionConfirmationDialog
-        isOpen={isVisionConfirmDialogOpen}
-        onClose={() => {
-          setIsVisionConfirmDialogOpen(false);
-          setVisionResult(null);
-        }}
-        visionResult={visionResult}
-        defaultType={cameraContext === "finished_product" ? "finished_product" : "component"}
-        onConfirm={async (action, data) => {
-          const allItems = (items as any[]) ?? [];
-          
-          if (action === "create") {
-            // Create new item and barcode
-            try {
-              // First, create the item
-              const itemRes = await apiRequest("POST", "/api/items", {
-                name: data.name,
-                sku: data.sku || "",
-                currentStock: data.quantity || 0,
-                type: data.type,
-                category: data.category || null,
-                location: data.location || null,
-              });
-              
-              if (!itemRes.ok) {
-                const error = await itemRes.json();
-                throw new Error(error.error || "Failed to create item");
-              }
-              
-              const newItem = await itemRes.json();
-              
-              // Then, create the barcode
-              const barcodePurpose = data.type === "finished_product" ? "finished_product" : "item";
-              const barcodeValue = `${data.type === "finished_product" ? "PROD" : "COMP"}-${data.sku || newItem.id}`;
-              
-              const barcodeRes = await apiRequest("POST", "/api/barcodes", {
-                name: data.name,
-                value: barcodeValue,
-                purpose: barcodePurpose,
-                sku: data.sku || "",
-                referenceId: newItem.id,
-              });
-              
-              if (!barcodeRes.ok) {
-                const error = await barcodeRes.json();
-                throw new Error(error.error || "Failed to create barcode");
-              }
-              
-              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-              await queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
-              
+          {/* Camera and Vision Dialogs */}
+          <CameraCaptureModal
+            isOpen={isCameraModalOpen}
+            onClose={() => setIsCameraModalOpen(false)}
+            onImageCaptured={async (imageDataUrl) => {
+              setIsAnalyzingImage(true);
               toast({
-                title: "Success",
-                description: `Created new ${data.type === "finished_product" ? "product" : "component"} with barcode: ${data.name}`,
+                title: "Analyzing image...",
+                description: "AI is identifying the item from your image.",
               });
               
+              try {
+                const res = await apiRequest("POST", "/api/vision/identify", { imageDataUrl });
+                if (!res.ok) {
+                  const error = await res.json();
+                  throw new Error(error.error || "Failed to analyze image");
+                }
+                
+                const result = await res.json();
+                setVisionResult(result);
+                setIsVisionConfirmDialogOpen(true);
+                
+                toast({
+                  title: "Item Identified",
+                  description: `AI identified: ${result.name}`,
+                });
+              } catch (error: any) {
+                toast({
+                  variant: "destructive",
+                  title: "Analysis Failed",
+                  description: error.message || "Failed to identify item from image",
+                });
+              } finally {
+                setIsAnalyzingImage(false);
+              }
+            }}
+          />
+          <VisionConfirmationDialog
+            isOpen={isVisionConfirmDialogOpen}
+            onClose={() => {
               setIsVisionConfirmDialogOpen(false);
               setVisionResult(null);
-            } catch (error: any) {
-              toast({
-                variant: "destructive",
-                title: "Error",
-                description: error.message || "Failed to create item and barcode",
-              });
-            }
-          } else {
-            // Adjust existing stock
-            const existingItem = allItems.find((item: any) => 
-              item.name.toLowerCase() === data.name?.toLowerCase() || 
-              (data.sku && item.sku?.toLowerCase() === data.sku.toLowerCase())
-            );
-            
-            if (!existingItem) {
-              toast({
-                variant: "destructive",
-                title: "Item Not Found",
-                description: "Could not find existing item. Please create it instead.",
-              });
-              return;
-            }
-            
-            try {
-              const newStock = existingItem.currentStock + (data.adjustmentQuantity || 0);
+            }}
+            visionResult={visionResult}
+            defaultType={cameraContext === "finished_product" ? "finished_product" : "component"}
+            onConfirm={async (action, data) => {
+              const allItems = (items as any[]) ?? [];
               
-              const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, {
-                currentStock: Math.max(0, newStock),
-              });
-              
-              if (!res.ok) {
-                const error = await res.json();
-                throw new Error(error.error || "Failed to adjust stock");
+              if (action === "create") {
+                // Create new item and barcode
+                try {
+                  // First, create the item
+                  const itemRes = await apiRequest("POST", "/api/items", {
+                    name: data.name,
+                    sku: data.sku || "",
+                    currentStock: data.quantity || 0,
+                    type: data.type,
+                    category: data.category || null,
+                    location: data.location || null,
+                  });
+                  
+                  if (!itemRes.ok) {
+                    const error = await itemRes.json();
+                    throw new Error(error.error || "Failed to create item");
+                  }
+                  
+                  const newItem = await itemRes.json();
+                  
+                  // Then, create the barcode
+                  const barcodePurpose = data.type === "finished_product" ? "finished_product" : "item";
+                  const barcodeValue = `${data.type === "finished_product" ? "PROD" : "COMP"}-${data.sku || newItem.id}`;
+                  
+                  const barcodeRes = await apiRequest("POST", "/api/barcodes", {
+                    name: data.name,
+                    value: barcodeValue,
+                    purpose: barcodePurpose,
+                    sku: data.sku || "",
+                    referenceId: newItem.id,
+                  });
+                  
+                  if (!barcodeRes.ok) {
+                    const error = await barcodeRes.json();
+                    throw new Error(error.error || "Failed to create barcode");
+                  }
+                  
+                  await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+                  await queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+                  
+                  toast({
+                    title: "Success",
+                    description: `Created new ${data.type === "finished_product" ? "product" : "component"} with barcode: ${data.name}`,
+                  });
+                  
+                  setIsVisionConfirmDialogOpen(false);
+                  setVisionResult(null);
+                } catch (error: any) {
+                  toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: error.message || "Failed to create item and barcode",
+                  });
+                }
+              } else {
+                // Adjust existing stock
+                const existingItem = allItems.find((item: any) => 
+                  item.name.toLowerCase() === data.name?.toLowerCase() || 
+                  (data.sku && item.sku?.toLowerCase() === data.sku.toLowerCase())
+                );
+                
+                if (!existingItem) {
+                  toast({
+                    variant: "destructive",
+                    title: "Item Not Found",
+                    description: "Could not find existing item. Please create it instead.",
+                  });
+                  return;
+                }
+                
+                try {
+                  const newStock = existingItem.currentStock + (data.adjustmentQuantity || 0);
+                  
+                  const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, {
+                    currentStock: Math.max(0, newStock),
+                  });
+                  
+                  if (!res.ok) {
+                    const error = await res.json();
+                    throw new Error(error.error || "Failed to adjust stock");
+                  }
+                  
+                  await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+                  
+                  toast({
+                    title: "Success",
+                    description: `Adjusted stock for ${existingItem.name}: ${existingItem.currentStock} → ${newStock}`,
+                  });
+                  
+                  setIsVisionConfirmDialogOpen(false);
+                  setVisionResult(null);
+                } catch (error: any) {
+                  toast({
+                    variant: "destructive",
+                    title: "Error",
+                    description: error.message || "Failed to adjust stock",
+                  });
+                }
               }
-              
-              await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-              
-              toast({
-                title: "Success",
-                description: `Adjusted stock for ${existingItem.name}: ${existingItem.currentStock} → ${newStock}`,
-              });
-              
-              setIsVisionConfirmDialogOpen(false);
-              setVisionResult(null);
-            } catch (error: any) {
-              toast({
-                variant: "destructive",
-                title: "Error",
-                description: error.message || "Failed to adjust stock",
-              });
-            }
-          }
-        }}
-      />
+            }}
+          />
 
-      {/* Print Labels Dialog */}
-      <PrintLabelsDialog
-        isOpen={isPrintLabelsDialogOpen}
-        onClose={() => setIsPrintLabelsDialogOpen(false)}
-      />
+          {/* Print Labels Dialog */}
+          <PrintLabelsDialog
+            isOpen={isPrintLabelsDialogOpen}
+            onClose={() => setIsPrintLabelsDialogOpen(false)}
+          />
+      </div>
     </div>
   );
 }

@@ -49,9 +49,15 @@ export class TransactionService {
         };
       }
 
+      // Normalize itemType to handle both formats: "finished_product"/"component" and "FINISHED"/"RAW"
+      const normalizedItemType = 
+        transaction.itemType === "finished_product" || transaction.itemType === "FINISHED" 
+          ? "FINISHED" 
+          : "RAW";
+
       const updates: Partial<Item> = {};
 
-      if (transaction.itemType === "FINISHED") {
+      if (normalizedItemType === "FINISHED") {
         if (transactionType === "TRANSFER_OUT") {
           if (location === "HILDALE") {
             if ((item.hildaleQty ?? 0) < quantity) {
@@ -106,7 +112,7 @@ export class TransactionService {
             updates.pivotQty = (item.pivotQty ?? 0) + quantity;
           }
         }
-      } else if (transaction.itemType === "RAW") {
+      } else if (normalizedItemType === "RAW") {
         if (transactionType === "PRODUCE") {
           if ((item.currentStock ?? 0) < quantity) {
             return {

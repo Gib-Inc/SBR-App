@@ -1099,7 +1099,7 @@ export default function Barcodes() {
                 });
               }
             } else {
-              // Adjust existing stock
+              // Adjust existing stock using transaction system
               const existingItem = allItems.find((item: any) => 
                 item.name.toLowerCase() === data.name?.toLowerCase() || 
                 (data.sku && item.sku?.toLowerCase() === data.sku.toLowerCase())
@@ -1115,26 +1115,26 @@ export default function Barcodes() {
               }
               
               try {
-                let updates: any = {};
-                let oldValue: number;
-                let newValue: number;
-                let stockType: string;
+                const adjustmentQty = data.adjustmentQuantity || 0;
+                
+                // Use transaction system for all stock adjustments
+                let location = 'N/A';
+                let itemType = 'component';
                 
                 if (existingItem.type === 'finished_product') {
-                  // For finished products, increment pivotQty (ready-to-ship warehouse)
-                  oldValue = existingItem.pivotQty ?? 0;
-                  newValue = Math.max(0, oldValue + (data.adjustmentQuantity || 0));
-                  updates.pivotQty = newValue;
-                  stockType = 'Pivot Qty';
-                } else {
-                  // For components, increment currentStock
-                  oldValue = existingItem.currentStock ?? 0;
-                  newValue = Math.max(0, oldValue + (data.adjustmentQuantity || 0));
-                  updates.currentStock = newValue;
-                  stockType = 'Stock';
+                  // For finished products, adjust Pivot location
+                  location = 'PIVOT';
+                  itemType = 'finished_product';
                 }
                 
-                const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, updates);
+                const res = await apiRequest("POST", "/api/transactions", {
+                  itemId: existingItem.id,
+                  itemType,
+                  type: "ADJUST",
+                  location,
+                  quantity: adjustmentQty,
+                  notes: `Barcode scan adjustment`,
+                });
                 
                 if (!res.ok) {
                   const error = await res.json();
@@ -1143,9 +1143,10 @@ export default function Barcodes() {
                 
                 await queryClient.invalidateQueries({ queryKey: ["/api/items"] });
                 
+                const locationText = itemType === 'finished_product' ? ` at ${location}` : '';
                 toast({
                   title: "Success",
-                  description: `Adjusted ${stockType} for ${existingItem.name}: ${oldValue} → ${newValue}`,
+                  description: `Adjusted stock for ${existingItem.name}${locationText}: ${adjustmentQty > 0 ? '+' : ''}${adjustmentQty}`,
                 });
                 
                 setIsVisionConfirmDialogOpen(false);

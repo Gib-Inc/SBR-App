@@ -24,12 +24,18 @@ function ItemTableRow({
   item, 
   onDelete, 
   onUpdate,
-  onEditBOM
+  onEditBOM,
+  onTransfer,
+  onProduce,
+  onViewHistory
 }: { 
   item: any; 
   onDelete: (item: any) => void;
   onUpdate: (id: string, field: string, value: string | number, onSuccess: () => void, onError: () => void) => void;
   onEditBOM?: (item: any) => void;
+  onTransfer?: (item: any) => void;
+  onProduce?: (item: any) => void;
+  onViewHistory?: (item: any) => void;
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -339,6 +345,42 @@ function ItemTableRow({
       {/* Actions Column */}
       <td className="px-3 align-middle">
         <div className="flex gap-1 justify-end">
+          {item.type === "finished_product" && onTransfer && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onTransfer(item)}
+              data-testid={`button-transfer-${item.id}`}
+              className="h-8 w-8"
+              title="Transfer between locations"
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+            </Button>
+          )}
+          {item.type === "finished_product" && onProduce && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onProduce(item)}
+              data-testid={`button-produce-${item.id}`}
+              className="h-8 w-8"
+              title="Produce items"
+            >
+              <Boxes className="h-4 w-4" />
+            </Button>
+          )}
+          {onViewHistory && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onViewHistory(item)}
+              data-testid={`button-history-${item.id}`}
+              className="h-8 w-8"
+              title="View transaction history"
+            >
+              <History className="h-4 w-4" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
@@ -735,6 +777,9 @@ export default function BOM() {
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [editingBOMItem, setEditingBOMItem] = useState<any>(null);
+  const [transferItem, setTransferItem] = useState<any>(null);
+  const [productionItem, setProductionItem] = useState<any>(null);
+  const [historyItem, setHistoryItem] = useState<any>(null);
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -908,6 +953,9 @@ export default function BOM() {
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
                     onEditBOM={setEditingBOMItem}
+                    onTransfer={setTransferItem}
+                    onProduce={setProductionItem}
+                    onViewHistory={setHistoryItem}
                   />
                 ))}
               </tbody>
@@ -964,6 +1012,7 @@ export default function BOM() {
                     item={item}
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
+                    onViewHistory={setHistoryItem}
                   />
                 ))}
               </tbody>
@@ -995,6 +1044,29 @@ export default function BOM() {
         isOpen={isImportDialogOpen}
         onClose={() => setIsImportDialogOpen(false)}
       />
+      
+      {/* Transaction Dialogs */}
+      {transferItem && (
+        <TransferDialog
+          isOpen={!!transferItem}
+          onClose={() => setTransferItem(null)}
+          item={transferItem}
+        />
+      )}
+      {productionItem && (
+        <ProductionDialog
+          isOpen={!!productionItem}
+          onClose={() => setProductionItem(null)}
+          item={productionItem}
+        />
+      )}
+      {historyItem && (
+        <TransactionHistoryDialog
+          isOpen={!!historyItem}
+          onClose={() => setHistoryItem(null)}
+          item={historyItem}
+        />
+      )}
     </div>
   );
 }

@@ -19,7 +19,11 @@ export interface LLMResponse {
 export interface ReorderRecommendation {
   itemId: string;
   itemName: string;
-  currentStock: number;
+  currentStock: number; // For components; for finished products, this is pivotQty
+  pivotQty?: number; // For finished products only
+  hildaleQty?: number; // For finished products only
+  totalOwned?: number; // For finished products only (pivotQty + hildaleQty)
+  itemType: "component" | "finished_product";
   recommendedOrderQty: number;
   urgency: "critical" | "high" | "medium" | "low";
   reason: string;
@@ -301,6 +305,7 @@ export class LLMService {
             itemId: item.id,
             itemName: item.name,
             currentStock: item.currentStock,
+            itemType: 'component',
             recommendedOrderQty: recommendedQty,
             urgency,
             reason: urgency === 'critical' 
@@ -311,6 +316,46 @@ export class LLMService {
             estimatedStockoutDays: Math.floor(daysUntilStockout),
             suggestedSupplier: designatedSupplier ? 
               (await storage.getSupplier(designatedSupplier.supplierId))?.name : undefined
+          });
+        }
+      } else if (item.type === 'finished_product') {
+        // For finished products, base risk check on pivotQty (ready-to-ship warehouse)
+        const pivotQty = item.pivotQty ?? 0;
+        const hildaleQty = item.hildaleQty ?? 0;
+        const totalOwned = pivotQty + hildaleQty;
+        
+        const daysUntilStockout = item.dailyUsage > 0 
+          ? pivotQty / item.dailyUsage 
+          : 999;
+
+        if (daysUntilStockout < 45) {
+          const urgency = 
+            daysUntilStockout < 14 ? 'critical' :
+            daysUntilStockout < 21 ? 'high' :
+            daysUntilStockout < 45 ? 'medium' : 'low';
+
+          const safetyStockDays = 30;
+          const recommendedQty = Math.max(
+            Math.ceil(item.dailyUsage * safetyStockDays - pivotQty),
+            item.minStock
+          );
+          
+          recommendations.push({
+            itemId: item.id,
+            itemName: item.name,
+            currentStock: pivotQty, // For finished products, currentStock represents pivotQty
+            pivotQty,
+            hildaleQty,
+            totalOwned,
+            itemType: 'finished_product',
+            recommendedOrderQty: recommendedQty,
+            urgency,
+            reason: urgency === 'critical' 
+              ? `Critical: Only ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining - order now. Hildale has ${hildaleQty} units in buffer.`
+              : urgency === 'high'
+              ? `High priority: ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining - order soon. Hildale has ${hildaleQty} units in buffer.`
+              : `Monitor: ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining. Hildale has ${hildaleQty} units in buffer.`,
+            estimatedStockoutDays: Math.floor(daysUntilStockout),
           });
         }
       }
@@ -337,7 +382,9 @@ export class LLMService {
     const fourWeeksLater = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     for (const item of items) {
-      if (item.type !== 'component') continue;
+      // Handle both components and finished products
+      const isFinishedProduct = item.type === 'finished_product';
+      if (item.type !== 'component' && !isFinishedProduct) continue;
 
       const salesHistory = await storage.getSalesHistoryByItemId(item.id);
       const supplierItems = await storage.getSupplierItemsByItemId(item.id);
@@ -366,9 +413,30 @@ export class LLMService {
       const avgLeadTime = designatedSupplier?.leadTimeDays || 14;
       const safetyStockDays = 30;
 
-      const prompt = `You are an inventory management AI assistant. Today is ${currentDate}.
+      // For finished products, use pivotQty as the primary stock measure
+      const pivotQty = isFinishedProduct ? (item.pivotQty ?? 0) : 0;
+      const hildaleQty = isFinishedProduct ? (item.hildaleQty ?? 0) : 0;
+      const totalOwned = isFinishedProduct ? pivotQty + hildaleQty : item.currentStock;
+      const stockForCalculation = isFinishedProduct ? pivotQty : item.currentStock;
 
-**Item Analysis:**
+      const prompt = isFinishedProduct ? 
+        `You are an inventory management AI assistant. Today is ${currentDate}.
+
+**Finished Product Analysis:**
+- Item: ${item.name} (SKU: ${item.sku})
+- Type: Finished Product
+- Pivot Warehouse (Ready-to-Ship): ${pivotQty} units
+- Hildale Warehouse (Buffer Stock): ${hildaleQty} units
+- Total Owned: ${totalOwned} units
+- Daily Usage Rate: ${item.dailyUsage} units/day
+- Minimum Stock Level: ${item.minStock} units
+- Safety Stock Target: ${safetyStockDays} days supply
+
+**Important:** Base risk calculations on Pivot Qty (${pivotQty}) as it represents ready-to-ship inventory. Hildale serves as buffer stock.`
+        :
+        `You are an inventory management AI assistant. Today is ${currentDate}.
+
+**Component Analysis:**
 - Item: ${item.name} (SKU: ${item.sku})
 - Current Stock: ${item.currentStock} units
 - Daily Usage Rate: ${item.dailyUsage} units/day
@@ -464,11 +532,17 @@ Analyze this inventory situation and reason through the following:
         recommendations.push({
           itemId: item.id,
           itemName: item.name,
-          currentStock: item.currentStock,
+          currentStock: stockForCalculation,
+          ...(isFinishedProduct && {
+            pivotQty,
+            hildaleQty,
+            totalOwned,
+          }),
+          itemType: isFinishedProduct ? 'finished_product' : 'component',
           recommendedOrderQty: parsedData.recommendedOrderQty,
           urgency: parsedData.urgency,
           reason: parsedData.reasoning,
-          estimatedStockoutDays: parsedData.daysUntilStockout || Math.floor(item.currentStock / Math.max(item.dailyUsage, 0.01)),
+          estimatedStockoutDays: parsedData.daysUntilStockout || Math.floor(stockForCalculation / Math.max(item.dailyUsage, 0.01)),
           suggestedSupplier: designatedSupplier
             ? (await storage.getSupplier(designatedSupplier.supplierId))?.name
             : undefined
@@ -495,8 +569,14 @@ Analyze this inventory situation and reason through the following:
     item: any,
     avgLeadTime: number
   ): ReorderRecommendation | null {
+    const isFinishedProduct = item.type === 'finished_product';
+    const pivotQty = isFinishedProduct ? (item.pivotQty ?? 0) : 0;
+    const hildaleQty = isFinishedProduct ? (item.hildaleQty ?? 0) : 0;
+    const totalOwned = isFinishedProduct ? pivotQty + hildaleQty : item.currentStock;
+    const stockForCalculation = isFinishedProduct ? pivotQty : item.currentStock;
+    
     const daysUntilStockout = item.dailyUsage > 0 
-      ? item.currentStock / item.dailyUsage 
+      ? stockForCalculation / item.dailyUsage 
       : 999;
 
     if (daysUntilStockout >= 45) return null;
@@ -508,21 +588,33 @@ Analyze this inventory situation and reason through the following:
 
     const safetyStockDays = 30;
     const recommendedQty = Math.max(
-      Math.ceil(item.dailyUsage * safetyStockDays - item.currentStock),
+      Math.ceil(item.dailyUsage * safetyStockDays - stockForCalculation),
       item.minStock
     );
 
     return {
       itemId: item.id,
       itemName: item.name,
-      currentStock: item.currentStock,
+      currentStock: stockForCalculation,
+      ...(isFinishedProduct && {
+        pivotQty,
+        hildaleQty,
+        totalOwned,
+      }),
+      itemType: isFinishedProduct ? 'finished_product' : 'component',
       recommendedOrderQty: recommendedQty,
       urgency,
-      reason: urgency === 'critical' 
-        ? `Critical: Only ${Math.floor(daysUntilStockout)} days of stock remaining - order now`
-        : urgency === 'high'
-        ? `High priority: ${Math.floor(daysUntilStockout)} days of stock remaining - order soon`
-        : `Monitor: ${Math.floor(daysUntilStockout)} days of stock remaining`,
+      reason: isFinishedProduct
+        ? (urgency === 'critical' 
+          ? `Critical: Only ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining - order now. Hildale has ${hildaleQty} units in buffer.`
+          : urgency === 'high'
+          ? `High priority: ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining - order soon. Hildale has ${hildaleQty} units in buffer.`
+          : `Monitor: ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining. Hildale has ${hildaleQty} units in buffer.`)
+        : (urgency === 'critical' 
+          ? `Critical: Only ${Math.floor(daysUntilStockout)} days of stock remaining - order now`
+          : urgency === 'high'
+          ? `High priority: ${Math.floor(daysUntilStockout)} days of stock remaining - order soon`
+          : `Monitor: ${Math.floor(daysUntilStockout)} days of stock remaining`),
       estimatedStockoutDays: Math.floor(daysUntilStockout),
       suggestedSupplier: undefined
     };

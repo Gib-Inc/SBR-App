@@ -311,3 +311,37 @@ export const updateBinSchema = insertBinSchema.partial();
 export const updateSupplierSchema = insertSupplierSchema.partial();
 export const updateSupplierItemSchema = insertSupplierItemSchema.partial();
 export const updateBarcodeSchema = insertBarcodeSchema.partial();
+
+// ============================================================================
+// FINISHED PRODUCT HELPERS
+// ============================================================================
+// For finished products, we use pivotQty and hildaleQty as the source of truth
+// instead of currentStock. These helper functions compute derived values.
+
+export function getAvailableToShip(item: Item): number {
+  if (item.type !== 'finished_product') {
+    throw new Error('getAvailableToShip() can only be called on finished products');
+  }
+  return item.pivotQty ?? 0;
+}
+
+export function getBufferStock(item: Item): number {
+  if (item.type !== 'finished_product') {
+    throw new Error('getBufferStock() can only be called on finished products');
+  }
+  return item.hildaleQty ?? 0;
+}
+
+export function getTotalOwned(item: Item): number {
+  if (item.type !== 'finished_product') {
+    throw new Error('getTotalOwned() can only be called on finished products');
+  }
+  return (item.pivotQty ?? 0) + (item.hildaleQty ?? 0);
+}
+
+// Type for items with computed finished product quantities
+export type ItemWithComputedQuantities = Item & {
+  totalOwned?: number;
+  availableToShip?: number;
+  bufferStock?: number;
+};

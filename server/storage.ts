@@ -45,7 +45,7 @@ export interface IStorage {
 
   // Items
   getAllItems(): Promise<Item[]>;
-  getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>>;
+  getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number; totalOwned?: number }>>;
   getItem(id: string): Promise<Item | undefined>;
   getItemBySku(sku: string): Promise<Item | undefined>;
   createItem(item: InsertItem): Promise<Item>;
@@ -434,7 +434,7 @@ export class MemStorage implements IStorage {
     return minCapacity === Infinity ? 0 : minCapacity;
   }
 
-  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>> {
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number; totalOwned?: number }>> {
     const items = Array.from(this.items.values());
     const itemsWithCounts = items.map((item) => {
       if (item.type === "finished_product") {
@@ -442,10 +442,11 @@ export class MemStorage implements IStorage {
           (bom) => bom.finishedProductId === item.id
         );
         const forecast = this.calculateProductionForecast(item.id);
-        return { ...item, componentsCount: bomEntries.length, forecastQty: forecast };
+        const totalOwned = (item.pivotQty ?? 0) + (item.hildaleQty ?? 0);
+        return { ...item, componentsCount: bomEntries.length, forecastQty: forecast, totalOwned };
       }
       // For components, explicitly return undefined to match PostgresStorage behavior
-      return { ...item, componentsCount: undefined, forecastQty: undefined };
+      return { ...item, componentsCount: undefined, forecastQty: undefined, totalOwned: undefined };
     });
     return itemsWithCounts;
   }
@@ -1036,7 +1037,7 @@ export class PostgresStorage implements IStorage {
     return minCapacity === Infinity ? 0 : minCapacity;
   }
 
-  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number }>> {
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number; totalOwned?: number }>> {
     // Use LEFT JOIN + COUNT to efficiently get BOM counts in a single query
     // Cast COUNT to integer explicitly to ensure consistent numeric type
     const results = await this.db
@@ -1051,15 +1052,17 @@ export class PostgresStorage implements IStorage {
       )
       .groupBy(schema.items.id);
     
-    // Calculate forecast for each finished product
+    // Calculate forecast and totalOwned for each finished product
     const itemsWithForecast = await Promise.all(
       results.map(async (row) => {
         if (row.items.type === "finished_product") {
           const forecast = await this.calculateProductionForecast(row.items.id);
+          const totalOwned = (row.items.pivotQty ?? 0) + (row.items.hildaleQty ?? 0);
           return {
             ...row.items,
             componentsCount: row.componentsCount,
             forecastQty: forecast,
+            totalOwned,
           };
         }
         // For components (non-finished products), return undefined instead of 0
@@ -1067,6 +1070,7 @@ export class PostgresStorage implements IStorage {
           ...row.items,
           componentsCount: undefined,
           forecastQty: undefined,
+          totalOwned: undefined,
         };
       })
     );

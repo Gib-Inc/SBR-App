@@ -155,7 +155,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const finishedProducts = items.filter(item => item.type === "finished_product");
 
       // Calculate metrics
-      const inventoryValue = items.reduce((sum, item) => sum + (item.currentStock * 10), 0); // Mock pricing
+      // For finished products, use totalOwned (pivotQty + hildaleQty)
+      // For components, use currentStock
+      const inventoryValue = items.reduce((sum, item) => {
+        const quantity = item.type === "finished_product" 
+          ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+          : item.currentStock;
+        return sum + (quantity * 10);
+      }, 0); // Mock pricing
       
       // Find item with lowest days of cover
       let minDaysOfCover = Infinity;
@@ -197,12 +204,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Get at-risk items
-      const atRiskItems = components
+      // Get at-risk items (components and finished products)
+      const atRiskComponents = components
         .map(item => ({
           ...item,
           daysOfCover: item.dailyUsage > 0 ? Math.floor(item.currentStock / item.dailyUsage) : 999,
-        }))
+        }));
+
+      // For finished products, base risk check on pivotQty (ready-to-ship warehouse)
+      const atRiskFinishedProducts = finishedProducts
+        .map(item => ({
+          ...item,
+          daysOfCover: item.dailyUsage > 0 ? Math.floor((item.pivotQty ?? 0) / item.dailyUsage) : 999,
+        }));
+
+      const atRiskItems = [...atRiskComponents, ...atRiskFinishedProducts]
         .filter(item => item.daysOfCover < 30)
         .sort((a, b) => a.daysOfCover - b.daysOfCover)
         .slice(0, 5);
@@ -297,6 +313,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateItemSchema.parse(req.body);
+      
+      // Get the existing item to check its type
+      const existingItem = await storage.getItem(req.params.id);
+      if (!existingItem) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+      
+      // Server-side guard: Prevent currentStock updates for finished products
+      // Finished products use only pivotQty and hildaleQty as sources of truth
+      if (existingItem.type === 'finished_product' && 'currentStock' in validated) {
+        delete validated.currentStock;
+      }
+      
       const item = await storage.updateItem(req.params.id, validated);
       if (!item) {
         return res.status(404).json({ error: "Item not found" });
@@ -337,7 +366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Barcode not found" });
       }
       
-      // For item and finished_product barcodes, update the item's currentStock
+      // For item and finished_product barcodes, update inventory
       if (barcode.purpose === "item" || barcode.purpose === "finished_product") {
         if (!barcode.referenceId) {
           return res.status(400).json({ error: "Barcode is not linked to an item" });
@@ -348,10 +377,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ error: "Item not found" });
         }
         
-        // Increase currentStock by 1
-        const updatedItem = await storage.updateItem(barcode.referenceId, {
-          currentStock: item.currentStock + 1,
-        });
+        let updates: any;
+        
+        // For finished products, update pivotQty (ready-to-ship warehouse)
+        // For components, update currentStock
+        if (item.type === 'finished_product') {
+          updates = {
+            pivotQty: (item.pivotQty ?? 0) + 1,
+          };
+        } else {
+          updates = {
+            currentStock: item.currentStock + 1,
+          };
+        }
+        
+        const updatedItem = await storage.updateItem(barcode.referenceId, updates);
         
         return res.json({
           success: true,

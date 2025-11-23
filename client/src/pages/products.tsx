@@ -202,41 +202,69 @@ function ItemTableRow({
         )}
       </td>
 
-      {/* Location Column (only for finished products) */}
+      {/* Hildale Qty Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle">
-          {editingField === "location" ? (
+          {editingField === "hildaleQty" ? (
             <div className="flex items-center gap-2">
-              <Select
-                value={editValue || "none"}
-                onValueChange={(value) => setEditValue(value === "none" ? "" : value)}
-              >
-                <SelectTrigger className="h-8" data-testid={`select-edit-location-${item.id}`}>
-                  <SelectValue placeholder="Select location" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">— No location —</SelectItem>
-                  {WAREHOUSE_LOCATIONS.map((loc) => (
-                    <SelectItem key={loc} value={loc}>
-                      {loc}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-location-${item.id}`}>
+              <Input
+                type="number"
+                min="0"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="h-8 w-24"
+                autoFocus
+                data-testid={`input-edit-hildale-qty-${item.id}`}
+              />
+              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-hildale-qty-${item.id}`}>
                 <Check className="h-4 w-4" />
               </Button>
-              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-location-${item.id}`}>
+              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-hildale-qty-${item.id}`}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
           ) : (
             <div 
-              className="cursor-pointer rounded px-2 py-1 hover-elevate" 
-              onClick={() => startEdit("location", item.location || "")}
-              data-testid={`text-item-location-${item.id}`}
+              className="cursor-pointer rounded px-2 py-1 hover-elevate text-right" 
+              onClick={() => startEdit("hildaleQty", item.hildaleQty ?? 0)}
+              data-testid={`text-item-hildale-qty-${item.id}`}
             >
-              {item.location || <span className="text-muted-foreground">—</span>}
+              {item.hildaleQty ?? 0}
+            </div>
+          )}
+        </td>
+      )}
+
+      {/* Pivot Qty Column (only for finished products) */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle">
+          {editingField === "pivotQty" ? (
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min="0"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className="h-8 w-24"
+                autoFocus
+                data-testid={`input-edit-pivot-qty-${item.id}`}
+              />
+              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-pivot-qty-${item.id}`}>
+                <Check className="h-4 w-4" />
+              </Button>
+              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-pivot-qty-${item.id}`}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            <div 
+              className="cursor-pointer rounded px-2 py-1 hover-elevate text-right" 
+              onClick={() => startEdit("pivotQty", item.pivotQty ?? 0)}
+              data-testid={`text-item-pivot-qty-${item.id}`}
+            >
+              {item.pivotQty ?? 0}
             </div>
           )}
         </td>
@@ -531,7 +559,8 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   const [sku, setSku] = useState("");
   const [currentStock, setCurrentStock] = useState("0");
   const [category, setCategory] = useState("");
-  const [location, setLocation] = useState("");
+  const [hildaleQty, setHildaleQty] = useState("0");
+  const [pivotQty, setPivotQty] = useState("0");
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -549,7 +578,8 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       setSku("");
       setCurrentStock("0");
       setCategory("");
-      setLocation("");
+      setHildaleQty("0");
+      setPivotQty("0");
     },
     onError: (error: Error) => {
       toast({
@@ -562,12 +592,16 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const hildaleQtyNum = Number(hildaleQty) || 0;
+    const pivotQtyNum = Number(pivotQty) || 0;
+    
     createMutation.mutate({
       name,
       sku,
-      currentStock: Number(currentStock),
+      currentStock: isFinished ? (hildaleQtyNum + pivotQtyNum) : Number(currentStock),
       category: isFinished ? null : category,
-      location: isFinished ? (location || null) : null,
+      hildaleQty: isFinished ? hildaleQtyNum : 0,
+      pivotQty: isFinished ? pivotQtyNum : 0,
       type: isFinished ? "finished_product" : "component",
     });
   };
@@ -602,33 +636,43 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
               data-testid="input-create-sku"
             />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="stock">Current Stock</Label>
-            <Input
-              id="stock"
-              type="number"
-              value={currentStock}
-              onChange={(e) => setCurrentStock(e.target.value)}
-              min="0"
-              data-testid="input-create-stock"
-            />
-          </div>
-          {isFinished && (
+          {!isFinished && (
             <div className="space-y-2">
-              <Label htmlFor="location">Location (Warehouse)</Label>
-              <Select value={location || "none"} onValueChange={(value) => setLocation(value === "none" ? "" : value)}>
-                <SelectTrigger id="location" data-testid="select-create-location">
-                  <SelectValue placeholder="Select warehouse location" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">— No location —</SelectItem>
-                  {WAREHOUSE_LOCATIONS.map((loc) => (
-                    <SelectItem key={loc} value={loc}>
-                      {loc}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="stock">Current Stock</Label>
+              <Input
+                id="stock"
+                type="number"
+                value={currentStock}
+                onChange={(e) => setCurrentStock(e.target.value)}
+                min="0"
+                data-testid="input-create-stock"
+              />
+            </div>
+          )}
+          {isFinished && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="hildale-qty">Hildale Qty</Label>
+                <Input
+                  id="hildale-qty"
+                  type="number"
+                  value={hildaleQty}
+                  onChange={(e) => setHildaleQty(e.target.value)}
+                  min="0"
+                  data-testid="input-create-hildale-qty"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pivot-qty">Pivot Qty</Label>
+                <Input
+                  id="pivot-qty"
+                  type="number"
+                  value={pivotQty}
+                  onChange={(e) => setPivotQty(e.target.value)}
+                  min="0"
+                  data-testid="input-create-pivot-qty"
+                />
+              </div>
             </div>
           )}
           {!isFinished && (
@@ -722,8 +766,27 @@ export default function BOM() {
   });
 
   const handleUpdate = (id: string, field: string, value: string | number, onSuccess: () => void, onError: () => void) => {
+    const item = allItems.find((i: any) => i.id === id);
+    if (!item) {
+      onError();
+      return;
+    }
+
+    let updates: any = { [field]: value };
+
+    // When updating hildaleQty or pivotQty, recalculate currentStock
+    if (field === "hildaleQty") {
+      const newHildaleQty = typeof value === 'number' ? value : parseInt(value) || 0;
+      const pivotQty = item.pivotQty ?? 0;
+      updates.currentStock = newHildaleQty + pivotQty;
+    } else if (field === "pivotQty") {
+      const newPivotQty = typeof value === 'number' ? value : parseInt(value) || 0;
+      const hildaleQty = item.hildaleQty ?? 0;
+      updates.currentStock = hildaleQty + newPivotQty;
+    }
+
     updateMutation.mutate(
-      { id, updates: { [field]: value } },
+      { id, updates },
       {
         onSuccess: () => {
           onSuccess();
@@ -810,7 +873,8 @@ export default function BOM() {
                   <th className="p-3 text-left text-sm font-medium">Name</th>
                   <th className="p-3 text-left text-sm font-medium">SKU</th>
                   <th className="p-3 text-right text-sm font-medium">Stock</th>
-                  <th className="p-3 text-left text-sm font-medium">Location</th>
+                  <th className="p-3 text-right text-sm font-medium">Hildale Qty</th>
+                  <th className="p-3 text-right text-sm font-medium">Pivot Qty</th>
                   <th className="p-3 text-center text-sm font-medium">BOM</th>
                   <th className="p-3 text-right text-sm font-medium">Actions</th>
                 </tr>

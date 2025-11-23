@@ -1,0 +1,168 @@
+Now that the barcode schema is cleaned up (barcodeValue, barcodeFormat, barcodeUsage, productKind, barcodeSource), implement the full behavior for:
+– GS1-style generator for finished products
+– Internal generator for raw inventory
+– A strong import system that handles product codes from many sources
+
+1. GS1-style generator for FINISHED products
+
+Implement a backend generator that:
+
+Uses gs1_prefix, item_ref_digits, and next_item_ref from barcode_settings.
+
+Builds an 11-digit base from prefix + itemRef, then computes and appends a 12th check digit (GTIN-12/UPC-style algorithm).
+
+Returns a 12-digit string as barcodeValue.
+
+Increments and saves next_item_ref each time.
+
+Behavior rules:
+
+Auto-generation should only run if gs1_prefix and item_ref_digits are set; otherwise, show a clear UI message telling the user to configure barcode settings first.
+
+When creating a Finished Product:
+
+Option A: Auto-generate → set productKind = "FINISHED", barcodeUsage = "EXTERNAL_GS1", barcodeSource = "GENERATED", keep barcodeFormat as whatever symbology we’re already using (e.g. CODE128).
+
+Option B: Manual/imported entry → accept a user-supplied barcodeValue, set productKind = "FINISHED", barcodeUsage = "EXTERNAL_GS1", barcodeSource = "MANUAL" or "IMPORTED".
+
+Validate:
+
+barcodeValue must be unique across all items.
+
+For auto-generated codes, enforce correct length and check digit.
+
+2. Internal generator for RAW inventory
+
+Implement a separate generator for productKind = "RAW" that:
+
+Uses next_internal_code from barcode_settings.
+
+Produces an obviously internal code like RAW-000001, RAW-000002, etc., stored in barcodeValue.
+
+Increments and saves next_internal_code each time.
+
+RAW items:
+
+Must not depend on gs1_prefix being configured.
+
+Default to auto-generated internal codes, but allow manual override.
+
+Always set barcodeUsage = "INTERNAL_STOCK" and appropriate barcodeSource.
+
+Keep barcodeFormat as the current symbology (e.g. CODE128).
+
+3. Create / edit flows on the Barcodes page
+
+Implement the Create Barcode flow so that:
+
+If the user chooses Finished Product:
+
+They can choose auto-generate vs manual entry.
+
+On save, enforce productKind = "FINISHED" and barcodeUsage = "EXTERNAL_GS1".
+
+If the user chooses Item Inventory:
+
+The internal generator runs by default.
+
+On save, enforce productKind = "RAW" and barcodeUsage = "INTERNAL_STOCK".
+
+Editing rules:
+
+Allow editing name, sku, and descriptive fields.
+
+Do not allow casual editing of productKind, barcodeUsage, or barcodeValue once an item is in use; if you add a “change code” flow, keep it separate and guarded with warnings.
+
+4. High-end product-code import: mapping, profiles, upsert
+
+Implement the import workflow so it’s powerful and flexible:
+
+Support at least CSV and XLSX uploads.
+
+After upload, parse the header row and auto-suggest mappings for common column names to internal fields: name, sku, barcodeValue, productKind, barcodeUsage, barcodeSource, external_system, external_id, etc.
+
+Show a column mapping UI where the user can confirm or change mappings and save them as reusable import_profile records.
+
+Implement upsert strategies:
+
+Let the user choose the match key:
+
+Match by barcodeValue.
+
+Match by sku.
+
+Match by both sku and barcodeValue.
+
+For each row:
+
+If a match is found → treat as update.
+
+If no match → treat as new item.
+
+If ambiguous → mark as conflict and skip.
+
+Add a dry-run/preview step:
+
+Show counts of new, updated, conflicted, and invalid rows.
+
+Allow cancel or confirm before committing.
+
+Implement import_job summaries:
+
+Store counts of inserted/updated/skipped/failed rows.
+
+Provide a downloadable error file listing failed/ignored rows with reasons.
+
+Show this summary in the UI.
+
+5. Intelligent barcode classification during import
+
+During import:
+
+If barcodeUsage is provided, respect it.
+
+If not provided:
+
+If productKind = "FINISHED" and barcodeValue looks like a numeric 12–13 digit code, default barcodeUsage = "EXTERNAL_GS1".
+
+Otherwise default barcodeUsage = "INTERNAL_STOCK".
+
+Imports should only use codes from the file; do not auto-generate new codes during import.
+
+6. Export, labels, and scanning
+
+Wire up the Export option so it outputs CSV/XLSX with: id, name, sku, productKind, barcodeValue, barcodeFormat, barcodeUsage, barcodeSource, external_system, external_id.
+
+Implement the Print Labels page so it:
+
+Renders barcode images from barcodeValue + barcodeFormat, plus name, SKU, and a Usage tag (External vs Internal).
+
+Uses a simple grid layout suitable for printing.
+
+Implement the basic Scan Inventory page so it:
+
+Looks up items by barcodeValue as soon as a code is scanned or typed.
+
+Shows item details and logs recent scans.
+
+7. Validation and safety
+
+Enforce uniqueness of barcodeValue.
+
+Enforce valid combinations:
+
+productKind = "FINISHED" → barcodeUsage must be EXTERNAL_GS1.
+
+productKind = "RAW" → barcodeUsage must be INTERNAL_STOCK.
+
+Ensure all failures (create/edit/import) surface friendly errors, not stack traces.
+
+When you’re done, explain:
+
+How to create FINISHED vs RAW items (auto vs manual codes).
+
+How to run the import flow step-by-step (upload → map → choose match strategy → preview → run).
+
+How to read the import summaries and error files.
+
+How to export items, print labels, and use the Scan page.

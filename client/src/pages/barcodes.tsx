@@ -249,6 +249,113 @@ function BarcodeTableRow({
   );
 }
 
+function BarcodeItemsSection({ 
+  title, 
+  items, 
+  searchQuery,
+  "data-testid-prefix": testIdPrefix 
+}: { 
+  title: string; 
+  items: any[]; 
+  searchQuery: string;
+  "data-testid-prefix": string;
+}) {
+  if (items.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 text-lg font-semibold">{title}</h3>
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+            <BarcodeIcon className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {searchQuery ? `No ${title.toLowerCase()} matching your search` : `No ${title.toLowerCase()} yet`}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <h3 className="mb-4 text-lg font-semibold">{title}</h3>
+        <div className="overflow-hidden rounded-md border">
+          <table className="w-full">
+            <thead className="bg-muted/50">
+              <tr className="border-b">
+                <th className="p-3 text-left text-sm font-medium">Barcode</th>
+                <th className="p-3 text-left text-sm font-medium">Name</th>
+                <th className="p-3 text-left text-sm font-medium">SKU</th>
+                <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
+                <th className="p-3 text-left text-sm font-medium">Product Kind</th>
+                <th className="p-3 text-left text-sm font-medium">Format</th>
+                <th className="p-3 text-left text-sm font-medium">Usage</th>
+                <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
+                <th className="p-3 text-right text-sm font-medium">Stock</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item: any) => (
+                <tr key={item.id} className="border-b hover-elevate" data-testid={`row-${testIdPrefix}-${item.id}`}>
+                  <td className="p-3">
+                    {item.barcodeValue ? (
+                      <div className="flex flex-col items-center gap-1">
+                        <img 
+                          src={`/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}`} 
+                          alt={item.barcodeValue}
+                          className="h-12 w-auto"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">No barcode</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-sm">{item.name}</td>
+                  <td className="p-3 text-sm font-mono">{item.sku}</td>
+                  <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
+                  <td className="p-3">
+                    {item.productKind ? (
+                      <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
+                        {item.productKind}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    <Badge variant="secondary" className="text-xs">
+                      {item.barcodeFormat || "Not Set"}
+                    </Badge>
+                  </td>
+                  <td className="p-3">
+                    {item.barcodeUsage ? (
+                      <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
+                        {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
+                  </td>
+                  <td className="p-3">
+                    <Badge variant="outline" className="text-xs">
+                      {item.barcodeSource || "None"}
+                    </Badge>
+                  </td>
+                  <td className="p-3 text-right text-sm">{item.currentStock}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -274,6 +381,9 @@ export default function Barcodes() {
     (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  // Split filtered items by productKind
+  const finishedItems = filteredItems.filter((item: any) => item.productKind === 'FINISHED');
+  const rawItems = filteredItems.filter((item: any) => item.productKind === 'RAW');
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
@@ -512,82 +622,21 @@ export default function Barcodes() {
         </Card>
       ) : (
         <div className="flex flex-col gap-6">
-          {/* All Items Table */}
-          <Card>
-            <CardContent className="p-6">
-              <div className="overflow-hidden rounded-md border">
-                <table className="w-full">
-                  <thead className="bg-muted/50">
-                    <tr className="border-b">
-                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
-                      <th className="p-3 text-left text-sm font-medium">Name</th>
-                      <th className="p-3 text-left text-sm font-medium">SKU</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
-                      <th className="p-3 text-left text-sm font-medium">Product Kind</th>
-                      <th className="p-3 text-left text-sm font-medium">Format</th>
-                      <th className="p-3 text-left text-sm font-medium">Usage</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
-                      <th className="p-3 text-right text-sm font-medium">Stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredItems.map((item: any) => (
-                      <tr key={item.id} className="border-b hover-elevate">
-                        <td className="p-3">
-                          {item.barcodeValue ? (
-                            <div className="flex flex-col items-center gap-1">
-                              <img 
-                                src={`/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}`} 
-                                alt={item.barcodeValue}
-                                className="h-12 w-auto"
-                                onError={(e) => {
-                                  e.currentTarget.style.display = 'none';
-                                }}
-                              />
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">No barcode</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-sm">{item.name}</td>
-                        <td className="p-3 text-sm font-mono">{item.sku}</td>
-                        <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
-                        <td className="p-3">
-                          {item.productKind ? (
-                            <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
-                              {item.productKind}
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">-</span>
-                          )}
-                        </td>
-                        <td className="p-3">
-                          <Badge variant="secondary" className="text-xs">
-                            {item.barcodeFormat || "Not Set"}
-                          </Badge>
-                        </td>
-                        <td className="p-3">
-                          {item.barcodeUsage ? (
-                            <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
-                              {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">-</span>
-                          )}
-                        </td>
-                        <td className="p-3">
-                          <Badge variant="outline" className="text-xs">
-                            {item.barcodeSource || "None"}
-                          </Badge>
-                        </td>
-                        <td className="p-3 text-right text-sm">{item.currentStock}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Finished Products Section */}
+          <BarcodeItemsSection 
+            title="Finished Products"
+            items={finishedItems}
+            searchQuery={searchQuery}
+            data-testid-prefix="finished"
+          />
+
+          {/* Stock Inventory Section */}
+          <BarcodeItemsSection 
+            title="Stock Inventory"
+            items={rawItems}
+            searchQuery={searchQuery}
+            data-testid-prefix="stock"
+          />
         </div>
       )}
 

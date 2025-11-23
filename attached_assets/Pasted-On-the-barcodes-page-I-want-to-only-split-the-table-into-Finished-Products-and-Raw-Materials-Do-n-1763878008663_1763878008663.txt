@@ -1,0 +1,41 @@
+On the /barcodes page, I want to only split the table into Finished Products and Raw Materials. Do not change the data model or stock fields; just reorganize this view.
+
+Requirements:
+
+Two sections, same columns
+
+Use the existing productKind field.
+
+At the top of the page, add a “Finished Products” section that shows items where productKind = "FINISHED".
+
+Below that, add a “Stock Inventory” (or “Raw Materials”) section that shows items where productKind = "RAW".
+
+Each section should use the same table layout and columns that the Barcodes page has now:
+
+Barcode (image), Name, SKU, Barcode Value, Product Kind, Format, Usage, Barcode Source, Stock (and any other existing columns).
+
+Do not remove or rename any fields/columns; this change is only about splitting the display into two tables based on productKind.
+
+Search and interactions
+
+Keep the existing search bar at the top of the page. It should filter rows in both tables (Finished and Stock Inventory) by name, SKU, or barcode value just like it does now.
+
+Any existing actions (e.g. row actions, Export CSV, Print Labels, Scan Inventory, Create Barcode) must continue to work. If Export/Print/Scan depend on a list of barcodes, make sure they still consider all items, not just one section.
+
+Implementation notes
+
+Do not modify the schema: keep productKind, barcodeUsage, barcodeFormat, stock, etc. exactly as they are.
+
+It’s fine if both sections reuse the same component with different filters; just ensure the UI renders as two clearly labeled tables stacked vertically.
+
+Verification
+
+After the change, confirm that:
+
+All existing barcode rows still appear, but are now separated into Finished Products vs Stock Inventory correctly by productKind.
+
+The columns and values in each row match what we had before the split.
+
+Search, Export CSV, Print Labels, Scan Inventory, and Create Barcode continue to work as expected.
+
+Give me a short summary of which files/components you changed and how the filtering by productKind is implemented.

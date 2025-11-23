@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Key, Zap, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { User, Key, Zap, CheckCircle2, XCircle, AlertCircle, Barcode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -36,6 +36,10 @@ export default function Settings() {
             <Zap className="mr-2 h-4 w-4" />
             LLM Configuration
           </TabsTrigger>
+          <TabsTrigger value="barcode" data-testid="tab-barcode">
+            <Barcode className="mr-2 h-4 w-4" />
+            Barcode Settings
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="space-y-4">
@@ -48,6 +52,10 @@ export default function Settings() {
 
         <TabsContent value="llm" className="space-y-4">
           <LLMSettings />
+        </TabsContent>
+
+        <TabsContent value="barcode" className="space-y-4">
+          <BarcodeSettingsTab />
         </TabsContent>
       </Tabs>
     </div>
@@ -684,6 +692,146 @@ function LLMSettings() {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+function BarcodeSettingsTab() {
+  const { toast } = useToast();
+  const [gs1Prefix, setGs1Prefix] = useState("");
+  const [itemRefDigits, setItemRefDigits] = useState(6);
+
+  // Fetch barcode settings
+  const { data: barcodeSettings } = useQuery<any>({
+    queryKey: ["/api/barcode-settings"],
+  });
+
+  // Update state when data loads
+  useEffect(() => {
+    if (barcodeSettings) {
+      setGs1Prefix(barcodeSettings.gs1Prefix || "");
+      setItemRefDigits(barcodeSettings.itemRefDigits || 6);
+    }
+  }, [barcodeSettings]);
+
+  // Save barcode settings mutation
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", "/api/barcode-settings", {
+        gs1Prefix: gs1Prefix || null,
+        itemRefDigits,
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to save barcode settings");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/barcode-settings"] });
+      toast({
+        title: "Settings saved",
+        description: "Barcode settings updated successfully",
+      });
+    },
+    onError: () => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to save barcode settings",
+      });
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">GS1 Configuration</CardTitle>
+          <CardDescription>
+            Configure your GS1 company prefix and barcode generation settings
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="gs1-prefix">GS1 Company Prefix</Label>
+              <Input
+                id="gs1-prefix"
+                value={gs1Prefix}
+                onChange={(e) => setGs1Prefix(e.target.value)}
+                placeholder="Leave blank until registered"
+                data-testid="input-gs1-prefix"
+              />
+              <p className="text-sm text-muted-foreground">
+                Your registered GS1 company prefix (optional)
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="item-ref-digits">Item Reference Digits</Label>
+              <Input
+                id="item-ref-digits"
+                type="number"
+                value={itemRefDigits}
+                onChange={(e) => setItemRefDigits(parseInt(e.target.value) || 6)}
+                min="4"
+                max="12"
+                data-testid="input-item-ref-digits"
+              />
+              <p className="text-sm text-muted-foreground">
+                Number of digits for item reference codes (4-12)
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button 
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending}
+              data-testid="button-save-barcode-settings"
+            >
+              {saveMutation.isPending ? "Saving..." : "Save Settings"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Barcode Counters</CardTitle>
+          <CardDescription>
+            Current barcode generation counters (read-only)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Next Item Reference</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={barcodeSettings?.nextItemRef || 1}
+                  disabled
+                  data-testid="text-next-item-ref"
+                />
+                <Badge variant="secondary">Read-only</Badge>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Next Internal Code</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={barcodeSettings?.nextInternalCode || 1000}
+                  disabled
+                  data-testid="text-next-internal-code"
+                />
+                <Badge variant="secondary">Read-only</Badge>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

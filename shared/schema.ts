@@ -32,6 +32,13 @@ export const items = pgTable("items", {
   dailyUsage: real("daily_usage").notNull().default(0),
   barcode: text("barcode"),
   location: text("location"), // Warehouse location for finished products
+  // Enhanced barcode and product tracking fields
+  productKind: text("product_kind"), // 'FINISHED' or 'RAW'
+  barcodeValue: text("barcode_value"),
+  barcodeType: text("barcode_type"), // 'GS1_FINISHED' or 'INTERNAL_RAW'
+  barcodeSource: text("barcode_source"), // 'GENERATED', 'IMPORTED', 'MANUAL'
+  externalSystem: text("external_system"), // 'shopify', 'amazon', 'csv_generic', etc.
+  externalId: text("external_id"), // External system's ID/handle/ASIN
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
@@ -234,6 +241,60 @@ export const barcodes = pgTable("barcodes", {
 export const insertBarcodeSchema = createInsertSchema(barcodes).omit({ id: true });
 export type InsertBarcode = z.infer<typeof insertBarcodeSchema>;
 export type Barcode = typeof barcodes.$inferSelect;
+
+// ============================================================================
+// BARCODE SETTINGS (GS1 Configuration)
+// ============================================================================
+
+export const barcodeSettings = pgTable("barcode_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  gs1Prefix: text("gs1_prefix"), // GS1 company prefix (nullable until registered)
+  itemRefDigits: integer("item_ref_digits").notNull().default(6),
+  nextItemRef: integer("next_item_ref").notNull().default(1),
+  nextInternalCode: integer("next_internal_code").notNull().default(1000),
+});
+
+export const insertBarcodeSettingsSchema = createInsertSchema(barcodeSettings).omit({ id: true });
+export const updateBarcodeSettingsSchema = insertBarcodeSettingsSchema.partial();
+export type InsertBarcodeSettings = z.infer<typeof insertBarcodeSettingsSchema>;
+export type BarcodeSettings = typeof barcodeSettings.$inferSelect;
+
+// ============================================================================
+// IMPORT PROFILES (Column Mapping Templates)
+// ============================================================================
+
+export const importProfiles = pgTable("import_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(), // e.g. "Generic CSV", "Shopify CSV", "Amazon Export"
+  description: text("description"),
+  columnMappings: text("column_mappings").notNull(), // JSON string with field mappings
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertImportProfileSchema = createInsertSchema(importProfiles).omit({ id: true, createdAt: true });
+export const updateImportProfileSchema = insertImportProfileSchema.partial();
+export type InsertImportProfile = z.infer<typeof insertImportProfileSchema>;
+export type ImportProfile = typeof importProfiles.$inferSelect;
+
+// ============================================================================
+// IMPORT JOBS (Import History & Status Tracking)
+// ============================================================================
+
+export const importJobs = pgTable("import_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  profileId: varchar("profile_id").references(() => importProfiles.id),
+  fileName: text("file_name").notNull(),
+  status: text("status").notNull().default('pending'), // 'pending', 'processing', 'completed', 'failed'
+  startedAt: timestamp("started_at").default(sql`now()`),
+  finishedAt: timestamp("finished_at"),
+  summary: text("summary"), // JSON with {inserted, updated, ignored, failed}
+  errors: text("errors"), // JSON array of error messages with row numbers
+});
+
+export const insertImportJobSchema = createInsertSchema(importJobs).omit({ id: true, startedAt: true });
+export const updateImportJobSchema = insertImportJobSchema.partial();
+export type InsertImportJob = z.infer<typeof insertImportJobSchema>;
+export type ImportJob = typeof importJobs.$inferSelect;
 
 // ============================================================================
 // UPDATE SCHEMAS (Partial validation for PATCH endpoints)

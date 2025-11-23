@@ -23,6 +23,12 @@ import {
   type InsertSettings,
   type Barcode,
   type InsertBarcode,
+  type BarcodeSettings,
+  type InsertBarcodeSettings,
+  type ImportProfile,
+  type InsertImportProfile,
+  type ImportJob,
+  type InsertImportJob,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -106,6 +112,26 @@ export interface IStorage {
   createBarcode(barcode: InsertBarcode): Promise<Barcode>;
   updateBarcode(id: string, barcode: Partial<InsertBarcode>): Promise<Barcode | undefined>;
   deleteBarcode(id: string): Promise<boolean>;
+
+  // Barcode Settings
+  getBarcodeSettings(): Promise<BarcodeSettings | undefined>;
+  createOrUpdateBarcodeSettings(settings: Partial<InsertBarcodeSettings>): Promise<BarcodeSettings>;
+  incrementItemRef(): Promise<number>;
+  incrementInternalCode(): Promise<number>;
+
+  // Import Profiles
+  getAllImportProfiles(): Promise<ImportProfile[]>;
+  getImportProfile(id: string): Promise<ImportProfile | undefined>;
+  createImportProfile(profile: InsertImportProfile): Promise<ImportProfile>;
+  updateImportProfile(id: string, profile: Partial<InsertImportProfile>): Promise<ImportProfile | undefined>;
+  deleteImportProfile(id: string): Promise<boolean>;
+
+  // Import Jobs
+  getAllImportJobs(): Promise<ImportJob[]>;
+  getImportJob(id: string): Promise<ImportJob | undefined>;
+  createImportJob(job: InsertImportJob): Promise<ImportJob>;
+  updateImportJob(id: string, job: Partial<InsertImportJob>): Promise<ImportJob | undefined>;
+  deleteImportJob(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -121,6 +147,9 @@ export class MemStorage implements IStorage {
   private integrationHealth: Map<string, IntegrationHealth>;
   private settings: Map<string, Settings>;
   private barcodes: Map<string, Barcode>;
+  private barcodeSettings: BarcodeSettings | null;
+  private importProfiles: Map<string, ImportProfile>;
+  private importJobs: Map<string, ImportJob>;
 
   constructor() {
     this.users = new Map();
@@ -135,6 +164,9 @@ export class MemStorage implements IStorage {
     this.integrationHealth = new Map();
     this.settings = new Map();
     this.barcodes = new Map();
+    this.barcodeSettings = null;
+    this.importProfiles = new Map();
+    this.importJobs = new Map();
     this.seedData();
   }
 
@@ -164,6 +196,12 @@ export class MemStorage implements IStorage {
       dailyUsage: 12,
       barcode: "COMP-NUT-001",
       location: null,
+      productKind: "RAW",
+      barcodeValue: "COMP-NUT-001",
+      barcodeType: "INTERNAL_RAW",
+      barcodeSource: "GENERATED",
+      externalSystem: null,
+      externalId: null,
     });
 
     this.items.set(boltId, {
@@ -177,6 +215,12 @@ export class MemStorage implements IStorage {
       dailyUsage: 15,
       barcode: "COMP-BOLT-001",
       location: null,
+      productKind: "RAW",
+      barcodeValue: "COMP-BOLT-001",
+      barcodeType: "INTERNAL_RAW",
+      barcodeSource: "GENERATED",
+      externalSystem: null,
+      externalId: null,
     });
 
     this.items.set(springId, {
@@ -190,6 +234,12 @@ export class MemStorage implements IStorage {
       dailyUsage: 8,
       barcode: "COMP-SPR-001",
       location: null,
+      productKind: "RAW",
+      barcodeValue: "COMP-SPR-001",
+      barcodeType: "INTERNAL_RAW",
+      barcodeSource: "GENERATED",
+      externalSystem: null,
+      externalId: null,
     });
 
     this.items.set(barId, {
@@ -203,6 +253,12 @@ export class MemStorage implements IStorage {
       dailyUsage: 6,
       barcode: "COMP-BAR-001",
       location: null,
+      productKind: "RAW",
+      barcodeValue: "COMP-BAR-001",
+      barcodeType: "INTERNAL_RAW",
+      barcodeSource: "GENERATED",
+      externalSystem: null,
+      externalId: null,
     });
 
     // Demo finished product
@@ -218,6 +274,12 @@ export class MemStorage implements IStorage {
       dailyUsage: 3,
       barcode: "PROD-SBR-001",
       location: "Spanish Fork",
+      productKind: "FINISHED",
+      barcodeValue: "PROD-SBR-001",
+      barcodeType: "GS1_FINISHED",
+      barcodeSource: "GENERATED",
+      externalSystem: null,
+      externalId: null,
     });
 
     // BOM for Sticker Bur Roller
@@ -334,6 +396,12 @@ export class MemStorage implements IStorage {
       dailyUsage: insertItem.dailyUsage ?? 0,
       barcode: insertItem.barcode ?? null,
       location: insertItem.location ?? null,
+      productKind: insertItem.productKind ?? null,
+      barcodeValue: insertItem.barcodeValue ?? null,
+      barcodeType: insertItem.barcodeType ?? null,
+      barcodeSource: insertItem.barcodeSource ?? null,
+      externalSystem: insertItem.externalSystem ?? null,
+      externalId: insertItem.externalId ?? null,
     };
     this.items.set(id, item);
     return item;
@@ -685,6 +753,130 @@ export class MemStorage implements IStorage {
   async deleteBarcode(id: string): Promise<boolean> {
     return this.barcodes.delete(id);
   }
+
+  // Barcode Settings
+  async getBarcodeSettings(): Promise<BarcodeSettings | undefined> {
+    return this.barcodeSettings || undefined;
+  }
+
+  async createOrUpdateBarcodeSettings(settings: Partial<InsertBarcodeSettings>): Promise<BarcodeSettings> {
+    if (!this.barcodeSettings) {
+      this.barcodeSettings = {
+        id: randomUUID(),
+        gs1Prefix: settings.gs1Prefix ?? null,
+        itemRefDigits: settings.itemRefDigits ?? 6,
+        nextItemRef: settings.nextItemRef ?? 1,
+        nextInternalCode: settings.nextInternalCode ?? 1000,
+      };
+    } else {
+      this.barcodeSettings = {
+        ...this.barcodeSettings,
+        ...settings,
+      };
+    }
+    return this.barcodeSettings;
+  }
+
+  async incrementItemRef(): Promise<number> {
+    if (!this.barcodeSettings) {
+      this.barcodeSettings = {
+        id: randomUUID(),
+        gs1Prefix: null,
+        itemRefDigits: 6,
+        nextItemRef: 1,
+        nextInternalCode: 1000,
+      };
+    }
+    const current = this.barcodeSettings.nextItemRef;
+    this.barcodeSettings.nextItemRef = current + 1;
+    return current;
+  }
+
+  async incrementInternalCode(): Promise<number> {
+    if (!this.barcodeSettings) {
+      this.barcodeSettings = {
+        id: randomUUID(),
+        gs1Prefix: null,
+        itemRefDigits: 6,
+        nextItemRef: 1,
+        nextInternalCode: 1000,
+      };
+    }
+    const current = this.barcodeSettings.nextInternalCode;
+    this.barcodeSettings.nextInternalCode = current + 1;
+    return current;
+  }
+
+  // Import Profiles
+  async getAllImportProfiles(): Promise<ImportProfile[]> {
+    return Array.from(this.importProfiles.values());
+  }
+
+  async getImportProfile(id: string): Promise<ImportProfile | undefined> {
+    return this.importProfiles.get(id);
+  }
+
+  async createImportProfile(insertProfile: InsertImportProfile): Promise<ImportProfile> {
+    const id = randomUUID();
+    const profile: ImportProfile = {
+      id,
+      name: insertProfile.name,
+      description: insertProfile.description ?? null,
+      columnMappings: insertProfile.columnMappings,
+      createdAt: new Date(),
+    };
+    this.importProfiles.set(id, profile);
+    return profile;
+  }
+
+  async updateImportProfile(id: string, updateData: Partial<InsertImportProfile>): Promise<ImportProfile | undefined> {
+    const profile = this.importProfiles.get(id);
+    if (!profile) return undefined;
+    const updated = { ...profile, ...updateData };
+    this.importProfiles.set(id, updated);
+    return updated;
+  }
+
+  async deleteImportProfile(id: string): Promise<boolean> {
+    return this.importProfiles.delete(id);
+  }
+
+  // Import Jobs
+  async getAllImportJobs(): Promise<ImportJob[]> {
+    return Array.from(this.importJobs.values());
+  }
+
+  async getImportJob(id: string): Promise<ImportJob | undefined> {
+    return this.importJobs.get(id);
+  }
+
+  async createImportJob(insertJob: InsertImportJob): Promise<ImportJob> {
+    const id = randomUUID();
+    const job: ImportJob = {
+      id,
+      profileId: insertJob.profileId ?? null,
+      fileName: insertJob.fileName,
+      status: insertJob.status ?? 'pending',
+      startedAt: new Date(),
+      finishedAt: insertJob.finishedAt ?? null,
+      summary: insertJob.summary ?? null,
+      errors: insertJob.errors ?? null,
+    };
+    this.importJobs.set(id, job);
+    return job;
+  }
+
+  async updateImportJob(id: string, updateData: Partial<InsertImportJob>): Promise<ImportJob | undefined> {
+    const job = this.importJobs.get(id);
+    if (!job) return undefined;
+    const updated = { ...job, ...updateData };
+    this.importJobs.set(id, updated);
+    return updated;
+  }
+
+  async deleteImportJob(id: string): Promise<boolean> {
+    return this.importJobs.delete(id);
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -981,6 +1173,118 @@ export class PostgresStorage implements IStorage {
 
   async deleteBarcode(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.barcodes).where(eq(schema.barcodes.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Barcode Settings
+  async getBarcodeSettings(): Promise<BarcodeSettings | undefined> {
+    const results = await this.db.select().from(schema.barcodeSettings).limit(1);
+    return results[0];
+  }
+
+  async createOrUpdateBarcodeSettings(settings: Partial<InsertBarcodeSettings>): Promise<BarcodeSettings> {
+    const existing = await this.getBarcodeSettings();
+    if (existing) {
+      const updated = await this.db
+        .update(schema.barcodeSettings)
+        .set(settings)
+        .where(eq(schema.barcodeSettings.id, existing.id))
+        .returning();
+      return updated[0];
+    } else {
+      const created = await this.db.insert(schema.barcodeSettings).values({
+        gs1Prefix: settings.gs1Prefix ?? null,
+        itemRefDigits: settings.itemRefDigits ?? 6,
+        nextItemRef: settings.nextItemRef ?? 1,
+        nextInternalCode: settings.nextInternalCode ?? 1000,
+      }).returning();
+      return created[0];
+    }
+  }
+
+  async incrementItemRef(): Promise<number> {
+    const existing = await this.getBarcodeSettings();
+    if (!existing) {
+      await this.createOrUpdateBarcodeSettings({});
+      return 1;
+    }
+    const current = existing.nextItemRef;
+    await this.db
+      .update(schema.barcodeSettings)
+      .set({ nextItemRef: current + 1 })
+      .where(eq(schema.barcodeSettings.id, existing.id));
+    return current;
+  }
+
+  async incrementInternalCode(): Promise<number> {
+    const existing = await this.getBarcodeSettings();
+    if (!existing) {
+      await this.createOrUpdateBarcodeSettings({});
+      return 1000;
+    }
+    const current = existing.nextInternalCode;
+    await this.db
+      .update(schema.barcodeSettings)
+      .set({ nextInternalCode: current + 1 })
+      .where(eq(schema.barcodeSettings.id, existing.id));
+    return current;
+  }
+
+  // Import Profiles
+  async getAllImportProfiles(): Promise<ImportProfile[]> {
+    return await this.db.select().from(schema.importProfiles);
+  }
+
+  async getImportProfile(id: string): Promise<ImportProfile | undefined> {
+    const results = await this.db.select().from(schema.importProfiles).where(eq(schema.importProfiles.id, id));
+    return results[0];
+  }
+
+  async createImportProfile(profile: InsertImportProfile): Promise<ImportProfile> {
+    const results = await this.db.insert(schema.importProfiles).values(profile).returning();
+    return results[0];
+  }
+
+  async updateImportProfile(id: string, updates: Partial<InsertImportProfile>): Promise<ImportProfile | undefined> {
+    const results = await this.db
+      .update(schema.importProfiles)
+      .set(updates)
+      .where(eq(schema.importProfiles.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteImportProfile(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.importProfiles).where(eq(schema.importProfiles.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Import Jobs
+  async getAllImportJobs(): Promise<ImportJob[]> {
+    return await this.db.select().from(schema.importJobs);
+  }
+
+  async getImportJob(id: string): Promise<ImportJob | undefined> {
+    const results = await this.db.select().from(schema.importJobs).where(eq(schema.importJobs.id, id));
+    return results[0];
+  }
+
+  async createImportJob(job: InsertImportJob): Promise<ImportJob> {
+    const results = await this.db.insert(schema.importJobs).values(job).returning();
+    return results[0];
+  }
+
+  async updateImportJob(id: string, updates: Partial<InsertImportJob>): Promise<ImportJob | undefined> {
+    const results = await this.db
+      .update(schema.importJobs)
+      .set(updates)
+      .where(eq(schema.importJobs.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteImportJob(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.importJobs).where(eq(schema.importJobs.id, id)).returning();
     return results.length > 0;
   }
 }

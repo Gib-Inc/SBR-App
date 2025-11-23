@@ -23,6 +23,11 @@ import {
   updateSupplierSchema,
   updateSupplierItemSchema,
   updateBarcodeSchema,
+  updateBarcodeSettingsSchema,
+  insertImportProfileSchema,
+  updateImportProfileSchema,
+  insertImportJobSchema,
+  updateImportJobSchema,
 } from "@shared/schema";
 
 const SALT_ROUNDS = 10;
@@ -1059,6 +1064,184 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[Vision API] Error:", error);
       res.status(500).json({ error: error.message || "Failed to identify item from image" });
+    }
+  });
+
+  // ============================================================================
+  // BARCODE SETTINGS
+  // ============================================================================
+
+  app.get("/api/barcode-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getBarcodeSettings();
+      res.json(settings || {
+        gs1Prefix: null,
+        itemRefDigits: 6,
+        nextItemRef: 1,
+        nextInternalCode: 1000,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch barcode settings" });
+    }
+  });
+
+  app.patch("/api/barcode-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validated = updateBarcodeSettingsSchema.parse(req.body);
+      const settings = await storage.createOrUpdateBarcodeSettings(validated);
+      res.json(settings);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid barcode settings" });
+    }
+  });
+
+  // ============================================================================
+  // IMPORT PROFILES
+  // ============================================================================
+
+  app.get("/api/import-profiles", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const profiles = await storage.getAllImportProfiles();
+      res.json(profiles);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch import profiles" });
+    }
+  });
+
+  app.get("/api/import-profiles/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const profile = await storage.getImportProfile(req.params.id);
+      if (!profile) {
+        return res.status(404).json({ error: "Import profile not found" });
+      }
+      res.json(profile);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch import profile" });
+    }
+  });
+
+  app.post("/api/import-profiles", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validated = insertImportProfileSchema.parse(req.body);
+      const profile = await storage.createImportProfile(validated);
+      res.status(201).json(profile);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid import profile data" });
+    }
+  });
+
+  app.patch("/api/import-profiles/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validated = updateImportProfileSchema.parse(req.body);
+      const profile = await storage.updateImportProfile(req.params.id, validated);
+      if (!profile) {
+        return res.status(404).json({ error: "Import profile not found" });
+      }
+      res.json(profile);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid import profile data" });
+    }
+  });
+
+  app.delete("/api/import-profiles/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteImportProfile(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Import profile not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete import profile" });
+    }
+  });
+
+  // ============================================================================
+  // IMPORT JOBS
+  // ============================================================================
+
+  app.get("/api/import-jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const jobs = await storage.getAllImportJobs();
+      res.json(jobs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch import jobs" });
+    }
+  });
+
+  app.get("/api/import-jobs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const job = await storage.getImportJob(req.params.id);
+      if (!job) {
+        return res.status(404).json({ error: "Import job not found" });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch import job" });
+    }
+  });
+
+  app.post("/api/import-jobs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validated = insertImportJobSchema.parse(req.body);
+      const job = await storage.createImportJob(validated);
+      res.status(201).json(job);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid import job data" });
+    }
+  });
+
+  app.patch("/api/import-jobs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validated = updateImportJobSchema.parse(req.body);
+      const job = await storage.updateImportJob(req.params.id, validated);
+      if (!job) {
+        return res.status(404).json({ error: "Import job not found" });
+      }
+      res.json(job);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Invalid import job data" });
+    }
+  });
+
+  // ============================================================================
+  // EXPORT & PRINT OPERATIONS
+  // ============================================================================
+
+  app.get("/api/export/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const items = await storage.getAllItems();
+      
+      // Prepare CSV data
+      const csvHeader = "ID,Name,SKU,Product Kind,Barcode Value,Barcode Type,Barcode Source,External System,External ID,Type,Current Stock,Min Stock\n";
+      const csvRows = items.map(item => 
+        `${item.id},${item.name},${item.sku},${item.productKind || ''},${item.barcodeValue || ''},${item.barcodeType || ''},${item.barcodeSource || ''},${item.externalSystem || ''},${item.externalId || ''},${item.type},${item.currentStock},${item.minStock}`
+      ).join('\n');
+      
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename=items-export.csv');
+      res.send(csvHeader + csvRows);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to export items" });
+    }
+  });
+
+  app.get("/api/print/labels", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { ids } = req.query;
+      
+      if (!ids || typeof ids !== 'string') {
+        return res.status(400).json({ error: "Product IDs are required" });
+      }
+      
+      const productIds = ids.split(',');
+      const items = await Promise.all(
+        productIds.map(id => storage.getItem(id))
+      );
+      
+      const validItems = items.filter(item => item !== undefined);
+      res.json({ items: validItems, message: "Ready for printing" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch items for printing" });
     }
   });
 

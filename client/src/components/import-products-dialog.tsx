@@ -43,7 +43,7 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
   const { toast } = useToast();
   const [step, setStep] = useState<ImportStep>("upload");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("default");
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [importResult, setImportResult] = useState<any>(null);
 
@@ -87,15 +87,12 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
     mutationFn: async () => {
       if (!selectedFile) throw new Error("No file selected");
 
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      if (selectedProfileId) {
-        formData.append("profileId", selectedProfileId);
-      }
-
-      // Create import job
+      // Note: Real implementation would send FormData to upload endpoint
+      // For now, we'll simulate the process since backend file upload isn't implemented yet
+      
+      // Create import job to track status
       const jobRes = await apiRequest("POST", "/api/import-jobs", {
-        profileId: selectedProfileId || null,
+        profileId: selectedProfileId === "default" ? null : selectedProfileId,
         fileName: selectedFile.name,
         status: "processing",
       });
@@ -106,8 +103,12 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
 
       const job = await jobRes.json();
 
-      // Simulate import process (in real implementation, backend would handle this)
-      // For now, we'll parse and validate the CSV
+      // TODO: In production, this would:
+      // 1. Upload the file to a processing endpoint
+      // 2. Poll the job status endpoint
+      // 3. Handle real-time progress updates
+      // For now, simulate success with preview data
+      
       return new Promise((resolve) => {
         setTimeout(() => {
           resolve({
@@ -146,7 +147,7 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
   const handleClose = () => {
     setStep("upload");
     setSelectedFile(null);
-    setSelectedProfileId("");
+    setSelectedProfileId("default");
     setPreviewData([]);
     setImportResult(null);
     onClose();
@@ -172,7 +173,7 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
                   <SelectValue placeholder="Select a profile or use default mapping" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Default Mapping</SelectItem>
+                  <SelectItem value="default">Default Mapping</SelectItem>
                   {profiles?.map((profile) => (
                     <SelectItem key={profile.id} value={profile.id}>
                       {profile.name}

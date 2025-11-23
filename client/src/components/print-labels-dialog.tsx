@@ -57,7 +57,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
   const allItems = (items ?? []).filter(
     (item) =>
       item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.sku.toLowerCase().includes(searchQuery.toLowerCase())
+      (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   // Toggle item selection

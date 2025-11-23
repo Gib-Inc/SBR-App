@@ -53,8 +53,8 @@ function ItemTableRow({
   const saveEdit = () => {
     if (!editingField) return;
 
-    // Validate input
-    if (editingField === "currentStock") {
+    // Validate input - numeric fields: currentStock, hildaleQty, pivotQty
+    if (editingField === "currentStock" || editingField === "hildaleQty" || editingField === "pivotQty") {
       const numValue = Number(editValue);
       if (isNaN(numValue) || numValue < 0) {
         return; // Keep edit mode open for invalid input
@@ -754,6 +754,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
                   min="0"
                   data-testid="input-create-hildale-qty"
                 />
+                <p className="text-xs text-muted-foreground">Initial stock at manufacturing site</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="pivot-qty">Pivot Qty</Label>
@@ -765,6 +766,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
                   min="0"
                   data-testid="input-create-pivot-qty"
                 />
+                <p className="text-xs text-muted-foreground">Initial stock at warehouse</p>
               </div>
             </div>
           )}

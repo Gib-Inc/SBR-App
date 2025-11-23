@@ -323,13 +323,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validated = insertItemSchema.parse(req.body);
       
+      // Extract initial quantities for finished products
+      const initialHildaleQty = validated.hildaleQty || 0;
+      const initialPivotQty = validated.pivotQty || 0;
+      
       // Server-side guard: Prevent currentStock for finished products during creation
       // Finished products use only pivotQty and hildaleQty as sources of truth
       if (validated.type === 'finished_product' && 'currentStock' in validated) {
         delete validated.currentStock;
       }
       
+      // For finished products, always create with zero quantities
+      // Then use transactions to set initial stock (creates audit trail)
+      if (validated.type === 'finished_product') {
+        validated.hildaleQty = 0;
+        validated.pivotQty = 0;
+      }
+      
+      // Create the item
       const item = await storage.createItem(validated);
+      
+      // For finished products with initial stock, create RECEIVE transactions
+      if (validated.type === 'finished_product') {
+        const userId = req.session.userId || "system";
+        
+        if (initialHildaleQty > 0) {
+          await transactionService.applyTransaction({
+            itemId: item.id,
+            itemType: "FINISHED",
+            type: "RECEIVE",
+            location: "HILDALE",
+            quantity: initialHildaleQty,
+            notes: "Initial stock at creation",
+            createdBy: userId,
+          });
+        }
+        
+        if (initialPivotQty > 0) {
+          await transactionService.applyTransaction({
+            itemId: item.id,
+            itemType: "FINISHED",
+            type: "RECEIVE",
+            location: "PIVOT",
+            quantity: initialPivotQty,
+            notes: "Initial stock at creation",
+            createdBy: userId,
+          });
+        }
+        
+        // Fetch updated item to return with correct quantities
+        const updatedItem = await storage.getItem(item.id);
+        return res.status(201).json(updatedItem);
+      }
+      
       res.status(201).json(item);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid item data" });
@@ -352,6 +398,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
         delete validated.currentStock;
       }
       
+      // For finished products: Route hildaleQty/pivotQty changes through transaction system
+      if (existingItem.type === 'finished_product') {
+        const userId = req.session.userId || "system";
+        let shouldRefetch = false;
+        
+        // Handle hildaleQty changes via ADJUST transaction
+        if ('hildaleQty' in validated) {
+          const newQty = Number(validated.hildaleQty);
+          const oldQty = existingItem.hildaleQty ?? 0;
+          const delta = newQty - oldQty;
+          
+          if (delta !== 0) {
+            const result = await transactionService.applyTransaction({
+              itemId: req.params.id,
+              itemType: "FINISHED",
+              type: "ADJUST",
+              location: "HILDALE",
+              quantity: delta,
+              notes: `Manual adjustment via inline edit`,
+              createdBy: userId,
+            });
+            
+            if (!result.success) {
+              return res.status(400).json({ error: result.error || "Failed to adjust Hildale quantity" });
+            }
+            shouldRefetch = true;
+          }
+          // Remove from updates - transaction service handles the change
+          delete validated.hildaleQty;
+        }
+        
+        // Handle pivotQty changes via ADJUST transaction
+        if ('pivotQty' in validated) {
+          const newQty = Number(validated.pivotQty);
+          const oldQty = existingItem.pivotQty ?? 0;
+          const delta = newQty - oldQty;
+          
+          if (delta !== 0) {
+            const result = await transactionService.applyTransaction({
+              itemId: req.params.id,
+              itemType: "FINISHED",
+              type: "ADJUST",
+              location: "PIVOT",
+              quantity: delta,
+              notes: `Manual adjustment via inline edit`,
+              createdBy: userId,
+            });
+            
+            if (!result.success) {
+              return res.status(400).json({ error: result.error || "Failed to adjust Pivot quantity" });
+            }
+            shouldRefetch = true;
+          }
+          // Remove from updates - transaction service handles the change
+          delete validated.pivotQty;
+        }
+        
+        // If quantities were adjusted via transactions, refetch the item
+        if (shouldRefetch) {
+          // Apply any remaining updates (non-quantity fields)
+          if (Object.keys(validated).length > 0) {
+            await storage.updateItem(req.params.id, validated);
+          }
+          const updatedItem = await storage.getItem(req.params.id);
+          return res.json(updatedItem);
+        }
+      }
+      
+      // For non-finished products or updates without quantity changes
       const item = await storage.updateItem(req.params.id, validated);
       if (!item) {
         return res.status(404).json({ error: "Item not found" });

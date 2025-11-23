@@ -349,6 +349,15 @@ export class MemStorage implements IStorage {
       lastAlertAt: null,
       errorMessage: null,
     });
+
+    // Barcode Settings
+    this.barcodeSettings = {
+      id: randomUUID(),
+      gs1Prefix: null, // To be configured by user
+      itemRefDigits: 6,
+      nextItemRef: 1,
+      nextInternalCode: 1000,
+    };
   }
 
   // Users

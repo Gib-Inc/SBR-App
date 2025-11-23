@@ -622,6 +622,49 @@ export default function Barcodes() {
     },
   });
 
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('columnMapping', JSON.stringify({
+      name: 'name',
+      sku: 'sku',
+      barcodeValue: 'barcodeValue',
+      productKind: 'productKind',
+      currentStock: 'currentStock',
+    }));
+    formData.append('matchStrategy', 'sku');
+
+    try {
+      const response = await fetch("/api/import/execute", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Import failed");
+      }
+
+      const result = await response.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      
+      toast({
+        title: "Import Complete",
+        description: `Inserted: ${result.inserted}, Updated: ${result.updated}, Skipped: ${result.skipped}`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Import Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+
+    e.target.value = '';
+  };
+
   const handleExport = async () => {
     try {
       const response = await fetch("/api/export/items");
@@ -749,6 +792,21 @@ export default function Barcodes() {
           <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button 
+            variant="outline" 
+            onClick={() => document.getElementById('import-file-input')?.click()}
+            data-testid="button-import-items"
+          >
+            <Download className="mr-2 h-4 w-4 rotate-180" />
+            Import CSV
+          </Button>
+          <input
+            id="import-file-input"
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={handleImportFile}
+          />
           <Button 
             variant="outline" 
             onClick={handleExport}
@@ -1024,180 +1082,184 @@ export default function Barcodes() {
 
 function BarcodeForm({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
-  const { data: items } = useQuery({
-    queryKey: ["/api/items"],
-  });
+  const [productKind, setProductKind] = useState<"FINISHED" | "RAW">("RAW");
+  const [name, setName] = useState("");
+  const [sku, setSku] = useState("");
+  const [barcodeValue, setBarcodeValue] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
 
-  const { data: bins } = useQuery({
-    queryKey: ["/api/bins"],
-  });
-
-  const { data: barcodes } = useQuery({
-    queryKey: ["/api/barcodes"],
-  });
-
-  const form = useForm<z.infer<typeof barcodeFormSchema>>({
-    resolver: zodResolver(barcodeFormSchema),
-    defaultValues: {
-      name: "",
-      value: "",
-      purpose: "bin",
-      sku: "",
-      referenceId: undefined,
+  const autoGenerateMutation = useMutation({
+    mutationFn: async () => {
+      const endpoint = productKind === "FINISHED" 
+        ? "/api/barcodes/generate-gs1" 
+        : "/api/barcodes/generate-internal";
+      const res = await apiRequest("POST", endpoint, {});
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to generate barcode");
+      }
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      setBarcodeValue(data.barcodeValue);
+      toast({
+        title: "Barcode Generated",
+        description: `Generated: ${data.barcodeValue}`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Generation Failed",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
-  const purpose = useWatch({ control: form.control, name: "purpose" });
-
-  // Generate preview of auto-generated barcode value
-  const getPlaceholder = () => {
-    if (!barcodes) return "e.g., BIN-001";
-    const samePurposeBarcodes = (barcodes as any[]).filter(b => b.purpose === purpose);
-    const counter = samePurposeBarcodes.length + 1;
-    const paddedCounter = counter.toString().padStart(3, '0');
-    
-    switch (purpose) {
-      case 'bin':
-        return `Will auto-generate: BIN-${paddedCounter}`;
-      case 'item':
-        return `Will auto-generate: ITEM-${paddedCounter}`;
-      case 'finished_product':
-        return `Will auto-generate: PROD-${paddedCounter}`;
-      default:
-        return "e.g., BAR-001";
-    }
-  };
-
-  const createBarcodeMutation = useMutation({
-    mutationFn: async (data: z.infer<typeof barcodeFormSchema>) => {
-      const res = await apiRequest("POST", "/api/barcodes", data);
+  const createItemMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/items", {
+        name,
+        sku: sku || `${productKind}-${Date.now()}`,
+        type: productKind === "FINISHED" ? "finished_product" : "component",
+        productKind,
+        barcodeValue,
+        barcodeFormat: "CODE128",
+        barcodeUsage: productKind === "FINISHED" ? "EXTERNAL_GS1" : "INTERNAL_STOCK",
+        barcodeSource: barcodeValue ? "MANUAL" : "AUTO_GENERATED",
+        currentStock: 0,
+        minStock: 0,
+        dailyUsage: 0,
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create item");
+      }
       return await res.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
       toast({
         title: "Success",
-        description: "Barcode created successfully",
+        description: "Item with barcode created successfully",
       });
       onClose();
     },
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to create barcode",
+        description: error.message,
         variant: "destructive",
       });
     },
   });
 
-  const onSubmit = (data: z.infer<typeof barcodeFormSchema>) => {
-    createBarcodeMutation.mutate(data);
+  const handleAutoGenerate = () => {
+    autoGenerateMutation.mutate();
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name || !sku) {
+      toast({
+        title: "Validation Error",
+        description: "Name and SKU are required",
+        variant: "destructive",
+      });
+      return;
+    }
+    createItemMutation.mutate();
   };
 
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-        <FormField
-          control={form.control}
-          name="name"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Name</FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="e.g., Bin A-1 Barcode"
-                  data-testid="input-barcode-name"
-                  {...field}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-2">
+        <Label htmlFor="product-kind">Product Type</Label>
+        <Select value={productKind} onValueChange={(v: any) => setProductKind(v)}>
+          <SelectTrigger id="product-kind" data-testid="select-product-kind">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="FINISHED">Finished Product (GS1/GTIN-12)</SelectItem>
+            <SelectItem value="RAW">Raw Inventory (Internal Code)</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          {productKind === "FINISHED" 
+            ? "External GS1 barcode for finished products" 
+            : "Internal stock code for raw materials"}
+        </p>
+      </div>
 
-        <FormField
-          control={form.control}
-          name="value"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Barcode Value (Optional)</FormLabel>
-              <FormControl>
-                <Input
-                  placeholder={getPlaceholder()}
-                  className="font-mono"
-                  data-testid="input-barcode-value"
-                  {...field}
-                />
-              </FormControl>
-              <FormDescription>
-                Leave blank to auto-generate or customize as needed
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
+      <div className="space-y-2">
+        <Label htmlFor="name">Name *</Label>
+        <Input
+          id="name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g., Sticker Bur Roller"
+          data-testid="input-item-name"
         />
+      </div>
 
-        <FormField
-          control={form.control}
-          name="purpose"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Type</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger data-testid="select-barcode-type">
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="bin">Bin Location</SelectItem>
-                  <SelectItem value="finished_product">Finished Product</SelectItem>
-                  <SelectItem value="item">Item Inventory</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
-          )}
+      <div className="space-y-2">
+        <Label htmlFor="sku">SKU *</Label>
+        <Input
+          id="sku"
+          value={sku}
+          onChange={(e) => setSku(e.target.value)}
+          placeholder="e.g., SBR-001"
+          data-testid="input-item-sku"
         />
+      </div>
 
-        <FormField
-          control={form.control}
-          name="sku"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>SKU (Optional)</FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="e.g., BIN-A1"
-                  className="font-mono"
-                  data-testid="input-barcode-sku"
-                  {...field}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
-        <div className="flex justify-end gap-2 pt-4">
+      <div className="space-y-2">
+        <Label htmlFor="barcode-value">Barcode Value</Label>
+        <div className="flex gap-2">
+          <Input
+            id="barcode-value"
+            value={barcodeValue}
+            onChange={(e) => setBarcodeValue(e.target.value)}
+            placeholder={productKind === "FINISHED" ? "Leave blank or auto-generate GS1" : "Leave blank or auto-generate RAW code"}
+            className="font-mono"
+            data-testid="input-barcode-value"
+          />
           <Button
             type="button"
-            variant="outline"
-            onClick={onClose}
-            data-testid="button-cancel"
+            variant="secondary"
+            onClick={handleAutoGenerate}
+            disabled={autoGenerateMutation.isPending}
+            data-testid="button-auto-generate"
           >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            disabled={createBarcodeMutation.isPending}
-            data-testid="button-save-barcode"
-          >
-            {createBarcodeMutation.isPending ? "Creating..." : "Create Barcode"}
+            {autoGenerateMutation.isPending ? "Generating..." : "Auto-Generate"}
           </Button>
         </div>
-      </form>
-    </Form>
+        <p className="text-xs text-muted-foreground">
+          {productKind === "FINISHED" 
+            ? "12-digit GTIN with check digit (requires GS1 prefix configured)" 
+            : "Format: RAW-000001, RAW-000002, etc."}
+        </p>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-4">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onClose}
+          data-testid="button-cancel"
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          disabled={createItemMutation.isPending}
+          data-testid="button-save-item"
+        >
+          {createItemMutation.isPending ? "Creating..." : "Create Item"}
+        </Button>
+      </div>
+    </form>
   );
 }
 

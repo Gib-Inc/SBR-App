@@ -135,7 +135,9 @@ export class ImportService {
       item.barcodeSource = "IMPORTED";
     }
 
-    if (!item.type) {
+    // Infer type from productKind if available, but don't default to 'component'
+    // This forces explicit classification for safety
+    if (!item.type && item.productKind) {
       item.type = item.productKind === "FINISHED" ? "finished_product" : "component";
     }
 
@@ -146,7 +148,7 @@ export class ImportService {
     return item;
   }
 
-  validateItem(item: Partial<InsertItem>, rowNumber?: number): { valid: boolean; error?: string; warnings?: string[] } {
+  validateItem(item: Partial<InsertItem>, isUpdate: boolean = false): { valid: boolean; error?: string; warnings?: string[] } {
     const warnings: string[] = [];
 
     // Required fields
@@ -156,6 +158,15 @@ export class ImportService {
 
     if (!item.sku || String(item.sku).trim().length === 0) {
       return { valid: false, error: "Missing required field: sku" };
+    }
+
+    // Type classification is required for new items (creates)
+    // Updates can rely on existing item type
+    if (!isUpdate && !item.type && !item.productKind) {
+      return {
+        valid: false,
+        error: "Missing required field: type or productKind. Items must be classified as component or finished_product",
+      };
     }
 
     // Product kind validation
@@ -259,7 +270,12 @@ export class ImportService {
     for (let i = 0; i < Math.min(rows.length, 100); i++) {
       const row = rows[i];
       const item = this.mapRowToItem(row, columnMapping);
-      const validation = this.validateItem(item);
+      
+      // Determine if this will be an update or create
+      const match = await this.findMatchingItem(item, matchStrategy);
+      const isUpdate = match.matched && !match.ambiguous;
+      
+      const validation = this.validateItem(item, isUpdate);
 
       if (!validation.valid) {
         result.invalid++;
@@ -271,8 +287,6 @@ export class ImportService {
         });
         continue;
       }
-
-      const match = await this.findMatchingItem(item, matchStrategy);
 
       if (match.ambiguous) {
         result.conflicts++;
@@ -306,14 +320,17 @@ export class ImportService {
     for (let i = 100; i < rows.length; i++) {
       const row = rows[i];
       const item = this.mapRowToItem(row, columnMapping);
-      const validation = this.validateItem(item);
+      
+      // Determine if this will be an update or create
+      const match = await this.findMatchingItem(item, matchStrategy);
+      const isUpdate = match.matched && !match.ambiguous;
+      
+      const validation = this.validateItem(item, isUpdate);
 
       if (!validation.valid) {
         result.invalid++;
         continue;
       }
-
-      const match = await this.findMatchingItem(item, matchStrategy);
 
       if (match.ambiguous) {
         result.conflicts++;
@@ -345,7 +362,13 @@ export class ImportService {
       const row = rows[i];
       try {
         const item = this.mapRowToItem(row, columnMapping);
-        const validation = this.validateItem(item);
+        
+        // Determine if this will be an update or create
+        const match = await this.findMatchingItem(item, matchStrategy);
+        const isUpdate = match.matched && !match.ambiguous;
+        
+        // Validate with proper context (isUpdate determines required fields)
+        const validation = this.validateItem(item, isUpdate);
 
         if (!validation.valid) {
           result.skipped++;
@@ -357,8 +380,6 @@ export class ImportService {
           continue;
         }
 
-        const match = await this.findMatchingItem(item, matchStrategy);
-
         if (match.ambiguous) {
           result.skipped++;
           result.errors.push({
@@ -369,6 +390,17 @@ export class ImportService {
           continue;
         }
 
+        // Server-side guard: Prevent currentStock for finished products
+        // Finished products use only pivotQty and hildaleQty as sources of truth
+        // For updates: check the matched item's type; for creates: check inferred type from productKind
+        const isFinishedProduct = match.matched 
+          ? match.matchedItem?.type === 'finished_product'
+          : (item.productKind === 'FINISHED' || item.type === 'finished_product');
+        
+        if (isFinishedProduct && 'currentStock' in item) {
+          delete item.currentStock;
+        }
+        
         if (match.matched && match.matchedItem) {
           await this.storage.updateItem(match.matchedItem.id, item);
           result.updated++;

@@ -461,20 +461,54 @@ export class MemStorage implements IStorage {
 
   async createItem(insertItem: InsertItem): Promise<Item> {
     const id = randomUUID();
+    
+    // Storage-level guard: Force currentStock to 0 for finished products
+    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
+    
+    // Normalize type/productKind to keep them in sync during creation
+    let normalizedType = insertItem.type;
+    let normalizedProductKind = insertItem.productKind ?? null;
+    
+    // Step 1: Fill in missing partner field
+    if (insertItem.type === 'finished_product' && !insertItem.productKind) {
+      normalizedProductKind = 'FINISHED';
+    } else if (insertItem.type === 'component' && !insertItem.productKind) {
+      normalizedProductKind = 'RAW';
+    } else if (insertItem.productKind === 'FINISHED' && !insertItem.type) {
+      normalizedType = 'finished_product';
+    } else if (insertItem.productKind === 'RAW' && !insertItem.type) {
+      normalizedType = 'component';
+    }
+    
+    // Step 2: Fix mismatches by ALWAYS favoring finished_product classification
+    // This ensures NO bypass: any signal of finished product → enforce finished product rules
+    if (normalizedType === 'finished_product' || normalizedProductKind === 'FINISHED') {
+      // ALWAYS favor finished_product: force both fields to finished state
+      normalizedType = 'finished_product';
+      normalizedProductKind = 'FINISHED';
+    } else if (normalizedType === 'component' || normalizedProductKind === 'RAW') {
+      // Both indicate component: normalize to component/RAW
+      normalizedType = 'component';
+      normalizedProductKind = 'RAW';
+    }
+    
+    const isFinishedProduct = normalizedType === 'finished_product' || normalizedProductKind === 'FINISHED';
+    const currentStock = isFinishedProduct ? 0 : (insertItem.currentStock ?? 0);
+    
     const item: Item = {
       id,
       name: insertItem.name,
       sku: insertItem.sku,
-      type: insertItem.type,
+      type: normalizedType,
       unit: insertItem.unit || 'units',
-      currentStock: insertItem.currentStock ?? 0,
+      currentStock,
       minStock: insertItem.minStock ?? 0,
       dailyUsage: insertItem.dailyUsage ?? 0,
       barcode: insertItem.barcode ?? null,
       location: insertItem.location ?? null,
       hildaleQty: insertItem.hildaleQty ?? 0,
       pivotQty: insertItem.pivotQty ?? 0,
-      productKind: insertItem.productKind ?? null,
+      productKind: normalizedProductKind,
       barcodeValue: insertItem.barcodeValue ?? null,
       barcodeFormat: insertItem.barcodeFormat ?? null,
       barcodeUsage: insertItem.barcodeUsage ?? null,
@@ -489,9 +523,49 @@ export class MemStorage implements IStorage {
   async updateItem(id: string, updateData: Partial<InsertItem>): Promise<Item | undefined> {
     const item = this.items.get(id);
     if (!item) return undefined;
-    const updated = { ...item, ...updateData };
-    this.items.set(id, updated);
-    return updated;
+    
+    // Storage-level guard: Force currentStock to 0 for finished products
+    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
+    
+    // Normalize type/productKind in update data to keep them in sync
+    let normalizedUpdateData = { ...updateData };
+    if (updateData.type === 'finished_product' && !updateData.productKind) {
+      normalizedUpdateData.productKind = 'FINISHED';
+    } else if (updateData.type === 'component' && !updateData.productKind) {
+      normalizedUpdateData.productKind = 'RAW';
+    } else if (updateData.productKind === 'FINISHED' && !updateData.type) {
+      normalizedUpdateData.type = 'finished_product';
+    } else if (updateData.productKind === 'RAW' && !updateData.type) {
+      normalizedUpdateData.type = 'component';
+    }
+    
+    // Merge to get preliminary final state
+    let mergedItem = { ...item, ...normalizedUpdateData };
+    
+    // Normalize FINAL merged state by ALWAYS favoring finished_product classification
+    // This fixes pre-existing inconsistencies and ensures NO bypass
+    if (mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED') {
+      // ALWAYS favor finished_product: force both fields to finished state
+      mergedItem.type = 'finished_product';
+      mergedItem.productKind = 'FINISHED';
+    } else if (mergedItem.type === 'component' || mergedItem.productKind === 'RAW') {
+      // Both indicate component: normalize to component/RAW
+      mergedItem.type = 'component';
+      mergedItem.productKind = 'RAW';
+    }
+    
+    // Determine if final state is finished product
+    const willBeFinished = mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED';
+    
+    if (willBeFinished) {
+      // Force currentStock to 0 and ensure type/productKind are fully synced
+      mergedItem.currentStock = 0;
+      mergedItem.type = 'finished_product';
+      mergedItem.productKind = 'FINISHED';
+    }
+    
+    this.items.set(id, mergedItem);
+    return mergedItem;
   }
 
   async deleteItem(id: string): Promise<boolean> {
@@ -1089,12 +1163,99 @@ export class PostgresStorage implements IStorage {
   }
 
   async createItem(insertItem: InsertItem): Promise<Item> {
-    const results = await this.db.insert(schema.items).values(insertItem).returning();
+    // Storage-level guard: Force currentStock to 0 for finished products
+    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
+    
+    // Normalize type/productKind to keep them in sync during creation
+    let normalizedInsert = { ...insertItem };
+    
+    // Step 1: Fill in missing partner field
+    if (insertItem.type === 'finished_product' && !insertItem.productKind) {
+      normalizedInsert.productKind = 'FINISHED';
+    } else if (insertItem.type === 'component' && !insertItem.productKind) {
+      normalizedInsert.productKind = 'RAW';
+    } else if (insertItem.productKind === 'FINISHED' && !insertItem.type) {
+      normalizedInsert.type = 'finished_product';
+    } else if (insertItem.productKind === 'RAW' && !insertItem.type) {
+      normalizedInsert.type = 'component';
+    }
+    
+    // Step 2: Fix mismatches by ALWAYS favoring finished_product classification
+    // This ensures NO bypass: any signal of finished product → enforce finished product rules
+    if (normalizedInsert.type === 'finished_product' || normalizedInsert.productKind === 'FINISHED') {
+      // ALWAYS favor finished_product: force both fields to finished state
+      normalizedInsert.type = 'finished_product';
+      normalizedInsert.productKind = 'FINISHED';
+    } else if (normalizedInsert.type === 'component' || normalizedInsert.productKind === 'RAW') {
+      // Both indicate component: normalize to component/RAW
+      normalizedInsert.type = 'component';
+      normalizedInsert.productKind = 'RAW';
+    }
+    
+    const isFinishedProduct = normalizedInsert.type === 'finished_product' || normalizedInsert.productKind === 'FINISHED';
+    if (isFinishedProduct) {
+      normalizedInsert.currentStock = 0;
+      normalizedInsert.type = 'finished_product';
+      normalizedInsert.productKind = 'FINISHED';
+    }
+    
+    const results = await this.db.insert(schema.items).values(normalizedInsert).returning();
     return results[0];
   }
 
   async updateItem(id: string, updateData: Partial<InsertItem>): Promise<Item | undefined> {
-    const results = await this.db.update(schema.items).set(updateData).where(eq(schema.items.id, id)).returning();
+    // Storage-level guard: Force currentStock to 0 for finished products
+    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
+    // Get the existing item to check its type
+    const existingItem = await this.getItem(id);
+    if (!existingItem) return undefined;
+    
+    // Normalize type/productKind in update data to keep them in sync
+    let normalizedUpdateData = { ...updateData };
+    if (updateData.type === 'finished_product' && !updateData.productKind) {
+      normalizedUpdateData.productKind = 'FINISHED';
+    } else if (updateData.type === 'component' && !updateData.productKind) {
+      normalizedUpdateData.productKind = 'RAW';
+    } else if (updateData.productKind === 'FINISHED' && !updateData.type) {
+      normalizedUpdateData.type = 'finished_product';
+    } else if (updateData.productKind === 'RAW' && !updateData.type) {
+      normalizedUpdateData.type = 'component';
+    }
+    
+    // Merge to get preliminary final state
+    let mergedItem = { ...existingItem, ...normalizedUpdateData };
+    
+    // Normalize FINAL merged state by ALWAYS favoring finished_product classification
+    // This fixes pre-existing inconsistencies and ensures NO bypass
+    if (mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED') {
+      // ALWAYS favor finished_product: force both fields to finished state
+      mergedItem.type = 'finished_product';
+      mergedItem.productKind = 'FINISHED';
+    } else if (mergedItem.type === 'component' || mergedItem.productKind === 'RAW') {
+      // Both indicate component: normalize to component/RAW
+      mergedItem.type = 'component';
+      mergedItem.productKind = 'RAW';
+    }
+    
+    // Determine if final state is finished product
+    const willBeFinished = mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED';
+    
+    if (willBeFinished) {
+      // Force currentStock to 0 and ensure type/productKind are fully synced
+      mergedItem.currentStock = 0;
+      mergedItem.type = 'finished_product';
+      mergedItem.productKind = 'FINISHED';
+    }
+    
+    // Prepare final update data with all normalized fields
+    const finalUpdateData = {
+      ...normalizedUpdateData,
+      type: mergedItem.type,
+      productKind: mergedItem.productKind,
+      currentStock: mergedItem.currentStock,
+    };
+    
+    const results = await this.db.update(schema.items).set(finalUpdateData).where(eq(schema.items.id, id)).returning();
     return results[0];
   }
 

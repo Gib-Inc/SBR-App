@@ -282,7 +282,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/items", requireAuth, async (req: Request, res: Response) => {
     try {
       const items = await storage.getItemsWithBOMCounts();
-      res.json(items);
+      
+      // Clean API response: null out currentStock for finished products
+      // Finished products use pivotQty, hildaleQty, and computed totalOwned
+      const cleanedItems = items.map((item: any) => {
+        if (item.type === 'finished_product') {
+          const { currentStock, ...rest } = item;
+          return { ...rest, currentStock: null };
+        }
+        return item;
+      });
+      
+      res.json(cleanedItems);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch items" });
     }
@@ -294,7 +305,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!item) {
         return res.status(404).json({ error: "Item not found" });
       }
-      res.json(item);
+      
+      // Clean API response: null out currentStock for finished products
+      if (item.type === 'finished_product') {
+        const { currentStock, ...rest } = item;
+        res.json({ ...rest, currentStock: null });
+      } else {
+        res.json(item);
+      }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch item" });
     }
@@ -303,6 +321,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/items", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = insertItemSchema.parse(req.body);
+      
+      // Server-side guard: Prevent currentStock for finished products during creation
+      // Finished products use only pivotQty and hildaleQty as sources of truth
+      if (validated.type === 'finished_product' && 'currentStock' in validated) {
+        delete validated.currentStock;
+      }
+      
       const item = await storage.createItem(validated);
       res.status(201).json(item);
     } catch (error: any) {

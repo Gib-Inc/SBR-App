@@ -43,6 +43,9 @@ export const items = pgTable("items", {
   barcodeSource: text("barcode_source"), // 'AUTO_GENERATED', 'IMPORTED', 'MANUAL'
   externalSystem: text("external_system"), // 'shopify', 'amazon', 'csv_generic', etc.
   externalId: text("external_id"), // External system's ID/handle/ASIN
+  // AI Forecast tracking fields
+  forecastDirty: boolean("forecast_dirty").notNull().default(true), // Indicates forecast needs refresh
+  lastForecastAt: timestamp("last_forecast_at"), // Last time AI forecast was updated
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

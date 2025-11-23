@@ -8,6 +8,27 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
+**November 23, 2025 - Inventory Movement & Transaction Tracking System**:
+- ✅ **Complete Audit Trail**: All inventory quantity changes now tracked via InventoryTransaction table
+  - Transaction types: TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP (TRANSFER splits into TRANSFER_IN/TRANSFER_OUT)
+  - Captures: itemId, itemType, type, location, quantity, notes, createdAt, createdBy
+- ✅ **TransactionService**: Centralized transaction logic with validation and automatic quantity updates
+  - Enforces finished products use ONLY hildaleQty/pivotQty (never currentStock)
+  - Components use currentStock as single source of truth
+  - ItemType normalization handles both "finished_product"/"component" and "FINISHED"/"RAW" formats
+- ✅ **Transaction API Endpoints**: RESTful endpoints for all movement operations
+  - POST /api/transactions - Create generic transaction
+  - GET /api/transactions/:itemId - Retrieve transaction history
+  - POST /api/transactions/transfer - Transfer between Hildale and Pivot locations
+  - POST /api/transactions/produce - Consume raw materials, produce finished products at Hildale
+- ✅ **Transaction UI Components**: Three dialog components for inventory operations
+  - TransferDialog: Move finished products between Hildale ↔ Pivot with validation
+  - ProductionDialog: Shows BOM requirements, validates stock availability, consumes components
+  - TransactionHistoryDialog: Complete audit trail with icons, colors, and date formatting
+- ✅ **Products Page Integration**: Action buttons for Transfer, Produce, and History on finished products
+- ✅ **Barcodes Page Refactoring**: Scan adjustments now use transaction system (type: ADJUST) instead of direct PATCH
+- ✅ **Critical Bug Fix**: ItemType normalization in TransactionService prevents finished products from incorrectly updating currentStock
+
 **November 22, 2025 - Production-Ready LLM Reorder Recommendations**:
 - ✅ **LLM Reasoning Implementation**: Replaced formula-based reorder recommendations with actual LLM reasoning
   - Multi-period analysis: 30-day, 90-day, and historical sales data with seasonal context

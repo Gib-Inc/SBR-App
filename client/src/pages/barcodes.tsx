@@ -261,65 +261,91 @@ export default function Barcodes() {
   const [cameraContext, setCameraContext] = useState<"finished_product" | "item">("finished_product");
   const { toast } = useToast();
   
-  // Fetch items for matching
-  const { data: items } = useQuery({
+  // Fetch items with barcode metadata
+  const { data: items, isLoading } = useQuery({
     queryKey: ["/api/items"],
   });
 
-  // Fetch barcodes
-  const { data: barcodes, isLoading } = useQuery({
-    queryKey: ["/api/barcodes"],
-  });
-
-  const filteredBarcodes = ((barcodes as any[]) ?? []).filter((barcode: any) =>
-    barcode.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (barcode.sku && barcode.sku.toLowerCase().includes(searchQuery.toLowerCase()))
+  const allItems = (items as any[]) ?? [];
+  
+  const filteredItems = allItems.filter((item: any) =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const finishedProductBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "finished_product" || b.purpose === "bin");
-  const itemInventoryBarcodes = filteredBarcodes.filter((b: any) => b.purpose === "item");
+  const finishedProducts = filteredItems.filter((item: any) => item.productKind === "FINISHED");
+  const rawInventory = filteredItems.filter((item: any) => item.productKind === "RAW");
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
-      const response = await apiRequest("PATCH", `/api/barcodes/${id}`, updates);
+      const response = await apiRequest("PATCH", `/api/items/${id}`, updates);
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       toast({
         title: "Success",
-        description: "Barcode updated successfully",
+        description: "Item updated successfully",
       });
     },
     onError: (error: Error) => {
       toast({
         variant: "destructive",
         title: "Error",
-        description: error.message || "Failed to update barcode",
+        description: error.message || "Failed to update item",
       });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (barcodeId: string) => {
-      const response = await apiRequest("DELETE", `/api/barcodes/${barcodeId}`, {});
+    mutationFn: async (itemId: string) => {
+      const response = await apiRequest("DELETE", `/api/items/${itemId}`, {});
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       toast({
         title: "Success",
-        description: "Barcode deleted successfully",
+        description: "Item deleted successfully",
       });
     },
     onError: (error: Error) => {
       toast({
         variant: "destructive",
         title: "Error",
-        description: error.message || "Failed to delete barcode",
+        description: error.message || "Failed to delete item",
       });
     },
   });
+
+  const handleExport = async () => {
+    try {
+      const response = await fetch("/api/export/items");
+      if (!response.ok) throw new Error("Export failed");
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `inventory-barcodes-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast({
+        title: "Success",
+        description: "Export downloaded successfully",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to export",
+      });
+    }
+  };
 
   const handleUpdate = (id: string, field: string, value: string) => {
     updateMutation.mutate({
@@ -406,10 +432,18 @@ export default function Barcodes() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Barcodes</h1>
-          <p className="text-sm text-muted-foreground">Manage barcodes for items and bins</p>
+          <h1 className="text-2xl font-semibold">Product Barcodes</h1>
+          <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            onClick={handleExport}
+            data-testid="button-export-barcodes"
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
           <Button 
             variant="outline" 
             onClick={() => setIsPrintLabelsDialogOpen(true)}
@@ -464,29 +498,29 @@ export default function Barcodes() {
         </div>
       </div>
 
-      {/* Barcodes Sections */}
+      {/* Items with Barcode Metadata */}
       {isLoading ? (
         <div className="flex h-64 items-center justify-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
         </div>
-      ) : filteredBarcodes.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <Card>
           <CardContent className="flex h-64 flex-col items-center justify-center gap-2">
             <BarcodeIcon className="h-12 w-12 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              {searchQuery ? "No barcodes found" : "No barcodes yet. Create your first barcode to get started."}
+              {searchQuery ? "No items found" : "No items yet. Add items from the Products page to get started."}
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="flex flex-col gap-8">
           {/* Finished Products Section */}
-          {finishedProductBarcodes.length > 0 && (
+          {finishedProducts.length > 0 && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">Finished Products</h2>
-                  <p className="text-sm text-muted-foreground">Barcodes for finished products</p>
+                  <p className="text-sm text-muted-foreground">Market-facing products with GS1-style barcodes</p>
                 </div>
                 <Button
                   size="sm"
@@ -506,21 +540,37 @@ export default function Barcodes() {
                   <thead className="bg-muted/50">
                     <tr className="border-b">
                       <th className="p-3 text-left text-sm font-medium">Name</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
-                      <th className="p-3 text-left text-sm font-medium">Type</th>
                       <th className="p-3 text-left text-sm font-medium">SKU</th>
-                      <th className="p-3 text-left text-sm font-medium">Actions</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
+                      <th className="p-3 text-left text-sm font-medium">Product Kind</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Type</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
+                      <th className="p-3 text-right text-sm font-medium">Stock</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {finishedProductBarcodes.map((barcode: any) => (
-                      <BarcodeTableRow 
-                        key={barcode.id} 
-                        barcode={barcode} 
-                        onPrint={handlePrint} 
-                        onDelete={handleDelete}
-                        onUpdate={handleUpdate}
-                      />
+                    {finishedProducts.map((item: any) => (
+                      <tr key={item.id} className="border-b hover-elevate">
+                        <td className="p-3 text-sm">{item.name}</td>
+                        <td className="p-3 text-sm font-mono">{item.sku}</td>
+                        <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
+                        <td className="p-3">
+                          <Badge className="text-xs bg-blue-600 text-white">
+                            {item.productKind || "FINISHED"}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="secondary" className="text-xs">
+                            {item.barcodeType || "Not Set"}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="outline" className="text-xs">
+                            {item.barcodeSource || "None"}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-right text-sm">{item.currentStock}</td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
@@ -528,13 +578,13 @@ export default function Barcodes() {
             </div>
           )}
 
-          {/* Item Inventory Section */}
-          {itemInventoryBarcodes.length > 0 && (
+          {/* Raw Inventory Section */}
+          {rawInventory.length > 0 && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold">Item Inventory</h2>
-                  <p className="text-sm text-muted-foreground">Barcodes for inventory items and components</p>
+                  <h2 className="text-lg font-semibold">Item Inventory (Raw Stock)</h2>
+                  <p className="text-sm text-muted-foreground">In-house components and materials with internal codes</p>
                 </div>
                 <Button
                   size="sm"
@@ -554,21 +604,37 @@ export default function Barcodes() {
                   <thead className="bg-muted/50">
                     <tr className="border-b">
                       <th className="p-3 text-left text-sm font-medium">Name</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
-                      <th className="p-3 text-left text-sm font-medium">Type</th>
                       <th className="p-3 text-left text-sm font-medium">SKU</th>
-                      <th className="p-3 text-left text-sm font-medium">Actions</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
+                      <th className="p-3 text-left text-sm font-medium">Product Kind</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Type</th>
+                      <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
+                      <th className="p-3 text-right text-sm font-medium">Stock</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {itemInventoryBarcodes.map((barcode: any) => (
-                      <BarcodeTableRow 
-                        key={barcode.id} 
-                        barcode={barcode} 
-                        onPrint={handlePrint} 
-                        onDelete={handleDelete}
-                        onUpdate={handleUpdate}
-                      />
+                    {rawInventory.map((item: any) => (
+                      <tr key={item.id} className="border-b hover-elevate">
+                        <td className="p-3 text-sm">{item.name}</td>
+                        <td className="p-3 text-sm font-mono">{item.sku}</td>
+                        <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
+                        <td className="p-3">
+                          <Badge className="text-xs bg-green-600 text-white">
+                            {item.productKind || "RAW"}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="secondary" className="text-xs">
+                            {item.barcodeType || "Not Set"}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="outline" className="text-xs">
+                            {item.barcodeSource || "None"}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-right text-sm">{item.currentStock}</td>
+                      </tr>
                     ))}
                   </tbody>
                 </table>
@@ -578,14 +644,13 @@ export default function Barcodes() {
         </div>
       )}
 
-      {/* Print Layout Info */}
-      <Card className="bg-muted/50">
-        <CardContent className="flex items-center gap-3 pt-6">
-          <BarcodeIcon className="h-5 w-5 text-muted-foreground" />
-          <div>
-            <p className="text-sm font-medium">Print on plain paper</p>
-            <p className="text-xs text-muted-foreground">
-              Barcodes are optimized for standard A4/Letter paper printing
+      {/* Export Info Card */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <BarcodeIcon className="h-4 w-4" />
+            <p>
+              Use the Export CSV button to download all items with barcode metadata including: id, name, SKU, product_kind, barcode_value, barcode_type, barcode_source, external_system, external_id
             </p>
           </div>
         </CardContent>

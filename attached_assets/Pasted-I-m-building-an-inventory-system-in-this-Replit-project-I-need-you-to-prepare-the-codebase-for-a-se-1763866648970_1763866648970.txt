@@ -1,0 +1,102 @@
+I’m building an inventory system in this Replit project. I need you to prepare the codebase for a serious barcode and product-code import system before we wire in the actual generators and logic.
+Go through the existing project and:
+
+Core data model and concepts
+
+Extend or create models so that every product/item shown on the Barcodes page can store at least:
+
+product_kind: "FINISHED" or "RAW" (finished products sold on the market vs in-house item inventory/raw stock).
+
+barcode_value: string – the exact code printed under the barcode.
+
+barcode_type: string/enum – "GS1_FINISHED" for market-facing finished products, "INTERNAL_RAW" for in-house inventory codes.
+
+barcode_source: string/enum – "GENERATED", "IMPORTED", or "MANUAL".
+
+Optional external identity fields for imports, for example:
+
+external_system (e.g. "shopify", "amazon", "csv_generic").
+
+external_id (string) – whatever that system uses as a primary key (e.g. handle, product_id, ASIN).
+
+Make sure the rest of the app continues to work with these additions.
+
+Barcode / GS1 configuration (no real GS1 account yet)
+
+Create a persistent barcode_settings model/table with:
+
+gs1_prefix (string, nullable for now).
+
+item_ref_digits (int).
+
+next_item_ref (int).
+
+next_internal_code (int).
+
+Add an Admin/Settings screen where I can:
+
+View/edit gs1_prefix and item_ref_digits.
+
+View next_item_ref and next_internal_code as read-only counters.
+
+Save changes safely. If gs1_prefix is blank, the system should still run; we just won’t auto-generate GS1-like codes yet.
+
+Barcodes page structure
+
+Update the existing Barcodes page so it clearly separates:
+
+Finished Products → items with product_kind = "FINISHED".
+
+Item Inventory → items with product_kind = "RAW".
+
+In each section, show at least: Name, SKU, barcode_value, product_kind, barcode_type, and barcode_source.
+
+Provide separate entry points (buttons or a mode selector) to start a “Create Barcode” flow for:
+
+Finished Product (will eventually use GS1-style logic).
+
+Item Inventory (will use internal generator).
+
+High-end import framework (scaffolding only)
+
+Set up the structures needed for a powerful product-code import system (no deep logic yet):
+
+Model(s) for import profiles, e.g. import_profile with:
+
+name (e.g. “Generic CSV”, “Shopify-style CSV”, “Amazon-style export”).
+
+column_mappings (JSON) describing how file columns map to internal fields (name, sku, barcode_value, product_kind, barcode_type, external_system, external_id, etc.).
+
+Model(s) for import jobs:
+
+import_job with fields like: profile_id, file_name, status, started_at, finished_at, summary (JSON with counts of inserted/updated/ignored/failed).
+
+Optional import_job_error or an error log column for row-level issues.
+
+Build a basic “Import Products / Barcodes” screen with:
+
+File upload (CSV and XLSX).
+
+Dropdown to choose an import_profile.
+
+Placeholder area for “column mapping preview” and “import summary”, but keep the implementation minimal for now (just enough to wire the UI and routes).
+
+Export, print, and scan scaffolding
+
+Add:
+
+A CSV/XLSX export option from the Barcodes page that exports at least: id, name, sku, product_kind, barcode_value, barcode_type, barcode_source, external_system, external_id.
+
+A Print Labels route/page that can receive a list of product IDs and render a print-friendly HTML page (simple layout for now).
+
+A Scan Inventory route/page with a single focused input field and placeholder logic.
+
+All of these should be wired into the router and navigation, but can use stubbed or minimal behavior until we implement deeper logic.
+
+When you’re done, summarize:
+
+Which models/tables and files you added or changed.
+
+How to set product_kind, barcode_type, barcode_source, and basic barcode_settings from the UI.
+
+How to navigate to the Barcodes page, Settings page, Import screen, Export option, Print Labels stub, and Scan stub.

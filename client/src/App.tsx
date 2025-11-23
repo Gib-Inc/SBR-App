@@ -96,7 +96,7 @@ function AuthenticatedApp() {
                     <UserMenu />
                   </div>
                 </header>
-                <main className="flex-1 overflow-auto">
+                <main className="flex-1 overflow-y-auto overflow-x-hidden">
                   <Switch>
                     <Route path="/" component={Dashboard} />
                     <Route path="/products" component={Products} />

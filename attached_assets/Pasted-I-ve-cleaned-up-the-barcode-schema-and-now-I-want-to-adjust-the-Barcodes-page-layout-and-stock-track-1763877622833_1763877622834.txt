@@ -1,0 +1,75 @@
+I’ve cleaned up the barcode schema and now I want to adjust the Barcodes page layout and stock tracking.
+
+Important: Do NOT remove or hide the Usage column; keep it visible. These changes are in addition to what we already have.
+
+1. Split the Barcodes view into Finished vs Raw sections (keep Usage visible)
+
+Using the existing productKind field, change /barcodes from a single table into two stacked tables:
+
+A “Finished Products” section at the top: items where productKind = "FINISHED".
+
+A “Stock Inventory” (or “Raw Materials”) section below: items where productKind = "RAW".
+
+Both tables should share the same columns and actions so UX is consistent.
+
+Keep the Usage column visible in both tables, showing the current barcodeUsage values (External GS1 vs Internal).
+
+Keep the search bar at the top; it should filter items in both tables (by name, SKU, barcodeValue, etc.).
+
+2. Add location-based stock: Hildale and Pivot
+
+In the item/product model, add two numeric fields:
+
+stockHildale – on-hand stock at Hildale.
+
+stockPivot – on-hand stock at the Pivot/Extensiv warehouse.
+
+Keep the existing overall stock field (e.g. stock or totalStock), but define total stock as stockHildale + stockPivot. If a single stock field exists in the DB, keep it in sync by updating stock = stockHildale + stockPivot whenever either location stock changes.
+
+Update the seed data so that existing items initialize as:
+
+stockHildale = stock (the previous single stock value).
+
+stockPivot = 0.
+
+Total stock remains unchanged.
+
+3. Show total + location stock in Barcodes and BOM
+
+On both Barcodes tables (Finished Products and Stock Inventory):
+
+Keep the existing Stock column but make it show the total (stockHildale + stockPivot or the synced stock).
+
+Add two new columns:
+
+Hildale Stock → stockHildale.
+
+Pivot Stock → stockPivot.
+
+On the BOM page, add the same two columns for both Finished Products and Stock Inventory sections, with the same meaning:
+
+Stock (total), Hildale Stock, Pivot Stock.
+
+Ensure any existing views that used the old stock field still display the same total quantity (now derived from the two location fields).
+
+4. Dashboard & analytics consistency
+
+Update all Dashboard/analytics calculations (Inventory Value, Days Until Stockout, Top At-Risk Items, Production Capacity, etc.) so they use total stock (stockHildale + stockPivot or the synced stock) instead of only one location.
+
+Verify that metrics still look reasonable and no view breaks due to the new fields.
+
+5. Verification
+
+Re-run the seed script and restart the app.
+
+Confirm that:
+
+The Barcodes page now has two sections: Finished Products on top and Stock Inventory/Raw below.
+
+The Usage column remains visible and correct in both tables.
+
+Each table shows: Barcode (image), Name, SKU, Barcode Value, Format, Usage, Barcode Source, Stock (total), Hildale Stock, and Pivot Stock.
+
+The BOM and Dashboard pages load correctly and reflect total stock as Hildale + Pivot.
+
+Provide a brief summary of which models and UI components you changed, which field(s) represent total stock, and how stockHildale and stockPivot are used across Barcodes, BOM, and Dashboard.

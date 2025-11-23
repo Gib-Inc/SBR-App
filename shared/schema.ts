@@ -27,7 +27,9 @@ export const items = pgTable("items", {
   sku: text("sku").notNull().unique(),
   type: text("type").notNull(), // 'component' or 'finished_product'
   unit: text("unit").notNull().default('units'), // 'units', 'kg', etc.
-  currentStock: integer("current_stock").notNull().default(0),
+  currentStock: integer("current_stock").notNull().default(0), // Total stock (stockHildale + stockPivot)
+  stockHildale: integer("stock_hildale").notNull().default(0), // Stock at Hildale location
+  stockPivot: integer("stock_pivot").notNull().default(0), // Stock at Pivot/Extensiv warehouse
   minStock: integer("min_stock").notNull().default(0),
   dailyUsage: real("daily_usage").notNull().default(0),
   barcode: text("barcode"),

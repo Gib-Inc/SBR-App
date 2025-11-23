@@ -4,8 +4,10 @@ import { storage } from "./storage";
 import { LLMService } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
+import { ImportService } from "./import-service";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
+import multer from "multer";
 import {
   insertItemSchema,
   insertBinSchema,
@@ -1256,6 +1258,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(job);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid import job data" });
+    }
+  });
+
+  // ============================================================================
+  // IMPORT OPERATIONS
+  // ============================================================================
+
+  const upload = multer({ storage: multer.memoryStorage() });
+
+  app.post("/api/import/upload", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const importService = new ImportService(storage);
+      const rows = importService.parseFile(req.file.buffer, req.file.originalname);
+
+      if (rows.length === 0) {
+        return res.status(400).json({ error: "File contains no data" });
+      }
+
+      const headers = Object.keys(rows[0]);
+      const suggestedMapping = importService.suggestColumnMappings(headers);
+
+      res.json({
+        headers,
+        suggestedMapping,
+        rowCount: rows.length,
+        sampleRows: rows.slice(0, 5),
+      });
+    } catch (error: any) {
+      console.error("[Import] Error uploading file:", error);
+      res.status(500).json({ error: error.message || "Failed to parse file" });
+    }
+  });
+
+  app.post("/api/import/preview", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const { columnMapping, matchStrategy = "sku" } = req.body;
+
+      if (!columnMapping) {
+        return res.status(400).json({ error: "Column mapping is required" });
+      }
+
+      const importService = new ImportService(storage);
+      const rows = importService.parseFile(req.file.buffer, req.file.originalname);
+      const mapping = typeof columnMapping === "string" ? JSON.parse(columnMapping) : columnMapping;
+
+      const preview = await importService.previewImport(rows, mapping, matchStrategy as any);
+
+      res.json(preview);
+    } catch (error: any) {
+      console.error("[Import] Error previewing import:", error);
+      res.status(500).json({ error: error.message || "Failed to preview import" });
+    }
+  });
+
+  app.post("/api/import/execute", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const { columnMapping, matchStrategy = "sku", profileId } = req.body;
+
+      if (!columnMapping) {
+        return res.status(400).json({ error: "Column mapping is required" });
+      }
+
+      const importService = new ImportService(storage);
+      const rows = importService.parseFile(req.file.buffer, req.file.originalname);
+      const mapping = typeof columnMapping === "string" ? JSON.parse(columnMapping) : columnMapping;
+
+      const job = await storage.createImportJob({
+        profileId: profileId || null,
+        fileName: req.file.originalname,
+        status: "processing",
+      });
+
+      const result = await importService.executeImport(rows, mapping, matchStrategy as any);
+
+      await storage.updateImportJob(job.id, {
+        status: result.success ? "completed" : "failed",
+        finishedAt: new Date(),
+        summary: JSON.stringify({
+          inserted: result.inserted,
+          updated: result.updated,
+          skipped: result.skipped,
+          failed: result.failed,
+        }),
+        errors: result.errors.length > 0 ? JSON.stringify(result.errors) : null,
+      });
+
+      res.json({
+        jobId: job.id,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("[Import] Error executing import:", error);
+      res.status(500).json({ error: error.message || "Failed to execute import" });
+    }
+  });
+
+  app.get("/api/import/errors/:jobId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const job = await storage.getImportJob(req.params.jobId);
+      
+      if (!job) {
+        return res.status(404).json({ error: "Import job not found" });
+      }
+
+      const errors = job.errors ? JSON.parse(job.errors) : [];
+
+      const csvHeader = "Row Number,Error,Data\n";
+      const csvRows = errors.map((err: any) => 
+        `${err.rowNumber},"${err.error}","${JSON.stringify(err.data).replace(/"/g, '""')}"`
+      ).join('\n');
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=import-errors-${req.params.jobId}.csv`);
+      res.send(csvHeader + csvRows);
+    } catch (error: any) {
+      console.error("[Import] Error downloading errors:", error);
+      res.status(500).json({ error: "Failed to download error file" });
     }
   });
 

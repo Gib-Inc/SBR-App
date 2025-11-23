@@ -1,0 +1,357 @@
+import { parse } from "csv-parse/sync";
+import * as XLSX from "xlsx";
+import type { IStorage } from "./storage";
+import type { InsertItem } from "@shared/schema";
+import { BarcodeGenerator } from "./barcode-generator";
+
+export interface ColumnMapping {
+  [csvColumn: string]: string | null; // Maps CSV column to schema field name
+}
+
+export interface ImportPreviewResult {
+  totalRows: number;
+  newItems: number;
+  updates: number;
+  conflicts: number;
+  invalid: number;
+  sampleRows: Array<{
+    rowNumber: number;
+    action: "create" | "update" | "conflict" | "invalid";
+    data: Partial<InsertItem>;
+    error?: string;
+  }>;
+}
+
+export interface ImportExecutionResult {
+  success: boolean;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  errors: Array<{
+    rowNumber: number;
+    error: string;
+    data: any;
+  }>;
+}
+
+export type MatchStrategy = "barcodeValue" | "sku" | "both";
+
+export class ImportService {
+  constructor(private storage: IStorage) {}
+
+  parseFile(buffer: Buffer, fileName: string): any[] {
+    const ext = fileName.toLowerCase().split(".").pop();
+
+    if (ext === "csv") {
+      return parse(buffer, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+      });
+    } else if (ext === "xlsx" || ext === "xls") {
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      return XLSX.utils.sheet_to_json(worksheet);
+    } else {
+      throw new Error(`Unsupported file type: ${ext}`);
+    }
+  }
+
+  suggestColumnMappings(headers: string[]): ColumnMapping {
+    const mapping: ColumnMapping = {};
+    const fieldMappings: { [key: string]: string[] } = {
+      name: ["name", "product name", "item name", "title", "description"],
+      sku: ["sku", "product code", "item code", "part number", "item number"],
+      barcodeValue: ["barcode", "barcode value", "upc", "ean", "gtin", "code", "barcode_value"],
+      productKind: ["product kind", "type", "product type", "kind", "product_kind"],
+      barcodeUsage: ["barcode usage", "usage", "barcode_usage"],
+      barcodeFormat: ["barcode format", "format", "symbology", "barcode_format"],
+      barcodeSource: ["barcode source", "source", "barcode_source"],
+      externalSystem: ["external system", "system", "source system", "external_system"],
+      externalId: ["external id", "external_id", "external reference", "external ref"],
+      currentStock: ["current stock", "stock", "quantity", "qty", "current_stock"],
+      minStock: ["min stock", "minimum stock", "min_stock", "reorder point"],
+      dailyUsage: ["daily usage", "usage", "daily_usage", "avg usage"],
+      unit: ["unit", "uom", "unit of measure"],
+      location: ["location", "warehouse", "bin"],
+    };
+
+    for (const header of headers) {
+      const lowerHeader = header.toLowerCase().trim();
+
+      for (const [field, keywords] of Object.entries(fieldMappings)) {
+        if (keywords.includes(lowerHeader)) {
+          mapping[header] = field;
+          break;
+        }
+      }
+
+      if (!mapping[header]) {
+        mapping[header] = null;
+      }
+    }
+
+    return mapping;
+  }
+
+  mapRowToItem(row: any, columnMapping: ColumnMapping): Partial<InsertItem> {
+    const item: Partial<InsertItem> = {};
+
+    for (const [csvColumn, schemaField] of Object.entries(columnMapping)) {
+      if (schemaField && row[csvColumn] !== undefined && row[csvColumn] !== "") {
+        const value = row[csvColumn];
+
+        switch (schemaField) {
+          case "currentStock":
+          case "minStock":
+            item[schemaField] = parseInt(value, 10) || 0;
+            break;
+          case "dailyUsage":
+            item[schemaField] = parseFloat(value) || 0;
+            break;
+          default:
+            (item as any)[schemaField] = String(value).trim();
+        }
+      }
+    }
+
+    if (!item.productKind && item.barcodeValue) {
+      const barcodeValue = String(item.barcodeValue);
+      if (/^\d{12,13}$/.test(barcodeValue)) {
+        item.productKind = "FINISHED";
+        if (!item.barcodeUsage) {
+          item.barcodeUsage = "EXTERNAL_GS1";
+        }
+      } else {
+        if (!item.barcodeUsage) {
+          item.barcodeUsage = "INTERNAL_STOCK";
+        }
+      }
+    }
+
+    if (!item.barcodeSource) {
+      item.barcodeSource = "IMPORTED";
+    }
+
+    if (!item.type) {
+      item.type = item.productKind === "FINISHED" ? "finished_product" : "component";
+    }
+
+    if (!item.unit) {
+      item.unit = "units";
+    }
+
+    return item;
+  }
+
+  validateItem(item: Partial<InsertItem>): { valid: boolean; error?: string } {
+    if (!item.name) {
+      return { valid: false, error: "Missing required field: name" };
+    }
+
+    if (!item.sku) {
+      return { valid: false, error: "Missing required field: sku" };
+    }
+
+    if (item.productKind === "FINISHED" && item.barcodeUsage !== "EXTERNAL_GS1") {
+      return {
+        valid: false,
+        error: "FINISHED products must use EXTERNAL_GS1 barcode usage",
+      };
+    }
+
+    if (item.productKind === "RAW" && item.barcodeUsage !== "INTERNAL_STOCK") {
+      return {
+        valid: false,
+        error: "RAW inventory must use INTERNAL_STOCK barcode usage",
+      };
+    }
+
+    return { valid: true };
+  }
+
+  async findMatchingItem(
+    item: Partial<InsertItem>,
+    matchStrategy: MatchStrategy
+  ): Promise<{ matched: boolean; matchedItem?: any; ambiguous: boolean }> {
+    const allItems = await this.storage.getAllItems();
+
+    if (matchStrategy === "barcodeValue" && item.barcodeValue) {
+      const matched = allItems.find((i) => i.barcodeValue === item.barcodeValue);
+      return { matched: !!matched, matchedItem: matched, ambiguous: false };
+    }
+
+    if (matchStrategy === "sku" && item.sku) {
+      const matched = allItems.find((i) => i.sku === item.sku);
+      return { matched: !!matched, matchedItem: matched, ambiguous: false };
+    }
+
+    if (matchStrategy === "both" && item.barcodeValue && item.sku) {
+      const barcodeMatch = allItems.find((i) => i.barcodeValue === item.barcodeValue);
+      const skuMatch = allItems.find((i) => i.sku === item.sku);
+
+      if (barcodeMatch && skuMatch && barcodeMatch.id === skuMatch.id) {
+        return { matched: true, matchedItem: barcodeMatch, ambiguous: false };
+      }
+
+      if (barcodeMatch || skuMatch) {
+        return { matched: true, matchedItem: barcodeMatch || skuMatch, ambiguous: true };
+      }
+    }
+
+    return { matched: false, ambiguous: false };
+  }
+
+  async previewImport(
+    rows: any[],
+    columnMapping: ColumnMapping,
+    matchStrategy: MatchStrategy
+  ): Promise<ImportPreviewResult> {
+    const result: ImportPreviewResult = {
+      totalRows: rows.length,
+      newItems: 0,
+      updates: 0,
+      conflicts: 0,
+      invalid: 0,
+      sampleRows: [],
+    };
+
+    for (let i = 0; i < Math.min(rows.length, 100); i++) {
+      const row = rows[i];
+      const item = this.mapRowToItem(row, columnMapping);
+      const validation = this.validateItem(item);
+
+      if (!validation.valid) {
+        result.invalid++;
+        result.sampleRows.push({
+          rowNumber: i + 1,
+          action: "invalid",
+          data: item,
+          error: validation.error,
+        });
+        continue;
+      }
+
+      const match = await this.findMatchingItem(item, matchStrategy);
+
+      if (match.ambiguous) {
+        result.conflicts++;
+        result.sampleRows.push({
+          rowNumber: i + 1,
+          action: "conflict",
+          data: item,
+          error: "Ambiguous match: barcode and SKU match different items",
+        });
+      } else if (match.matched) {
+        result.updates++;
+        if (result.sampleRows.length < 20) {
+          result.sampleRows.push({
+            rowNumber: i + 1,
+            action: "update",
+            data: item,
+          });
+        }
+      } else {
+        result.newItems++;
+        if (result.sampleRows.length < 20) {
+          result.sampleRows.push({
+            rowNumber: i + 1,
+            action: "create",
+            data: item,
+          });
+        }
+      }
+    }
+
+    for (let i = 100; i < rows.length; i++) {
+      const row = rows[i];
+      const item = this.mapRowToItem(row, columnMapping);
+      const validation = this.validateItem(item);
+
+      if (!validation.valid) {
+        result.invalid++;
+        continue;
+      }
+
+      const match = await this.findMatchingItem(item, matchStrategy);
+
+      if (match.ambiguous) {
+        result.conflicts++;
+      } else if (match.matched) {
+        result.updates++;
+      } else {
+        result.newItems++;
+      }
+    }
+
+    return result;
+  }
+
+  async executeImport(
+    rows: any[],
+    columnMapping: ColumnMapping,
+    matchStrategy: MatchStrategy
+  ): Promise<ImportExecutionResult> {
+    const result: ImportExecutionResult = {
+      success: true,
+      inserted: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      try {
+        const item = this.mapRowToItem(row, columnMapping);
+        const validation = this.validateItem(item);
+
+        if (!validation.valid) {
+          result.skipped++;
+          result.errors.push({
+            rowNumber: i + 1,
+            error: validation.error || "Validation failed",
+            data: row,
+          });
+          continue;
+        }
+
+        const match = await this.findMatchingItem(item, matchStrategy);
+
+        if (match.ambiguous) {
+          result.skipped++;
+          result.errors.push({
+            rowNumber: i + 1,
+            error: "Ambiguous match: barcode and SKU match different items",
+            data: row,
+          });
+          continue;
+        }
+
+        if (match.matched && match.matchedItem) {
+          await this.storage.updateItem(match.matchedItem.id, item);
+          result.updated++;
+        } else {
+          await this.storage.createItem(item as InsertItem);
+          result.inserted++;
+        }
+      } catch (error: any) {
+        result.failed++;
+        result.errors.push({
+          rowNumber: i + 1,
+          error: error.message || "Unknown error",
+          data: row,
+        });
+      }
+    }
+
+    if (result.failed > 0) {
+      result.success = false;
+    }
+
+    return result;
+  }
+}

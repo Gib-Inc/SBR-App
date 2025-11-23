@@ -1231,9 +1231,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const items = await storage.getAllItems();
       
       // Prepare CSV data
-      const csvHeader = "ID,Name,SKU,Product Kind,Barcode Value,Barcode Type,Barcode Source,External System,External ID,Type,Current Stock,Min Stock\n";
+      const csvHeader = "ID,Name,SKU,Product Kind,Barcode Value,Barcode Format,Barcode Usage,Barcode Source,External System,External ID,Type,Current Stock,Min Stock\n";
       const csvRows = items.map(item => 
-        `${item.id},${item.name},${item.sku},${item.productKind || ''},${item.barcodeValue || ''},${item.barcodeType || ''},${item.barcodeSource || ''},${item.externalSystem || ''},${item.externalId || ''},${item.type},${item.currentStock},${item.minStock}`
+        `${item.id},${item.name},${item.sku},${item.productKind || ''},${item.barcodeValue || ''},${item.barcodeFormat || ''},${item.barcodeUsage || ''},${item.barcodeSource || ''},${item.externalSystem || ''},${item.externalId || ''},${item.type},${item.currentStock},${item.minStock}`
       ).join('\n');
       
       res.setHeader('Content-Type', 'text/csv');

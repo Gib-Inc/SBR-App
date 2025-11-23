@@ -1035,14 +1035,27 @@ export default function Barcodes() {
               // Create new item and barcode
               try {
                 // First, create the item
-                const itemRes = await apiRequest("POST", "/api/items", {
+                const payload: any = {
                   name: data.name,
                   sku: data.sku || "",
-                  currentStock: data.quantity || 0,
                   type: data.type,
-                  category: data.category || null,
-                  location: data.location || null,
-                });
+                };
+                
+                if (data.type === "finished_product") {
+                  // Finished products use pivotQty (ready-to-ship) by default
+                  payload.pivotQty = data.quantity || 0;
+                  payload.hildaleQty = 0;
+                  payload.category = null;
+                } else {
+                  // Components use currentStock
+                  payload.currentStock = data.quantity || 0;
+                  payload.category = data.category || null;
+                  payload.location = data.location || null;
+                  payload.pivotQty = 0;
+                  payload.hildaleQty = 0;
+                }
+                
+                const itemRes = await apiRequest("POST", "/api/items", payload);
                 
                 if (!itemRes.ok) {
                   const error = await itemRes.json();
@@ -1102,11 +1115,26 @@ export default function Barcodes() {
               }
               
               try {
-                const newStock = existingItem.currentStock + (data.adjustmentQuantity || 0);
+                let updates: any = {};
+                let oldValue: number;
+                let newValue: number;
+                let stockType: string;
                 
-                const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, {
-                  currentStock: Math.max(0, newStock),
-                });
+                if (existingItem.type === 'finished_product') {
+                  // For finished products, increment pivotQty (ready-to-ship warehouse)
+                  oldValue = existingItem.pivotQty ?? 0;
+                  newValue = Math.max(0, oldValue + (data.adjustmentQuantity || 0));
+                  updates.pivotQty = newValue;
+                  stockType = 'Pivot Qty';
+                } else {
+                  // For components, increment currentStock
+                  oldValue = existingItem.currentStock ?? 0;
+                  newValue = Math.max(0, oldValue + (data.adjustmentQuantity || 0));
+                  updates.currentStock = newValue;
+                  stockType = 'Stock';
+                }
+                
+                const res = await apiRequest("PATCH", `/api/items/${existingItem.id}`, updates);
                 
                 if (!res.ok) {
                   const error = await res.json();
@@ -1117,7 +1145,7 @@ export default function Barcodes() {
                 
                 toast({
                   title: "Success",
-                  description: `Adjusted stock for ${existingItem.name}: ${existingItem.currentStock} → ${newStock}`,
+                  description: `Adjusted ${stockType} for ${existingItem.name}: ${oldValue} → ${newValue}`,
                 });
                 
                 setIsVisionConfirmDialogOpen(false);

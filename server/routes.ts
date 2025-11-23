@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { LLMService } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
+import { BarcodeGenerator } from "./barcode-generator";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import {
@@ -1111,6 +1112,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(settings);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid barcode settings" });
+    }
+  });
+
+  // ============================================================================
+  // BARCODE GENERATION
+  // ============================================================================
+
+  app.post("/api/barcodes/generate-gs1", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const generator = new BarcodeGenerator(storage);
+      const result = await generator.generateGS1Barcode();
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({ barcodeValue: result.barcodeValue });
+    } catch (error: any) {
+      console.error("[Barcode Generation] Error generating GS1 barcode:", error);
+      res.status(500).json({ error: error.message || "Failed to generate GS1 barcode" });
+    }
+  });
+
+  app.post("/api/barcodes/generate-internal", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const generator = new BarcodeGenerator(storage);
+      const result = await generator.generateInternalCode();
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({ barcodeValue: result.barcodeValue });
+    } catch (error: any) {
+      console.error("[Barcode Generation] Error generating internal code:", error);
+      res.status(500).json({ error: error.message || "Failed to generate internal code" });
     }
   });
 

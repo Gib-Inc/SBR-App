@@ -33,14 +33,16 @@ async function seed() {
         dailyUsage: 25,
         barcodeValue: "NUT-M8",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!nut.barcodeValue) {
       await storage.updateItem(nut.id, {
         barcodeValue: "NUT-M8",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     }
@@ -57,14 +59,16 @@ async function seed() {
         dailyUsage: 30,
         barcodeValue: "BOLT-M8-50",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!bolt.barcodeValue) {
       await storage.updateItem(bolt.id, {
         barcodeValue: "BOLT-M8-50",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     }
@@ -81,14 +85,16 @@ async function seed() {
         dailyUsage: 15,
         barcodeValue: "SPRING-20",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!spring.barcodeValue) {
       await storage.updateItem(spring.id, {
         barcodeValue: "SPRING-20",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     }
@@ -105,14 +111,16 @@ async function seed() {
         dailyUsage: 10,
         barcodeValue: "BAR-500",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!bar.barcodeValue) {
       await storage.updateItem(bar.id, {
         barcodeValue: "BAR-500",
         productKind: "RAW",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "INTERNAL_STOCK",
         barcodeSource: "AUTO_GENERATED",
       });
     }
@@ -132,14 +140,16 @@ async function seed() {
         dailyUsage: 5,
         barcodeValue: "WIDGET-A",
         productKind: "FINISHED",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "EXTERNAL_GS1",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!widgetA.barcodeValue) {
       await storage.updateItem(widgetA.id, {
         barcodeValue: "WIDGET-A",
         productKind: "FINISHED",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "EXTERNAL_GS1",
         barcodeSource: "AUTO_GENERATED",
       });
     }
@@ -156,14 +166,16 @@ async function seed() {
         dailyUsage: 3,
         barcodeValue: "GADGET-B",
         productKind: "FINISHED",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "EXTERNAL_GS1",
         barcodeSource: "AUTO_GENERATED",
       });
     } else if (!gadgetB.barcodeValue) {
       await storage.updateItem(gadgetB.id, {
         barcodeValue: "GADGET-B",
         productKind: "FINISHED",
-        barcodeType: "CODE128",
+        barcodeFormat: "CODE128",
+        barcodeUsage: "EXTERNAL_GS1",
         barcodeSource: "AUTO_GENERATED",
       });
     }

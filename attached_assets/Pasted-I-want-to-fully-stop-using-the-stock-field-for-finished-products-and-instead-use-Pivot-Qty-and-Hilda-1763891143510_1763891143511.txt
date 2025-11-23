@@ -1,0 +1,115 @@
+I want to fully stop using the stock field for finished products and instead use Pivot Qty and Hildale Qty for all logic and UI. Raw Inventory (Stock Inventory) should still use its own stock field as before.
+
+Please make the following changes exactly:
+
+1. Finished product model: remove stock as a real field
+
+In the model/schema for finished products only (the ones shown in the Finished Products table on the BOM page):
+
+Keep hildaleQty and pivotQty as the only stored quantity fields.
+
+Remove the separate stock field from the finished-product schema and storage:
+
+Remove stock from the finished-product type/interface.
+
+Remove stock from any finished-product database/storage definition (MemStorage, Postgres, etc.).
+
+Add a small helper function (in a shared service/module) that, given a finished product, returns:
+
+availableToShip = pivotQty
+
+bufferStock = hildaleQty
+
+totalOwned = pivotQty + hildaleQty
+
+Do not touch the raw-inventory (Stock Inventory) schema; its stock field and behavior must remain intact.
+
+2. Remove the Stock column from the Finished Products table
+
+On the BOM /products page, in the Finished Products table:
+
+Remove the Stock column entirely from the UI.
+
+The columns for Finished Products should now include (at minimum): Name, SKU, Forecast, Hildale Qty, Pivot Qty, BOM, Actions (plus any other non-stock metadata you already show).
+
+In the create/edit Finished Product dialog:
+
+Ensure there is no stock field.
+
+Only allow editing hildaleQty and pivotQty as numeric fields (non-negative).
+
+Do not change the Stock Inventory (raw materials) section columns; it should still use its stock field.
+
+3. Rewire all finished-product logic that currently uses stock
+
+Search the entire codebase for references to finished-product stock and update them to use pivotQty/hildaleQty via the helper from step 1. This includes:
+
+Dashboard metrics (e.g. Inventory Value, Days Until Stockout, Production Capacity, Top At-Risk Items) where they relate to finished products.
+
+Smart Analytics / Reorder Recommendations / Demand Forecasts for finished products.
+
+Any AI/agent services or prompts that reason about finished-product “current stock”.
+
+Replace each usage as follows:
+
+For “what is ready to ship right now” → use availableToShip = pivotQty.
+
+For overall inventory health / total units physically owned → use totalOwned = pivotQty + hildaleQty.
+
+Where a single number is needed for routing or summaries, prefer availableToShip when the context is sales/fulfillment and totalOwned when the context is long-term inventory health.
+
+Remove any write paths that attempt to set a finished-product stock value directly; finished products must now only store and update hildaleQty and pivotQty.
+
+Keep raw-inventory logic that uses its own stock field unchanged.
+
+4. Update restock / at-risk logic for finished products
+
+For restock/at-risk decisions for finished products:
+
+Base the primary risk check on pivotQty (because Pivot is the ready-to-ship warehouse).
+
+Use totalOwned = pivotQty + hildaleQty to understand the true buffer available.
+
+Example pattern (adapt to the existing code):
+
+Compute days-of-cover at Pivot: pivotDays = pivotQty / usagePerDay.
+
+Optionally compute days-of-cover including Hildale: totalDays = totalOwned / usagePerDay.
+
+Mark a product as needing restock when pivotDays falls below a threshold, even if hildaleQty is still positive.
+
+Ensure any AI/agent explanations or Smart Analytics text clearly refer to Pivot vs Hildale when describing why something is at risk.
+
+5. API and response shapes
+
+Update any API responses for finished products that currently include stock:
+
+Remove the stock field from the response payload for finished products.
+
+If the frontend needs a total count, include a computed field such as totalOwned based on pivotQty + hildaleQty.
+
+Ensure the Products/BOM page queries and types are updated to use these new quantities instead of stock.
+
+Keep raw-inventory APIs that expose a stock field as they are.
+
+6. Verification
+
+After changes:
+
+The Finished Products table shows no Stock column and only Hildale Qty + Pivot Qty (and Forecast, BOM, Actions, etc.).
+
+Editing Hildale or Pivot quantities for a finished product persists correctly and no UI references a stock field.
+
+The Dashboard and Smart Analytics load correctly and produce reasonable values based on Pivot/Hildale quantities (no runtime errors from missing stock).
+
+Reorder/at-risk logic for finished products uses pivotQty as the primary signal and totalOwned as the buffer, as described.
+
+Raw inventory still uses its own stock field and behaves exactly as before.
+
+Finally, summarize:
+
+Which models/services/endpoints you changed for finished products.
+
+Where and how you now compute availableToShip, bufferStock, and totalOwned.
+
+Which parts of the Dashboard/Analytics/AI logic were updated to depend on Pivot vs Hildale quantities.

@@ -1,0 +1,65 @@
+The horizontal scroll issue on /barcodes still isn’t fixed. The page itself still scrolls left/right, unlike Dashboard and BOM. I need you to debug this precisely and make /barcodes behave the same as the other pages.
+
+Goal / Acceptance criteria
+
+The browser window must NOT have a horizontal scrollbar because of the page layout.
+
+Only each data table (Finished Products and Stock Inventory) should scroll horizontally inside its own container when the columns are too wide.
+
+The rightmost Actions column must always remain visible inside the table’s scroll area.
+
+1. Match the layout structure of Dashboard/BOM
+
+Open the React/TSX file for the Barcodes page (e.g. client/src/pages/barcodes.tsx).
+
+Also open the files for Dashboard and BOM pages.
+
+Compare the top-level layout containers (wrapping divs, layout components, Tailwind/utility classes, etc.):
+
+Make sure the Barcodes page uses the same main content container as Dashboard/BOM (same width/max-width classes, same padding, same overflow rules).
+
+Remove any extra wrappers or styles on the Barcodes page that set fixed widths, min-width larger than 100%, or overflow-x: auto/scroll on the page container. The top-level page container should be w-full, max-w constrained like the other pages, and NOT cause horizontal scroll.
+
+2. Constrain horizontal overflow to the tables only
+
+For the Finished Products table and the Stock Inventory table:
+
+Wrap each table in a div that:
+
+Has width: 100% (or w-full).
+
+Has overflow-x: auto so that only this wrapper can scroll horizontally.
+
+Ensures the parent section/card/container around it has overflow-x: hidden (so it doesn’t expand the full page).
+
+The table itself can use min-width: max-content/min-w-max or similar so columns don’t squish, but the wrapper must be the thing that scrolls.
+
+Verify that after this, the page wrapper (body/main content) no longer expands beyond the viewport width.
+
+3. Make the Actions column sticky on the right
+
+Find the rightmost Actions column in the shared table component.
+
+Make this column position: sticky with right: 0 inside the scroll wrapper so that when the table scrolls horizontally, the Actions column stays pinned to the right edge of the scroll area.
+
+Give this sticky column a solid background and a slightly higher z-index so that it doesn’t show underlying columns when overlapping.
+
+Apply the same behavior to both Finished Products and Stock Inventory tables.
+
+4. Verification steps (you must actually follow these)
+
+In the preview:
+
+Confirm that the Dashboard and BOM pages still behave as before (no horizontal scroll on the page).
+
+On /barcodes, confirm that:
+
+The browser window has no horizontal scrollbar when the page loads.
+
+Each table shows its own horizontal scrollbar when the columns extend past the visible width.
+
+When I scroll a table horizontally, the Actions column stays visible on the right at all times.
+
+If the page still scrolls horizontally, inspect which container is wider than the viewport (just like you did when comparing with Dashboard/BOM) and fix that specific container instead of wrapping more divs.
+
+Finally, summarize exactly which components/styles you changed, what the new wrapper structure is around each table, and which element (class or component) is responsible for handling horizontal overflow now.

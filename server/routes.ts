@@ -541,6 +541,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Generate barcode image from value (on-the-fly generation)
+  app.get("/api/generate-barcode/:value", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { value } = req.params;
+      if (!value || value.trim() === '') {
+        return res.status(400).json({ error: "Barcode value is required" });
+      }
+      
+      const pngBuffer = await BarcodeService.generateBarcodeBuffer({ value });
+      
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+      res.send(pngBuffer);
+    } catch (error) {
+      console.error('Error generating barcode image:', error);
+      res.status(500).json({ error: "Failed to generate barcode image" });
+    }
+  });
+
   app.get("/api/barcodes/lookup/:value", requireAuth, async (req: Request, res: Response) => {
     try {
       const barcode = await storage.getBarcodeByValue(req.params.value);

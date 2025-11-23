@@ -111,7 +111,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
             <div class="label-content">
               <div class="barcode-container">
                 ${item.barcodeValue ? `
-                  <img src="/api/barcodes/generate?value=${encodeURIComponent(item.barcodeValue)}&format=code128" 
+                  <img src="/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}" 
                        alt="${item.barcodeValue}" 
                        class="barcode-image" />
                 ` : `<div class="no-barcode">No Barcode</div>`}

@@ -274,8 +274,6 @@ export default function Barcodes() {
     (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
-  const finishedProducts = filteredItems.filter((item: any) => item.productKind === "FINISHED");
-  const rawInventory = filteredItems.filter((item: any) => item.productKind === "RAW");
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
@@ -513,32 +511,15 @@ export default function Barcodes() {
           </CardContent>
         </Card>
       ) : (
-        <div className="flex flex-col gap-8">
-          {/* Finished Products Section */}
-          {finishedProducts.length > 0 && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold">Finished Products</h2>
-                  <p className="text-sm text-muted-foreground">Market-facing products with GS1-style barcodes</p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setCameraContext("finished_product");
-                    setIsCameraModalOpen(true);
-                  }}
-                  data-testid="button-scan-finished-product-barcode"
-                >
-                  <Camera className="mr-2 h-4 w-4" />
-                  Scan Item
-                </Button>
-              </div>
+        <div className="flex flex-col gap-6">
+          {/* All Items Table */}
+          <Card>
+            <CardContent className="p-6">
               <div className="overflow-hidden rounded-md border">
                 <table className="w-full">
                   <thead className="bg-muted/50">
                     <tr className="border-b">
+                      <th className="p-3 text-left text-sm font-medium">Barcode</th>
                       <th className="p-3 text-left text-sm font-medium">Name</th>
                       <th className="p-3 text-left text-sm font-medium">SKU</th>
                       <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
@@ -549,15 +530,35 @@ export default function Barcodes() {
                     </tr>
                   </thead>
                   <tbody>
-                    {finishedProducts.map((item: any) => (
+                    {filteredItems.map((item: any) => (
                       <tr key={item.id} className="border-b hover-elevate">
+                        <td className="p-3">
+                          {item.barcodeValue ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <img 
+                                src={`/api/generate-barcode/${encodeURIComponent(item.barcodeValue)}`} 
+                                alt={item.barcodeValue}
+                                className="h-12 w-auto"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No barcode</span>
+                          )}
+                        </td>
                         <td className="p-3 text-sm">{item.name}</td>
                         <td className="p-3 text-sm font-mono">{item.sku}</td>
                         <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
                         <td className="p-3">
-                          <Badge className="text-xs bg-blue-600 text-white">
-                            {item.productKind || "FINISHED"}
-                          </Badge>
+                          {item.productKind ? (
+                            <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
+                              {item.productKind}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )}
                         </td>
                         <td className="p-3">
                           <Badge variant="secondary" className="text-xs">
@@ -575,72 +576,8 @@ export default function Barcodes() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
-
-          {/* Raw Inventory Section */}
-          {rawInventory.length > 0 && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold">Item Inventory (Raw Stock)</h2>
-                  <p className="text-sm text-muted-foreground">In-house components and materials with internal codes</p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setCameraContext("item");
-                    setIsCameraModalOpen(true);
-                  }}
-                  data-testid="button-scan-item-inventory-barcode"
-                >
-                  <Camera className="mr-2 h-4 w-4" />
-                  Scan Item
-                </Button>
-              </div>
-              <div className="overflow-hidden rounded-md border">
-                <table className="w-full">
-                  <thead className="bg-muted/50">
-                    <tr className="border-b">
-                      <th className="p-3 text-left text-sm font-medium">Name</th>
-                      <th className="p-3 text-left text-sm font-medium">SKU</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
-                      <th className="p-3 text-left text-sm font-medium">Product Kind</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Type</th>
-                      <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
-                      <th className="p-3 text-right text-sm font-medium">Stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rawInventory.map((item: any) => (
-                      <tr key={item.id} className="border-b hover-elevate">
-                        <td className="p-3 text-sm">{item.name}</td>
-                        <td className="p-3 text-sm font-mono">{item.sku}</td>
-                        <td className="p-3 text-sm font-mono">{item.barcodeValue || "-"}</td>
-                        <td className="p-3">
-                          <Badge className="text-xs bg-green-600 text-white">
-                            {item.productKind || "RAW"}
-                          </Badge>
-                        </td>
-                        <td className="p-3">
-                          <Badge variant="secondary" className="text-xs">
-                            {item.barcodeType || "Not Set"}
-                          </Badge>
-                        </td>
-                        <td className="p-3">
-                          <Badge variant="outline" className="text-xs">
-                            {item.barcodeSource || "None"}
-                          </Badge>
-                        </td>
-                        <td className="p-3 text-right text-sm">{item.currentStock}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+            </CardContent>
+          </Card>
         </div>
       )}
 

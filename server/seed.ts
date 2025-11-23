@@ -31,6 +31,17 @@ async function seed() {
         currentStock: 500,
         minStock: 100,
         dailyUsage: 25,
+        barcodeValue: "NUT-M8",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!nut.barcodeValue) {
+      await storage.updateItem(nut.id, {
+        barcodeValue: "NUT-M8",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 
@@ -44,6 +55,17 @@ async function seed() {
         currentStock: 450,
         minStock: 100,
         dailyUsage: 30,
+        barcodeValue: "BOLT-M8-50",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!bolt.barcodeValue) {
+      await storage.updateItem(bolt.id, {
+        barcodeValue: "BOLT-M8-50",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 
@@ -57,6 +79,17 @@ async function seed() {
         currentStock: 200,
         minStock: 50,
         dailyUsage: 15,
+        barcodeValue: "SPRING-20",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!spring.barcodeValue) {
+      await storage.updateItem(spring.id, {
+        barcodeValue: "SPRING-20",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 
@@ -70,6 +103,17 @@ async function seed() {
         currentStock: 150,
         minStock: 30,
         dailyUsage: 10,
+        barcodeValue: "BAR-500",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!bar.barcodeValue) {
+      await storage.updateItem(bar.id, {
+        barcodeValue: "BAR-500",
+        productKind: "RAW",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 
@@ -86,6 +130,17 @@ async function seed() {
         currentStock: 25,
         minStock: 10,
         dailyUsage: 5,
+        barcodeValue: "WIDGET-A",
+        productKind: "FINISHED",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!widgetA.barcodeValue) {
+      await storage.updateItem(widgetA.id, {
+        barcodeValue: "WIDGET-A",
+        productKind: "FINISHED",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 
@@ -99,6 +154,17 @@ async function seed() {
         currentStock: 15,
         minStock: 5,
         dailyUsage: 3,
+        barcodeValue: "GADGET-B",
+        productKind: "FINISHED",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
+      });
+    } else if (!gadgetB.barcodeValue) {
+      await storage.updateItem(gadgetB.id, {
+        barcodeValue: "GADGET-B",
+        productKind: "FINISHED",
+        barcodeType: "CODE128",
+        barcodeSource: "AUTO_GENERATED",
       });
     }
 

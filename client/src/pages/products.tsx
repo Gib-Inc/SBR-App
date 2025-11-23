@@ -7,9 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { ImportProductsDialog } from "@/components/import-products-dialog";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -632,6 +633,7 @@ export default function BOM() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [editingBOMItem, setEditingBOMItem] = useState<any>(null);
   const { toast } = useToast();
 
@@ -719,6 +721,14 @@ export default function BOM() {
           <h1 className="text-2xl font-semibold">BOM</h1>
           <p className="text-sm text-muted-foreground">Manage finished products and stock inventory</p>
         </div>
+        <Button
+          variant="outline"
+          onClick={() => setIsImportDialogOpen(true)}
+          data-testid="button-import-products"
+        >
+          <Upload className="mr-2 h-4 w-4" />
+          Import Products
+        </Button>
       </div>
 
       {/* Search Bar */}
@@ -868,6 +878,10 @@ export default function BOM() {
           allItems={allItems}
         />
       )}
+      <ImportProductsDialog
+        isOpen={isImportDialogOpen}
+        onClose={() => setIsImportDialogOpen(false)}
+      />
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CameraCaptureModal } from "@/components/camera-capture-modal";
 import { VisionConfirmationDialog } from "@/components/vision-confirmation-dialog";
+import { PrintLabelsDialog } from "@/components/print-labels-dialog";
 
 const barcodeFormSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -252,6 +253,7 @@ export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isScanDialogOpen, setIsScanDialogOpen] = useState(false);
+  const [isPrintLabelsDialogOpen, setIsPrintLabelsDialogOpen] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [isVisionConfirmDialogOpen, setIsVisionConfirmDialogOpen] = useState(false);
   const [visionResult, setVisionResult] = useState<any>(null);
@@ -408,6 +410,14 @@ export default function Barcodes() {
           <p className="text-sm text-muted-foreground">Manage barcodes for items and bins</p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            onClick={() => setIsPrintLabelsDialogOpen(true)}
+            data-testid="button-print-labels"
+          >
+            <Printer className="mr-2 h-4 w-4" />
+            Print Labels
+          </Button>
           <Dialog open={isScanDialogOpen} onOpenChange={setIsScanDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" data-testid="button-scan-inventory">
@@ -729,6 +739,12 @@ export default function Barcodes() {
             }
           }
         }}
+      />
+
+      {/* Print Labels Dialog */}
+      <PrintLabelsDialog
+        isOpen={isPrintLabelsDialogOpen}
+        onClose={() => setIsPrintLabelsDialogOpen(false)}
       />
     </div>
   );

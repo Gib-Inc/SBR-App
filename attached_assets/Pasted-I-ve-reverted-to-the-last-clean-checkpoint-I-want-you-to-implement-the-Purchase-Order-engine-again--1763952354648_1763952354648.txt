@@ -1,0 +1,177 @@
+I’ve reverted to the last clean checkpoint. I want you to implement the Purchase Order engine again, but this time the entire UI must live inside the existing Suppliers page, under the “PO History & Issues” tab. Do not create any new sidebar navigation entries like “Purchase Orders”. Everything related to POs should be reachable through Suppliers only.
+
+1. Layout and routing – Suppliers page as the PO hub
+
+Use the existing Suppliers route/page and its tab structure.
+
+The tab labeled “PO History & Issues” must become the main Purchase Order workspace.
+
+Inside that tab:
+
+At the top, show summary cards (Total POs, Draft, Pending Approval, Active/Received, etc.), similar to what you built on the standalone Purchase Orders page.
+
+Below the cards, show a PO data table with: PO Number, Supplier, Status, Order Date, Expected Date, Total, and Actions.
+
+Add search and filters (search by PO number or supplier, filter by status and supplier) exactly like before, but all wired to this tab.
+
+The rest of the Suppliers page (e.g., the “Discovery & Creation” tab) should stay as-is or be stubbed, but do not move PO UI outside of PO History & Issues.
+
+Remove or ignore any standalone /purchase-orders route that might exist; all PO screens must be rendered in the Suppliers page context.
+
+2. Data model for POs (backend)
+
+Implement or reuse PurchaseOrder and PurchaseOrderLine models that support the PO lifecycle:
+
+PurchaseOrder:
+
+id
+
+supplierId
+
+poNumber (e.g. PO-2025-0001)
+
+status: DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED, CANCELLED
+
+orderDate
+
+approvedAt
+
+sentAt
+
+expectedDate (optional)
+
+receivedAt (when fully received)
+
+notes
+
+PurchaseOrderLine:
+
+id
+
+purchaseOrderId
+
+inventoryItemId (raw material item)
+
+qtyOrdered
+
+qtyReceived
+
+unitCost
+
+lineTotal (can be derived but may be stored)
+
+Make sure these models integrate cleanly with the existing Items/Supplier models and the transaction system. If any PO schema already exists from earlier work, migrate/align it instead of duplicating.
+
+3. Reorder → PO creation (from Stock Inventory)
+
+On the BOM / Stock Inventory table, keep the Reorder action on each raw material.
+
+When Reorder is clicked:
+
+Open an “Add to Purchase Order” modal.
+
+Pre-fill:
+
+Supplier (from the item’s supplier column).
+
+Suggested reorder quantity (from existing forecast/reorder logic if available).
+
+Unit cost (from the supplier data for that item).
+
+The modal must allow the user to:
+
+Adjust quantity.
+
+Choose whether to add this line to an existing DRAFT PO for that supplier or create a brand new PO.
+
+When confirmed, create or update the appropriate PurchaseOrder + PurchaseOrderLine records.
+
+After a PO is created or updated, it must be visible in the Suppliers → PO History & Issues table (not on any separate page).
+
+4. PO detail and actions – inside Suppliers tab
+
+When clicking a row in the PO table on the PO History & Issues tab:
+
+Open a PO detail view as either a side drawer or a modal overlay, but keep the user on the Suppliers route.
+
+The detail view shows:
+
+Header with supplier, PO number, status, key dates, and total.
+
+A lines table: item, qtyOrdered, qtyReceived, unitCost, lineTotal.
+
+Actions based on status:
+
+DRAFT: Submit for Approval, Edit Lines, Delete.
+
+APPROVAL_PENDING: Approve, Reject.
+
+APPROVED: Mark Sent, Cancel.
+
+SENT / PARTIAL_RECEIVED: Receive Items.
+
+RECEIVED: Close PO.
+
+All status transitions and detail editing must happen within this Suppliers context; do not navigate to a different page.
+
+No emails or external integrations should be triggered here yet; this is pure data + inventory logic.
+
+5. Receiving flow and inventory integration
+
+Implement Receive Items from the PO detail:
+
+Show all lines with Ordered, Already Received, and an editable Receive Now quantity.
+
+On submit:
+
+For each line, create proper RECEIVE transactions in the existing inventory transaction system.
+
+Increase the raw material stock accordingly.
+
+Update each line’s qtyReceived.
+
+If all lines are now fully received, set status → RECEIVED and set receivedAt.
+
+If only some are received, status → PARTIAL_RECEIVED.
+
+Ensure the Stock Inventory table reflects updated stock, and that the transaction/audit trail remains consistent with other movements.
+
+6. Forecast / AI batching (no per-change spam)
+
+When POs are received and stock changes:
+
+Mark the affected items for forecast refresh and let the existing batch forecasting job handle AI calls.
+
+Do not trigger the AI forecast per line/transaction; keep the same batching strategy we already use for inventory changes and scans.
+
+7. UX + layout rules
+
+The Suppliers page width and layout must match the Dashboard/BOM/Barcode pages.
+
+If the PO table needs more columns than fit, only the table content should scroll horizontally inside its card; the page itself must not become horizontally scrollable.
+
+Keep the PO History & Issues tab clean and focused:
+
+Summary cards at the top.
+
+Filters + PO table below.
+
+PO detail in a drawer/modal.
+
+Leave the Discovery & Creation tab available for future supplier outreach tooling; do not move the PO engine there.
+
+8. Verification
+
+After implementation, verify and show (via the UI) that:
+
+Clicking Reorder on raw materials creates/updates POs and they appear in Suppliers → PO History & Issues.
+
+The PO table in that tab supports search and filter by status and supplier.
+
+The approval flow works via the Suppliers PO detail drawer/modal (DRAFT → APPROVAL_PENDING → APPROVED → SENT).
+
+Receiving items from that PO detail updates Stock Inventory and transaction history correctly.
+
+No extra sidebar nav items (like a separate Purchase Orders page) exist; everything PO-related is fully usable inside the Suppliers page tabs.
+
+Finally, summarize which files you changed and confirm that the old standalone Purchase Orders view (if any) has been removed or is no longer reachable from the sidebar.

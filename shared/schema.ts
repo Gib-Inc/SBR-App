@@ -142,12 +142,15 @@ export type SupplierItem = typeof supplierItems.$inferSelect;
 
 export const purchaseOrders = pgTable("purchase_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  poNumber: text("po_number").notNull().unique(), // e.g., PO-2025-0001
   supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
+  approvedAt: timestamp("approved_at"),
   sentAt: timestamp("sent_at"),
+  expectedDate: timestamp("expected_date"),
   receivedAt: timestamp("received_at"),
   paidAt: timestamp("paid_at"),
-  status: text("status").notNull().default('DRAFT'), // DRAFT, PENDING_APPROVAL, SENT, PARTIAL_RECEIVED, RECEIVED, PAID, CANCELLED
+  status: text("status").notNull().default('DRAFT'), // DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED, CANCELLED
   hasIssue: boolean("has_issue").notNull().default(false),
   issueStatus: text("issue_status").notNull().default('NONE'), // NONE, OPEN, IN_PROGRESS, RESOLVED
   issueType: text("issue_type"), // late, damaged, short_shipment, quality, invoice_mismatch, other
@@ -170,9 +173,9 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   purchaseOrderId: varchar("purchase_order_id").notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
   itemId: varchar("item_id").notNull().references(() => items.id),
-  quantity: integer("quantity").notNull(),
-  receivedQuantity: integer("received_quantity").notNull().default(0),
-  unitPrice: real("unit_price"),
+  qtyOrdered: integer("qty_ordered").notNull(),
+  qtyReceived: integer("qty_received").notNull().default(0),
+  unitCost: real("unit_cost"),
 }, (table) => ({
   purchaseOrderIdIdx: index("purchase_order_lines_purchase_order_id_idx").on(table.purchaseOrderId),
 }));

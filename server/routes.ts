@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { LLMService } from "./services/llm";
+import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
 import { ImportService } from "./import-service";
@@ -32,6 +32,9 @@ import {
   updateImportProfileSchema,
   insertImportJobSchema,
   updateImportJobSchema,
+  insertPurchaseOrderSchema,
+  insertPurchaseOrderLineSchema,
+  insertSupplierLeadSchema,
 } from "@shared/schema";
 
 const SALT_ROUNDS = 10;
@@ -1838,6 +1841,408 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[Transaction] Error processing production:", error);
       res.status(500).json({ error: error.message || "Failed to process production" });
+    }
+  });
+
+  app.get("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const purchaseOrders = await storage.getAllPurchaseOrders();
+      res.json(purchaseOrders);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching purchase orders:", error);
+      res.status(500).json({ error: "Failed to fetch purchase orders" });
+    }
+  });
+
+  app.get("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const purchaseOrder = await storage.getPurchaseOrder(id);
+      
+      if (!purchaseOrder) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      res.json({ ...purchaseOrder, lines });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching purchase order:", error);
+      res.status(500).json({ error: "Failed to fetch purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
+    let createdPOId: string | null = null;
+    try {
+      const { lines, ...poData } = req.body;
+      
+      const validatedPO = insertPurchaseOrderSchema.parse(poData);
+      const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
+      createdPOId = purchaseOrder.id;
+
+      if (lines && Array.isArray(lines)) {
+        for (const line of lines) {
+          const validatedLine = insertPurchaseOrderLineSchema.parse({
+            ...line,
+            purchaseOrderId: purchaseOrder.id,
+          });
+          await storage.createPurchaseOrderLine(validatedLine);
+        }
+      }
+
+      const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
+      res.status(201).json({ ...purchaseOrder, lines: createdLines });
+    } catch (error: any) {
+      if (createdPOId) {
+        try {
+          await storage.deletePurchaseOrder(createdPOId);
+        } catch (rollbackError) {
+          console.error("[PurchaseOrder] Error rolling back PO:", rollbackError);
+        }
+      }
+      console.error("[PurchaseOrder] Error creating purchase order:", error);
+      res.status(400).json({ error: error.message || "Failed to create purchase order" });
+    }
+  });
+
+  app.patch("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const validatedUpdates = insertPurchaseOrderSchema.partial().parse(req.body);
+      
+      const updated = await storage.updatePurchaseOrder(id, validatedUpdates);
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error updating purchase order:", error);
+      res.status(400).json({ error: error.message || "Failed to update purchase order" });
+    }
+  });
+
+  app.delete("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const deleted = await storage.deletePurchaseOrder(id);
+      
+      if (!deleted) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error deleting purchase order:", error);
+      res.status(500).json({ error: "Failed to delete purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/mark-sent", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'SENT',
+        sentAt: new Date(),
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error marking purchase order as sent:", error);
+      res.status(500).json({ error: "Failed to mark purchase order as sent" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/mark-received", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'RECEIVED',
+        receivedAt: new Date(),
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error marking purchase order as received:", error);
+      res.status(500).json({ error: "Failed to mark purchase order as received" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/mark-paid", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        paidAt: new Date(),
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error marking purchase order as paid:", error);
+      res.status(500).json({ error: "Failed to mark purchase order as paid" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/report-issue", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { issueType, issueNotes, refundStatus, refundAmount } = req.body;
+      
+      const updated = await storage.updatePurchaseOrder(id, {
+        hasIssue: true,
+        issueStatus: 'OPEN',
+        issueType,
+        issueNotes,
+        refundStatus: refundStatus || 'NONE',
+        refundAmount: refundAmount || 0,
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error reporting issue:", error);
+      res.status(500).json({ error: "Failed to report issue" });
+    }
+  });
+
+  app.post("/api/purchase-order-lines", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validatedLine = insertPurchaseOrderLineSchema.parse(req.body);
+      const line = await storage.createPurchaseOrderLine(validatedLine);
+      res.status(201).json(line);
+    } catch (error: any) {
+      console.error("[PurchaseOrderLine] Error creating line:", error);
+      res.status(400).json({ error: error.message || "Failed to create line" });
+    }
+  });
+
+  app.patch("/api/purchase-order-lines/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const validatedUpdates = insertPurchaseOrderLineSchema.partial().parse(req.body);
+      
+      const updated = await storage.updatePurchaseOrderLine(id, validatedUpdates);
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Line not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrderLine] Error updating line:", error);
+      res.status(400).json({ error: error.message || "Failed to update line" });
+    }
+  });
+
+  app.delete("/api/purchase-order-lines/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const deleted = await storage.deletePurchaseOrderLine(id);
+      
+      if (!deleted) {
+        return res.status(404).json({ error: "Line not found" });
+      }
+
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[PurchaseOrderLine] Error deleting line:", error);
+      res.status(500).json({ error: "Failed to delete line" });
+    }
+  });
+
+  app.get("/api/supplier-leads", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { status } = req.query;
+      
+      const leads = status 
+        ? await storage.getSupplierLeadsByStatus(status as string)
+        : await storage.getAllSupplierLeads();
+        
+      res.json(leads);
+    } catch (error: any) {
+      console.error("[SupplierLead] Error fetching leads:", error);
+      res.status(500).json({ error: "Failed to fetch supplier leads" });
+    }
+  });
+
+  app.get("/api/supplier-leads/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const lead = await storage.getSupplierLead(id);
+      
+      if (!lead) {
+        return res.status(404).json({ error: "Supplier lead not found" });
+      }
+
+      res.json(lead);
+    } catch (error: any) {
+      console.error("[SupplierLead] Error fetching lead:", error);
+      res.status(500).json({ error: "Failed to fetch supplier lead" });
+    }
+  });
+
+  app.post("/api/supplier-leads", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validatedLead = insertSupplierLeadSchema.parse(req.body);
+      const lead = await storage.createSupplierLead(validatedLead);
+      res.status(201).json(lead);
+    } catch (error: any) {
+      console.error("[SupplierLead] Error creating lead:", error);
+      res.status(400).json({ error: error.message || "Failed to create supplier lead" });
+    }
+  });
+
+  app.patch("/api/supplier-leads/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const validatedUpdates = insertSupplierLeadSchema.partial().parse(req.body);
+      
+      const updated = await storage.updateSupplierLead(id, validatedUpdates);
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Supplier lead not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[SupplierLead] Error updating lead:", error);
+      res.status(400).json({ error: error.message || "Failed to update supplier lead" });
+    }
+  });
+
+  app.delete("/api/supplier-leads/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const deleted = await storage.deleteSupplierLead(id);
+      
+      if (!deleted) {
+        return res.status(404).json({ error: "Supplier lead not found" });
+      }
+
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[SupplierLead] Error deleting lead:", error);
+      res.status(500).json({ error: "Failed to delete supplier lead" });
+    }
+  });
+
+  app.post("/api/supplier-leads/:id/generate-outreach", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const lead = await storage.getSupplierLead(id);
+      
+      if (!lead) {
+        return res.status(404).json({ error: "Supplier lead not found" });
+      }
+
+      const settings = await storage.getSettings(req.session.userId!);
+      const provider = (settings?.llmProvider || 'chatgpt') as LLMProvider;
+      const apiKey = settings?.llmApiKey || '';
+      const customEndpoint = settings?.llmCustomEndpoint || undefined;
+
+      const prompt = `You are writing an outreach email to a potential supplier. Generate a professional, concise email template to introduce our manufacturing company and express interest in partnering.
+
+Supplier Information:
+- Name: ${lead.name}
+- Category: ${lead.category || 'Not specified'}
+- Website: ${lead.websiteUrl || 'Not specified'}
+
+The email should:
+1. Be professional but friendly
+2. Briefly introduce our company
+3. Express specific interest in their products/services
+4. Request pricing information and ordering details
+5. Include a clear call-to-action
+6. Be concise (under 200 words)
+
+Generate only the email body text, no subject line.`;
+
+      const result = await LLMService.askLLM({
+        provider,
+        apiKey,
+        customEndpoint,
+        taskType: "forecasting",
+        payload: { prompt },
+      });
+
+      if (!result.success || !result.data) {
+        return res.status(500).json({ 
+          error: result.error || "Failed to generate outreach draft" 
+        });
+      }
+
+      const outreachDraft = String(result.data);
+
+      const updated = await storage.updateSupplierLead(id, {
+        aiOutreachDraft: outreachDraft,
+        lastContactedAt: new Date(),
+      });
+
+      res.json({ outreachDraft, lead: updated });
+    } catch (error: any) {
+      console.error("[SupplierLead] Error generating outreach:", error);
+      res.status(500).json({ error: error.message || "Failed to generate outreach" });
+    }
+  });
+
+  app.post("/api/supplier-leads/:id/convert", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { orderUrl } = req.body;
+      
+      const lead = await storage.getSupplierLead(id);
+      
+      if (!lead) {
+        return res.status(404).json({ error: "Supplier lead not found" });
+      }
+
+      const supplierData = {
+        name: lead.name,
+        orderUrl: orderUrl || lead.websiteUrl || '',
+        contactEmail: lead.contactEmail || null,
+        contactPhone: lead.contactPhone || null,
+        notes: lead.notes || null,
+      };
+
+      const validatedSupplier = insertSupplierSchema.parse(supplierData);
+      const supplier = await storage.createSupplier(validatedSupplier);
+
+      await storage.updateSupplierLead(id, {
+        status: 'CONVERTED',
+        convertedSupplierId: supplier.id,
+      });
+
+      res.status(201).json({ supplier, lead });
+    } catch (error: any) {
+      console.error("[SupplierLead] Error converting lead:", error);
+      res.status(400).json({ error: error.message || "Failed to convert lead to supplier" });
+    }
+  });
+
+  app.post("/api/supplier-leads/import-phantombuster", requireAuth, async (req: Request, res: Response) => {
+    try {
+      res.status(501).json({ 
+        error: "PhantomBuster integration not implemented yet",
+        note: "This endpoint is a placeholder for PhantomBuster web scraping integration. Implementation must comply with PhantomBuster Terms of Service and target website robots.txt/terms."
+      });
+    } catch (error: any) {
+      console.error("[SupplierLead] Error importing from PhantomBuster:", error);
+      res.status(500).json({ error: "Failed to import from PhantomBuster" });
     }
   });
 

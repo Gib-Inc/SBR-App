@@ -8,6 +8,16 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
+**November 24, 2025 - Purchase Order Table UI Improvements**:
+- ✅ **Proper Table Containerization**: Restructured PO table in Suppliers page for optimal data viewing
+  - Filters (search + status/supplier dropdowns) separated and fixed at top with visual border
+  - Independent dual-scroll: vertical (max-h-[600px]) and horizontal (min-w-[1100px] table)
+  - Sticky headers (sticky top-0 bg-card z-10) remain visible during vertical scrolling
+  - Empty state renders as row inside tbody, maintaining table structure
+  - Loading state properly positioned outside scroll container
+- ✅ **Seed Data Fix**: Corrected supplier variable references (acmeSupplier → acmeCorp, globalSupplier → globalSupply)
+  - 4 sample POs created: Draft, Sent, Partial Received, and Received statuses
+
 **November 23, 2025 - AI Batch Forecasting & Transaction System Improvements**:
 - ✅ **Batch Forecast Infrastructure**: Added forecastDirty, lastForecastAt, and forecastData fields to items schema
   - forecastDirty (boolean): Marks items needing forecast refresh

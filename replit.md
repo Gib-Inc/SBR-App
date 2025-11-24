@@ -8,13 +8,18 @@ This is a production-ready full-stack inventory management web application desig
 
 ## Recent Changes
 
-**November 24, 2025 - Purchase Order Table UI Improvements**:
+**November 24, 2025 - Purchase Order Table UI & Responsive Layout**:
 - ✅ **Proper Table Containerization**: Restructured PO table in Suppliers page for optimal data viewing
   - Filters (search + status/supplier dropdowns) separated and fixed at top with visual border
   - Independent dual-scroll: vertical (max-h-[600px]) and horizontal (min-w-[1100px] table)
   - Sticky headers (sticky top-0 bg-card z-10) remain visible during vertical scrolling
   - Empty state renders as row inside tbody, maintaining table structure
   - Loading state properly positioned outside scroll container
+- ✅ **Responsive Page Layout**: Fixed horizontal scrolling issues in Suppliers page
+  - Replaced `container mx-auto` with `w-full max-w-full` to constrain to viewport width
+  - Added responsive padding (px-4 md:px-6) that adapts to sidebar open/closed states
+  - Page-level horizontal scroll eliminated - only table scrolls horizontally within container
+  - Layout properly adapts when sidebar toggles between open and collapsed states
 - ✅ **Seed Data Fix**: Corrected supplier variable references (acmeSupplier → acmeCorp, globalSupplier → globalSupply)
   - 4 sample POs created: Draft, Sent, Partial Received, and Received statuses
 

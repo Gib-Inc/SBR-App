@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { format } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -691,34 +692,145 @@ function BOMDialog({
 }
 
 function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
+  const [quantity, setQuantity] = useState<string>("");
+  const [selectedSupplier, setSelectedSupplier] = useState<string>("");
+  const [selectedPOOption, setSelectedPOOption] = useState<"new" | "existing">("new");
+  const [selectedExistingPO, setSelectedExistingPO] = useState<string>("");
+  const { toast } = useToast();
+
+  const { data: suppliers } = useQuery<any[]>({
+    queryKey: ["/api/suppliers"],
+    enabled: isOpen,
+  });
+
+  const { data: supplierItems } = useQuery<any[]>({
+    queryKey: ["/api/supplier-items"],
+    enabled: isOpen,
+  });
+
+  const { data: draftPOs } = useQuery<any[]>({
+    queryKey: ["/api/suppliers", selectedSupplier, "draft-purchase-orders"],
+    enabled: isOpen && !!selectedSupplier,
+  });
+
+  const createPOMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const response = await apiRequest("POST", "/api/purchase-orders", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Purchase order created successfully",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      onClose();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create purchase order",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const addLineMutation = useMutation({
+    mutationFn: async (data: { lineData: any; poId: string }) => {
+      const response = await apiRequest("POST", "/api/purchase-order-lines", data.lineData);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Item added to purchase order",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      onClose();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to add item to purchase order",
+        variant: "destructive",
+      });
+    },
+  });
+
   if (!item) return null;
 
   const currentStock = item.currentStock ?? 0;
   const dailyUsage = item.dailyUsage ?? 1;
   const daysOfCover = dailyUsage > 0 ? Math.floor(currentStock / dailyUsage) : 0;
   
-  // Calculate suggested order quantity: target 30 days supply minus current stock, clamped to 0
   const targetStock = Math.max(dailyUsage * 30, 100);
   const calculatedOrderQty = Math.max(0, targetStock - currentStock);
-  
-  // Respect MOQ if specified, otherwise use calculated quantity
-  const moq = item.primarySupplier?.minimumOrderQuantity || 0;
-  const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
+
+  const itemSuppliers = supplierItems?.filter(si => si.itemId === item.id) || [];
+  const primarySupplierItem = itemSuppliers.find(si => si.isDesignatedSupplier);
+  const supplierMap = new Map(suppliers?.map(s => [s.id, s]) || []);
+
+  const suggestedQty = primarySupplierItem?.minimumOrderQuantity 
+    ? Math.max(primarySupplierItem.minimumOrderQuantity, calculatedOrderQty)
+    : calculatedOrderQty;
+
+  const selectedSupplierItem = itemSuppliers.find(si => si.supplierId === selectedSupplier);
+
+  const handleSubmit = () => {
+    const qty = parseInt(quantity) || suggestedQty;
+    if (qty <= 0) {
+      toast({
+        title: "Invalid quantity",
+        description: "Please enter a positive quantity",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!selectedSupplier) {
+      toast({
+        title: "No supplier selected",
+        description: "Please select a supplier",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const lineData = {
+      itemId: item.id,
+      quantity: qty,
+      unitPrice: selectedSupplierItem?.price || 0,
+    };
+
+    if (selectedPOOption === "existing" && selectedExistingPO) {
+      addLineMutation.mutate({
+        lineData: { ...lineData, purchaseOrderId: selectedExistingPO },
+        poId: selectedExistingPO,
+      });
+    } else {
+      createPOMutation.mutate({
+        supplierId: selectedSupplier,
+        status: "DRAFT",
+        notes: `Created from reorder for ${item.name}`,
+        lines: [lineData],
+      });
+    }
+  };
+
+  const hasDraftPOs = (draftPOs?.length || 0) > 0;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Reorder / Create Purchase Order</DialogTitle>
+          <DialogTitle>Add to Purchase Order</DialogTitle>
         </DialogHeader>
         <div className="space-y-6">
-          {/* Item Information */}
           <div>
             <h3 className="font-semibold text-lg mb-2">{item.name}</h3>
             <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>
           </div>
 
-          {/* Current Stock & Coverage */}
           <div className="grid grid-cols-2 gap-4">
             <Card>
               <CardHeader className="pb-3">
@@ -727,72 +839,133 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
               <CardContent>
                 <div className="text-2xl font-bold">{currentStock}</div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {daysOfCover} days of cover at current usage
+                  {daysOfCover} days of cover
                 </p>
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Suggested Order Qty</CardTitle>
+                <CardTitle className="text-sm font-medium">Suggested Qty</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{suggestedOrderQty}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  ~30 days supply
-                </p>
+                <div className="text-2xl font-bold">{suggestedQty}</div>
+                <p className="text-xs text-muted-foreground mt-1">~30 days supply</p>
               </CardContent>
             </Card>
           </div>
 
-          {/* Supplier Information */}
-          {item.primarySupplier ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm font-medium">Primary Supplier</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Supplier</p>
-                    <p className="font-medium">{item.primarySupplier.supplierName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Supplier SKU</p>
-                    <p className="font-mono text-sm">{item.primarySupplier.supplierSku || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Unit Cost</p>
-                    <p className="font-medium">
-                      {item.primarySupplier.unitCost ? `$${item.primarySupplier.unitCost.toFixed(2)}` : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">MOQ</p>
-                    <p className="font-medium">{item.primarySupplier.minimumOrderQuantity || "—"}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Lead Time</p>
-                    <p className="font-medium">
-                      {item.primarySupplier.leadTimeDays ? `${item.primarySupplier.leadTimeDays} days` : "—"}
-                    </p>
-                  </div>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">Supplier</label>
+              <Select value={selectedSupplier} onValueChange={setSelectedSupplier}>
+                <SelectTrigger data-testid="select-supplier">
+                  <SelectValue placeholder="Select supplier" />
+                </SelectTrigger>
+                <SelectContent>
+                  {itemSuppliers.map(si => {
+                    const supplier = supplierMap.get(si.supplierId);
+                    return supplier ? (
+                      <SelectItem key={si.id} value={si.supplierId}>
+                        {supplier.name} 
+                        {si.isDesignatedSupplier && " (Primary)"}
+                        {si.price && ` - $${si.price.toFixed(2)}`}
+                      </SelectItem>
+                    ) : null;
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Quantity</label>
+              <Input
+                type="number"
+                placeholder={`Suggested: ${suggestedQty}`}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                data-testid="input-quantity"
+              />
+            </div>
+
+            {selectedSupplier && hasDraftPOs && (
+              <div className="space-y-3">
+                <label className="text-sm font-medium">Purchase Order</label>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={selectedPOOption === "new"}
+                      onChange={() => setSelectedPOOption("new")}
+                      className="cursor-pointer"
+                    />
+                    <span className="text-sm">Create new PO</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={selectedPOOption === "existing"}
+                      onChange={() => setSelectedPOOption("existing")}
+                      className="cursor-pointer"
+                    />
+                    <span className="text-sm">Add to existing DRAFT PO</span>
+                  </label>
                 </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="py-8 text-center">
-                <p className="text-muted-foreground">No supplier configured for this item</p>
-              </CardContent>
-            </Card>
-          )}
+
+                {selectedPOOption === "existing" && (
+                  <Select value={selectedExistingPO} onValueChange={setSelectedExistingPO}>
+                    <SelectTrigger data-testid="select-existing-po">
+                      <SelectValue placeholder="Select draft PO" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {draftPOs?.map(po => (
+                        <SelectItem key={po.id} value={po.id}>
+                          {po.poNumber || po.id.slice(0, 8)} - {po.orderDate ? format(new Date(po.orderDate), 'MMM dd, yyyy') : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
+            {selectedSupplierItem && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Supplier Details</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Unit Price:</span>
+                    <span className="font-medium">
+                      {selectedSupplierItem.price ? `$${selectedSupplierItem.price.toFixed(2)}` : "—"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">MOQ:</span>
+                    <span className="font-medium">{selectedSupplierItem.minimumOrderQuantity || "—"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Lead Time:</span>
+                    <span className="font-medium">
+                      {selectedSupplierItem.leadTimeDays ? `${selectedSupplierItem.leadTimeDays} days` : "—"}
+                    </span>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
 
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>
-              Close
+            <Button variant="outline" onClick={onClose} disabled={createPOMutation.isPending || addLineMutation.isPending}>
+              Cancel
             </Button>
-            <Button disabled>
-              Create PO (Coming Soon)
+            <Button 
+              onClick={handleSubmit}
+              disabled={createPOMutation.isPending || addLineMutation.isPending || !selectedSupplier}
+              data-testid="button-add-to-po"
+            >
+              {createPOMutation.isPending || addLineMutation.isPending ? "Adding..." : 
+               selectedPOOption === "existing" ? "Add to PO" : "Create PO"}
             </Button>
           </div>
         </div>

@@ -2486,7 +2486,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/purchase-orders/:id/toggle-dispute", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { action } = req.body; // 'open' or 'resolve'
+      
+      // Validate request body
+      const toggleDisputeSchema = z.object({
+        action: z.enum(['open', 'resolve']),
+        reason: z.string().optional(),
+      });
+      
+      const { action, reason } = toggleDisputeSchema.parse(req.body);
       
       const po = await storage.getPurchaseOrder(id);
       if (!po) {
@@ -2502,27 +2509,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
           issueStatus: 'OPEN',
           issueOpenedAt: now,
           issueResolvedAt: null,
+          issueNotes: reason || 'Dispute opened without specific reason',
         };
 
         // TODO: Integrate with GoHighLevel SMS workflow
         // This will trigger a manual SMS workflow in GHL to notify the rep
-        console.log(`[PurchaseOrder] Dispute opened for PO ${po.poNumber}:`, {
+        console.log('[PurchaseOrder] Dispute opened:', {
           poId: id,
           poNumber: po.poNumber,
           supplierId: po.supplierId,
-          ghlRep: po.ghlRepName,
+          ghlRep: po.ghlRepName || 'N/A',
+          reason: reason || 'No reason provided',
           // Future: Call GHL API to send SMS to rep
         });
-      } else if (action === 'resolve') {
+      } else {
+        // action === 'resolve'
         updateData = {
           issueStatus: 'RESOLVED',
           issueResolvedAt: now,
+          issueNotes: null, // Clear notes when resolving
         };
-      } else {
-        return res.status(400).json({ error: "Invalid action. Must be 'open' or 'resolve'" });
+        
+        console.log('[PurchaseOrder] Dispute resolved:', {
+          poId: id,
+          poNumber: po.poNumber,
+        });
       }
 
-      const updated = await storage.updatePurchaseOrder(id, updateData);
+      await storage.updatePurchaseOrder(id, updateData);
+      
+      // Fetch updated PO to ensure we return latest data
+      const updated = await storage.getPurchaseOrder(id);
+      
+      if (!updated) {
+        return res.status(500).json({ error: "Failed to retrieve updated purchase order" });
+      }
+      
       res.json({ 
         success: true, 
         message: action === 'open' ? "Dispute opened. GHL team will be notified." : "Dispute resolved.",
@@ -2530,6 +2552,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error toggling dispute:", error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Invalid request body", details: error.errors });
+      }
       res.status(500).json({ error: error.message || "Failed to update dispute status" });
     }
   });
@@ -2538,10 +2563,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/purchase-orders/:id/bulk-confirm-receipt", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      
+      // No request body needed, but validate empty body
+      const bulkConfirmSchema = z.object({}).optional();
+      bulkConfirmSchema.parse(req.body);
+      
       const po = await storage.getPurchaseOrder(id);
       
       if (!po) {
         return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      // Check status - prevent double-processing
+      if (po.status === 'RECEIVED') {
+        return res.status(409).json({ error: "PO already fully received" });
       }
 
       if (!['SENT', 'PARTIAL_RECEIVED'].includes(po.status)) {
@@ -2550,49 +2585,122 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const lines = await storage.getPurchaseOrderLinesByPOId(id);
       
-      // For each line, create RECEIVE transaction for remaining quantity
+      if (!lines || lines.length === 0) {
+        return res.status(400).json({ error: "No line items found for this PO" });
+      }
+      
+      // Step 1: Validate all lines can be processed (dry run)
+      const linesToProcess: Array<{
+        line: typeof lines[0];
+        item: Item;
+        itemType: 'FINISHED' | 'RAW';
+        location: 'HILDALE' | 'PIVOT' | 'N/A';
+        remaining: number;
+      }> = [];
+      
       for (const line of lines) {
         const remaining = line.qtyOrdered - line.qtyReceived;
         if (remaining > 0) {
+          // Verify item exists
+          const item = await storage.getItem(line.itemId);
+          if (!item) {
+            return res.status(400).json({ 
+              success: false,
+              error: `Cannot process PO: Item not found for line ${line.id}`,
+            });
+          }
+
+          // Determine item type and location
+          const itemType = item.type === 'finished_product' ? 'FINISHED' as const : 'RAW' as const;
+          const location = itemType === 'RAW' ? 'N/A' as const : 'HILDALE' as const;
+          
+          linesToProcess.push({
+            line,
+            item,
+            itemType,
+            location,
+            remaining,
+          });
+        }
+      }
+
+      // If no lines to process, nothing to do
+      if (linesToProcess.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "All line items have already been received",
+        });
+      }
+
+      // Step 2: Apply all transactions atomically
+      const processedLines = [];
+      for (const { line, item, itemType, location, remaining } of linesToProcess) {
+        try {
+          // Use TransactionService to apply RECEIVE transaction
+          const result = await transactionService.applyTransaction({
+            itemId: line.itemId,
+            itemType,
+            type: 'RECEIVE',
+            location,
+            quantity: remaining,
+            notes: `Bulk confirm receipt for PO ${po.poNumber}`,
+            createdBy: 'system',
+          });
+
+          if (!result.success) {
+            // If any transaction fails, abort and return error
+            return res.status(400).json({ 
+              success: false,
+              error: `Failed to receive item "${item.name}": ${result.error}`,
+            });
+          }
+
           // Update line received quantity
           await storage.updatePurchaseOrderLine(line.id, {
             qtyReceived: line.qtyOrdered,
           });
-
-          // Create RECEIVE transaction
-          const transaction = await storage.createInventoryTransaction({
-            itemId: line.itemId,
-            transactionType: 'RECEIVE',
-            quantity: remaining,
-            binId: null,
-            purchaseOrderId: id,
-            purchaseOrderLineId: line.id,
-            notes: `Bulk confirm receipt for PO ${po.poNumber}`,
+          
+          processedLines.push({
+            lineId: line.id,
+            itemName: item.name,
+            quantityReceived: remaining,
           });
-
-          // Update item currentStock
-          const item = await storage.getItem(line.itemId);
-          if (item) {
-            await storage.updateItem(line.itemId, {
-              currentStock: (item.currentStock || 0) + remaining,
-            });
-          }
+          
+          console.log(`[PurchaseOrder] Received ${remaining} units of item ${item.name} for PO ${po.poNumber}`);
+        } catch (lineError: any) {
+          // If any error occurs, abort and return error
+          console.error(`[PurchaseOrder] Error processing line ${line.id}:`, lineError);
+          return res.status(500).json({ 
+            success: false,
+            error: `Failed to process line for item "${item.name}": ${lineError.message}`,
+          });
         }
       }
 
-      // Update PO status to RECEIVED
-      const updated = await storage.updatePurchaseOrder(id, {
+      // Step 3: Only update PO status if ALL lines succeeded
+      await storage.updatePurchaseOrder(id, {
         status: 'RECEIVED',
         receivedAt: new Date(),
       });
 
+      // Fetch updated PO to return latest data
+      const updated = await storage.getPurchaseOrder(id);
+      
+      if (!updated) {
+        return res.status(500).json({ error: "Failed to retrieve updated PO" });
+      }
+
       res.json({ 
         success: true,
         message: "PO marked as fully received and inventory updated",
-        purchaseOrder: updated 
+        purchaseOrder: updated,
+        processed: processedLines,
       });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error bulk confirming receipt:", error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Invalid request body", details: error.errors });
+      }
       res.status(500).json({ error: error.message || "Failed to bulk confirm receipt" });
     }
   });

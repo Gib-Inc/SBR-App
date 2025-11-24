@@ -563,6 +563,13 @@ export default function Suppliers() {
                                     }}
                                     disabled={toggleDisputeMutation.isPending}
                                     data-testid={`button-dispute-${po.id}`}
+                                    aria-label={
+                                      po.issueStatus === 'OPEN' 
+                                        ? "Mark dispute resolved" 
+                                        : po.issueStatus === 'RESOLVED'
+                                        ? "Dispute resolved"
+                                        : "Open dispute and notify in GHL"
+                                    }
                                     title={
                                       po.issueStatus === 'OPEN' 
                                         ? "Mark dispute resolved" 
@@ -590,6 +597,11 @@ export default function Suppliers() {
                                     }}
                                     disabled={!canConfirm}
                                     data-testid={`button-confirm-receipt-${po.id}`}
+                                    aria-label={
+                                      canConfirm
+                                        ? "Confirm order received in full"
+                                        : "Receiving not available in this status"
+                                    }
                                     title={
                                       canConfirm
                                         ? "Confirm order received in full"

@@ -94,9 +94,7 @@ export default function Returns() {
 
   const issueLabelMutation = useMutation({
     mutationFn: async (returnId: string) => {
-      return await apiRequest(`/api/returns/${returnId}/label`, {
-        method: "POST",
-      });
+      return await apiRequest("POST", `/api/returns/${returnId}/label`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
@@ -143,98 +141,102 @@ export default function Returns() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="flex flex-col gap-6 p-6">
+      {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Returns</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl font-semibold">Returns</h1>
+          <p className="text-sm text-muted-foreground">
             Manage customer return requests and inventory restocking
           </p>
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5" />
-            Return Requests
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Loading returns...
-            </div>
-          ) : !returns || returns.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No return requests yet
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Order ID</TableHead>
-                    <TableHead>Channel</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Resolution</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {returns.map((returnRequest) => (
-                    <TableRow
-                      key={returnRequest.id}
-                      className="cursor-pointer hover-elevate"
-                      onClick={() => setSelectedReturnId(returnRequest.id)}
-                      data-testid={`row-return-${returnRequest.id}`}
-                    >
-                      <TableCell className="font-medium">
-                        {returnRequest.externalOrderId}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{returnRequest.salesChannel}</Badge>
-                      </TableCell>
-                      <TableCell>{returnRequest.customerName}</TableCell>
-                      <TableCell>
-                        <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
-                          {returnRequest.status.replace(/_/g, ' ')}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <span className={getResolutionColor(returnRequest.resolutionRequested)}>
-                          {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedReturnId(returnRequest.id);
-                            setShowReceiveModal(true);
-                          }}
-                          disabled={returnRequest.status === 'RECEIVED' || returnRequest.status === 'REFUNDED' || returnRequest.status === 'REPLACED'}
-                          data-testid={`button-receive-${returnRequest.id}`}
-                        >
-                          <PackageCheck className="h-4 w-4 mr-1" />
-                          Receive
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Return Requests Section */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Return Requests</h2>
+            <p className="text-sm text-muted-foreground">Track and process customer returns</p>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="flex h-48 items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          </div>
+        ) : !returns || returns.length === 0 ? (
+          <Card>
+            <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
+              <Package className="h-12 w-12 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">No return requests yet</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium">Order ID</th>
+                  <th className="p-3 text-left text-sm font-medium">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium">Customer</th>
+                  <th className="p-3 text-left text-sm font-medium">Status</th>
+                  <th className="p-3 text-left text-sm font-medium">Resolution</th>
+                  <th className="p-3 text-left text-sm font-medium">Created</th>
+                  <th className="p-3 text-right text-sm font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {returns.map((returnRequest) => (
+                  <tr
+                    key={returnRequest.id}
+                    className="h-11 border-b hover-elevate cursor-pointer"
+                    onClick={() => setSelectedReturnId(returnRequest.id)}
+                    data-testid={`row-return-${returnRequest.id}`}
+                  >
+                    <td className="px-3 align-middle font-medium">
+                      {returnRequest.externalOrderId}
+                    </td>
+                    <td className="px-3 align-middle">
+                      <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+                    </td>
+                    <td className="px-3 align-middle">{returnRequest.customerName}</td>
+                    <td className="px-3 align-middle">
+                      <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
+                        {returnRequest.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-3 align-middle">
+                      <span className={getResolutionColor(returnRequest.resolutionRequested)}>
+                        {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
+                      </span>
+                    </td>
+                    <td className="px-3 align-middle">
+                      {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
+                    </td>
+                    <td className="px-3 align-middle text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedReturnId(returnRequest.id);
+                          setShowReceiveModal(true);
+                        }}
+                        disabled={returnRequest.status === 'RECEIVED' || returnRequest.status === 'REFUNDED' || returnRequest.status === 'REPLACED'}
+                        data-testid={`button-receive-${returnRequest.id}`}
+                      >
+                        <PackageCheck className="h-4 w-4 mr-1" />
+                        Receive
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {selectedReturnId && returnDetails && !showReceiveModal && (
         <ReturnDetailsModal
@@ -426,13 +428,9 @@ function ReceiveReturnModal({ returnDetails, onClose, onSuccess }: ReceiveReturn
 
   const receiveMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest(`/api/returns/${returnDetails.returnRequest.id}/receive`, {
-        method: "POST",
-        body: JSON.stringify({
-          items: itemsData,
-          resolutionFinal,
-        }),
-        headers: { "Content-Type": "application/json" },
+      return await apiRequest("POST", `/api/returns/${returnDetails.returnRequest.id}/receive`, {
+        items: itemsData,
+        resolutionFinal,
       });
     },
     onSuccess: () => {

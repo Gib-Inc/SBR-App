@@ -1876,6 +1876,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { lines, ...poData } = req.body;
       
+      if (!poData.poNumber) {
+        const year = new Date().getFullYear();
+        const allPOs = await storage.getAllPurchaseOrders();
+        const thisYearPOs = allPOs.filter(po => 
+          po.poNumber?.startsWith(`PO-${year}-`)
+        );
+        const nextNum = thisYearPOs.length + 1;
+        poData.poNumber = `PO-${year}-${String(nextNum).padStart(4, '0')}`;
+      }
+      
       const validatedPO = insertPurchaseOrderSchema.parse(poData);
       const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
       createdPOId = purchaseOrder.id;
@@ -2017,6 +2027,192 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[PurchaseOrder] Error reporting issue:", error);
       res.status(500).json({ error: "Failed to report issue" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/submit-for-approval", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'APPROVAL_PENDING',
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error submitting for approval:", error);
+      res.status(500).json({ error: "Failed to submit for approval" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/approve", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'APPROVED',
+        approvedAt: new Date(),
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error approving purchase order:", error);
+      res.status(500).json({ error: "Failed to approve purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/reject", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { notes } = req.body;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'DRAFT',
+        notes: notes || '',
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error rejecting purchase order:", error);
+      res.status(500).json({ error: "Failed to reject purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { receivedItems } = req.body;
+      
+      if (!receivedItems || !Array.isArray(receivedItems)) {
+        return res.status(400).json({ error: "receivedItems array is required" });
+      }
+
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      const createdTransactions = [];
+
+      for (const receivedItem of receivedItems) {
+        const { lineId, quantity } = receivedItem;
+        
+        if (!lineId || quantity === undefined || quantity <= 0) {
+          continue;
+        }
+
+        const line = lines.find(l => l.id === lineId);
+        if (!line) {
+          continue;
+        }
+
+        const item = await storage.getItem(line.itemId);
+        if (!item) {
+          continue;
+        }
+
+        const transaction = await transactionService.applyTransaction({
+          itemId: line.itemId,
+          itemType: 'RAW',
+          type: 'RECEIVE',
+          location: 'HILDALE',
+          quantity,
+          notes: `Received from PO ${po.poNumber || id}`,
+          createdBy: req.session.userId || "system",
+        });
+
+        if (transaction.success && transaction.transaction) {
+          createdTransactions.push(transaction.transaction);
+        }
+
+        const newReceivedQty = (line.receivedQuantity || 0) + quantity;
+        await storage.updatePurchaseOrderLine(line.id, {
+          receivedQuantity: newReceivedQty,
+        });
+      }
+
+      const updatedLines = await storage.getPurchaseOrderLinesByPOId(id);
+      const allFullyReceived = updatedLines.every(line => 
+        (line.receivedQuantity || 0) >= line.quantity
+      );
+      const anyReceived = updatedLines.some(line => 
+        (line.receivedQuantity || 0) > 0
+      );
+
+      const newStatus = allFullyReceived ? 'RECEIVED' : (anyReceived ? 'PARTIAL_RECEIVED' : po.status);
+      const receivedAt = allFullyReceived ? new Date() : po.receivedAt;
+
+      const updatedPO = await storage.updatePurchaseOrder(id, {
+        status: newStatus,
+        receivedAt,
+      });
+
+      res.json({
+        purchaseOrder: updatedPO,
+        lines: updatedLines,
+        transactions: createdTransactions,
+      });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error receiving items:", error);
+      res.status(500).json({ error: error.message || "Failed to receive items" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/close", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'CLOSED',
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error closing purchase order:", error);
+      res.status(500).json({ error: "Failed to close purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/cancel", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'CANCELLED',
+      });
+      
+      if (!updated) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error cancelling purchase order:", error);
+      res.status(500).json({ error: "Failed to cancel purchase order" });
+    }
+  });
+
+  app.get("/api/suppliers/:supplierId/draft-purchase-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { supplierId } = req.params;
+      const allPOs = await storage.getPurchaseOrdersBySupplierId(supplierId);
+      const draftPOs = allPOs.filter(po => po.status === 'DRAFT');
+      res.json(draftPOs);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching draft POs:", error);
+      res.status(500).json({ error: "Failed to fetch draft purchase orders" });
     }
   });
 

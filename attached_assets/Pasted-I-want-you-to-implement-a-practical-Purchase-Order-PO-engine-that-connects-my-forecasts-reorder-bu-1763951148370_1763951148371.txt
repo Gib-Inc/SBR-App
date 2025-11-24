@@ -1,0 +1,179 @@
+I want you to implement a practical Purchase Order (PO) engine that connects my forecasts/reorder buttons to actual POs and inventory movements. Do NOT build AI outreach or email sending here; this system is about correct data, approvals, and inventory updates. We’ll integrate with GHL later for communication.
+
+1. Data model for POs
+
+Create or refine PurchaseOrder and PurchaseOrderLine models so they support a full PO lifecycle:
+
+PurchaseOrder fields (suggested):
+
+id
+
+supplierId (link to Supplier)
+
+poNumber (human-friendly, like PO-2025-0001)
+
+status: DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED, CANCELLED
+
+orderDate (created)
+
+approvedAt
+
+sentAt
+
+expectedDate (optional)
+
+receivedAt (when fully received)
+
+notes
+
+PurchaseOrderLine fields (per item):
+
+id
+
+purchaseOrderId
+
+inventoryItemId (the raw material item)
+
+qtyOrdered
+
+qtyReceived (for partial receipts)
+
+unitCost
+
+lineTotal (derived = qtyOrdered * unitCost, but can be stored if needed)
+
+Make sure this schema is consistent with how Items/Suppliers are already modeled, and keep backwards compatibility with existing data.
+
+2. Connect “Reorder” from the Stock Inventory table to POs
+
+In the Stock Inventory table (BOM page), there is already a Reorder action. Wire this into the PO engine:
+
+When the user clicks Reorder on a raw material:
+
+Open a “Add to Purchase Order” modal.
+
+Pre-fill:
+
+Supplier (primary supplier from Supplier column).
+
+Suggested quantity (from forecast/reorder logic if available; otherwise 0).
+
+Unit cost (from supplier config).
+
+In the modal, allow the user to:
+
+Adjust the quantity.
+
+Choose between:
+
+“Add to existing DRAFT PO for this supplier” (if one exists), OR
+
+“Create new PO for this supplier”.
+
+On save:
+
+If adding to an existing DRAFT PO, append or update the line.
+
+If creating a new PO, create PurchaseOrder (status = DRAFT) + PurchaseOrderLine.
+
+No emails are sent here. Just maintain clean PO records.
+
+3. Basic Purchase Orders list view
+
+Add a “Purchase Orders” tab or route (this can be under the new Suppliers nav or its own item, whichever fits your structure best).
+
+Show a table of all POs with columns:
+
+PO #
+
+Supplier
+
+Status
+
+Order Date
+
+Expected Date
+
+Total
+
+Actions
+
+Filters: by supplier, by status, by date range, and a search box.
+
+The table must follow the same layout rules as the other pages: fixed page width, and if columns overflow, only the table content should scroll horizontally inside its card (never the whole page).
+
+4. PO detail + approval flow
+
+Clicking a PO row should open a detail view (drawer or full page):
+
+Header: supplier name, status, key dates (order/approved/sent/received).
+
+Lines table: item, qtyOrdered, qtyReceived, unitCost, lineTotal.
+
+Buttons depending on status:
+
+For DRAFT: Submit for Approval, Edit Lines, Delete.
+
+For APPROVAL_PENDING: Approve, Reject.
+
+For APPROVED: Mark Sent, Cancel.
+
+For SENT or PARTIAL_RECEIVED: Receive Items (partial or full).
+
+For RECEIVED: Close PO.
+
+The “Submit for Approval → Approve” flow should just move statuses and timestamps; do not send any emails. We’ll later push these approved POs to GHL as tasks/emails.
+
+5. Receiving and inventory integration
+
+Implement a Receive Items flow for POs that are SENT or PARTIAL_RECEIVED:
+
+Open a modal listing all lines with: Item, Ordered Qty, Already Received, and an input for Receive Now.
+
+When the user enters quantities and confirms:
+
+For each line, create proper RECEIVE transactions in the existing inventory transaction system for that raw material.
+
+Increment the item’s stock based on the received quantity.
+
+Update qtyReceived on that line.
+
+If all lines are fully received, set PO status → RECEIVED and receivedAt = now. If only some are received, status → PARTIAL_RECEIVED.
+
+This must use the same transaction/audit trail pattern already used for other stock movements so we keep a consistent history.
+
+6. Forecast / reorder integration (no extra AI calls)
+
+After receiving items, ensure the batch forecasting pipeline picks up the new stock levels:
+
+Mark affected items as needing forecast refresh and let the existing batch job handle it (do not call the AI forecaster per line/scan).
+
+Confirm that reorder recommendations update correctly after POs are received.
+
+7. Preparing for GHL integration (but don’t implement it yet)
+
+For each APPROVED or SENT PO, expose a clean data structure that can later be pushed to GHL: supplier name, lines, totals, and a human-readable description.
+
+For now, just:
+
+Provide a Copy as text or Download as PDF/JSON option in the PO detail view so we have a clear representation of what will eventually be sent via GHL.
+
+Add comments in the code noting where the GHL integration will hook in (e.g., “TODO: create GHL task / email when status changes to APPROVED or SENT”).
+
+Do not call any external APIs or send emails in this step.
+
+8. Verification
+
+After implementation, please verify and show (via log/description or screenshots):
+
+Clicking Reorder on multiple raw materials creates/updates POs correctly (lines, quantities, totals).
+
+The Purchase Orders list shows those POs with correct status and supplier.
+
+The approval flow works: DRAFT → APPROVAL_PENDING → APPROVED → SENT.
+
+Receiving items through the PO detail creates proper RECEIVE transactions and updates stock/forecasts.
+
+No emails are sent and no external integrations are called; we are just preparing clean PO data that we can later feed into GHL.
+
+Finally, summarize which files/components you changed and how the PO engine now connects the Reorder actions, transaction system, and forecasting.

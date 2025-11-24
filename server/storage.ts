@@ -13,6 +13,12 @@ import {
   type InsertSupplier,
   type SupplierItem,
   type InsertSupplierItem,
+  type PurchaseOrder,
+  type InsertPurchaseOrder,
+  type PurchaseOrderLine,
+  type InsertPurchaseOrderLine,
+  type SupplierLead,
+  type InsertSupplierLead,
   type SalesHistory,
   type InsertSalesHistory,
   type FinishedInventorySnapshot,
@@ -140,6 +146,29 @@ export interface IStorage {
   getAllInventoryTransactions(): Promise<InventoryTransaction[]>;
   getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]>;
   createInventoryTransaction(transaction: InsertInventoryTransaction): Promise<InventoryTransaction>;
+
+  // Purchase Orders
+  getAllPurchaseOrders(): Promise<PurchaseOrder[]>;
+  getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined>;
+  getPurchaseOrdersBySupplierId(supplierId: string): Promise<PurchaseOrder[]>;
+  createPurchaseOrder(po: InsertPurchaseOrder): Promise<PurchaseOrder>;
+  updatePurchaseOrder(id: string, po: Partial<InsertPurchaseOrder>): Promise<PurchaseOrder | undefined>;
+  deletePurchaseOrder(id: string): Promise<boolean>;
+
+  // Purchase Order Lines
+  getAllPurchaseOrderLines(): Promise<PurchaseOrderLine[]>;
+  getPurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<PurchaseOrderLine[]>;
+  createPurchaseOrderLine(line: InsertPurchaseOrderLine): Promise<PurchaseOrderLine>;
+  updatePurchaseOrderLine(id: string, line: Partial<InsertPurchaseOrderLine>): Promise<PurchaseOrderLine | undefined>;
+  deletePurchaseOrderLine(id: string): Promise<boolean>;
+
+  // Supplier Leads
+  getAllSupplierLeads(): Promise<SupplierLead[]>;
+  getSupplierLead(id: string): Promise<SupplierLead | undefined>;
+  getSupplierLeadsByStatus(status: string): Promise<SupplierLead[]>;
+  createSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead>;
+  updateSupplierLead(id: string, lead: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined>;
+  deleteSupplierLead(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -159,6 +188,9 @@ export class MemStorage implements IStorage {
   private importProfiles: Map<string, ImportProfile>;
   private importJobs: Map<string, ImportJob>;
   private inventoryTransactions: Map<string, InventoryTransaction>;
+  private purchaseOrders: Map<string, PurchaseOrder>;
+  private purchaseOrderLines: Map<string, PurchaseOrderLine>;
+  private supplierLeads: Map<string, SupplierLead>;
 
   constructor() {
     this.users = new Map();
@@ -177,6 +209,9 @@ export class MemStorage implements IStorage {
     this.importProfiles = new Map();
     this.importJobs = new Map();
     this.inventoryTransactions = new Map();
+    this.purchaseOrders = new Map();
+    this.purchaseOrderLines = new Map();
+    this.supplierLeads = new Map();
     this.seedData();
   }
 
@@ -1086,6 +1121,135 @@ export class MemStorage implements IStorage {
     this.inventoryTransactions.set(id, transaction);
     return transaction;
   }
+
+  // Purchase Orders
+  async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
+    return Array.from(this.purchaseOrders.values());
+  }
+
+  async getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined> {
+    return this.purchaseOrders.get(id);
+  }
+
+  async getPurchaseOrdersBySupplierId(supplierId: string): Promise<PurchaseOrder[]> {
+    return Array.from(this.purchaseOrders.values())
+      .filter(po => po.supplierId === supplierId);
+  }
+
+  async createPurchaseOrder(insertPO: InsertPurchaseOrder): Promise<PurchaseOrder> {
+    const id = randomUUID();
+    const po: PurchaseOrder = {
+      id,
+      ...insertPO,
+      orderDate: insertPO.orderDate ?? new Date(),
+      sentAt: insertPO.sentAt ?? null,
+      receivedAt: insertPO.receivedAt ?? null,
+      paidAt: insertPO.paidAt ?? null,
+      status: insertPO.status ?? 'DRAFT',
+      hasIssue: insertPO.hasIssue ?? false,
+      issueStatus: insertPO.issueStatus ?? 'NONE',
+      issueType: insertPO.issueType ?? null,
+      issueNotes: insertPO.issueNotes ?? null,
+      refundStatus: insertPO.refundStatus ?? 'NONE',
+      refundAmount: insertPO.refundAmount ?? 0,
+      notes: insertPO.notes ?? null,
+    };
+    this.purchaseOrders.set(id, po);
+    return po;
+  }
+
+  async updatePurchaseOrder(id: string, updates: Partial<InsertPurchaseOrder>): Promise<PurchaseOrder | undefined> {
+    const po = this.purchaseOrders.get(id);
+    if (!po) return undefined;
+    const updated = { ...po, ...updates };
+    this.purchaseOrders.set(id, updated);
+    return updated;
+  }
+
+  async deletePurchaseOrder(id: string): Promise<boolean> {
+    return this.purchaseOrders.delete(id);
+  }
+
+  // Purchase Order Lines
+  async getAllPurchaseOrderLines(): Promise<PurchaseOrderLine[]> {
+    return Array.from(this.purchaseOrderLines.values());
+  }
+
+  async getPurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<PurchaseOrderLine[]> {
+    return Array.from(this.purchaseOrderLines.values())
+      .filter(line => line.purchaseOrderId === purchaseOrderId);
+  }
+
+  async createPurchaseOrderLine(insertLine: InsertPurchaseOrderLine): Promise<PurchaseOrderLine> {
+    const id = randomUUID();
+    const line: PurchaseOrderLine = {
+      id,
+      ...insertLine,
+      receivedQuantity: insertLine.receivedQuantity ?? 0,
+      unitPrice: insertLine.unitPrice ?? null,
+    };
+    this.purchaseOrderLines.set(id, line);
+    return line;
+  }
+
+  async updatePurchaseOrderLine(id: string, updates: Partial<InsertPurchaseOrderLine>): Promise<PurchaseOrderLine | undefined> {
+    const line = this.purchaseOrderLines.get(id);
+    if (!line) return undefined;
+    const updated = { ...line, ...updates };
+    this.purchaseOrderLines.set(id, updated);
+    return updated;
+  }
+
+  async deletePurchaseOrderLine(id: string): Promise<boolean> {
+    return this.purchaseOrderLines.delete(id);
+  }
+
+  // Supplier Leads
+  async getAllSupplierLeads(): Promise<SupplierLead[]> {
+    return Array.from(this.supplierLeads.values());
+  }
+
+  async getSupplierLead(id: string): Promise<SupplierLead | undefined> {
+    return this.supplierLeads.get(id);
+  }
+
+  async getSupplierLeadsByStatus(status: string): Promise<SupplierLead[]> {
+    return Array.from(this.supplierLeads.values())
+      .filter(lead => lead.status === status);
+  }
+
+  async createSupplierLead(insertLead: InsertSupplierLead): Promise<SupplierLead> {
+    const id = randomUUID();
+    const lead: SupplierLead = {
+      id,
+      ...insertLead,
+      source: insertLead.source ?? 'MANUAL',
+      status: insertLead.status ?? 'NEW',
+      websiteUrl: insertLead.websiteUrl ?? null,
+      contactEmail: insertLead.contactEmail ?? null,
+      contactPhone: insertLead.contactPhone ?? null,
+      category: insertLead.category ?? null,
+      notes: insertLead.notes ?? null,
+      lastContactedAt: insertLead.lastContactedAt ?? null,
+      aiOutreachDraft: insertLead.aiOutreachDraft ?? null,
+      convertedSupplierId: insertLead.convertedSupplierId ?? null,
+      createdAt: new Date(),
+    };
+    this.supplierLeads.set(id, lead);
+    return lead;
+  }
+
+  async updateSupplierLead(id: string, updates: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined> {
+    const lead = this.supplierLeads.get(id);
+    if (!lead) return undefined;
+    const updated = { ...lead, ...updates };
+    this.supplierLeads.set(id, updated);
+    return updated;
+  }
+
+  async deleteSupplierLead(id: string): Promise<boolean> {
+    return this.supplierLeads.delete(id);
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -1709,6 +1873,88 @@ export class PostgresStorage implements IStorage {
   async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
     const results = await this.db.insert(schema.inventoryTransactions).values(insertTransaction).returning();
     return results[0];
+  }
+
+  // Purchase Orders
+  async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
+    return await this.db.select().from(schema.purchaseOrders);
+  }
+
+  async getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined> {
+    const results = await this.db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, id));
+    return results[0];
+  }
+
+  async getPurchaseOrdersBySupplierId(supplierId: string): Promise<PurchaseOrder[]> {
+    return await this.db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.supplierId, supplierId));
+  }
+
+  async createPurchaseOrder(po: InsertPurchaseOrder): Promise<PurchaseOrder> {
+    const results = await this.db.insert(schema.purchaseOrders).values(po).returning();
+    return results[0];
+  }
+
+  async updatePurchaseOrder(id: string, updates: Partial<InsertPurchaseOrder>): Promise<PurchaseOrder | undefined> {
+    const results = await this.db.update(schema.purchaseOrders).set(updates).where(eq(schema.purchaseOrders.id, id)).returning();
+    return results[0];
+  }
+
+  async deletePurchaseOrder(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Purchase Order Lines
+  async getAllPurchaseOrderLines(): Promise<PurchaseOrderLine[]> {
+    return await this.db.select().from(schema.purchaseOrderLines);
+  }
+
+  async getPurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<PurchaseOrderLine[]> {
+    return await this.db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.purchaseOrderId, purchaseOrderId));
+  }
+
+  async createPurchaseOrderLine(line: InsertPurchaseOrderLine): Promise<PurchaseOrderLine> {
+    const results = await this.db.insert(schema.purchaseOrderLines).values(line).returning();
+    return results[0];
+  }
+
+  async updatePurchaseOrderLine(id: string, updates: Partial<InsertPurchaseOrderLine>): Promise<PurchaseOrderLine | undefined> {
+    const results = await this.db.update(schema.purchaseOrderLines).set(updates).where(eq(schema.purchaseOrderLines.id, id)).returning();
+    return results[0];
+  }
+
+  async deletePurchaseOrderLine(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Supplier Leads
+  async getAllSupplierLeads(): Promise<SupplierLead[]> {
+    return await this.db.select().from(schema.supplierLeads);
+  }
+
+  async getSupplierLead(id: string): Promise<SupplierLead | undefined> {
+    const results = await this.db.select().from(schema.supplierLeads).where(eq(schema.supplierLeads.id, id));
+    return results[0];
+  }
+
+  async getSupplierLeadsByStatus(status: string): Promise<SupplierLead[]> {
+    return await this.db.select().from(schema.supplierLeads).where(eq(schema.supplierLeads.status, status));
+  }
+
+  async createSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead> {
+    const results = await this.db.insert(schema.supplierLeads).values(lead).returning();
+    return results[0];
+  }
+
+  async updateSupplierLead(id: string, updates: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined> {
+    const results = await this.db.update(schema.supplierLeads).set(updates).where(eq(schema.supplierLeads.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteSupplierLead(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.supplierLeads).where(eq(schema.supplierLeads.id, id)).returning();
+    return results.length > 0;
   }
 }
 

@@ -158,6 +158,7 @@ export const purchaseOrders = pgTable("purchase_orders", {
   refundStatus: text("refund_status").notNull().default('NONE'), // NONE, REQUESTED, PARTIAL_REFUND, FULL_REFUND
   refundAmount: real("refund_amount").default(0),
   notes: text("notes"),
+  ghlRepName: text("ghl_rep_name"), // GoHighLevel rep who issued the PO
 });
 
 export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true });

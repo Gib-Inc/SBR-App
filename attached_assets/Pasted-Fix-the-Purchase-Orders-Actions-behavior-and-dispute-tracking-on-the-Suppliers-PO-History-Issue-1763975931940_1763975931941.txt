@@ -1,0 +1,178 @@
+Fix the Purchase Orders Actions behavior and dispute tracking on the Suppliers → “PO History & Issues” tab.
+
+Goals:
+
+Make the PO Actions column very simple and predictable.
+
+Row click opens PO detail.
+
+Actions column always shows exactly TWO icons per row:
+
+Confirm receipt icon.
+
+Dispute icon.
+
+Remove all confusing differences between the two “box” icons and any mixed behaviors.
+
+Please do the following:
+
+Row click instead of “View” link
+
+Ensure the entire PO table row is clickable (not just a “View” link) to open the PO detail drawer/modal.
+
+Remove the separate “View” text/action if it still exists; the row itself is the view trigger.
+
+Do not change the existing PO detail layout or status transitions, just how you open it.
+
+Standardize the Actions column
+
+In the Actions column, always render exactly two icons per row:
+a) A “Confirm receipt” icon (for example, a checkmark or box with check).
+b) A “Dispute” icon (the flag icon you already use).
+
+Remove any extra icons or variants that currently behave differently depending on status.
+
+Make sure the icons are always present, even if some are disabled in certain states, so the Actions column looks consistent across all rows.
+
+Confirm receipt behavior (first icon)
+
+The first icon’s ONLY responsibility is confirming that the PO was received and updating inventory.
+
+Clicking this icon should ALWAYS:
+
+Open ONE consistent confirmation modal (no browser prompt, no different variants).
+
+The modal title should be something like “Confirm Full Receipt”.
+
+Inside the modal, show:
+
+Supplier name
+
+PO number
+
+Order date, expected date
+
+A mini line-item summary table with: item name, qty ordered, qty already received, and what will be received now (full ordered qty if this is a simple “confirm all” flow).
+
+Ask a clear question: “Do you want to mark this PO as fully received and update inventory based on all ordered quantities?”
+
+Provide two buttons: “Cancel” and “Confirm”.
+
+On Confirm:
+
+Use the existing receive/transaction logic to:
+
+Create RECEIVE transactions for each line.
+
+Update raw material stock.
+
+Update qtyReceived for each line.
+
+If the PO is now fully received, set status to RECEIVED (or CLOSED if that’s your final state) and set receivedAt.
+
+If the PO is already RECEIVED or CLOSED:
+
+The confirm icon should be disabled or display a tooltip like “Already received”.
+
+It should NOT open a modal or change data.
+
+Do NOT let this icon open the cancel flow or the dispute flow. It should never ask for a “reason for cancellation”.
+
+Dispute behavior (second icon)
+
+The second icon (flag) handles ONLY disputes, no inventory updates.
+
+Use the existing issueStatus, issueOpenedAt, issueResolvedAt and related PO fields. Do not add duplicate fields.
+
+When the PO has NO active dispute:
+
+Clicking the flag icon opens an “Open Dispute” modal.
+
+The modal should show:
+
+Supplier
+
+PO number
+
+Order and expected dates
+
+A text area for “Reason for dispute”.
+
+Buttons: “Cancel” and “Open Dispute”.
+
+On confirm:
+
+Set issueStatus (or equivalent) to OPEN.
+
+Set issueOpenedAt to now.
+
+Store the reason text (e.g., outcomeDetails or a dedicated reason field).
+
+Trigger the existing GHL manual dispute workflow hook (whatever function or API you have that marks this PO as “needs review” in GHL). If that integration is not implemented yet, add a clearly labeled stub where we can wire it later.
+
+Update the “Needs Review” analytics card at the top so it counts the number of POs currently in dispute (OPEN issues).
+
+When the PO already has an OPEN dispute:
+
+The flag icon should appear “active” (e.g., red) so the row visually shows it’s in dispute.
+
+Clicking the icon should open a “Resolve Dispute” modal.
+
+The modal should show the dispute reason, any notes, and a text area for “Resolution notes”.
+
+Buttons: “Cancel” and “Mark Resolved”.
+
+On confirm:
+
+Set issueStatus to RESOLVED (or equivalent non-open value).
+
+Set issueResolvedAt to now.
+
+Save the resolution notes to the same outcome/notes field.
+
+Decrement the “Needs Review” card count by one (because this issue is no longer active).
+
+The dispute flow must NOT change inventory or PO status directly. It is only for tracking problems and feeding the “Needs Review” card and GHL dispute messaging.
+
+Dispute-related data in the PO table
+
+In the PO table on the Suppliers → “PO History & Issues” tab, add a small, clear indication of dispute state for each row.
+
+You can either:
+
+Add a dedicated “Issue” or “Dispute” column with pills like “None”, “Open”, “Resolved”, OR
+
+Reuse the existing “Status” column with a small secondary chip/badge indicating “In Dispute” when issueStatus is OPEN.
+
+Make sure this indication is driven directly by the existing issueStatus and timestamps so the table and analytics cards are always in sync.
+
+The “Needs Review” analytics card should display the count of POs where issueStatus is OPEN (current disputes), not a historical total.
+
+Clean up old behaviors
+
+Remove any paths where:
+
+Clicking the confirm icon opens a cancel flow.
+
+Clicking a different “box” icon shows a different modal without confirm buttons.
+
+A browser prompt is used instead of the new modals.
+
+Ensure there is a single unified confirm-receipt modal and a single unified pair of dispute modals (open/resolve) as described above.
+
+After refactor, test at least three scenarios:
+
+A draft/sent PO with no dispute.
+
+A received/closed PO.
+
+A PO with an open dispute.
+and confirm that:
+
+Row click opens detail.
+
+First icon always handles confirm receipt and shows the same modal.
+
+Second icon always handles disputes and correctly updates issueStatus and the “Needs Review” card.
+
+Please keep the existing visual style and layout of the Suppliers page; just fix the Actions behaviors, modals, and table dispute indicators as described.

@@ -2492,10 +2492,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate request body
       const toggleDisputeSchema = z.object({
         action: z.enum(['open', 'resolve']),
-        reason: z.string().optional(),
+        reason: z.string().optional(), // Used for opening dispute
+        resolutionNotes: z.string().optional(), // Used for resolving dispute
       });
       
-      const { action, reason } = toggleDisputeSchema.parse(req.body);
+      const { action, reason, resolutionNotes } = toggleDisputeSchema.parse(req.body);
       
       const po = await storage.getPurchaseOrder(id);
       if (!po) {
@@ -2526,15 +2527,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       } else {
         // action === 'resolve'
+        // Preserve original dispute reason and append resolution notes
+        const originalReason = po.issueNotes || 'No original reason provided';
+        const resolutionText = resolutionNotes || 'Marked as resolved without notes';
+        const combinedNotes = `Original: ${originalReason}\nResolution: ${resolutionText}`;
+        
         updateData = {
           issueStatus: 'RESOLVED',
           issueResolvedAt: now,
-          issueNotes: null, // Clear notes when resolving
+          issueNotes: combinedNotes,
         };
         
         console.log('[PurchaseOrder] Dispute resolved:', {
           poId: id,
           poNumber: po.poNumber,
+          resolutionNotes: resolutionText,
         });
       }
 

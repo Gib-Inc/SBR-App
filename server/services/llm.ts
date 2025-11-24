@@ -486,7 +486,7 @@ Analyze this inventory situation and reason through the following:
 
       try {
         if (!apiKey) {
-          const fallbackRecommendation = this.generateFallbackRecommendation(item, avgLeadTime);
+          const fallbackRecommendation = await this.generateFallbackRecommendation(item, avgLeadTime);
           if (fallbackRecommendation) {
             recommendations.push(fallbackRecommendation);
           }
@@ -503,7 +503,7 @@ Analyze this inventory situation and reason through the following:
 
         if (!llmResponse.success || !llmResponse.data) {
           console.error(`[LLM] Failed to get recommendation for ${item.name}:`, llmResponse.error);
-          const fallbackRecommendation = this.generateFallbackRecommendation(item, avgLeadTime);
+          const fallbackRecommendation = await this.generateFallbackRecommendation(item, avgLeadTime);
           if (fallbackRecommendation) {
             recommendations.push(fallbackRecommendation);
           }
@@ -518,7 +518,7 @@ Analyze this inventory situation and reason through the following:
         } catch (parseError: any) {
           console.error(`[LLM] JSON parse error for ${item.name}:`, parseError.message);
           console.error(`[LLM] Raw response:`, llmResponse.data.recommendation);
-          const fallbackRecommendation = this.generateFallbackRecommendation(item, avgLeadTime);
+          const fallbackRecommendation = await this.generateFallbackRecommendation(item, avgLeadTime);
           if (fallbackRecommendation) {
             recommendations.push(fallbackRecommendation);
           }
@@ -527,14 +527,14 @@ Analyze this inventory situation and reason through the following:
 
         if (!parsedData.urgency || parsedData.recommendedOrderQty == null || !parsedData.reasoning) {
           console.error(`[LLM] Invalid response format for ${item.name}:`, parsedData);
-          const fallbackRecommendation = this.generateFallbackRecommendation(item, avgLeadTime);
+          const fallbackRecommendation = await this.generateFallbackRecommendation(item, avgLeadTime);
           if (fallbackRecommendation) {
             recommendations.push(fallbackRecommendation);
           }
           continue;
         }
 
-        recommendations.push({
+        const recommendation = {
           itemId: item.id,
           itemName: item.name,
           currentStock: stockForCalculation,
@@ -551,10 +551,36 @@ Analyze this inventory situation and reason through the following:
           suggestedSupplier: designatedSupplier
             ? (await storage.getSupplier(designatedSupplier.supplierId))?.name
             : undefined
+        };
+        recommendations.push(recommendation);
+        
+        // Create AIRecommendation record for audit trail
+        const recommendedAction = parsedData.urgency === 'critical' || parsedData.urgency === 'high' ? 'ORDER' : 'MONITOR';
+        await storage.createAIRecommendation({
+          type: 'FORECAST_REORDER',
+          itemId: item.id,
+          location: isFinishedProduct ? 'PIVOT' : null,
+          recommendedQty: parsedData.recommendedOrderQty,
+          recommendedAction,
+          horizonDays: 30,
+          contextSnapshot: {
+            currentStock: stockForCalculation,
+            dailyUsage: item.dailyUsage,
+            pivotQty: isFinishedProduct ? pivotQty : undefined,
+            hildaleQty: isFinishedProduct ? hildaleQty : undefined,
+            totalOwned: isFinishedProduct ? totalOwned : undefined,
+            last30DaysSales,
+            last90DaysSales,
+            avgLeadTime,
+            daysUntilStockout: parsedData.daysUntilStockout,
+            urgency: parsedData.urgency,
+            reasoning: parsedData.reasoning,
+          },
+          llmResponseTimeMs: null, // Could track this with performance.now()
         });
       } catch (error: any) {
         console.error(`[LLM] Unexpected error for ${item.name}:`, error.message);
-        const fallbackRecommendation = this.generateFallbackRecommendation(item, avgLeadTime);
+        const fallbackRecommendation = await this.generateFallbackRecommendation(item, avgLeadTime);
         if (fallbackRecommendation) {
           recommendations.push(fallbackRecommendation);
         }
@@ -570,10 +596,10 @@ Analyze this inventory situation and reason through the following:
   /**
    * Fallback recommendation when LLM is not available
    */
-  private static generateFallbackRecommendation(
+  private static async generateFallbackRecommendation(
     item: any,
     avgLeadTime: number
-  ): ReorderRecommendation | null {
+  ): Promise<ReorderRecommendation | null> {
     const isFinishedProduct = item.type === 'finished_product';
     const pivotQty = isFinishedProduct ? (item.pivotQty ?? 0) : 0;
     const hildaleQty = isFinishedProduct ? (item.hildaleQty ?? 0) : 0;
@@ -597,7 +623,7 @@ Analyze this inventory situation and reason through the following:
       item.minStock
     );
 
-    return {
+    const recommendation = {
       itemId: item.id,
       itemName: item.name,
       currentStock: stockForCalculation,
@@ -623,6 +649,31 @@ Analyze this inventory situation and reason through the following:
       estimatedStockoutDays: Math.floor(daysUntilStockout),
       suggestedSupplier: undefined
     };
+    
+    // Create AIRecommendation record for fallback path
+    const recommendedAction = urgency === 'critical' || urgency === 'high' ? 'ORDER' : 'MONITOR';
+    await storage.createAIRecommendation({
+      type: 'FORECAST_REORDER',
+      itemId: item.id,
+      location: isFinishedProduct ? 'PIVOT' : null,
+      recommendedQty,
+      recommendedAction,
+      horizonDays: 30,
+      contextSnapshot: {
+        currentStock: stockForCalculation,
+        dailyUsage: item.dailyUsage,
+        pivotQty: isFinishedProduct ? pivotQty : undefined,
+        hildaleQty: isFinishedProduct ? hildaleQty : undefined,
+        totalOwned: isFinishedProduct ? totalOwned : undefined,
+        avgLeadTime,
+        daysUntilStockout: Math.floor(daysUntilStockout),
+        urgency,
+        fallback: true,
+      },
+      llmResponseTimeMs: null,
+    });
+    
+    return recommendation;
   }
 
   /**

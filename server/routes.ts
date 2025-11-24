@@ -1844,6 +1844,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================================================
+  // AI RECOMMENDATIONS
+  // ============================================================================
+
+  app.get("/api/ai-recommendations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, type } = req.query;
+      let recommendations = await storage.getAllAIRecommendations();
+      
+      if (itemId) {
+        recommendations = recommendations.filter(r => r.itemId === itemId);
+      }
+      if (type) {
+        recommendations = recommendations.filter(r => r.type === type);
+      }
+      
+      res.json(recommendations);
+    } catch (error: any) {
+      console.error("[AIRecommendation] Error fetching AI recommendations:", error);
+      res.status(500).json({ error: "Failed to fetch AI recommendations" });
+    }
+  });
+
+  app.get("/api/ai-recommendations/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const recommendation = await storage.getAIRecommendation(id);
+      
+      if (!recommendation) {
+        return res.status(404).json({ error: "AI recommendation not found" });
+      }
+      
+      res.json(recommendation);
+    } catch (error: any) {
+      console.error("[AIRecommendation] Error fetching AI recommendation:", error);
+      res.status(500).json({ error: "Failed to fetch AI recommendation" });
+    }
+  });
+
+  app.patch("/api/ai-recommendations/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const updates = req.body;
+      
+      const updated = await storage.updateAIRecommendation(id, updates);
+      
+      if (!updated) {
+        return res.status(404).json({ error: "AI recommendation not found" });
+      }
+      
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[AIRecommendation] Error updating AI recommendation:", error);
+      res.status(500).json({ error: "Failed to update AI recommendation" });
+    }
+  });
+
+  // ============================================================================
+  // PURCHASE ORDERS
+  // ============================================================================
+
   app.get("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     try {
       const purchaseOrders = await storage.getAllPurchaseOrders();
@@ -1902,9 +1963,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (lines && Array.isArray(lines)) {
         for (const line of lines) {
+          // Determine location based on item type for proper AI recommendation lookup
+          const item = await storage.getItem(line.itemId);
+          const location = item?.type === 'finished_product' ? 'PIVOT' : null;
+          
+          // Find the latest AI recommendation for this item using the storage helper
+          const latestRecommendation = await storage.getLatestAIRecommendationForItem(
+            line.itemId,
+            location
+          );
+          
           const validatedLine = insertPurchaseOrderLineSchema.parse({
             ...line,
             purchaseOrderId: purchaseOrder.id,
+            aiRecommendationId: latestRecommendation?.id || null,
+            recommendedQtyAtOrderTime: latestRecommendation?.recommendedQty || null,
+            finalOrderedQty: line.quantity,
           });
           await storage.createPurchaseOrderLine(validatedLine);
         }
@@ -2356,6 +2430,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await storage.updatePurchaseOrderLine(line.id, {
             qtyReceived: line.qtyOrdered,
           });
+        }
+        
+        // Calculate and record AI recommendation outcome
+        if (line.aiRecommendationId && line.recommendedQtyAtOrderTime != null && line.finalOrderedQty != null) {
+          const actualReceived = line.qtyOrdered; // Total received after this confirmation
+          const recommended = line.recommendedQtyAtOrderTime;
+          const ordered = line.finalOrderedQty;
+          
+          // Only calculate outcome if we have a valid recommendation quantity
+          if (recommended > 0) {
+            // Determine outcome status based on ordered vs recommended
+            let outcomeStatus: 'ACCURATE' | 'UNDER_ORDERED' | 'OVER_ORDERED' = 'ACCURATE';
+            const variance = ((ordered - recommended) / recommended) * 100;
+            
+            if (Math.abs(variance) <= 10) {
+              outcomeStatus = 'ACCURATE';
+            } else if (ordered < recommended) {
+              outcomeStatus = 'UNDER_ORDERED';
+            } else {
+              outcomeStatus = 'OVER_ORDERED';
+            }
+            
+            // Update the AI recommendation with outcome
+            const userDecision = ordered === recommended ? 'ACCEPTED' : (ordered > recommended ? 'INCREASED' : 'REDUCED');
+            await storage.updateAIRecommendation(line.aiRecommendationId, {
+              outcomeStatus,
+              outcomeDetails: {
+                userDecision,
+                decisionNotes: ordered !== recommended ? `Ordered ${ordered} instead of recommended ${recommended}` : undefined,
+                orderedQty: ordered,
+                receivedQty: actualReceived,
+                recommendedQty: recommended,
+                variancePercent: variance,
+                outcomeNotes: `Received ${actualReceived} units (${variance.toFixed(1)}% variance from recommendation)`,
+              },
+            });
+          }
         }
       }
 

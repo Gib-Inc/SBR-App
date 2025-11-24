@@ -43,7 +43,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -151,8 +151,9 @@ export interface IStorage {
 
   // AI Recommendations
   getAllAIRecommendations(): Promise<AIRecommendation[]>;
+  getAIRecommendation(id: string): Promise<AIRecommendation | undefined>;
   getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]>;
-  getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined>;
+  getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined>;
   createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation>;
   updateAIRecommendation(id: string, recommendation: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined>;
 
@@ -1139,13 +1140,17 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async getAIRecommendation(id: string): Promise<AIRecommendation | undefined> {
+    return this.aiRecommendations.get(id);
+  }
+
   async getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]> {
     return Array.from(this.aiRecommendations.values())
       .filter(r => r.itemId === itemId)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined> {
+  async getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined> {
     const recommendations = Array.from(this.aiRecommendations.values())
       .filter(r => r.itemId === itemId && (location === undefined || r.location === location))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -1213,6 +1218,7 @@ export class MemStorage implements IStorage {
       refundStatus: insertPO.refundStatus ?? 'NONE',
       refundAmount: insertPO.refundAmount ?? 0,
       notes: insertPO.notes ?? null,
+      ghlRepName: insertPO.ghlRepName ?? null,
     };
     this.purchaseOrders.set(id, po);
     return po;
@@ -1947,6 +1953,15 @@ export class PostgresStorage implements IStorage {
     return results;
   }
 
+  async getAIRecommendation(id: string): Promise<AIRecommendation | undefined> {
+    const results = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .where(eq(schema.aiRecommendations.id, id))
+      .limit(1);
+    return results[0];
+  }
+
   async getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]> {
     const results = await this.db
       .select()
@@ -1956,11 +1971,16 @@ export class PostgresStorage implements IStorage {
     return results;
   }
 
-  async getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined> {
+  async getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined> {
     let whereClause = eq(schema.aiRecommendations.itemId, itemId);
     
     if (location !== undefined) {
-      whereClause = and(whereClause, eq(schema.aiRecommendations.location, location))!;
+      // Use isNull for null locations, eq for non-null string locations
+      if (location === null) {
+        whereClause = and(whereClause, isNull(schema.aiRecommendations.location))!;
+      } else {
+        whereClause = and(whereClause, eq(schema.aiRecommendations.location, location))!;
+      }
     }
     
     const results = await this.db

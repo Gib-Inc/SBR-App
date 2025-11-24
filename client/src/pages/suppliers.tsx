@@ -309,66 +309,69 @@ export default function Suppliers() {
                 Create PO
               </Button>
             </CardHeader>
-            <CardContent>
-              {/* Filters */}
-              <div className="flex flex-wrap items-center gap-2 mb-4">
-                <div className="relative flex-1 min-w-[200px]">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search by PO# or supplier..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9"
-                    data-testid="input-search-po"
-                  />
+            <CardContent className="p-0">
+              {/* Filters - Fixed at top */}
+              <div className="p-6 pb-4 border-b">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by PO# or supplier..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-9"
+                      data-testid="input-search-po"
+                    />
+                  </div>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
+                      <SelectValue placeholder="Filter by status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      <SelectItem value="DRAFT">Draft</SelectItem>
+                      <SelectItem value="APPROVAL_PENDING">Pending Approval</SelectItem>
+                      <SelectItem value="APPROVED">Approved</SelectItem>
+                      <SelectItem value="SENT">Sent</SelectItem>
+                      <SelectItem value="PARTIAL_RECEIVED">Partial Received</SelectItem>
+                      <SelectItem value="RECEIVED">Received</SelectItem>
+                      <SelectItem value="CLOSED">Closed</SelectItem>
+                      <SelectItem value="CANCELLED">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={supplierFilter} onValueChange={setSupplierFilter}>
+                    <SelectTrigger className="w-[200px]" data-testid="select-supplier-filter">
+                      <SelectValue placeholder="Filter by supplier" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Suppliers</SelectItem>
+                      {suppliers.map(s => (
+                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
-                    <SelectValue placeholder="Filter by status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="DRAFT">Draft</SelectItem>
-                    <SelectItem value="APPROVAL_PENDING">Pending Approval</SelectItem>
-                    <SelectItem value="APPROVED">Approved</SelectItem>
-                    <SelectItem value="SENT">Sent</SelectItem>
-                    <SelectItem value="PARTIAL_RECEIVED">Partial Received</SelectItem>
-                    <SelectItem value="RECEIVED">Received</SelectItem>
-                    <SelectItem value="CLOSED">Closed</SelectItem>
-                    <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={supplierFilter} onValueChange={setSupplierFilter}>
-                  <SelectTrigger className="w-[200px]" data-testid="select-supplier-filter">
-                    <SelectValue placeholder="Filter by supplier" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Suppliers</SelectItem>
-                    {suppliers.map(s => (
-                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
 
-{isLoadingPOs ? (
+              {/* Scrollable Table Container */}
+              {isLoadingPOs ? (
                 <div className="text-center py-8 text-muted-foreground">Loading purchase orders...</div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
+                <div className="relative max-h-[600px] overflow-auto">
+                  <table className="w-full min-w-[1100px]">
+                    <thead className="sticky top-0 bg-card z-10">
                       <tr className="border-b">
-                        <th className="text-left p-2 font-medium whitespace-nowrap">PO #</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Supplier</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Products Ordered</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Status</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Order Date</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Expected</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Received</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Days to Receive</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">GHL Rep</th>
-                        <th className="text-right p-2 font-medium whitespace-nowrap">Total</th>
-                        <th className="text-right p-2 font-medium whitespace-nowrap">Actions</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">PO #</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Supplier</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Products Ordered</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Status</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Order Date</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Expected</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Received</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Days to Receive</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">GHL Rep</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Total</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Actions</th>
                       </tr>
                     </thead>
                     <tbody>

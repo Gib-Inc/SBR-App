@@ -476,7 +476,7 @@ async function seed() {
       // PO 1: Draft status
       const po1 = await storage.createPurchaseOrder({
         poNumber: "PO-2025-0001",
-        supplierId: acmeSupplier.id,
+        supplierId: acmeCorp.id,
         status: "DRAFT",
         orderDate: new Date("2025-11-20"),
         expectedDate: new Date("2025-12-05"),
@@ -500,7 +500,7 @@ async function seed() {
       // PO 2: Sent status (awaiting delivery)
       const po2 = await storage.createPurchaseOrder({
         poNumber: "PO-2025-0002",
-        supplierId: globalSupplier.id,
+        supplierId: globalSupply.id,
         status: "SENT",
         orderDate: new Date("2025-11-15"),
         expectedDate: new Date("2025-11-30"),
@@ -524,7 +524,7 @@ async function seed() {
       // PO 3: Partial Received status
       const po3 = await storage.createPurchaseOrder({
         poNumber: "PO-2025-0003",
-        supplierId: acmeSupplier.id,
+        supplierId: acmeCorp.id,
         status: "PARTIAL_RECEIVED",
         orderDate: new Date("2025-11-10"),
         expectedDate: new Date("2025-11-25"),
@@ -548,7 +548,7 @@ async function seed() {
       // PO 4: Received status (ready to confirm)
       const po4 = await storage.createPurchaseOrder({
         poNumber: "PO-2025-0004",
-        supplierId: globalSupplier.id,
+        supplierId: globalSupply.id,
         status: "RECEIVED",
         orderDate: new Date("2025-11-05"),
         expectedDate: new Date("2025-11-20"),

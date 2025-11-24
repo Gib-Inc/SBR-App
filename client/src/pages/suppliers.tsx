@@ -433,93 +433,98 @@ export default function Suppliers() {
             </Card>
           </div>
 
-          {/* PO Table */}
-          <div className="w-full max-w-full overflow-hidden">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                <CardTitle>Purchase Orders</CardTitle>
-                <Button size="sm" data-testid="button-create-po">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Create PO
-                </Button>
-              </CardHeader>
-            <CardContent className="p-0">
-              {/* Filters - Fixed at top */}
-              <div className="p-6 pb-4 border-b">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative flex-1 min-w-[200px]">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      placeholder="Search by PO# or supplier..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9"
-                      data-testid="input-search-po"
-                    />
-                  </div>
-                  <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
-                      <SelectValue placeholder="Filter by status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Statuses</SelectItem>
-                      <SelectItem value="DRAFT">Draft</SelectItem>
-                      <SelectItem value="APPROVAL_PENDING">Pending Approval</SelectItem>
-                      <SelectItem value="APPROVED">Approved</SelectItem>
-                      <SelectItem value="SENT">Sent</SelectItem>
-                      <SelectItem value="PARTIAL_RECEIVED">Partial Received</SelectItem>
-                      <SelectItem value="RECEIVED">Received</SelectItem>
-                      <SelectItem value="CLOSED">Closed</SelectItem>
-                      <SelectItem value="CANCELLED">Cancelled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={supplierFilter} onValueChange={setSupplierFilter}>
-                    <SelectTrigger className="w-[200px]" data-testid="select-supplier-filter">
-                      <SelectValue placeholder="Filter by supplier" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Suppliers</SelectItem>
-                      {suppliers.map(s => (
-                        <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+          {/* PO Table Section */}
+          <div className="flex flex-col gap-4">
+            {/* Section Heading */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Purchase Orders</h2>
+                <p className="text-sm text-muted-foreground">Track and manage supplier purchase orders</p>
               </div>
+              <Button size="sm" data-testid="button-create-po">
+                <Plus className="h-4 w-4 mr-2" />
+                Create PO
+              </Button>
+            </div>
 
-              {/* Scrollable Table Container */}
-              {isLoadingPOs ? (
-                <div className="text-center py-8 text-muted-foreground">Loading purchase orders...</div>
-              ) : (
-                <div className="relative max-h-[600px] overflow-y-auto">
-                  <div className="w-full max-w-full overflow-x-auto">
-                    <table className="w-full min-w-[1100px]">
-                      <thead className="sticky top-0 bg-card z-10">
-                        <tr className="border-b">
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">PO #</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Supplier</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Products Ordered</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Status</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Order Date</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Expected</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Received</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Days to Receive</th>
-                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">GHL Rep</th>
-                          <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Total</th>
-                          <th className="sticky right-0 z-10 text-right p-2 font-medium whitespace-nowrap bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
-                        </tr>
-                      </thead>
+            {/* Search and Filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by PO# or supplier..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search-po"
+                />
+              </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[180px]" data-testid="select-status-filter">
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="DRAFT">Draft</SelectItem>
+                  <SelectItem value="APPROVAL_PENDING">Pending Approval</SelectItem>
+                  <SelectItem value="APPROVED">Approved</SelectItem>
+                  <SelectItem value="SENT">Sent</SelectItem>
+                  <SelectItem value="PARTIAL_RECEIVED">Partial Received</SelectItem>
+                  <SelectItem value="RECEIVED">Received</SelectItem>
+                  <SelectItem value="CLOSED">Closed</SelectItem>
+                  <SelectItem value="CANCELLED">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={supplierFilter} onValueChange={setSupplierFilter}>
+                <SelectTrigger className="w-[200px]" data-testid="select-supplier-filter">
+                  <SelectValue placeholder="Filter by supplier" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Suppliers</SelectItem>
+                  {suppliers.map(s => (
+                    <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Data Table */}
+            {isLoadingPOs ? (
+              <div className="flex h-48 items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+              </div>
+            ) : filteredPOs.length === 0 ? (
+              <Card>
+                <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
+                  <Building2 className="h-12 w-12 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">
+                    {purchaseOrders.length === 0 
+                      ? "No purchase orders yet. Create your first one to get started."
+                      : "No purchase orders match your filters."}
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="relative max-h-[600px] overflow-y-auto rounded-md border">
+                <div className="w-full max-w-full overflow-x-auto">
+                  <table className="w-full min-w-[1100px]">
+                    <thead className="sticky top-0 bg-muted/50 z-10">
+                      <tr className="border-b">
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">PO #</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Supplier</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Products Ordered</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Status</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Order Date</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Expected</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Received</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">Days to Receive</th>
+                        <th className="p-3 text-left text-sm font-medium whitespace-nowrap bg-muted/50">GHL Rep</th>
+                        <th className="p-3 text-right text-sm font-medium whitespace-nowrap bg-muted/50">Total</th>
+                        <th className="sticky right-0 z-10 p-3 text-right text-sm font-medium whitespace-nowrap bg-muted/50 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                      </tr>
+                    </thead>
                     <tbody>
-                      {filteredPOs.length === 0 ? (
-                        <tr>
-                          <td colSpan={11} className="p-8 text-center text-muted-foreground">
-                            {purchaseOrders.length === 0 
-                              ? "No purchase orders yet. Create your first one to get started."
-                              : "No purchase orders match your filters."}
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredPOs.map((po) => {
+                      {filteredPOs.map((po) => {
                           const daysToReceive = getDaysToReceive(po.orderDate, po.receivedAt);
                           const orderTotal = getOrderTotal(po.lines);
                           const canConfirm = po.status === 'SENT' || po.status === 'PARTIAL_RECEIVED';
@@ -527,7 +532,7 @@ export default function Suppliers() {
                           return (
                             <tr 
                               key={po.id} 
-                              className="border-b hover-elevate cursor-pointer" 
+                              className="h-11 border-b hover-elevate cursor-pointer" 
                               data-testid={`row-po-${po.id}`}
                               onClick={() => setSelectedPO(po.id)}
                               onKeyDown={(e) => {
@@ -540,18 +545,18 @@ export default function Suppliers() {
                               role="button"
                               aria-label={`View purchase order ${po.poNumber}`}
                             >
-                              <td className="p-2">
+                              <td className="px-3 align-middle">
                                 <span className="font-mono text-sm font-medium">{po.poNumber}</span>
                               </td>
-                              <td className="p-2 whitespace-nowrap">
+                              <td className="px-3 align-middle whitespace-nowrap">
                                 {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
                               </td>
-                              <td className="p-2">
+                              <td className="px-3 align-middle">
                                 <span className="text-sm max-w-xs truncate block" title={getProductsSummary(po.lines)}>
                                   {getProductsSummary(po.lines)}
                                 </span>
                               </td>
-                              <td className="p-2">
+                              <td className="px-3 align-middle">
                                 <div className="flex flex-wrap items-center gap-1">
                                   <Badge variant={
                                     po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
@@ -569,25 +574,25 @@ export default function Suppliers() {
                                   )}
                                 </div>
                               </td>
-                              <td className="p-2 text-sm whitespace-nowrap">
+                              <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
                               </td>
-                              <td className="p-2 text-sm whitespace-nowrap">
+                              <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString() : '-'}
                               </td>
-                              <td className="p-2 text-sm whitespace-nowrap">
+                              <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '-'}
                               </td>
-                              <td className="p-2 text-sm whitespace-nowrap">
+                              <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {daysToReceive !== null ? `${daysToReceive} days` : '-'}
                               </td>
-                              <td className="p-2 text-sm whitespace-nowrap">
+                              <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {po.ghlRepName || '-'}
                               </td>
-                              <td className="p-2 text-sm text-right whitespace-nowrap font-medium">
+                              <td className="px-3 align-middle text-sm text-right whitespace-nowrap font-medium">
                                 ${orderTotal.toFixed(2)}
                               </td>
-                              <td className="sticky right-0 z-10 bg-card p-2 text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                              <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                                 <div className="flex items-center justify-end gap-1">
                                   {/* Dispute / Resolve Icon */}
                                   <Button
@@ -655,14 +660,12 @@ export default function Suppliers() {
                             </tr>
                           );
                         })
-                      )}
+                      }
                     </tbody>
-                    </table>
-                  </div>
+                  </table>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+              </div>
+            )}
           </div>
         </TabsContent>
 

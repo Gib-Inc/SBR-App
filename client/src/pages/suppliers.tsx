@@ -23,6 +23,8 @@ import {
   AlertCircle,
   Truck,
   MessageSquare,
+  Brain,
+  TrendingDown,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -690,29 +692,70 @@ export default function Suppliers() {
               {/* Line Items */}
               <div>
                 <Label className="text-sm font-medium">Line Items</Label>
-                <div className="mt-2 border rounded-md">
+                <div className="mt-2 border rounded-md overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-muted/50">
                       <tr className="border-b">
                         <th className="text-left p-2 text-xs font-medium">Item</th>
+                        <th className="text-right p-2 text-xs font-medium">AI Suggested</th>
                         <th className="text-right p-2 text-xs font-medium">Ordered</th>
                         <th className="text-right p-2 text-xs font-medium">Received</th>
                         <th className="text-right p-2 text-xs font-medium">Remaining</th>
                         <th className="text-right p-2 text-xs font-medium">Unit Cost</th>
+                        <th className="text-center p-2 text-xs font-medium">Decision</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedPOData.lines.map(line => {
                         const item = items.find(i => i.id === line.itemId);
                         const remaining = line.qtyOrdered - line.qtyReceived;
+                        const aiSuggested = line.recommendedQtyAtOrderTime;
+                        // Use finalOrderedQty if available, otherwise fall back to qtyOrdered
+                        const ordered = line.finalOrderedQty !== null && line.finalOrderedQty !== undefined 
+                          ? line.finalOrderedQty 
+                          : line.qtyOrdered;
+                        let decisionStatus = 'NONE';
+                        let decisionVariant: 'default' | 'secondary' | 'destructive' | 'outline' = 'outline';
+                        
+                        if (aiSuggested !== null && aiSuggested !== undefined) {
+                          if (ordered === aiSuggested) {
+                            decisionStatus = 'ACCEPTED';
+                            decisionVariant = 'default';
+                          } else if (ordered > aiSuggested) {
+                            decisionStatus = 'INCREASED';
+                            decisionVariant = 'secondary';
+                          } else if (ordered < aiSuggested && ordered > 0) {
+                            decisionStatus = 'REDUCED';
+                            decisionVariant = 'secondary';
+                          } else if (ordered === 0) {
+                            decisionStatus = 'IGNORED';
+                            decisionVariant = 'destructive';
+                          }
+                        }
+                        
                         return (
                           <tr key={line.id} className="border-b">
                             <td className="p-2 text-sm">{item?.name || 'Unknown'}</td>
-                            <td className="p-2 text-sm text-right">{line.qtyOrdered}</td>
+                            <td className="p-2 text-sm text-right">
+                              {aiSuggested !== null && aiSuggested !== undefined ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <Brain className="h-3 w-3 text-primary" />
+                                  <span>{aiSuggested}</span>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-sm text-right font-medium">{ordered}</td>
                             <td className="p-2 text-sm text-right">{line.qtyReceived}</td>
                             <td className="p-2 text-sm text-right">{remaining}</td>
                             <td className="p-2 text-sm text-right">
                               ${line.unitCost?.toFixed(2) || '0.00'}
+                            </td>
+                            <td className="p-2 text-center">
+                              <Badge variant={decisionVariant} className="text-xs">
+                                {decisionStatus}
+                              </Badge>
                             </td>
                           </tr>
                         );

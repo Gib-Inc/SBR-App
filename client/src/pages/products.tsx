@@ -6,8 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart, Scan } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -29,7 +30,8 @@ function ItemTableRow({
   onTransfer,
   onProduce,
   onViewHistory,
-  onReorder
+  onReorder,
+  aiRecommendations
 }: { 
   item: any; 
   onDelete: (item: any) => void;
@@ -39,6 +41,7 @@ function ItemTableRow({
   onProduce?: (item: any) => void;
   onViewHistory?: (item: any) => void;
   onReorder?: (item: any) => void;
+  aiRecommendations?: any[];
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -255,6 +258,49 @@ function ItemTableRow({
           )}
         </td>
       )}
+
+      {/* AI Reorder Column (only for components) */}
+      {item.type === "component" && (() => {
+        // Get latest recommendation - filter and clone to avoid mutating query cache
+        const itemRecommendations = (aiRecommendations?.filter(
+          (rec: any) => rec.itemId === item.id && rec.location === null
+        ) || []).slice(); // Clone array to avoid mutating query cache
+        // Sort by createdAt DESC to get the most recent recommendation
+        itemRecommendations.sort((a: any, b: any) => 
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        const latestRecommendation = itemRecommendations[0];
+        return (
+          <td className="px-3 align-middle">
+            {latestRecommendation ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 cursor-help">
+                      <Brain className="h-3 w-3 text-primary" />
+                      <span className="text-sm font-medium" data-testid={`text-ai-qty-${item.id}`}>
+                        {latestRecommendation.recommendedQty}
+                      </span>
+                      <Badge 
+                        variant={latestRecommendation.recommendedAction === 'ORDER' ? 'destructive' : 'secondary'}
+                        className="text-xs"
+                      >
+                        {latestRecommendation.recommendedAction}
+                      </Badge>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">Last updated: {new Date(latestRecommendation.createdAt).toLocaleString()}</p>
+                    <p className="text-xs">Current stock: {latestRecommendation.contextSnapshot?.currentStock ?? 0}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : (
+              <div className="text-sm text-muted-foreground px-2 py-1">—</div>
+            )}
+          </td>
+        );
+      })()}
 
       {/* Forecast Column (only for finished products) */}
       {item.type === "finished_product" && (
@@ -1143,6 +1189,10 @@ export default function BOM() {
     queryKey: ["/api/items"],
   });
 
+  const { data: aiRecommendations = [] } = useQuery<any[]>({
+    queryKey: ["/api/ai-recommendations"],
+  });
+
   const allItems = (items as any[]) ?? [];
   
   const filteredItems = allItems.filter((item: any) =>
@@ -1391,6 +1441,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium">MOQ</th>
                   <th className="p-3 text-right text-sm font-medium">Lead Time (days)</th>
                   <th className="p-3 text-right text-sm font-medium">Stock</th>
+                  <th className="p-3 text-left text-sm font-medium">AI Reorder</th>
                   <th className="p-3 text-left text-sm font-medium">Category</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
@@ -1404,6 +1455,7 @@ export default function BOM() {
                     onDelete={handleDelete}
                     onViewHistory={setHistoryItem}
                     onReorder={setReorderItem}
+                    aiRecommendations={aiRecommendations}
                   />
                 ))}
               </tbody>

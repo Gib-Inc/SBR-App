@@ -15,11 +15,17 @@ This is a production-ready full-stack inventory management web application desig
   - Sticky headers (sticky top-0 bg-card z-10) remain visible during vertical scrolling
   - Empty state renders as row inside tbody, maintaining table structure
   - Loading state properly positioned outside scroll container
-- ✅ **Responsive Page Layout**: Fixed horizontal scrolling issues in Suppliers page
-  - Replaced `container mx-auto` with `w-full max-w-full` to constrain to viewport width
-  - Added responsive padding (px-4 md:px-6) that adapts to sidebar open/closed states
-  - Page-level horizontal scroll eliminated - only table scrolls horizontally within container
-  - Layout properly adapts when sidebar toggles between open and collapsed states
+- ✅ **Responsive Page Layout**: Fixed horizontal scrolling issues across entire application
+  - **Root Cause Fix**: Added `min-w-0` to flex containers in App.tsx to allow content shrinking below natural size
+    - Applied to main flex column wrapper and main element
+    - Prevents flex children from forcing page-level overflow
+  - **Suppliers Page Constraints**: Added comprehensive width constraints throughout hierarchy
+    - Page wrapper: `min-w-0 overflow-x-hidden` to allow shrinking and clip overflow
+    - TabsContent: `w-full max-w-full min-w-0` to constrain tabs to viewport
+    - PO Card wrapper: `w-full max-w-full overflow-hidden` for strict width enforcement
+    - Scroll container: `w-full max-w-full overflow-x-auto` for explicit horizontal scroll control
+  - **Result**: Page-level horizontal scroll eliminated - only table scrolls horizontally within container
+  - Layout properly adapts when sidebar toggles between open (256px) and collapsed (48px) states
 - ✅ **Seed Data Fix**: Corrected supplier variable references (acmeSupplier → acmeCorp, globalSupplier → globalSupply)
   - 4 sample POs created: Draft, Sent, Partial Received, and Received statuses
 

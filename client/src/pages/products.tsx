@@ -698,13 +698,18 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
 
   if (!item) return null;
 
-  const currentStock = item.currentStock ?? 0;
+  // CRITICAL: Finished products use hildaleQty + pivotQty, components use currentStock
+  const isFinished = item.type === "finished_product";
+  const totalStock = isFinished 
+    ? (item.hildaleQty ?? 0) + (item.pivotQty ?? 0)
+    : (item.currentStock ?? 0);
+  
   const dailyUsage = item.dailyUsage ?? 1;
-  const daysOfCover = dailyUsage > 0 ? Math.floor(currentStock / dailyUsage) : 0;
+  const daysOfCover = dailyUsage > 0 ? Math.floor(totalStock / dailyUsage) : 0;
   
   // Calculate suggested order quantity
   const targetStock = Math.max(dailyUsage * 30, 100);
-  const calculatedOrderQty = Math.max(0, targetStock - currentStock);
+  const calculatedOrderQty = Math.max(0, targetStock - totalStock);
   const moq = item.primarySupplier?.minimumOrderQuantity || 0;
   const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
 
@@ -813,10 +818,12 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
           <div className="grid grid-cols-2 gap-4">
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Current Stock</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  {isFinished ? "Total Stock (Hildale + Pivot)" : "Current Stock"}
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{currentStock}</div>
+                <div className="text-2xl font-bold">{totalStock}</div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {daysOfCover} days of cover at current usage
                 </p>

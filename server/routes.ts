@@ -9,6 +9,7 @@ import { TransactionService } from "./transaction-service";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
+import { z } from "zod";
 import {
   insertItemSchema,
   insertBinSchema,
@@ -35,6 +36,7 @@ import {
   insertPurchaseOrderSchema,
   insertPurchaseOrderLineSchema,
   insertSupplierLeadSchema,
+  type Item,
 } from "@shared/schema";
 
 const SALT_ROUNDS = 10;

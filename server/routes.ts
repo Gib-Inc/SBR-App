@@ -2560,6 +2560,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Bulk Confirm Receipt - Mark PO as fully received and create RECEIVE transactions
+  // 
+  // LIMITATION: This endpoint is not fully atomic at the database level. While it validates
+  // all lines upfront and aborts on the first failure, if processing fails midway through
+  // (e.g., line 3 fails), earlier line items (1-2) will have already been updated in inventory
+  // with no automatic rollback. The PO status will remain SENT/PARTIAL_RECEIVED, making the
+  // discrepancy visible. Clear error messages are returned to the UI so users can manually
+  // review affected POs.
+  // 
+  // TODO: For perfect atomicity, implement storage-level transaction support with
+  // withTransaction() wrapper. This is deferred to avoid architectural changes.
   app.post("/api/purchase-orders/:id/bulk-confirm-receipt", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;

@@ -26,6 +26,11 @@ export interface ProductionRequest {
 export class TransactionService {
   constructor(private storage: IStorage) {}
 
+  // NOTE: This method mutates inventory immediately via storage layer and does not
+  // participate in database-level transactions. Callers that process multiple
+  // transactions (e.g., bulk PO receipt) should validate upfront, but understand
+  // that if a later transaction fails, earlier ones will have already been committed
+  // to the database with no automatic rollback.
   async applyTransaction(
     transaction: InsertInventoryTransaction
   ): Promise<TransactionResult> {

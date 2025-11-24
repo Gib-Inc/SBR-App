@@ -1142,7 +1142,9 @@ export class MemStorage implements IStorage {
       id,
       ...insertPO,
       orderDate: insertPO.orderDate ?? new Date(),
+      approvedAt: insertPO.approvedAt ?? null,
       sentAt: insertPO.sentAt ?? null,
+      expectedDate: insertPO.expectedDate ?? null,
       receivedAt: insertPO.receivedAt ?? null,
       paidAt: insertPO.paidAt ?? null,
       status: insertPO.status ?? 'DRAFT',
@@ -1185,8 +1187,8 @@ export class MemStorage implements IStorage {
     const line: PurchaseOrderLine = {
       id,
       ...insertLine,
-      receivedQuantity: insertLine.receivedQuantity ?? 0,
-      unitPrice: insertLine.unitPrice ?? null,
+      qtyReceived: insertLine.qtyReceived ?? 0,
+      unitCost: insertLine.unitCost ?? null,
     };
     this.purchaseOrderLines.set(id, line);
     return line;

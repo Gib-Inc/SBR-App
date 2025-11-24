@@ -39,6 +39,12 @@ import {
   type InsertInventoryTransaction,
   type AIRecommendation,
   type InsertAIRecommendation,
+  type ReturnRequest,
+  type InsertReturnRequest,
+  type ReturnItem,
+  type InsertReturnItem,
+  type ReturnShipment,
+  type InsertReturnShipment,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -179,6 +185,22 @@ export interface IStorage {
   createSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead>;
   updateSupplierLead(id: string, lead: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined>;
   deleteSupplierLead(id: string): Promise<boolean>;
+
+  // Return Requests
+  getAllReturnRequests(): Promise<ReturnRequest[]>;
+  getReturnRequest(id: string): Promise<ReturnRequest | undefined>;
+  createReturnRequest(request: InsertReturnRequest): Promise<ReturnRequest>;
+  updateReturnRequest(id: string, request: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined>;
+
+  // Return Items
+  getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]>;
+  createReturnItem(item: InsertReturnItem): Promise<ReturnItem>;
+  updateReturnItem(id: string, item: Partial<InsertReturnItem>): Promise<ReturnItem | undefined>;
+
+  // Return Shipments
+  getReturnShipmentsByRequestId(returnRequestId: string): Promise<ReturnShipment[]>;
+  createReturnShipment(shipment: InsertReturnShipment): Promise<ReturnShipment>;
+  updateReturnShipment(id: string, shipment: Partial<InsertReturnShipment>): Promise<ReturnShipment | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -202,6 +224,9 @@ export class MemStorage implements IStorage {
   private purchaseOrders: Map<string, PurchaseOrder>;
   private purchaseOrderLines: Map<string, PurchaseOrderLine>;
   private supplierLeads: Map<string, SupplierLead>;
+  private returnRequests: Map<string, ReturnRequest>;
+  private returnItems: Map<string, ReturnItem>;
+  private returnShipments: Map<string, ReturnShipment>;
 
   constructor() {
     this.users = new Map();
@@ -224,6 +249,9 @@ export class MemStorage implements IStorage {
     this.purchaseOrders = new Map();
     this.purchaseOrderLines = new Map();
     this.supplierLeads = new Map();
+    this.returnRequests = new Map();
+    this.returnItems = new Map();
+    this.returnShipments = new Map();
     this.seedData();
   }
 
@@ -1319,6 +1347,98 @@ export class MemStorage implements IStorage {
   async deleteSupplierLead(id: string): Promise<boolean> {
     return this.supplierLeads.delete(id);
   }
+
+  // Return Requests
+  async getAllReturnRequests(): Promise<ReturnRequest[]> {
+    return Array.from(this.returnRequests.values());
+  }
+
+  async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
+    return this.returnRequests.get(id);
+  }
+
+  async createReturnRequest(insertRequest: InsertReturnRequest): Promise<ReturnRequest> {
+    const id = randomUUID();
+    const now = new Date();
+    const request: ReturnRequest = {
+      id,
+      ...insertRequest,
+      status: insertRequest.status ?? 'OPEN',
+      resolutionFinal: insertRequest.resolutionFinal ?? null,
+      reason: insertRequest.reason ?? null,
+      customerEmail: insertRequest.customerEmail ?? null,
+      customerPhone: insertRequest.customerPhone ?? null,
+      ghlContactId: insertRequest.ghlContactId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.returnRequests.set(id, request);
+    return request;
+  }
+
+  async updateReturnRequest(id: string, updates: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined> {
+    const request = this.returnRequests.get(id);
+    if (!request) return undefined;
+    const updated = { ...request, ...updates, updatedAt: new Date() };
+    this.returnRequests.set(id, updated);
+    return updated;
+  }
+
+  // Return Items
+  async getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]> {
+    return Array.from(this.returnItems.values())
+      .filter(item => item.returnRequestId === returnRequestId);
+  }
+
+  async createReturnItem(insertItem: InsertReturnItem): Promise<ReturnItem> {
+    const id = randomUUID();
+    const item: ReturnItem = {
+      id,
+      ...insertItem,
+      qtyApproved: insertItem.qtyApproved ?? 0,
+      qtyReceived: insertItem.qtyReceived ?? 0,
+      disposition: insertItem.disposition ?? null,
+      notes: insertItem.notes ?? null,
+    };
+    this.returnItems.set(id, item);
+    return item;
+  }
+
+  async updateReturnItem(id: string, updates: Partial<InsertReturnItem>): Promise<ReturnItem | undefined> {
+    const item = this.returnItems.get(id);
+    if (!item) return undefined;
+    const updated = { ...item, ...updates };
+    this.returnItems.set(id, updated);
+    return updated;
+  }
+
+  // Return Shipments
+  async getReturnShipmentsByRequestId(returnRequestId: string): Promise<ReturnShipment[]> {
+    return Array.from(this.returnShipments.values())
+      .filter(shipment => shipment.returnRequestId === returnRequestId);
+  }
+
+  async createReturnShipment(insertShipment: InsertReturnShipment): Promise<ReturnShipment> {
+    const id = randomUUID();
+    const now = new Date();
+    const shipment: ReturnShipment = {
+      id,
+      ...insertShipment,
+      status: insertShipment.status ?? 'LABEL_CREATED',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.returnShipments.set(id, shipment);
+    return shipment;
+  }
+
+  async updateReturnShipment(id: string, updates: Partial<InsertReturnShipment>): Promise<ReturnShipment | undefined> {
+    const shipment = this.returnShipments.get(id);
+    if (!shipment) return undefined;
+    const updated = { ...shipment, ...updates, updatedAt: new Date() };
+    this.returnShipments.set(id, updated);
+    return updated;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -2087,6 +2207,62 @@ export class PostgresStorage implements IStorage {
   async deleteSupplierLead(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.supplierLeads).where(eq(schema.supplierLeads.id, id)).returning();
     return results.length > 0;
+  }
+
+  // Return Requests
+  async getAllReturnRequests(): Promise<ReturnRequest[]> {
+    return await this.db.select().from(schema.returnRequests);
+  }
+
+  async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
+    const results = await this.db.select().from(schema.returnRequests).where(eq(schema.returnRequests.id, id));
+    return results[0];
+  }
+
+  async createReturnRequest(request: InsertReturnRequest): Promise<ReturnRequest> {
+    const results = await this.db.insert(schema.returnRequests).values(request).returning();
+    return results[0];
+  }
+
+  async updateReturnRequest(id: string, updates: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined> {
+    const results = await this.db.update(schema.returnRequests)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.returnRequests.id, id))
+      .returning();
+    return results[0];
+  }
+
+  // Return Items
+  async getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]> {
+    return await this.db.select().from(schema.returnItems).where(eq(schema.returnItems.returnRequestId, returnRequestId));
+  }
+
+  async createReturnItem(item: InsertReturnItem): Promise<ReturnItem> {
+    const results = await this.db.insert(schema.returnItems).values(item).returning();
+    return results[0];
+  }
+
+  async updateReturnItem(id: string, updates: Partial<InsertReturnItem>): Promise<ReturnItem | undefined> {
+    const results = await this.db.update(schema.returnItems).set(updates).where(eq(schema.returnItems.id, id)).returning();
+    return results[0];
+  }
+
+  // Return Shipments
+  async getReturnShipmentsByRequestId(returnRequestId: string): Promise<ReturnShipment[]> {
+    return await this.db.select().from(schema.returnShipments).where(eq(schema.returnShipments.returnRequestId, returnRequestId));
+  }
+
+  async createReturnShipment(shipment: InsertReturnShipment): Promise<ReturnShipment> {
+    const results = await this.db.insert(schema.returnShipments).values(shipment).returning();
+    return results[0];
+  }
+
+  async updateReturnShipment(id: string, updates: Partial<InsertReturnShipment>): Promise<ReturnShipment | undefined> {
+    const results = await this.db.update(schema.returnShipments)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.returnShipments.id, id))
+      .returning();
+    return results[0];
   }
 }
 

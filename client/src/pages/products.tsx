@@ -700,17 +700,17 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
 
   const { data: suppliers } = useQuery<any[]>({
     queryKey: ["/api/suppliers"],
-    enabled: isOpen,
+    enabled: isOpen && !!item,
   });
 
   const { data: supplierItems } = useQuery<any[]>({
     queryKey: ["/api/supplier-items"],
-    enabled: isOpen,
+    enabled: isOpen && !!item,
   });
 
   const { data: draftPOs } = useQuery<any[]>({
     queryKey: ["/api/suppliers", selectedSupplier, "draft-purchase-orders"],
-    enabled: isOpen && !!selectedSupplier,
+    enabled: isOpen && !!item && !!selectedSupplier,
   });
 
   const createPOMutation = useMutation({
@@ -756,8 +756,6 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
       });
     },
   });
-
-  if (!item) return null;
 
   const currentStock = item.currentStock ?? 0;
   const dailyUsage = item.dailyUsage ?? 1;
@@ -816,6 +814,8 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
       });
     }
   };
+
+  if (!item) return null;
 
   const hasDraftPOs = (draftPOs?.length || 0) > 0;
 

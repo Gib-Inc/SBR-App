@@ -177,8 +177,13 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
   qtyOrdered: integer("qty_ordered").notNull(),
   qtyReceived: integer("qty_received").notNull().default(0),
   unitCost: real("unit_cost"),
+  // AI Recommendation tracking
+  aiRecommendationId: varchar("ai_recommendation_id").references(() => aiRecommendations.id),
+  recommendedQtyAtOrderTime: integer("recommended_qty_at_order_time"), // AI suggested quantity when PO was created
+  finalOrderedQty: integer("final_ordered_qty"), // What user actually ordered (may differ from recommendedQty)
 }, (table) => ({
   purchaseOrderIdIdx: index("purchase_order_lines_purchase_order_id_idx").on(table.purchaseOrderId),
+  aiRecommendationIdIdx: index("purchase_order_lines_ai_recommendation_id_idx").on(table.aiRecommendationId),
 }));
 
 export const insertPurchaseOrderLineSchema = createInsertSchema(purchaseOrderLines).omit({ id: true });
@@ -388,6 +393,36 @@ export const insertInventoryTransactionSchema = createInsertSchema(inventoryTran
 });
 export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransactionSchema>;
 export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
+
+// ============================================================================
+// AI RECOMMENDATIONS (LLM-Generated Reorder Suggestions)
+// ============================================================================
+
+export const aiRecommendations = pgTable("ai_recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull(), // 'FORECAST_REORDER', 'PO_SUGGESTION'
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  location: text("location"), // 'PIVOT', 'HILDALE', null for global
+  recommendedQty: integer("recommended_qty").notNull(),
+  recommendedAction: text("recommended_action").notNull(), // 'ORDER', 'MONITOR', 'HOLD'
+  horizonDays: integer("horizon_days"), // Forecast horizon in days
+  contextSnapshot: jsonb("context_snapshot"), // Current stock, open POs, forecast, etc.
+  llmResponseTimeMs: integer("llm_response_time_ms"), // LLM API response time
+  outcomeStatus: text("outcome_status"), // 'ACCURATE', 'UNDER_ORDERED', 'OVER_ORDERED', null if not evaluated
+  outcomeDetails: jsonb("outcome_details"), // {orderedQty, receivedQty, recommendedQty, daysCoveredAfterReceipt}
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
+  createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),
+  typeIdx: index("ai_recommendations_type_idx").on(table.type),
+}));
+
+export const insertAIRecommendationSchema = createInsertSchema(aiRecommendations).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertAIRecommendation = z.infer<typeof insertAIRecommendationSchema>;
+export type AIRecommendation = typeof aiRecommendations.$inferSelect;
 
 // ============================================================================
 // UPDATE SCHEMAS (Partial validation for PATCH endpoints)

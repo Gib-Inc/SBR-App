@@ -1,0 +1,133 @@
+I want you to implement a proper AI insights + audit layer across this inventory app. Do not invent new pages; instead wire everything into the existing pages and tabs. Follow these steps carefully and reuse existing patterns (transactions, POs, batch forecasting) instead of creating parallel logic.
+
+1. Add an AIRecommendation log model and wire it into the batch forecaster
+
+Create a persistent AIRecommendation model (DB + TypeScript types) with at least:
+
+id, createdAt
+
+type (e.g. FORECAST_REORDER, PO_SUGGESTION)
+
+itemId (stock item or finished product)
+
+location (Pivot, Hildale, or global)
+
+recommendedQty
+
+recommendedAction (ORDER, MONITOR, HOLD, etc.)
+
+horizonDays
+
+contextSnapshot (JSON blob of relevant state: current stock by location, open POs, forecast, etc.)
+
+llmResponseTimeMs
+
+Optional outcome fields: outcomeStatus, outcomeDetails (to be filled later when we know reality)
+
+Update the existing batch forecasting job that already computes reorder recommendations so that:
+
+It writes the “current recommended reorder quantity / status” back to each relevant item.
+
+It inserts an AIRecommendation record per item whenever a new recommendation is generated or significantly changed.
+
+It does not fire the LLM on every single stock edit; continue using the existing batch job so AI calls are grouped efficiently.
+
+2. Link POs to the AI suggestions
+
+Extend PurchaseOrderLine so each line can optionally reference the recommendation that influenced it:
+
+aiRecommendationId (nullable)
+
+recommendedQtyAtOrderTime (copied from the AIRecommendation when the PO line is created)
+
+finalOrderedQty (what the user actually ordered)
+
+In the “Reorder” flow from the Stock Inventory table:
+
+When we prefill the suggested quantity for a line, also attach the most recent AIRecommendation for that item (same supplier + location) to the created line.
+
+If the user overrides the quantity, keep both recommendedQtyAtOrderTime and finalOrderedQty.
+
+3. Record outcomes when items are received
+
+In the PO “Receive Items” flow, after we create the existing RECEIVE transactions and update stock:
+
+For each line that has an aiRecommendationId, update the linked AIRecommendation with an outcome:
+
+Compute whether the PO was roughly aligned with the suggestion (e.g. within ±20% of recommendedQtyAtOrderTime) and set outcomeStatus to ACCURATE, UNDER_ORDERED, or OVER_ORDERED.
+
+Store an outcomeDetails JSON summary (e.g. {orderedQty, receivedQty, recommendedQty, daysCoveredAfterReceipt}).
+
+This should reuse the current transaction / stock logic and only add annotation; do not fork the stock update code.
+
+4. Surface AI insights on the BOM page
+
+On the BOM / Products page, in the Stock Inventory section:
+
+Add a new column AI Reorder Suggestion.
+
+For each item, show a concise string like Order 300 (30 days) or Monitor – 18 days cover, using the latest AIRecommendation for that item + location.
+
+Show a tooltip with “Last updated: <timestamp>” and the core context (e.g. stock, open POs).
+
+Clicking the suggestion should open a small modal that lists the last few AIRecommendations for that item, with columns such as Date, Suggested Qty, Action, Linked PO (if any), Outcome.
+
+Make sure the table stays within the existing layout container and only the table body scrolls horizontally if needed (do not reintroduce page-wide horizontal scroll).
+
+5. Surface AI vs actual on the Suppliers → PO History & Issues tab
+
+On the Suppliers page, PO History & Issues tab:
+
+Keep the current summary cards at the top, but ensure they pull from real data (see step 6).
+
+In the Purchase Orders table, add these columns (scrollable if needed):
+
+AI Suggested Qty = sum of recommendedQtyAtOrderTime for the PO’s lines that have an aiRecommendationId.
+
+Ordered Qty = sum of finalOrderedQty across lines.
+
+Received Qty = sum of all quantities received so far for those lines.
+
+Delta % = percentage difference between suggested and ordered (e.g. (Ordered - Suggested) / Suggested).
+
+In the PO detail view, for each line show:
+
+Recommended, Ordered, Received and a small chip: Accepted, Reduced, Increased, Ignored.
+
+Add a “Dispute / Issue” button that does not send anything yet but clearly marks that this PO had a problem; we will later connect it to GHL.
+
+6. Make the AI Agent → Insights cards real
+
+On the AI Agent page, Insights tab, wire the summary cards to the new data:
+
+Total Recommendations = count of AIRecommendation across the selected date range.
+
+Accuracy Rate = percentage of AIRecommendation rows that have outcomeStatus = 'ACCURATE' (or within a defined threshold) out of those that have an outcome.
+
+Avg Response Time = average of llmResponseTimeMs.
+
+Below the cards, make the history table pull directly from AIRecommendation plus linked PO lines:
+
+Columns: Date, Item, Recommended Action/Qty, Linked PO, Outcome Status, Delta %, Response Time.
+
+Add filters by Item, Supplier, type, outcome status, and date.
+
+Ensure this table and cards update correctly when filters or date ranges change.
+
+7. General constraints
+
+Reuse existing routes and components; do not add new top-level pages.
+
+Do not change how we currently batch LLM calls; we are only adding logging and UI, not new AI workflows.
+
+Before finalizing, verify:
+
+AIRecommendation records are written on forecast runs.
+
+Reorder flows attach recommendations to PO lines.
+
+Receiving a PO updates both stock and AI outcomes.
+
+The BOM and Suppliers tables show the new columns without breaking layout.
+
+The AI Agent → Insights cards and table display accurate numbers for a few seeded scenarios.

@@ -37,6 +37,8 @@ import {
   type InsertImportJob,
   type InventoryTransaction,
   type InsertInventoryTransaction,
+  type AIRecommendation,
+  type InsertAIRecommendation,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -147,6 +149,13 @@ export interface IStorage {
   getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]>;
   createInventoryTransaction(transaction: InsertInventoryTransaction): Promise<InventoryTransaction>;
 
+  // AI Recommendations
+  getAllAIRecommendations(): Promise<AIRecommendation[]>;
+  getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]>;
+  getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined>;
+  createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation>;
+  updateAIRecommendation(id: string, recommendation: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined>;
+
   // Purchase Orders
   getAllPurchaseOrders(): Promise<PurchaseOrder[]>;
   getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined>;
@@ -188,6 +197,7 @@ export class MemStorage implements IStorage {
   private importProfiles: Map<string, ImportProfile>;
   private importJobs: Map<string, ImportJob>;
   private inventoryTransactions: Map<string, InventoryTransaction>;
+  private aiRecommendations: Map<string, AIRecommendation>;
   private purchaseOrders: Map<string, PurchaseOrder>;
   private purchaseOrderLines: Map<string, PurchaseOrderLine>;
   private supplierLeads: Map<string, SupplierLead>;
@@ -209,6 +219,7 @@ export class MemStorage implements IStorage {
     this.importProfiles = new Map();
     this.importJobs = new Map();
     this.inventoryTransactions = new Map();
+    this.aiRecommendations = new Map();
     this.purchaseOrders = new Map();
     this.purchaseOrderLines = new Map();
     this.supplierLeads = new Map();
@@ -1122,6 +1133,53 @@ export class MemStorage implements IStorage {
     return transaction;
   }
 
+  // AI Recommendations
+  async getAllAIRecommendations(): Promise<AIRecommendation[]> {
+    return Array.from(this.aiRecommendations.values())
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]> {
+    return Array.from(this.aiRecommendations.values())
+      .filter(r => r.itemId === itemId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined> {
+    const recommendations = Array.from(this.aiRecommendations.values())
+      .filter(r => r.itemId === itemId && (location === undefined || r.location === location))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return recommendations[0];
+  }
+
+  async createAIRecommendation(insertRecommendation: InsertAIRecommendation): Promise<AIRecommendation> {
+    const id = randomUUID();
+    const recommendation: AIRecommendation = {
+      id,
+      type: insertRecommendation.type,
+      itemId: insertRecommendation.itemId,
+      location: insertRecommendation.location ?? null,
+      recommendedQty: insertRecommendation.recommendedQty,
+      recommendedAction: insertRecommendation.recommendedAction,
+      horizonDays: insertRecommendation.horizonDays ?? null,
+      contextSnapshot: insertRecommendation.contextSnapshot ?? null,
+      llmResponseTimeMs: insertRecommendation.llmResponseTimeMs ?? null,
+      outcomeStatus: insertRecommendation.outcomeStatus ?? null,
+      outcomeDetails: insertRecommendation.outcomeDetails ?? null,
+      createdAt: new Date(),
+    };
+    this.aiRecommendations.set(id, recommendation);
+    return recommendation;
+  }
+
+  async updateAIRecommendation(id: string, update: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined> {
+    const existing = this.aiRecommendations.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...update };
+    this.aiRecommendations.set(id, updated);
+    return updated;
+  }
+
   // Purchase Orders
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
     return Array.from(this.purchaseOrders.values());
@@ -1189,6 +1247,9 @@ export class MemStorage implements IStorage {
       ...insertLine,
       qtyReceived: insertLine.qtyReceived ?? 0,
       unitCost: insertLine.unitCost ?? null,
+      aiRecommendationId: insertLine.aiRecommendationId ?? null,
+      recommendedQtyAtOrderTime: insertLine.recommendedQtyAtOrderTime ?? null,
+      finalOrderedQty: insertLine.finalOrderedQty ?? null,
     };
     this.purchaseOrderLines.set(id, line);
     return line;
@@ -1874,6 +1935,55 @@ export class PostgresStorage implements IStorage {
 
   async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
     const results = await this.db.insert(schema.inventoryTransactions).values(insertTransaction).returning();
+    return results[0];
+  }
+
+  // AI Recommendations
+  async getAllAIRecommendations(): Promise<AIRecommendation[]> {
+    const results = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`);
+    return results;
+  }
+
+  async getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]> {
+    const results = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .where(eq(schema.aiRecommendations.itemId, itemId))
+      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`);
+    return results;
+  }
+
+  async getLatestAIRecommendationForItem(itemId: string, location?: string): Promise<AIRecommendation | undefined> {
+    let whereClause = eq(schema.aiRecommendations.itemId, itemId);
+    
+    if (location !== undefined) {
+      whereClause = and(whereClause, eq(schema.aiRecommendations.location, location))!;
+    }
+    
+    const results = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .where(whereClause)
+      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`)
+      .limit(1);
+    
+    return results[0];
+  }
+
+  async createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation> {
+    const results = await this.db.insert(schema.aiRecommendations).values(recommendation).returning();
+    return results[0];
+  }
+
+  async updateAIRecommendation(id: string, update: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined> {
+    const results = await this.db
+      .update(schema.aiRecommendations)
+      .set(update)
+      .where(eq(schema.aiRecommendations.id, id))
+      .returning();
     return results[0];
   }
 

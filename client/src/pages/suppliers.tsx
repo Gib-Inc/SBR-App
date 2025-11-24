@@ -57,6 +57,10 @@ export default function Suppliers() {
   const [selectedPO, setSelectedPO] = useState<string | null>(null);
   const [showReceiveDialog, setShowReceiveDialog] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState<string | null>(null);
+  const [showOpenDisputeDialog, setShowOpenDisputeDialog] = useState<string | null>(null);
+  const [showResolveDisputeDialog, setShowResolveDisputeDialog] = useState<string | null>(null);
+  const [disputeReason, setDisputeReason] = useState("");
+  const [resolutionNotes, setResolutionNotes] = useState("");
 
   const { data: poSummary } = useQuery<POSummary>({
     queryKey: ['/api/purchase-orders/summary'],
@@ -81,6 +85,18 @@ export default function Suppliers() {
   const { data: selectedPOData } = useQuery<PurchaseOrder & { lines: PurchaseOrderLine[] }>({
     queryKey: ['/api/purchase-orders', selectedPO],
     enabled: !!selectedPO,
+  });
+
+  // Query PO data for confirm dialog
+  const { data: confirmPOData } = useQuery<PurchaseOrder & { lines: PurchaseOrderLine[] }>({
+    queryKey: ['/api/purchase-orders', showConfirmDialog],
+    enabled: !!showConfirmDialog,
+  });
+
+  // Query PO data for dispute dialogs
+  const { data: disputePOData } = useQuery<PurchaseOrder & { lines: PurchaseOrderLine[] }>({
+    queryKey: ['/api/purchase-orders', showOpenDisputeDialog || showResolveDisputeDialog],
+    enabled: !!(showOpenDisputeDialog || showResolveDisputeDialog),
   });
 
   // Filter purchase orders
@@ -254,8 +270,17 @@ export default function Suppliers() {
   });
 
   const toggleDisputeMutation = useMutation({
-    mutationFn: async ({ id, action }: { id: string; action: 'open' | 'resolve' }) => {
-      const res = await apiRequest("POST", `/api/purchase-orders/${id}/toggle-dispute`, { action });
+    mutationFn: async ({ id, action, reason, resolutionNotes }: { 
+      id: string; 
+      action: 'open' | 'resolve'; 
+      reason?: string;
+      resolutionNotes?: string;
+    }) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/toggle-dispute`, { 
+        action, 
+        reason,
+        resolutionNotes 
+      });
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.error || "Failed to update dispute status");
@@ -270,6 +295,11 @@ export default function Suppliers() {
           ? "Dispute opened - GHL team will be notified" 
           : "Dispute marked as resolved" 
       });
+      // Clear modal states and text fields
+      setShowOpenDisputeDialog(null);
+      setShowResolveDisputeDialog(null);
+      setDisputeReason("");
+      setResolutionNotes("");
     },
     onError: (error: Error) => {
       toast({
@@ -522,14 +552,22 @@ export default function Suppliers() {
                                 </span>
                               </td>
                               <td className="p-2">
-                                <Badge variant={
-                                  po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
-                                  po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
-                                  po.status === 'CANCELLED' ? 'destructive' :
-                                  'outline'
-                                } data-testid={`badge-status-${po.id}`}>
-                                  {po.status.replace('_', ' ')}
-                                </Badge>
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <Badge variant={
+                                    po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
+                                    po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
+                                    po.status === 'CANCELLED' ? 'destructive' :
+                                    'outline'
+                                  } data-testid={`badge-status-${po.id}`}>
+                                    {po.status.replace('_', ' ')}
+                                  </Badge>
+                                  {po.issueStatus === 'OPEN' && (
+                                    <Badge variant="destructive" className="text-xs" data-testid={`badge-dispute-${po.id}`}>
+                                      <Flag className="h-3 w-3 mr-1" />
+                                      In Dispute
+                                    </Badge>
+                                  )}
+                                </div>
                               </td>
                               <td className="p-2 text-sm whitespace-nowrap">
                                 {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
@@ -558,23 +596,25 @@ export default function Suppliers() {
                                     className="h-8 w-8"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      const action = po.issueStatus === 'OPEN' ? 'resolve' : 'open';
-                                      toggleDisputeMutation.mutate({ id: po.id, action });
+                                      if (po.issueStatus === 'OPEN') {
+                                        setShowResolveDisputeDialog(po.id);
+                                      } else {
+                                        setShowOpenDisputeDialog(po.id);
+                                      }
                                     }}
-                                    disabled={toggleDisputeMutation.isPending}
                                     data-testid={`button-dispute-${po.id}`}
                                     aria-label={
                                       po.issueStatus === 'OPEN' 
-                                        ? "Mark dispute resolved" 
+                                        ? "Resolve dispute" 
                                         : po.issueStatus === 'RESOLVED'
-                                        ? "Dispute resolved"
+                                        ? "Dispute was resolved"
                                         : "Open dispute and notify in GHL"
                                     }
                                     title={
                                       po.issueStatus === 'OPEN' 
-                                        ? "Mark dispute resolved" 
+                                        ? "Resolve dispute" 
                                         : po.issueStatus === 'RESOLVED'
-                                        ? "Dispute resolved"
+                                        ? "Dispute was resolved"
                                         : "Open dispute & notify in GHL"
                                     }
                                   >
@@ -925,13 +965,73 @@ export default function Suppliers() {
 
       {/* Bulk Confirm Receipt Dialog */}
       <Dialog open={!!showConfirmDialog} onOpenChange={() => setShowConfirmDialog(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Confirm Full Receipt</DialogTitle>
             <DialogDescription>
-              Mark this PO as fully received and update inventory based on all ordered quantities?
+              {confirmPOData && (
+                <span>
+                  Supplier: {suppliers.find(s => s.id === confirmPOData.supplierId)?.name || 'Unknown'}
+                  {' • '}
+                  PO: {confirmPOData.poNumber}
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
+
+          {confirmPOData && (
+            <div className="space-y-4">
+              {/* PO Metadata */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Order Date</Label>
+                  <div>{confirmPOData.orderDate ? new Date(confirmPOData.orderDate).toLocaleDateString() : '-'}</div>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Expected Date</Label>
+                  <div>{confirmPOData.expectedDate ? new Date(confirmPOData.expectedDate).toLocaleDateString() : '-'}</div>
+                </div>
+              </div>
+
+              {/* Line Items Summary */}
+              <div>
+                <Label className="text-sm font-medium mb-2 block">Line Items to Receive</Label>
+                <div className="border rounded-md">
+                  <table className="w-full">
+                    <thead className="bg-muted/50">
+                      <tr className="border-b">
+                        <th className="text-left p-2 text-xs font-medium">Item</th>
+                        <th className="text-right p-2 text-xs font-medium">Qty Ordered</th>
+                        <th className="text-right p-2 text-xs font-medium">Already Received</th>
+                        <th className="text-right p-2 text-xs font-medium">Will Receive</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {confirmPOData.lines && confirmPOData.lines.map(line => {
+                        const item = items.find(i => i.id === line.itemId);
+                        const remaining = line.qtyOrdered - line.qtyReceived;
+                        return (
+                          <tr key={line.id} className="border-b last:border-0">
+                            <td className="p-2 text-sm">{item?.name || 'Unknown'}</td>
+                            <td className="p-2 text-sm text-right">{line.qtyOrdered}</td>
+                            <td className="p-2 text-sm text-right">{line.qtyReceived}</td>
+                            <td className="p-2 text-sm text-right font-medium">{remaining}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Confirmation Question */}
+              <div className="bg-muted/50 border rounded-md p-3 text-sm">
+                <p className="font-medium">Do you want to mark this PO as fully received and update inventory based on all ordered quantities?</p>
+                <p className="text-muted-foreground text-xs mt-1">This will create RECEIVE transactions for all remaining quantities.</p>
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowConfirmDialog(null)}>
               Cancel
@@ -946,6 +1046,174 @@ export default function Suppliers() {
               data-testid="button-confirm-bulk-receipt"
             >
               {bulkConfirmReceiptMutation.isPending ? "Confirming..." : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Open Dispute Dialog */}
+      <Dialog open={!!showOpenDisputeDialog} onOpenChange={() => {
+        setShowOpenDisputeDialog(null);
+        setDisputeReason("");
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Open Dispute</DialogTitle>
+            <DialogDescription>
+              {disputePOData && showOpenDisputeDialog === disputePOData.id && (
+                <span>
+                  Supplier: {suppliers.find(s => s.id === disputePOData.supplierId)?.name || 'Unknown'}
+                  {' • '}
+                  PO: {disputePOData.poNumber}
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {disputePOData && showOpenDisputeDialog === disputePOData.id && (
+            <div className="space-y-4">
+              {/* PO Metadata */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Order Date</Label>
+                  <div>{disputePOData.orderDate ? new Date(disputePOData.orderDate).toLocaleDateString() : '-'}</div>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Expected Date</Label>
+                  <div>{disputePOData.expectedDate ? new Date(disputePOData.expectedDate).toLocaleDateString() : '-'}</div>
+                </div>
+              </div>
+
+              {/* Reason for Dispute */}
+              <div className="space-y-2">
+                <Label htmlFor="dispute-reason">Reason for Dispute</Label>
+                <Textarea
+                  id="dispute-reason"
+                  placeholder="Describe the issue with this order (e.g., late delivery, damaged items, quantity mismatch, etc.)"
+                  value={disputeReason}
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  rows={4}
+                  data-testid="textarea-dispute-reason"
+                />
+              </div>
+
+              <div className="bg-muted/50 border rounded-md p-3 text-sm">
+                <p className="text-muted-foreground text-xs">
+                  Opening a dispute will notify the GHL team for manual review and mark this PO as needing attention.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setShowOpenDisputeDialog(null);
+              setDisputeReason("");
+            }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (showOpenDisputeDialog) {
+                  toggleDisputeMutation.mutate({ 
+                    id: showOpenDisputeDialog, 
+                    action: 'open',
+                    reason: disputeReason || 'No specific reason provided' 
+                  });
+                }
+              }}
+              disabled={toggleDisputeMutation.isPending}
+              data-testid="button-confirm-open-dispute"
+            >
+              {toggleDisputeMutation.isPending ? "Opening..." : "Open Dispute"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Resolve Dispute Dialog */}
+      <Dialog open={!!showResolveDisputeDialog} onOpenChange={() => {
+        setShowResolveDisputeDialog(null);
+        setResolutionNotes("");
+      }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Resolve Dispute</DialogTitle>
+            <DialogDescription>
+              {disputePOData && showResolveDisputeDialog === disputePOData.id && (
+                <span>
+                  Supplier: {suppliers.find(s => s.id === disputePOData.supplierId)?.name || 'Unknown'}
+                  {' • '}
+                  PO: {disputePOData.poNumber}
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {disputePOData && showResolveDisputeDialog === disputePOData.id && (
+            <div className="space-y-4">
+              {/* PO Metadata */}
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Order Date</Label>
+                  <div>{disputePOData.orderDate ? new Date(disputePOData.orderDate).toLocaleDateString() : '-'}</div>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Expected Date</Label>
+                  <div>{disputePOData.expectedDate ? new Date(disputePOData.expectedDate).toLocaleDateString() : '-'}</div>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Dispute Opened</Label>
+                  <div>{disputePOData.issueOpenedAt ? new Date(disputePOData.issueOpenedAt).toLocaleDateString() : '-'}</div>
+                </div>
+              </div>
+
+              {/* Original Dispute Reason */}
+              {disputePOData.issueNotes && (
+                <div className="space-y-2">
+                  <Label>Original Dispute Reason</Label>
+                  <div className="bg-muted/50 border rounded-md p-3 text-sm">
+                    {disputePOData.issueNotes}
+                  </div>
+                </div>
+              )}
+
+              {/* Resolution Notes */}
+              <div className="space-y-2">
+                <Label htmlFor="resolution-notes">Resolution Notes</Label>
+                <Textarea
+                  id="resolution-notes"
+                  placeholder="Describe how the dispute was resolved (e.g., refund issued, replacement sent, etc.)"
+                  value={resolutionNotes}
+                  onChange={(e) => setResolutionNotes(e.target.value)}
+                  rows={4}
+                  data-testid="textarea-resolution-notes"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setShowResolveDisputeDialog(null);
+              setResolutionNotes("");
+            }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (showResolveDisputeDialog) {
+                  toggleDisputeMutation.mutate({ 
+                    id: showResolveDisputeDialog, 
+                    action: 'resolve',
+                    resolutionNotes: resolutionNotes || 'Marked as resolved without specific notes' 
+                  });
+                }
+              }}
+              disabled={toggleDisputeMutation.isPending}
+              data-testid="button-confirm-resolve-dispute"
+            >
+              {toggleDisputeMutation.isPending ? "Resolving..." : "Mark Resolved"}
             </Button>
           </DialogFooter>
         </DialogContent>

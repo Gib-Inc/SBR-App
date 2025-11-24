@@ -357,23 +357,24 @@ export default function Suppliers() {
               {isLoadingPOs ? (
                 <div className="text-center py-8 text-muted-foreground">Loading purchase orders...</div>
               ) : (
-                <div className="relative max-h-[600px] overflow-auto">
-                  <table className="w-full min-w-[1100px]">
-                    <thead className="sticky top-0 bg-card z-10">
-                      <tr className="border-b">
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">PO #</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Supplier</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Products Ordered</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Status</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Order Date</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Expected</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Received</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Days to Receive</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap bg-card">GHL Rep</th>
-                        <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Total</th>
-                        <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Actions</th>
-                      </tr>
-                    </thead>
+                <div className="relative max-h-[600px] overflow-y-auto">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1100px]">
+                      <thead className="sticky top-0 bg-card z-10">
+                        <tr className="border-b">
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">PO #</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Supplier</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Products Ordered</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Status</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Order Date</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Expected</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Received</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Days to Receive</th>
+                          <th className="text-left p-2 font-medium whitespace-nowrap bg-card">GHL Rep</th>
+                          <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Total</th>
+                          <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Actions</th>
+                        </tr>
+                      </thead>
                     <tbody>
                       {filteredPOs.length === 0 ? (
                         <tr>
@@ -472,7 +473,8 @@ export default function Suppliers() {
                         })
                       )}
                     </tbody>
-                  </table>
+                    </table>
+                  </div>
                 </div>
               )}
             </CardContent>

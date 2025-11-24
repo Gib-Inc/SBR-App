@@ -691,19 +691,110 @@ function BOMDialog({
 }
 
 function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
+  const { toast } = useToast();
+  const [orderQty, setOrderQty] = useState("");
+  const [poMode, setPoMode] = useState<"new" | "existing">("new");
+  const [selectedExistingPO, setSelectedExistingPO] = useState("");
+
   if (!item) return null;
 
   const currentStock = item.currentStock ?? 0;
   const dailyUsage = item.dailyUsage ?? 1;
   const daysOfCover = dailyUsage > 0 ? Math.floor(currentStock / dailyUsage) : 0;
   
-  // Calculate suggested order quantity: target 30 days supply minus current stock, clamped to 0
+  // Calculate suggested order quantity
   const targetStock = Math.max(dailyUsage * 30, 100);
   const calculatedOrderQty = Math.max(0, targetStock - currentStock);
-  
-  // Respect MOQ if specified, otherwise use calculated quantity
   const moq = item.primarySupplier?.minimumOrderQuantity || 0;
   const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
+
+  // Fetch purchase orders and suppliers for this item's supplier
+  const { data: allPOs = [] } = useQuery<any[]>({
+    queryKey: ['/api/purchase-orders'],
+    enabled: isOpen && !!item.primarySupplier,
+  });
+
+  const { data: suppliers = [] } = useQuery<any[]>({
+    queryKey: ['/api/suppliers'],
+    enabled: isOpen,
+  });
+
+  const supplier = suppliers.find(s => s.id === item.primarySupplier?.supplierId);
+  const draftPOs = allPOs.filter(
+    po => po.supplierId === supplier?.id && ['DRAFT', 'APPROVAL_PENDING'].includes(po.status)
+  );
+
+  const createPOMutation = useMutation({
+    mutationFn: async (data: { mode: "new" | "existing"; qty: number; poId?: string }) => {
+      if (!supplier) throw new Error("No supplier configured");
+      
+      const qty = data.qty;
+      const unitCost = item.primarySupplier?.unitCost || 0;
+
+      if (data.mode === "new") {
+        // Create new PO
+        const res = await apiRequest("POST", "/api/purchase-orders", {
+          supplierId: supplier.id,
+          status: "DRAFT",
+          lines: [{
+            itemId: item.id,
+            qtyOrdered: qty,
+            unitCost,
+          }],
+        });
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      } else {
+        // Add to existing PO
+        const res = await apiRequest("POST", `/api/purchase-orders/${data.poId}/lines`, {
+          lines: [{
+            itemId: item.id,
+            qtyOrdered: qty,
+            unitCost,
+          }],
+        });
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
+      toast({ title: poMode === "new" ? "Purchase order created" : "Line added to PO" });
+      onClose();
+      setOrderQty("");
+      setPoMode("new");
+      setSelectedExistingPO("");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to create PO", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleCreatePO = () => {
+    const qty = parseInt(orderQty) || suggestedOrderQty;
+    
+    if (!supplier) {
+      toast({ title: "No supplier configured for this item", variant: "destructive" });
+      return;
+    }
+
+    if (qty <= 0) {
+      toast({ title: "Quantity must be greater than 0", variant: "destructive" });
+      return;
+    }
+
+    if (poMode === "existing" && !selectedExistingPO) {
+      toast({ title: "Please select a purchase order", variant: "destructive" });
+      return;
+    }
+
+    createPOMutation.mutate({
+      mode: poMode,
+      qty,
+      poId: selectedExistingPO,
+    });
+  };
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -787,12 +878,77 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             </Card>
           )}
 
+          {/* Order Quantity */}
+          <div>
+            <Label htmlFor="orderQty">Order Quantity</Label>
+            <Input
+              id="orderQty"
+              type="number"
+              min="1"
+              placeholder={`Suggested: ${suggestedOrderQty}`}
+              value={orderQty}
+              onChange={(e) => setOrderQty(e.target.value)}
+              data-testid="input-order-qty"
+            />
+          </div>
+
+          {/* PO Mode Selection */}
+          {supplier && draftPOs.length > 0 && (
+            <div>
+              <Label>Purchase Order</Label>
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    id="mode-new"
+                    checked={poMode === "new"}
+                    onChange={() => setPoMode("new")}
+                    data-testid="radio-new-po"
+                  />
+                  <Label htmlFor="mode-new" className="cursor-pointer">Create New PO</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    id="mode-existing"
+                    checked={poMode === "existing"}
+                    onChange={() => setPoMode("existing")}
+                    data-testid="radio-existing-po"
+                  />
+                  <Label htmlFor="mode-existing" className="cursor-pointer">Add to Existing Draft PO</Label>
+                </div>
+                {poMode === "existing" && (
+                  <Select value={selectedExistingPO} onValueChange={setSelectedExistingPO}>
+                    <SelectTrigger data-testid="select-existing-po">
+                      <SelectValue placeholder="Select a draft PO" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {draftPOs.map(po => (
+                        <SelectItem key={po.id} value={po.id}>
+                          {po.poNumber} ({po.status})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose}>
               Close
             </Button>
-            <Button disabled>
-              Create PO (Coming Soon)
+            <Button 
+              onClick={handleCreatePO}
+              disabled={!supplier || createPOMutation.isPending}
+              data-testid="button-create-po-from-reorder"
+            >
+              {createPOMutation.isPending 
+                ? "Creating..." 
+                : poMode === "new" 
+                  ? "Create PO" 
+                  : "Add to PO"}
             </Button>
           </div>
         </div>

@@ -1141,7 +1141,6 @@ export class MemStorage implements IStorage {
     const po: PurchaseOrder = {
       id,
       ...insertPO,
-      poNumber: insertPO.poNumber ?? null,
       orderDate: insertPO.orderDate ?? new Date(),
       sentAt: insertPO.sentAt ?? null,
       receivedAt: insertPO.receivedAt ?? null,

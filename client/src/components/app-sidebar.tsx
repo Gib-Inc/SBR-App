@@ -1,4 +1,4 @@
-import { LayoutDashboard, Package, Barcode, Brain, Settings, Building2, ShoppingCart } from "lucide-react";
+import { LayoutDashboard, Package, Barcode, Brain, Settings, Building2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -33,11 +33,6 @@ const mainMenuItems = [
     title: "Suppliers",
     url: "/suppliers",
     icon: Building2,
-  },
-  {
-    title: "Purchase Orders",
-    url: "/purchase-orders",
-    icon: ShoppingCart,
   },
   {
     title: "AI Agent",

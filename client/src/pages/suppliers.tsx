@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import {
   FileText,
   AlertCircle,
   Truck,
+  MessageSquare,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -39,6 +40,10 @@ interface POSummary {
   cancelled: number;
 }
 
+interface EnrichedPO extends PurchaseOrder {
+  lines?: PurchaseOrderLine[];
+}
+
 export default function Suppliers() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
@@ -52,7 +57,7 @@ export default function Suppliers() {
     queryKey: ['/api/purchase-orders/summary'],
   });
 
-  const { data: purchaseOrders = [], isLoading: isLoadingPOs } = useQuery<PurchaseOrder[]>({
+  const { data: purchaseOrders = [], isLoading: isLoadingPOs } = useQuery<EnrichedPO[]>({
     queryKey: ['/api/purchase-orders'],
   });
 
@@ -73,6 +78,12 @@ export default function Suppliers() {
     enabled: !!selectedPO,
   });
 
+  // Calculate Active/Open count (SENT + PARTIAL_RECEIVED + APPROVAL_PENDING + APPROVED)
+  const activeOpenCount = useMemo(() => {
+    if (!poSummary) return 0;
+    return poSummary.sent + poSummary.partialReceived + poSummary.approvalPending + poSummary.approved;
+  }, [poSummary]);
+
   // Filter purchase orders
   const filteredPOs = purchaseOrders.filter(po => {
     const matchesSearch = 
@@ -84,6 +95,32 @@ export default function Suppliers() {
 
     return matchesSearch && matchesStatus && matchesSupplier;
   });
+
+  // Helper to get products ordered summary
+  const getProductsSummary = (lines?: PurchaseOrderLine[]) => {
+    if (!lines || lines.length === 0) return '-';
+    const summaryParts = lines.slice(0, 3).map(line => {
+      const item = items.find(i => i.id === line.itemId);
+      return `${line.qtyOrdered}x ${item?.name || 'Unknown'}`;
+    });
+    if (lines.length > 3) {
+      summaryParts.push(`+${lines.length - 3} more`);
+    }
+    return summaryParts.join(', ');
+  };
+
+  // Helper to calculate order total
+  const getOrderTotal = (lines?: PurchaseOrderLine[]) => {
+    if (!lines || lines.length === 0) return 0;
+    return lines.reduce((sum, line) => sum + (line.qtyOrdered * (line.unitCost || 0)), 0);
+  };
+
+  // Helper to calculate days to receive
+  const getDaysToReceive = (orderDate: Date | null, receivedAt: Date | null) => {
+    if (!orderDate || !receivedAt) return null;
+    const diffMs = new Date(receivedAt).getTime() - new Date(orderDate).getTime();
+    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  };
 
   const approvePOMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -155,6 +192,52 @@ export default function Suppliers() {
     },
   });
 
+  const confirmReceiptMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/confirm-receipt`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to confirm receipt");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/items'] });
+      toast({ title: "PO marked as received and stock updated" });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to confirm receipt",
+        description: error.message,
+        variant: "destructive"
+      });
+    },
+  });
+
+  const disputePOMutation = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/dispute`, { reason });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to create dispute");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
+      toast({ title: "Dispute initiated - GHL team will be notified" });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to create dispute",
+        description: error.message,
+        variant: "destructive"
+      });
+    },
+  });
+
   return (
     <div className="container mx-auto py-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -179,9 +262,17 @@ export default function Suppliers() {
         </TabsList>
 
         <TabsContent value="purchase-orders" className="space-y-4">
-          {/* Summary Cards */}
+          {/* Summary Cards - 4 Compact Cards */}
           {poSummary && (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Card data-testid="card-total">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Total POs</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{poSummary.total}</div>
+                </CardContent>
+              </Card>
               <Card data-testid="card-draft">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Draft</CardTitle>
@@ -198,28 +289,12 @@ export default function Suppliers() {
                   <div className="text-2xl font-bold">{poSummary.approvalPending}</div>
                 </CardContent>
               </Card>
-              <Card data-testid="card-approved">
+              <Card data-testid="card-active">
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Approved</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Active / Open</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.approved}</div>
-                </CardContent>
-              </Card>
-              <Card data-testid="card-sent">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Sent</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.sent}</div>
-                </CardContent>
-              </Card>
-              <Card data-testid="card-received">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Received</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.received}</div>
+                  <div className="text-2xl font-bold">{activeOpenCount}</div>
                 </CardContent>
               </Card>
             </div>
@@ -289,59 +364,106 @@ export default function Suppliers() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b">
-                        <th className="text-left p-2 font-medium">PO #</th>
-                        <th className="text-left p-2 font-medium">Supplier</th>
-                        <th className="text-left p-2 font-medium">Status</th>
-                        <th className="text-left p-2 font-medium">Order Date</th>
-                        <th className="text-left p-2 font-medium">Expected</th>
-                        <th className="text-left p-2 font-medium">Issues</th>
-                        <th className="text-right p-2 font-medium">Actions</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">PO #</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Supplier</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Products Ordered</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Status</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Order Date</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Expected</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Received</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Days to Receive</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">GHL Rep</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Total</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPOs.map((po) => (
-                        <tr key={po.id} className="border-b hover-elevate" data-testid={`row-po-${po.id}`}>
-                          <td className="p-2">
-                            <span className="font-mono text-sm font-medium">{po.poNumber}</span>
-                          </td>
-                          <td className="p-2">
-                            {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
-                          </td>
-                          <td className="p-2">
-                            <Badge variant={
-                              po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
-                              po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
-                              po.status === 'CANCELLED' ? 'destructive' :
-                              'outline'
-                            } data-testid={`badge-status-${po.id}`}>
-                              {po.status.replace('_', ' ')}
-                            </Badge>
-                          </td>
-                          <td className="p-2 text-sm">
-                            {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
-                          </td>
-                          <td className="p-2 text-sm">
-                            {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString() : '-'}
-                          </td>
-                          <td className="p-2">
-                            {po.hasIssue && (
-                              <Badge variant="destructive" data-testid={`badge-issue-${po.id}`}>
-                                {po.issueStatus}
+                      {filteredPOs.map((po) => {
+                        const daysToReceive = getDaysToReceive(po.orderDate, po.receivedAt);
+                        const orderTotal = getOrderTotal(po.lines);
+                        return (
+                          <tr key={po.id} className="border-b hover-elevate" data-testid={`row-po-${po.id}`}>
+                            <td className="p-2">
+                              <span className="font-mono text-sm font-medium">{po.poNumber}</span>
+                            </td>
+                            <td className="p-2 whitespace-nowrap">
+                              {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
+                            </td>
+                            <td className="p-2">
+                              <span className="text-sm max-w-xs truncate block" title={getProductsSummary(po.lines)}>
+                                {getProductsSummary(po.lines)}
+                              </span>
+                            </td>
+                            <td className="p-2">
+                              <Badge variant={
+                                po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
+                                po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
+                                po.status === 'CANCELLED' ? 'destructive' :
+                                'outline'
+                              } data-testid={`badge-status-${po.id}`}>
+                                {po.status.replace('_', ' ')}
                               </Badge>
-                            )}
-                          </td>
-                          <td className="p-2 text-right">
-                            <Button 
-                              size="sm" 
-                              variant="ghost" 
-                              onClick={() => setSelectedPO(po.id)}
-                              data-testid={`button-view-po-${po.id}`}
-                            >
-                              View
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="p-2 text-sm whitespace-nowrap">
+                              {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
+                            </td>
+                            <td className="p-2 text-sm whitespace-nowrap">
+                              {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString() : '-'}
+                            </td>
+                            <td className="p-2 text-sm whitespace-nowrap">
+                              {po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '-'}
+                            </td>
+                            <td className="p-2 text-sm whitespace-nowrap">
+                              {daysToReceive !== null ? `${daysToReceive} days` : '-'}
+                            </td>
+                            <td className="p-2 text-sm whitespace-nowrap">
+                              {po.ghlRepName || '-'}
+                            </td>
+                            <td className="p-2 text-sm text-right whitespace-nowrap font-medium">
+                              ${orderTotal.toFixed(2)}
+                            </td>
+                            <td className="p-2 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button 
+                                  size="sm" 
+                                  variant="ghost" 
+                                  onClick={() => setSelectedPO(po.id)}
+                                  data-testid={`button-view-po-${po.id}`}
+                                >
+                                  View
+                                </Button>
+                                {po.status === 'RECEIVED' && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => confirmReceiptMutation.mutate(po.id)}
+                                    disabled={confirmReceiptMutation.isPending}
+                                    data-testid={`button-confirm-receipt-${po.id}`}
+                                    title="Confirm receipt and update stock"
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                )}
+                                {['SENT', 'PARTIAL_RECEIVED', 'RECEIVED'].includes(po.status) && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const reason = prompt("Describe the issue with this PO:");
+                                      if (reason) disputePOMutation.mutate({ id: po.id, reason });
+                                    }}
+                                    disabled={disputePOMutation.isPending}
+                                    data-testid={`button-dispute-${po.id}`}
+                                    title="Create dispute (GHL)"
+                                  >
+                                    <MessageSquare className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

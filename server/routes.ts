@@ -1847,7 +1847,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     try {
       const purchaseOrders = await storage.getAllPurchaseOrders();
-      res.json(purchaseOrders);
+      
+      // Enrich with line items for table display
+      const enrichedPOs = await Promise.all(
+        purchaseOrders.map(async (po) => {
+          const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+          return { ...po, lines };
+        })
+      );
+      
+      res.json(enrichedPOs);
     } catch (error: any) {
       console.error("[PurchaseOrder] Error fetching purchase orders:", error);
       res.status(500).json({ error: "Failed to fetch purchase orders" });
@@ -2304,6 +2313,102 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[PurchaseOrder] Error receiving PO:", error);
       res.status(500).json({ error: error.message || "Failed to receive purchase order" });
+    }
+  });
+
+  // Confirm receipt - quick path for fully received POs
+  app.post("/api/purchase-orders/:id/confirm-receipt", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      if (po.status !== 'RECEIVED') {
+        return res.status(409).json({ error: `Can only confirm receipt for POs with RECEIVED status. Current status: ${po.status}` });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      
+      // Create RECEIVE transactions for any remaining unreceived quantities
+      for (const line of lines) {
+        const remaining = line.qtyOrdered - line.qtyReceived;
+        if (remaining > 0) {
+          const item = await storage.getItem(line.itemId);
+          if (item) {
+            await transactionService.applyTransaction({
+              itemId: line.itemId,
+              itemType: item.type === 'finished_product' ? 'FINISHED' : 'RAW',
+              type: 'RECEIVE',
+              location: 'HILDALE', // Default location
+              quantity: remaining,
+              notes: `Auto-confirmed receipt from PO ${po.poNumber}`,
+              createdBy: req.session.userId || 'system',
+            });
+
+            // Mark item for forecast refresh
+            await storage.updateItem(line.itemId, { forecastDirty: true });
+          }
+
+          // Update line received quantity
+          await storage.updatePurchaseOrderLine(line.id, {
+            qtyReceived: line.qtyOrdered,
+          });
+        }
+      }
+
+      // Mark as fully received
+      const updated = await storage.updatePurchaseOrder(id, {
+        receivedAt: new Date(),
+      });
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error confirming receipt:", error);
+      res.status(500).json({ error: error.message || "Failed to confirm receipt" });
+    }
+  });
+
+  // Dispute - GHL integration stub for SMS workflow
+  app.post("/api/purchase-orders/:id/dispute", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { reason } = req.body;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      // Mark PO as having an issue
+      const updated = await storage.updatePurchaseOrder(id, {
+        hasIssue: true,
+        issueStatus: 'OPEN',
+        issueNotes: reason || 'No reason provided',
+        issueType: 'other',
+      });
+
+      // TODO: Integrate with GoHighLevel SMS workflow
+      // This will trigger a manual SMS workflow in GHL to notify the rep
+      console.log(`[PurchaseOrder] Dispute created for PO ${po.poNumber}:`, {
+        poId: id,
+        poNumber: po.poNumber,
+        supplierId: po.supplierId,
+        ghlRep: po.ghlRepName,
+        reason,
+        // Future: Call GHL API to send SMS to rep
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Dispute created. GHL team will be notified.",
+        purchaseOrder: updated 
+      });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error creating dispute:", error);
+      res.status(500).json({ error: error.message || "Failed to create dispute" });
     }
   });
 

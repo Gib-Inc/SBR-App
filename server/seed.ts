@@ -470,6 +470,111 @@ async function seed() {
 
     console.log("✓ Barcodes ready");
 
+    // Create sample purchase orders - idempotent
+    const existingPOs = await storage.getAllPurchaseOrders();
+    if (existingPOs.length === 0) {
+      // PO 1: Draft status
+      const po1 = await storage.createPurchaseOrder({
+        poNumber: "PO-2025-0001",
+        supplierId: acmeSupplier.id,
+        status: "DRAFT",
+        orderDate: new Date("2025-11-20"),
+        expectedDate: new Date("2025-12-05"),
+        ghlRepName: "Sarah Chen",
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po1.id,
+        itemId: nut.id,
+        qtyOrdered: 1000,
+        qtyReceived: 0,
+        unitCost: 0.15,
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po1.id,
+        itemId: bolt.id,
+        qtyOrdered: 500,
+        qtyReceived: 0,
+        unitCost: 0.25,
+      });
+
+      // PO 2: Sent status (awaiting delivery)
+      const po2 = await storage.createPurchaseOrder({
+        poNumber: "PO-2025-0002",
+        supplierId: globalSupplier.id,
+        status: "SENT",
+        orderDate: new Date("2025-11-15"),
+        expectedDate: new Date("2025-11-30"),
+        ghlRepName: "Mike Johnson",
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po2.id,
+        itemId: spring.id,
+        qtyOrdered: 300,
+        qtyReceived: 0,
+        unitCost: 1.50,
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po2.id,
+        itemId: bar.id,
+        qtyOrdered: 200,
+        qtyReceived: 0,
+        unitCost: 5.00,
+      });
+
+      // PO 3: Partial Received status
+      const po3 = await storage.createPurchaseOrder({
+        poNumber: "PO-2025-0003",
+        supplierId: acmeSupplier.id,
+        status: "PARTIAL_RECEIVED",
+        orderDate: new Date("2025-11-10"),
+        expectedDate: new Date("2025-11-25"),
+        ghlRepName: "Sarah Chen",
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po3.id,
+        itemId: nut.id,
+        qtyOrdered: 2000,
+        qtyReceived: 1000,
+        unitCost: 0.14,
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po3.id,
+        itemId: bolt.id,
+        qtyOrdered: 1500,
+        qtyReceived: 0,
+        unitCost: 0.24,
+      });
+
+      // PO 4: Received status (ready to confirm)
+      const po4 = await storage.createPurchaseOrder({
+        poNumber: "PO-2025-0004",
+        supplierId: globalSupplier.id,
+        status: "RECEIVED",
+        orderDate: new Date("2025-11-05"),
+        expectedDate: new Date("2025-11-20"),
+        receivedAt: new Date("2025-11-18"),
+        ghlRepName: "Mike Johnson",
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po4.id,
+        itemId: spring.id,
+        qtyOrdered: 500,
+        qtyReceived: 500,
+        unitCost: 1.45,
+      });
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po4.id,
+        itemId: bar.id,
+        qtyOrdered: 100,
+        qtyReceived: 100,
+        unitCost: 4.95,
+      });
+
+      console.log("✓ Created 4 sample purchase orders (Draft, Sent, Partial Received, Received)");
+    } else {
+      console.log("✓ Purchase orders already exist");
+    }
+
     console.log("\n✅ Database seeded successfully!");
   } catch (error) {
     console.error("❌ Error seeding database:", error);

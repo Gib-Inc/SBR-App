@@ -351,14 +351,8 @@ export default function Suppliers() {
                 </Select>
               </div>
 
-              {isLoadingPOs ? (
+{isLoadingPOs ? (
                 <div className="text-center py-8 text-muted-foreground">Loading purchase orders...</div>
-              ) : filteredPOs.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  {purchaseOrders.length === 0 
-                    ? "No purchase orders yet. Create your first one to get started."
-                    : "No purchase orders match your filters."}
-                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
@@ -378,92 +372,102 @@ export default function Suppliers() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPOs.map((po) => {
-                        const daysToReceive = getDaysToReceive(po.orderDate, po.receivedAt);
-                        const orderTotal = getOrderTotal(po.lines);
-                        return (
-                          <tr key={po.id} className="border-b hover-elevate" data-testid={`row-po-${po.id}`}>
-                            <td className="p-2">
-                              <span className="font-mono text-sm font-medium">{po.poNumber}</span>
-                            </td>
-                            <td className="p-2 whitespace-nowrap">
-                              {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
-                            </td>
-                            <td className="p-2">
-                              <span className="text-sm max-w-xs truncate block" title={getProductsSummary(po.lines)}>
-                                {getProductsSummary(po.lines)}
-                              </span>
-                            </td>
-                            <td className="p-2">
-                              <Badge variant={
-                                po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
-                                po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
-                                po.status === 'CANCELLED' ? 'destructive' :
-                                'outline'
-                              } data-testid={`badge-status-${po.id}`}>
-                                {po.status.replace('_', ' ')}
-                              </Badge>
-                            </td>
-                            <td className="p-2 text-sm whitespace-nowrap">
-                              {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
-                            </td>
-                            <td className="p-2 text-sm whitespace-nowrap">
-                              {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString() : '-'}
-                            </td>
-                            <td className="p-2 text-sm whitespace-nowrap">
-                              {po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '-'}
-                            </td>
-                            <td className="p-2 text-sm whitespace-nowrap">
-                              {daysToReceive !== null ? `${daysToReceive} days` : '-'}
-                            </td>
-                            <td className="p-2 text-sm whitespace-nowrap">
-                              {po.ghlRepName || '-'}
-                            </td>
-                            <td className="p-2 text-sm text-right whitespace-nowrap font-medium">
-                              ${orderTotal.toFixed(2)}
-                            </td>
-                            <td className="p-2 text-right whitespace-nowrap">
-                              <div className="flex items-center justify-end gap-1">
-                                <Button 
-                                  size="sm" 
-                                  variant="ghost" 
-                                  onClick={() => setSelectedPO(po.id)}
-                                  data-testid={`button-view-po-${po.id}`}
-                                >
-                                  View
-                                </Button>
-                                {po.status === 'RECEIVED' && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => confirmReceiptMutation.mutate(po.id)}
-                                    disabled={confirmReceiptMutation.isPending}
-                                    data-testid={`button-confirm-receipt-${po.id}`}
-                                    title="Confirm receipt and update stock"
+                      {filteredPOs.length === 0 ? (
+                        <tr>
+                          <td colSpan={11} className="p-8 text-center text-muted-foreground">
+                            {purchaseOrders.length === 0 
+                              ? "No purchase orders yet. Create your first one to get started."
+                              : "No purchase orders match your filters."}
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPOs.map((po) => {
+                          const daysToReceive = getDaysToReceive(po.orderDate, po.receivedAt);
+                          const orderTotal = getOrderTotal(po.lines);
+                          return (
+                            <tr key={po.id} className="border-b hover-elevate" data-testid={`row-po-${po.id}`}>
+                              <td className="p-2">
+                                <span className="font-mono text-sm font-medium">{po.poNumber}</span>
+                              </td>
+                              <td className="p-2 whitespace-nowrap">
+                                {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
+                              </td>
+                              <td className="p-2">
+                                <span className="text-sm max-w-xs truncate block" title={getProductsSummary(po.lines)}>
+                                  {getProductsSummary(po.lines)}
+                                </span>
+                              </td>
+                              <td className="p-2">
+                                <Badge variant={
+                                  po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
+                                  po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
+                                  po.status === 'CANCELLED' ? 'destructive' :
+                                  'outline'
+                                } data-testid={`badge-status-${po.id}`}>
+                                  {po.status.replace('_', ' ')}
+                                </Badge>
+                              </td>
+                              <td className="p-2 text-sm whitespace-nowrap">
+                                {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}
+                              </td>
+                              <td className="p-2 text-sm whitespace-nowrap">
+                                {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString() : '-'}
+                              </td>
+                              <td className="p-2 text-sm whitespace-nowrap">
+                                {po.receivedAt ? new Date(po.receivedAt).toLocaleDateString() : '-'}
+                              </td>
+                              <td className="p-2 text-sm whitespace-nowrap">
+                                {daysToReceive !== null ? `${daysToReceive} days` : '-'}
+                              </td>
+                              <td className="p-2 text-sm whitespace-nowrap">
+                                {po.ghlRepName || '-'}
+                              </td>
+                              <td className="p-2 text-sm text-right whitespace-nowrap font-medium">
+                                ${orderTotal.toFixed(2)}
+                              </td>
+                              <td className="p-2 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button 
+                                    size="sm" 
+                                    variant="ghost" 
+                                    onClick={() => setSelectedPO(po.id)}
+                                    data-testid={`button-view-po-${po.id}`}
                                   >
-                                    <CheckCircle className="h-4 w-4" />
+                                    View
                                   </Button>
-                                )}
-                                {['SENT', 'PARTIAL_RECEIVED', 'RECEIVED'].includes(po.status) && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      const reason = prompt("Describe the issue with this PO:");
-                                      if (reason) disputePOMutation.mutate({ id: po.id, reason });
-                                    }}
-                                    disabled={disputePOMutation.isPending}
-                                    data-testid={`button-dispute-${po.id}`}
-                                    title="Create dispute (GHL)"
-                                  >
-                                    <MessageSquare className="h-4 w-4" />
-                                  </Button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                                  {po.status === 'RECEIVED' && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => confirmReceiptMutation.mutate(po.id)}
+                                      disabled={confirmReceiptMutation.isPending}
+                                      data-testid={`button-confirm-receipt-${po.id}`}
+                                      title="Confirm receipt and update stock"
+                                    >
+                                      <CheckCircle className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                  {['SENT', 'PARTIAL_RECEIVED', 'RECEIVED'].includes(po.status) && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        const reason = prompt("Describe the issue with this PO:");
+                                        if (reason) disputePOMutation.mutate({ id: po.id, reason });
+                                      }}
+                                      disabled={disputePOMutation.isPending}
+                                      data-testid={`button-dispute-${po.id}`}
+                                      title="Create dispute (GHL)"
+                                    >
+                                      <MessageSquare className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>

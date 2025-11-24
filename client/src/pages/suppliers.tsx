@@ -84,6 +84,27 @@ export default function Suppliers() {
     return poSummary.sent + poSummary.partialReceived + poSummary.approvalPending + poSummary.approved;
   }, [poSummary]);
 
+  // Calculate business analytics on filtered POs
+  const businessAnalytics = useMemo(() => {
+    const sent = purchaseOrders.filter(po => po.sentAt !== null).length;
+    const paid = purchaseOrders.filter(po => po.paidAt !== null).length;
+    const delivered = purchaseOrders.filter(po => po.receivedAt !== null).length;
+    
+    const deliveredPOs = purchaseOrders.filter(po => po.sentAt && po.receivedAt);
+    let avgDeliveryDays: number | null = null;
+    if (deliveredPOs.length > 0) {
+      const totalDays = deliveredPOs.reduce((sum, po) => {
+        const sent = new Date(po.sentAt!);
+        const received = new Date(po.receivedAt!);
+        const days = Math.ceil((received.getTime() - sent.getTime()) / (1000 * 60 * 60 * 24));
+        return sum + days;
+      }, 0);
+      avgDeliveryDays = Math.round(totalDays / deliveredPOs.length);
+    }
+    
+    return { sent, paid, delivered, avgDeliveryDays };
+  }, [purchaseOrders]);
+
   // Filter purchase orders
   const filteredPOs = purchaseOrders.filter(po => {
     const matchesSearch = 
@@ -262,43 +283,48 @@ export default function Suppliers() {
         </TabsList>
 
         <TabsContent value="purchase-orders" className="w-full max-w-full min-w-0 space-y-4">
-          {/* Summary Cards - 4 Compact Cards */}
-          {poSummary && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card data-testid="card-total">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Total POs</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.total}</div>
-                </CardContent>
-              </Card>
-              <Card data-testid="card-draft">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Draft</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.draft}</div>
-                </CardContent>
-              </Card>
-              <Card data-testid="card-approval-pending">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Pending Approval</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{poSummary.approvalPending}</div>
-                </CardContent>
-              </Card>
-              <Card data-testid="card-active">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Active / Open</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{activeOpenCount}</div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
+          {/* Business Analytics Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card data-testid="card-sent">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">POs Sent</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{businessAnalytics.sent}</div>
+                <p className="text-xs text-muted-foreground mt-1">Orders sent to suppliers</p>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-paid">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">POs Paid</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{businessAnalytics.paid}</div>
+                <p className="text-xs text-muted-foreground mt-1">Orders fully paid</p>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-delivered">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">POs Delivered</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{businessAnalytics.delivered}</div>
+                <p className="text-xs text-muted-foreground mt-1">Orders received</p>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-avg-delivery">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Delivery Time</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  {businessAnalytics.avgDeliveryDays !== null ? businessAnalytics.avgDeliveryDays : '—'}
+                  {businessAnalytics.avgDeliveryDays !== null ? ' days' : ''}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">From sent to received</p>
+              </CardContent>
+            </Card>
+          </div>
 
           {/* PO Table */}
           <div className="w-full max-w-full overflow-hidden">

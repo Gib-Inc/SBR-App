@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -27,7 +27,8 @@ function ItemTableRow({
   onEditBOM,
   onTransfer,
   onProduce,
-  onViewHistory
+  onViewHistory,
+  onReorder
 }: { 
   item: any; 
   onDelete: (item: any) => void;
@@ -36,6 +37,7 @@ function ItemTableRow({
   onTransfer?: (item: any) => void;
   onProduce?: (item: any) => void;
   onViewHistory?: (item: any) => void;
+  onReorder?: (item: any) => void;
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -179,6 +181,46 @@ function ItemTableRow({
           </div>
         )}
       </td>
+
+      {/* Supplier Columns (only for components) */}
+      {item.type === "component" && (
+        <>
+          {/* Supplier Name */}
+          <td className="px-3 align-middle">
+            <div className="px-2 py-1 text-sm" data-testid={`text-supplier-name-${item.id}`}>
+              {item.primarySupplier?.supplierName || <span className="text-muted-foreground">No supplier</span>}
+            </div>
+          </td>
+
+          {/* Supplier SKU */}
+          <td className="px-3 align-middle">
+            <div className="px-2 py-1 font-mono text-sm" data-testid={`text-supplier-sku-${item.id}`}>
+              {item.primarySupplier?.supplierSku || <span className="text-muted-foreground">—</span>}
+            </div>
+          </td>
+
+          {/* Unit Cost */}
+          <td className="px-3 align-middle">
+            <div className="px-2 py-1 text-right text-sm" data-testid={`text-unit-cost-${item.id}`}>
+              {item.primarySupplier?.unitCost ? `$${item.primarySupplier.unitCost.toFixed(2)}` : <span className="text-muted-foreground">—</span>}
+            </div>
+          </td>
+
+          {/* MOQ */}
+          <td className="px-3 align-middle">
+            <div className="px-2 py-1 text-right text-sm" data-testid={`text-moq-${item.id}`}>
+              {item.primarySupplier?.minimumOrderQuantity || <span className="text-muted-foreground">—</span>}
+            </div>
+          </td>
+
+          {/* Lead Time */}
+          <td className="px-3 align-middle">
+            <div className="px-2 py-1 text-right text-sm" data-testid={`text-lead-time-${item.id}`}>
+              {item.primarySupplier?.leadTimeDays || <span className="text-muted-foreground">—</span>}
+            </div>
+          </td>
+        </>
+      )}
 
       {/* Current Stock Column (only for components) */}
       {item.type === "component" && (
@@ -367,6 +409,18 @@ function ItemTableRow({
               title="Produce items"
             >
               <Boxes className="h-4 w-4" />
+            </Button>
+          )}
+          {item.type === "component" && onReorder && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onReorder(item)}
+              data-testid={`button-reorder-${item.id}`}
+              className="h-8 w-8"
+              title="Create reorder / add to PO"
+            >
+              <ShoppingCart className="h-4 w-4" />
             </Button>
           )}
           {onViewHistory && (
@@ -635,6 +689,110 @@ function BOMDialog({
   );
 }
 
+function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
+  if (!item) return null;
+
+  const currentStock = item.currentStock ?? 0;
+  const dailyUsage = item.dailyUsage ?? 1;
+  const daysOfCover = dailyUsage > 0 ? Math.floor(currentStock / dailyUsage) : 0;
+  const suggestedOrderQty = item.primarySupplier?.minimumOrderQuantity || Math.max(dailyUsage * 30, 100);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Reorder / Create Purchase Order</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-6">
+          {/* Item Information */}
+          <div>
+            <h3 className="font-semibold text-lg mb-2">{item.name}</h3>
+            <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>
+          </div>
+
+          {/* Current Stock & Coverage */}
+          <div className="grid grid-cols-2 gap-4">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Current Stock</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{currentStock}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {daysOfCover} days of cover at current usage
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Suggested Order Qty</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{suggestedOrderQty}</div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ~30 days supply
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Supplier Information */}
+          {item.primarySupplier ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-medium">Primary Supplier</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Supplier</p>
+                    <p className="font-medium">{item.primarySupplier.supplierName}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Supplier SKU</p>
+                    <p className="font-mono text-sm">{item.primarySupplier.supplierSku || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Unit Cost</p>
+                    <p className="font-medium">
+                      {item.primarySupplier.unitCost ? `$${item.primarySupplier.unitCost.toFixed(2)}` : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">MOQ</p>
+                    <p className="font-medium">{item.primarySupplier.minimumOrderQuantity || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Lead Time</p>
+                    <p className="font-medium">
+                      {item.primarySupplier.leadTimeDays ? `${item.primarySupplier.leadTimeDays} days` : "—"}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-muted-foreground">No supplier configured for this item</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose}>
+              Close
+            </Button>
+            <Button disabled>
+              Create PO (Coming Soon)
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; onClose: () => void; isFinished: boolean }) {
   const { toast } = useToast();
   const [name, setName] = useState("");
@@ -805,6 +963,7 @@ export default function BOM() {
   const [transferItem, setTransferItem] = useState<any>(null);
   const [productionItem, setProductionItem] = useState<any>(null);
   const [historyItem, setHistoryItem] = useState<any>(null);
+  const [reorderItem, setReorderItem] = useState<any>(null);
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -1019,12 +1178,17 @@ export default function BOM() {
             </CardContent>
           </Card>
         ) : (
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full">
+          <div className="overflow-x-auto overflow-y-visible rounded-md border">
+            <table className="w-full min-w-[1200px]">
               <thead className="bg-muted/50">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium">Name</th>
                   <th className="p-3 text-left text-sm font-medium">SKU</th>
+                  <th className="p-3 text-left text-sm font-medium">Supplier</th>
+                  <th className="p-3 text-left text-sm font-medium">Supplier SKU</th>
+                  <th className="p-3 text-right text-sm font-medium">Unit Cost</th>
+                  <th className="p-3 text-right text-sm font-medium">MOQ</th>
+                  <th className="p-3 text-right text-sm font-medium">Lead Time (days)</th>
                   <th className="p-3 text-right text-sm font-medium">Stock</th>
                   <th className="p-3 text-left text-sm font-medium">Category</th>
                   <th className="p-3 text-right text-sm font-medium">Actions</th>
@@ -1038,6 +1202,7 @@ export default function BOM() {
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
                     onViewHistory={setHistoryItem}
+                    onReorder={setReorderItem}
                   />
                 ))}
               </tbody>
@@ -1090,6 +1255,13 @@ export default function BOM() {
           isOpen={!!historyItem}
           onClose={() => setHistoryItem(null)}
           item={historyItem}
+        />
+      )}
+      {reorderItem && (
+        <ReorderDialog
+          isOpen={!!reorderItem}
+          onClose={() => setReorderItem(null)}
+          item={reorderItem}
         />
       )}
     </div>

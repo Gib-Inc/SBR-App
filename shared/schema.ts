@@ -153,6 +153,8 @@ export const purchaseOrders = pgTable("purchase_orders", {
   status: text("status").notNull().default('DRAFT'), // DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED, CANCELLED
   hasIssue: boolean("has_issue").notNull().default(false),
   issueStatus: text("issue_status").notNull().default('NONE'), // NONE, OPEN, IN_PROGRESS, RESOLVED
+  issueOpenedAt: timestamp("issue_opened_at"),
+  issueResolvedAt: timestamp("issue_resolved_at"),
   issueType: text("issue_type"), // late, damaged, short_shipment, quality, invoice_mismatch, other
   issueNotes: text("issue_notes"),
   refundStatus: text("refund_status").notNull().default('NONE'), // NONE, REQUESTED, PARTIAL_REFUND, FULL_REFUND

@@ -1,0 +1,91 @@
+Update the Suppliers → “PO History & Issues” tab so the Purchase Orders table and header cards match this behavior. Please work only inside the existing Suppliers page (e.g. client/src/pages/suppliers.tsx and related PO components/hooks) and reuse current backend models for PurchaseOrder and transactions.
+
+Make the whole row open PO detail (remove “View” text button)
+
+Remove the “View” button from the Actions column.
+
+Make each table row clickable to open the existing PO detail drawer/modal (the same component currently used when clicking “View”).
+
+Use proper UX: row hover state + cursor: pointer, and ensure keyboard/ARIA support (row or a hidden button/link with onKeyDown for Enter/Space).
+
+Keep the Actions column visible for the icons described below; clicking the row anywhere except the icon buttons should open the detail.
+
+Standardize Actions column: always two icons (Dispute + Confirm)
+Backend/state:
+
+On PurchaseOrder add or reuse an issue-tracking field set:
+
+issueStatus: 'NONE' | 'OPEN' | 'RESOLVED'
+issueOpenedAt?: Date
+issueResolvedAt?: Date
+
+
+If something similar already exists, extend/reuse it instead of duplicating.
+
+Expose these fields through the existing PO list API so the table can render the correct state.
+
+UI behavior in the Actions column (for every row):
+
+Render exactly two icon buttons on every PO row, regardless of status:
+
+Dispute / Resolve issue (left icon)
+
+Default state (issueStatus === 'NONE'): show an “open dispute / message supplier” icon (chat/flag), tooltip like “Open dispute & notify in GHL”.
+
+On click:
+
+Set issueStatus → 'OPEN', issueOpenedAt → now, and persist.
+
+Trigger the existing GHL dispute hook or create a stub function (e.g. triggerGhlDispute(po)), which will later call a GHL webhook / manual-SMS workflow. For now it can just log or record a “pendingGhlDispute” event in the DB.
+
+Open state (issueStatus === 'OPEN'): change icon style (e.g. filled flag/check), tooltip “Mark dispute resolved”.
+
+On click in OPEN state: set issueStatus → 'RESOLVED', issueResolvedAt → now, and persist. No new GHL call needed here; just close the issue.
+
+Resolved state should still show the icon but with a tooltip like “Dispute resolved” and maybe a subtle “done” style; clicking can optionally re-open or be disabled—pick the simplest and document in the code.
+
+Confirm Received (right icon)
+
+Show a “check/delivery” icon with tooltip “Confirm order received in full”.
+
+When the PO status is SENT or PARTIAL_RECEIVED:
+
+On click, open a small confirm dialog: “Mark this PO as fully received and update inventory based on all ordered quantities?”
+
+If confirmed, call a backend helper that:
+
+For each PO line, creates RECEIVE transactions for the remaining unreceived quantity.
+
+Updates qtyReceived to match qtyOrdered for all lines.
+
+Sets PO status → RECEIVED, receivedAt → now.
+
+After success, refresh both the PO table and any stock/forecast views impacted.
+
+For any other status (DRAFT, APPROVAL_PENDING, CANCELLED, CLOSED, etc.), keep the icon visible but disabled with a tooltip like “Receiving not available in this status”.
+
+Ensure both icons appear consistently for all rows so the Actions column layout never changes.
+
+Rename and rewire the first analytics card to track open disputes
+
+In the analytics card row at the top of the “PO History & Issues” tab:
+
+Rename the first card from “Total POs” to “Needs Review”.
+
+Subtitle: “POs currently in dispute”.
+
+Change its data source:
+
+Instead of counting all POs, it should count only PurchaseOrder records where issueStatus === 'OPEN'.
+
+Ensure it updates live when a dispute is opened or resolved (e.g. after the dispute icon toggles, refetch or optimistically update the card state).
+
+Leave the other cards (Draft, POs Sent, Paid, Delivered, Avg Delivery, etc.) functioning as they already do.
+
+General consistency checks
+
+Make sure the PO table still supports search, status filter, and supplier filter, and that the new issue fields do not break any existing queries.
+
+Confirm that clicking a row still opens the detail drawer and the icons remain individually clickable without triggering the row click.
+
+Keep the table horizontally scrollable inside its card only; do not reintroduce page-level horizontal scrolling.

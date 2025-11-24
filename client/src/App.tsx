@@ -89,7 +89,7 @@ function AuthenticatedApp() {
           >
             <div className="flex h-screen w-full">
               <AppSidebar />
-              <div className="flex flex-1 flex-col">
+              <div className="flex flex-1 flex-col min-w-0">
                 <header className="flex h-14 items-center justify-between gap-4 border-b px-4">
                   <SidebarTrigger data-testid="button-sidebar-toggle" />
                   <div className="flex items-center gap-2">
@@ -97,7 +97,7 @@ function AuthenticatedApp() {
                     <UserMenu />
                   </div>
                 </header>
-                <main className="flex-1 overflow-y-auto overflow-x-hidden">
+                <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
                   <Switch>
                     <Route path="/" component={Dashboard} />
                     <Route path="/products" component={Products} />

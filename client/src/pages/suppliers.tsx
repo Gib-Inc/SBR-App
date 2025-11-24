@@ -239,7 +239,7 @@ export default function Suppliers() {
   });
 
   return (
-    <div className="w-full max-w-full px-4 md:px-6 py-6 space-y-6">
+    <div className="w-full max-w-full min-w-0 overflow-x-hidden px-4 md:px-6 py-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Suppliers</h1>
@@ -261,7 +261,7 @@ export default function Suppliers() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="purchase-orders" className="space-y-4">
+        <TabsContent value="purchase-orders" className="w-full max-w-full min-w-0 space-y-4">
           {/* Summary Cards - 4 Compact Cards */}
           {poSummary && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -301,14 +301,15 @@ export default function Suppliers() {
           )}
 
           {/* PO Table */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-              <CardTitle>Purchase Orders</CardTitle>
-              <Button size="sm" data-testid="button-create-po">
-                <Plus className="h-4 w-4 mr-2" />
-                Create PO
-              </Button>
-            </CardHeader>
+          <div className="w-full max-w-full overflow-hidden">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+                <CardTitle>Purchase Orders</CardTitle>
+                <Button size="sm" data-testid="button-create-po">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create PO
+                </Button>
+              </CardHeader>
             <CardContent className="p-0">
               {/* Filters - Fixed at top */}
               <div className="p-6 pb-4 border-b">
@@ -358,7 +359,7 @@ export default function Suppliers() {
                 <div className="text-center py-8 text-muted-foreground">Loading purchase orders...</div>
               ) : (
                 <div className="relative max-h-[600px] overflow-y-auto">
-                  <div className="overflow-x-auto">
+                  <div className="w-full max-w-full overflow-x-auto">
                     <table className="w-full min-w-[1100px]">
                       <thead className="sticky top-0 bg-card z-10">
                         <tr className="border-b">
@@ -479,9 +480,10 @@ export default function Suppliers() {
               )}
             </CardContent>
           </Card>
+          </div>
         </TabsContent>
 
-        <TabsContent value="discovery" className="space-y-4">
+        <TabsContent value="discovery" className="w-full max-w-full min-w-0 space-y-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
               <CardTitle>Supplier Leads</CardTitle>

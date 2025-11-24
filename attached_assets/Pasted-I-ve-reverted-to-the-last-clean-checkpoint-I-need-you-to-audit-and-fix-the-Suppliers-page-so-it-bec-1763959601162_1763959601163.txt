@@ -1,0 +1,125 @@
+I’ve reverted to the last clean checkpoint. I need you to audit and fix the Suppliers page so it becomes the single, well-designed Purchase Order hub.
+
+1. Page + tab structure
+
+Use the existing /suppliers route and tab structure.
+
+The “PO History & Issues” tab must contain the entire Purchase Order UI.
+
+Do not create or use any separate sidebar pages like /purchase-orders. If such a route exists, reuse its logic but remove it from the sidebar and keep all PO screens rendering inside the Suppliers page.
+
+2. Compact summary cards at the top
+
+Inside the “PO History & Issues” tab:
+
+At the very top, show four small, precise analytics cards in a single row (responsive on small screens):
+
+Total POs
+
+Draft
+
+Pending Approval
+
+Active / Open (SENT + PARTIAL_RECEIVED + APPROVAL_PENDING, etc. – use the same logic you already had).
+
+These cards should be visually compact: short labels, one main number, minimal text.
+
+They must not cause horizontal page scroll; use the same container width and layout conventions as Dashboard/BOM/Barcodes.
+
+3. Main PO data table below (dominant section)
+
+Below the cards, add (or fix) a scrollable data table that lists every Purchase Order.
+
+If a PO table component already exists from the previous Purchase Orders page, reuse it and wire it here.
+
+If it only exists as backend data, build the UI table for it now.
+
+The table should live inside a card with overflow-x scrolling for the table only; the overall page must stay fixed-width with no horizontal scroll.
+
+Columns required (in this order, left → right):
+
+PO Number (e.g. PO-2025-0001)
+
+Supplier
+
+Products Ordered (human-readable summary string like: 3x Hex Bolt, 2x Nut, 1x Roller)
+
+Status
+
+Order Date
+
+Expected Date
+
+Received Date (blank if not fully received)
+
+Days to Receive (calculated from Order Date → Received Date once fully received)
+
+GHL Rep (the GoHighLevel rep who issued the PO – use existing field if present, or add one)
+
+Total (order total)
+
+Actions (buttons/icons)
+
+Add search + filters above the table:
+
+Search by PO number or supplier.
+
+Filter by status and supplier (dropdowns).
+
+Make sure real data from the existing PurchaseOrder and PurchaseOrderLine models is feeding this table; don’t invent dummy data.
+
+4. Actions column behavior
+
+In the Actions column, include at least these actions:
+
+View / Details – opens the existing PO detail view (side drawer or modal) inside the Suppliers page, not a new route.
+
+Confirm Receipt – when the PO is fully received and a user confirms, do the following:
+
+Mark the PO as fully received (status = RECEIVED, set receivedAt).
+
+Use the existing transaction system to create proper RECEIVE transactions for all lines if they are not already applied.
+
+Update raw material stock accordingly.
+
+After stock updates, mark all affected items for batch forecast refresh (reuse the existing batching logic; do not call the AI per line).
+
+Dispute (GHL) – add a button that will be used to trigger a dispute SMS via GoHighLevel:
+
+Implement a function such as triggerGHLDispute(poId) that, for now, either calls an existing GHL integration stub or logs a clear TODO.
+
+The intent is: button in this app is clicked → we hit a backend endpoint → that endpoint triggers a manual SMS workflow in GHL.
+
+Wire the Dispute button to this stub so the plumbing is ready.
+
+5. Inventory and transaction integration
+
+Ensure the PO table reflects correct status transitions and quantities using the existing PurchaseOrder / PurchaseOrderLine schema and the transaction engine.
+
+Receiving via the PO detail should:
+
+Update qtyReceived per line.
+
+Create RECEIVE transactions for raw materials.
+
+Automatically reflect updated stock in the Stock Inventory table.
+
+When Confirm Receipt is used from the Actions column, reuse the same logic so there is a single, consistent path to update stock and statuses.
+
+6. Layout + UX rules
+
+Suppliers page width and padding must match Dashboard/BOM/Barcodes.
+
+The four analytics cards at the top are small and precise, not huge blocks.
+
+The PO table is the dominant central section and scrolls horizontally inside its own card only. The page itself must not slide left/right.
+
+Keep the “Discovery & Creation” tab as-is; don’t move any PO UI there.
+
+Finally:
+
+Scan the codebase for any leftover standalone Purchase Orders page or unused components; refactor them so there is one PO UI: Suppliers → “PO History & Issues”.
+
+If you find any existing PO table implementation that is not visible right now, fix the wiring/state so it renders correctly in this tab.
+
+Please explain briefly in your task summary what you found (missing table vs. unused component vs. route mismatch) and how you wired the table + cards into the Suppliers page.

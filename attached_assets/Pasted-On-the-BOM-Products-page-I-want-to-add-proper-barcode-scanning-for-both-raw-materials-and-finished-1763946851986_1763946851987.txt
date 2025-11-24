@@ -1,0 +1,141 @@
+On the BOM / Products page I want to add proper barcode scanning for both raw materials and finished products, wired into the transaction system. The goal is to:
+
+Have a focused, low-error way to update stock for raw materials when new materials arrive.
+
+Have a focused way to increase finished products at Hildale after assembly (and consume components via BOM).
+
+Reuse the existing scanning logic from the Barcodes page where possible.
+
+Prevent cross-contamination (raw vs finished) by enforcing modes and validation.
+
+1. New scan controls on the BOM page
+
+In the BOM page:
+
+Above or near the Stock Inventory section, add a button: “Scan Raw Materials”.
+
+Above or near the Finished Products section, add a button: “Scan Finished Products”.
+
+Both buttons should open a shared Scan Inventory modal, but with a clear mode: RAW or FINISHED, depending on which button was clicked.
+
+Inside the modal, also add a small toggle or segmented control so the user can switch mode if needed:
+
+Modes: Raw Materials, Finished Products.
+
+The currently active mode should be VERY clearly highlighted.
+
+2. Reuse and extend existing scanner modal
+
+Reuse the same camera/scan component that the Scan Inventory button on the Barcodes page uses, instead of building a separate scanner.
+
+Add a context + mode concept to the scanner:
+
+context: BARCODES_PAGE vs BOM_PAGE.
+
+mode (for BOM): RAW vs FINISHED.
+
+When opened from the BOM page, pass context = "BOM_PAGE" and the appropriate mode.
+
+The modal should show:
+
+Current mode (Raw vs Finished).
+
+Live scanner view.
+
+A list/log of scanned items in this session (item name, SKU, barcode value, quantity applied).
+
+3. Mode-aware behavior and validation
+
+When a barcode is scanned in BOM context:
+
+Look up the barcode record and determine which item it belongs to and its productKind (RAW vs FINISHED).
+
+If the scanned item’s productKind does not match the current mode:
+
+Show a clear error message:
+
+e.g., “This barcode belongs to a Finished Product, but you’re in Raw Materials mode.”
+
+Do not apply any stock changes.
+
+Allow the user to either switch modes or cancel.
+
+If the kind matches the current mode, proceed with the appropriate transaction logic (see next section).
+
+This validation is important: it must provide the “secured and focused route” so raw vs finished codes can’t silently update the wrong area.
+
+4. Transaction logic – Raw Materials
+
+In Raw Materials mode (Stock Inventory):
+
+Each successful scan should either:
+
+Increment stock by +1 per scan, OR
+
+Prompt for a quantity in a small step (e.g., default to 1 but allow the user to enter the received quantity before applying).
+
+When applying the change, do not directly mutate the stock field. Instead:
+
+Create a proper RECEIVE or ADJUST transaction (depending on how the system is designed for inbound materials) in the transaction system.
+
+Update the item’s stock through that transaction so the audit trail stays intact.
+
+Add the resulting movement to the session log in the modal (e.g., “Received 50 x Hex Nut M8”).
+
+5. Transaction logic – Finished Products (Hildale)
+
+In Finished Products mode:
+
+Each scan represents finished units being produced at Hildale after assembly.
+
+For each successful scan:
+
+Prompt for quantity (default 1).
+
+Invoke the existing PRODUCE transaction logic for that finished product:
+
+Increase the product’s Hildale Qty by the scanned quantity.
+
+Consume the appropriate raw components from Stock Inventory according to the BOM (scaled by quantity).
+
+Record a transaction entry per affected item (finished and raw) to keep the audit trail consistent.
+
+Again, log each action in the modal: “Produced 10 x Widget A (components consumed according to BOM).”
+
+The scanner should NOT bypass the transaction system or directly edit Hildale/Pivot fields.
+
+6. Forecast + AI batching integration
+
+Whenever a scan causes inventory to change (raw or finished):
+
+Mark the affected items as having “dirty” forecasts or enqueue them for the batch forecasting job that already exists.
+
+Do not call the AI forecaster on every single scan. Respect the existing batching logic you implemented earlier (e.g., first change + last change, or time-based batch).
+
+Confirm that scanning large batches (e.g., many raw materials received in a row) will only trigger the AI forecast once per batch, not per scan.
+
+7. UX details
+
+The modal should block interaction with the underlying page while open and clearly show when a scan is applied vs ignored.
+
+Provide buttons: Finish Session / Close that simply close the modal after the user is done scanning.
+
+Ensure that opening/closing the modal does not affect page layout or create any horizontal scroll issues.
+
+The BOM page and Barcodes page must remain fixed-width like the Dashboard; only any internal tables or modal content may scroll horizontally if needed.
+
+8. Verification
+
+After implementation, please:
+
+Show how to open the scanner for Raw Materials and for Finished Products on the BOM page.
+
+Demonstrate a valid raw-material scan updates Stock Inventory via a transaction and appears correctly in the audit trail.
+
+Demonstrate a valid finished-product scan increases Hildale Qty and consumes components via the PRODUCE transaction.
+
+Demonstrate that scanning a Finished Product while in Raw mode (and vice versa) is blocked with a clear error and no stock change.
+
+Confirm that the AI forecasting still runs in a batched, efficient way, not one call per scan.
+
+Finally, summarize which files/components you changed and how the scanner now integrates with the BOM page, transaction system, and forecasting.

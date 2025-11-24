@@ -7,13 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart, Scan } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
 import { TransferDialog } from "@/components/transfer-dialog";
 import { ProductionDialog } from "@/components/production-dialog";
 import { TransactionHistoryDialog } from "@/components/transaction-history-dialog";
+import { ScanInventoryModal } from "@/components/scan-inventory-modal";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -970,6 +971,8 @@ export default function BOM() {
   const [transferItem, setTransferItem] = useState<any>(null);
   const [productionItem, setProductionItem] = useState<any>(null);
   const [historyItem, setHistoryItem] = useState<any>(null);
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanMode, setScanMode] = useState<"RAW" | "FINISHED">("RAW");
   const [reorderItem, setReorderItem] = useState<any>(null);
   const { toast } = useToast();
 
@@ -1100,14 +1103,28 @@ export default function BOM() {
             <h2 className="text-lg font-semibold">Finished Products</h2>
             <p className="text-sm text-muted-foreground">Products with bill of materials</p>
           </div>
-          <Button
-            size="sm"
-            onClick={() => setIsCreateFinishedDialogOpen(true)}
-            data-testid="button-create-finished-product"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Product
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setScanMode("FINISHED");
+                setIsScanModalOpen(true);
+              }}
+              data-testid="button-scan-finished-products"
+            >
+              <Scan className="mr-2 h-4 w-4" />
+              Scan Finished Products
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setIsCreateFinishedDialogOpen(true)}
+              data-testid="button-create-finished-product"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Product
+            </Button>
+          </div>
         </div>
         {isLoading ? (
           <div className="flex h-48 items-center justify-center">
@@ -1162,14 +1179,28 @@ export default function BOM() {
             <h2 className="text-lg font-semibold">Stock Inventory</h2>
             <p className="text-sm text-muted-foreground">Components and raw materials</p>
           </div>
-          <Button
-            size="sm"
-            onClick={() => setIsCreateStockDialogOpen(true)}
-            data-testid="button-create-stock-item"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Item
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setScanMode("RAW");
+                setIsScanModalOpen(true);
+              }}
+              data-testid="button-scan-raw-materials"
+            >
+              <Scan className="mr-2 h-4 w-4" />
+              Scan Raw Materials
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => setIsCreateStockDialogOpen(true)}
+              data-testid="button-create-stock-item"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Item
+            </Button>
+          </div>
         </div>
         {isLoading ? (
           <div className="flex h-48 items-center justify-center">
@@ -1271,6 +1302,15 @@ export default function BOM() {
           item={reorderItem}
         />
       )}
+      
+      {/* Scan Inventory Modal */}
+      <ScanInventoryModal
+        isOpen={isScanModalOpen}
+        onClose={() => setIsScanModalOpen(false)}
+        mode={scanMode}
+        context="BOM_PAGE"
+        onModeChange={setScanMode}
+      />
     </div>
   );
 }

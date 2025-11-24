@@ -1924,6 +1924,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get PO summary for dashboard cards (must come before /:id route)
+  app.get("/api/purchase-orders/summary", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allPOs = await storage.getAllPurchaseOrders();
+      const summary = {
+        total: allPOs.length,
+        draft: allPOs.filter(po => po.status === 'DRAFT').length,
+        approvalPending: allPOs.filter(po => po.status === 'APPROVAL_PENDING').length,
+        approved: allPOs.filter(po => po.status === 'APPROVED').length,
+        sent: allPOs.filter(po => po.status === 'SENT').length,
+        partialReceived: allPOs.filter(po => po.status === 'PARTIAL_RECEIVED').length,
+        received: allPOs.filter(po => po.status === 'RECEIVED').length,
+        closed: allPOs.filter(po => po.status === 'CLOSED').length,
+        cancelled: allPOs.filter(po => po.status === 'CANCELLED').length,
+      };
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching summary:", error);
+      res.status(500).json({ error: "Failed to fetch PO summary" });
+    }
+  });
+
   app.get("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -2162,28 +2184,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // ENHANCED PURCHASE ORDER ENDPOINTS
   // ============================================================================
-
-  // Get PO summary for dashboard cards
-  app.get("/api/purchase-orders/summary", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const allPOs = await storage.getAllPurchaseOrders();
-      const summary = {
-        total: allPOs.length,
-        draft: allPOs.filter(po => po.status === 'DRAFT').length,
-        approvalPending: allPOs.filter(po => po.status === 'APPROVAL_PENDING').length,
-        approved: allPOs.filter(po => po.status === 'APPROVED').length,
-        sent: allPOs.filter(po => po.status === 'SENT').length,
-        partialReceived: allPOs.filter(po => po.status === 'PARTIAL_RECEIVED').length,
-        received: allPOs.filter(po => po.status === 'RECEIVED').length,
-        closed: allPOs.filter(po => po.status === 'CLOSED').length,
-        cancelled: allPOs.filter(po => po.status === 'CANCELLED').length,
-      };
-      res.json(summary);
-    } catch (error: any) {
-      console.error("[PurchaseOrder] Error fetching summary:", error);
-      res.status(500).json({ error: "Failed to fetch PO summary" });
-    }
-  });
 
   // Approve PO
   app.post("/api/purchase-orders/:id/approve", requireAuth, async (req: Request, res: Response) => {

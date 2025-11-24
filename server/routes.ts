@@ -36,8 +36,12 @@ import {
   insertPurchaseOrderSchema,
   insertPurchaseOrderLineSchema,
   insertSupplierLeadSchema,
+  insertReturnRequestSchema,
+  insertReturnItemSchema,
+  insertReturnShipmentSchema,
   type Item,
 } from "@shared/schema";
+import { createReturnLabelService } from "./return-label-service";
 
 const SALT_ROUNDS = 10;
 
@@ -2934,6 +2938,289 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[SupplierLead] Error importing from PhantomBuster:", error);
       res.status(500).json({ error: "Failed to import from PhantomBuster" });
+    }
+  });
+
+  // ============================================================================
+  // RETURNS MODULE
+  // ============================================================================
+  // Returns are customer-initiated requests for refund/replacement.
+  // GHL's support bot handles customer communication and approval.
+  // This app creates structured return records, generates labels,
+  // and updates inventory when returns are received.
+
+  const labelService = createReturnLabelService();
+
+  // Create a return request
+  // POST /api/returns
+  // Body: { externalOrderId, salesChannel, customerName, customerEmail?, customerPhone?, ghlContactId?, resolutionRequested, reason, items: [{ inventoryItemId or sku, qtyRequested }] }
+  // Returns: ReturnRequest with id for GHL to store
+  app.post("/api/returns", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { items: itemsData, ...requestData } = req.body;
+
+      // Validate return request data
+      const validatedRequest = insertReturnRequestSchema.parse(requestData);
+      
+      // Create return request
+      const returnRequest = await storage.createReturnRequest(validatedRequest);
+
+      // Create return items
+      if (!itemsData || !Array.from(itemsData).length) {
+        return res.status(400).json({ error: "At least one item is required" });
+      }
+
+      const returnItems = [];
+      for (const itemData of itemsData) {
+        let inventoryItemId = itemData.inventoryItemId;
+        
+        // If SKU provided instead of ID, look up the item
+        if (!inventoryItemId && itemData.sku) {
+          const item = await storage.getItemBySku(itemData.sku);
+          if (!item) {
+            return res.status(404).json({ error: `Item with SKU ${itemData.sku} not found` });
+          }
+          inventoryItemId = item.id;
+        }
+
+        if (!inventoryItemId) {
+          return res.status(400).json({ error: "Either inventoryItemId or sku is required for each item" });
+        }
+
+        const item = await storage.getItem(inventoryItemId);
+        if (!item) {
+          return res.status(404).json({ error: `Item ${inventoryItemId} not found` });
+        }
+
+        const returnItem = await storage.createReturnItem({
+          returnRequestId: returnRequest.id,
+          inventoryItemId,
+          sku: item.sku,
+          qtyRequested: itemData.qtyRequested,
+          qtyApproved: itemData.qtyRequested, // Default: approve requested qty
+        });
+
+        returnItems.push(returnItem);
+      }
+
+      res.status(201).json({ 
+        returnRequest,
+        items: returnItems 
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error creating return request:", error);
+      res.status(400).json({ error: error.message || "Failed to create return request" });
+    }
+  });
+
+  // Issue return label for an existing request
+  // POST /api/returns/:id/label
+  // Returns: { trackingNumber, labelUrl } for GHL to send to customer
+  app.post("/api/returns/:id/label", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+
+      // Validate that return is in an allowed state
+      if (!['OPEN', 'LABEL_ISSUED'].includes(returnRequest.status)) {
+        return res.status(400).json({ 
+          error: `Cannot issue label for return with status ${returnRequest.status}` 
+        });
+      }
+
+      // Get return items for label generation
+      const returnItems = await storage.getReturnItemsByRequestId(id);
+      if (!returnItems.length) {
+        return res.status(400).json({ error: "Return has no items" });
+      }
+
+      // Prepare items for label service
+      const itemsForLabel = await Promise.all(
+        returnItems.map(async (ri) => {
+          const item = await storage.getItem(ri.inventoryItemId);
+          return {
+            sku: ri.sku,
+            name: item?.name || ri.sku,
+            quantity: ri.qtyApproved,
+          };
+        })
+      );
+
+      // Generate shipping label via stub service
+      // TODO: When integrating real provider (Shippo/EasyPost), add customer address here
+      const labelResponse = await labelService.generateLabel({
+        customerName: returnRequest.customerName,
+        items: itemsForLabel,
+      });
+
+      // Create shipment record
+      await storage.createReturnShipment({
+        returnRequestId: id,
+        carrier: labelResponse.carrier,
+        trackingNumber: labelResponse.trackingNumber,
+        labelUrl: labelResponse.labelUrl,
+      });
+
+      // Update return request status
+      await storage.updateReturnRequest(id, {
+        status: 'LABEL_ISSUED',
+      });
+
+      res.json({
+        trackingNumber: labelResponse.trackingNumber,
+        labelUrl: labelResponse.labelUrl,
+        carrier: labelResponse.carrier,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error issuing label:", error);
+      res.status(500).json({ error: error.message || "Failed to issue return label" });
+    }
+  });
+
+  // Mark return as received
+  // POST /api/returns/:id/receive
+  // Body: { items: [{ returnItemId, qtyReceived, disposition }], resolutionFinal? }
+  // Updates inventory for RESTOCK items using TransactionService
+  app.post("/api/returns/:id/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { items: receivedItems, resolutionFinal } = req.body;
+
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+
+      if (!receivedItems || !Array.from(receivedItems).length) {
+        return res.status(400).json({ error: "At least one received item is required" });
+      }
+
+      // Validate all items upfront
+      const returnItems = await storage.getReturnItemsByRequestId(id);
+      for (const receivedItem of receivedItems) {
+        const returnItem = returnItems.find(ri => ri.id === receivedItem.returnItemId);
+        if (!returnItem) {
+          return res.status(404).json({ 
+            error: `Return item ${receivedItem.returnItemId} not found` 
+          });
+        }
+
+        if (!['RESTOCK', 'SCRAP', 'INSPECT'].includes(receivedItem.disposition)) {
+          return res.status(400).json({ 
+            error: `Invalid disposition: ${receivedItem.disposition}` 
+          });
+        }
+      }
+
+      // Process each received item
+      // TODO: For true atomicity, wrap in database transaction
+      // For now, validate everything first, then apply (same pattern as PO bulk receive)
+      for (const receivedItem of receivedItems) {
+        const returnItem = returnItems.find(ri => ri.id === receivedItem.returnItemId);
+        if (!returnItem) continue;
+
+        // Update return item with received qty and disposition
+        await storage.updateReturnItem(receivedItem.returnItemId, {
+          qtyReceived: receivedItem.qtyReceived,
+          disposition: receivedItem.disposition,
+          notes: receivedItem.notes || null,
+        });
+
+        // If disposition is RESTOCK, update inventory using TransactionService
+        if (receivedItem.disposition === 'RESTOCK') {
+          const item = await storage.getItem(returnItem.inventoryItemId);
+          if (!item) continue;
+
+          // For finished products, restock to Hildale (buffer stock)
+          // For components, update currentStock
+          if (item.type === 'finished_product') {
+            await TransactionService.createTransaction({
+              itemId: item.id,
+              type: 'RECEIVE',
+              quantity: receivedItem.qtyReceived,
+              location: 'HILDALE',
+              referenceType: 'RETURN',
+              referenceId: id,
+              notes: `Restocked from return ${returnRequest.externalOrderId}`,
+            });
+          } else {
+            await TransactionService.createTransaction({
+              itemId: item.id,
+              type: 'RECEIVE',
+              quantity: receivedItem.qtyReceived,
+              referenceType: 'RETURN',
+              referenceId: id,
+              notes: `Restocked from return ${returnRequest.externalOrderId}`,
+            });
+          }
+        }
+      }
+
+      // Update return request status
+      const updates: any = { status: 'RECEIVED' };
+      if (resolutionFinal) {
+        updates.resolutionFinal = resolutionFinal;
+        if (resolutionFinal === 'REFUNDED') {
+          updates.status = 'REFUNDED';
+        } else if (resolutionFinal === 'REPLACED') {
+          updates.status = 'REPLACED';
+        }
+      }
+
+      const updatedRequest = await storage.updateReturnRequest(id, updates);
+
+      // Fetch updated items
+      const updatedItems = await storage.getReturnItemsByRequestId(id);
+
+      res.json({
+        returnRequest: updatedRequest,
+        items: updatedItems,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error receiving return:", error);
+      res.status(500).json({ error: error.message || "Failed to receive return" });
+    }
+  });
+
+  // Get return request details
+  // GET /api/returns/:id
+  // Returns: ReturnRequest + items + shipments
+  app.get("/api/returns/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+
+      const items = await storage.getReturnItemsByRequestId(id);
+      const shipments = await storage.getReturnShipmentsByRequestId(id);
+
+      res.json({
+        returnRequest,
+        items,
+        shipments,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error fetching return:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch return" });
+    }
+  });
+
+  // List all return requests
+  // GET /api/returns
+  app.get("/api/returns", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const returnRequests = await storage.getAllReturnRequests();
+      res.json(returnRequests);
+    } catch (error: any) {
+      console.error("[Returns] Error fetching returns:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch returns" });
     }
   });
 

@@ -1,0 +1,75 @@
+I want to upgrade the Stock Inventory table on the BOM page to show key supplier info and a “Reorder” action, while keeping the page layout fixed. The page itself must never become horizontally scrollable; only the data table inside its card should scroll horizontally when needed.
+
+Please implement the following changes specifically for the Stock Inventory section:
+
+1. Add supplier purchasing columns to Stock Inventory
+
+In the Stock Inventory table (raw materials) on the BOM page, add the following columns after SKU and before the existing Stock column:
+
+Supplier – show the primary supplier name for that item (if none configured, show a subtle “No supplier” indicator).
+
+Supplier SKU – the supplier-specific SKU/code for this item.
+
+Unit Cost – primary supplier unit price (e.g. “$1.25”).
+
+MOQ – minimum order quantity.
+
+Lead Time – lead time in days (use per-item override; fallback to supplier default).
+
+Keep the existing Stock and Category columns, and keep the Actions column at the far right.
+
+All supplier data should come from the primary SupplierItemConfig for that item. If an item has no primary supplier yet, render these cells as empty or “—” and highlight that in a subtle way.
+
+2. Add a Reorder action button at the end of each row
+
+In the Actions column of the Stock Inventory table, add a clear Reorder button/icon (e.g., a shopping cart or truck icon with tooltip “Create reorder / add to PO”).
+
+Clicking this should:
+
+Open the appropriate reorder / PO flow for that item (for now it can open a modal or side panel that shows current stock, days of cover, suggested order quantity, and supplier info).
+
+Use the existing reorder engine and supplier configuration when it’s available.
+
+Keep existing actions (history, delete, etc.) intact; just add the Reorder control in a consistent position.
+
+3. Table layout and horizontal scrolling (very important)
+
+The BOM page layout must behave like the other pages (Dashboard, Barcodes, AI Agent):
+
+The page content container stays within the normal app width and should not expand when the table has many columns.
+
+There must be no horizontal scroll on the entire page; horizontal scrolling should only happen inside the Stock Inventory table area when columns overflow.
+
+To achieve this:
+
+Wrap the Stock Inventory table in a container that allows horizontal scrolling (e.g., a div with horizontal overflow enabled) inside the existing card/container.
+
+Give the table itself an appropriate min width so columns don’t squash unreadably, but do not apply any width rules on the outer page/container that cause the full page to grow wider than the viewport.
+
+Ensure the Actions column (with the Reorder button) stays visible at the far right edge of the scrollable area; the user should be able to scroll horizontally to see all supplier columns and still reach the Actions column.
+
+Please explicitly check the previous issue that happened on the Barcodes page where making the table wider caused the whole page to become scrollable horizontally. Do not repeat that pattern here. Instead, use the same fixed-page, scrollable-table approach used on correctly-behaving pages.
+
+4. Verify behavior after the change
+
+After implementing the new columns and scrolling behavior:
+
+Load the BOM page on a typical laptop width. Confirm the overall page does not extend off-screen horizontally. Switching between Dashboard/BOM/Barcodes should feel consistent.
+
+In the Stock Inventory section, when all columns are visible, verify that:
+
+Only the table area scrolls left–right when there isn’t enough width.
+
+The rest of the page (header, Finished Products section, navigation) stays fixed and does not scroll sideways.
+
+Confirm that supplier info appears correctly for items with a primary supplier and shows a neutral placeholder for items without one.
+
+Click the new Reorder button on a few items and confirm it opens the reorder/PO flow without errors and uses the item’s current supplier config.
+
+Finally, summarize what you changed:
+
+Which files/components were updated for the Stock Inventory table.
+
+How the supplier columns map to the supplier configuration.
+
+How the scroll behavior is implemented so that only the table scrolls horizontally, not the whole page.

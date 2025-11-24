@@ -1,0 +1,424 @@
+I want a Supplier control center page with multiple tabs. It should do two main things:
+
+
+
+Show every PO ever issued, with status + issue / refund handling.
+
+
+Help discover and create new suppliers from scraped data (e.g., PhantomBuster) and generate outreach drafts with AI.
+
+
+Use the existing Supplier, PurchaseOrder, PurchaseOrderLine, and SupplierItemConfig models where possible. If any of these don’t exist yet, create minimal versions that match how the rest of the app is structured. Do not break the existing BOM, Barcodes, or Dashboard layouts.
+1. Supplier page layout and tabs
+
+
+Create a Suppliers page with a top-level layout similar to other pages (no full-page horizontal scroll).
+
+
+At the top, show a header (“Suppliers”) and basic filters (search by supplier name, filter by status).
+
+
+Below, add a tab control with at least these tabs:
+
+
+PO History & Issues
+
+
+Discovery & Creation
+
+
+
+
+The page container must keep the same width behavior as the Dashboard/BOM pages:
+
+
+The page itself must not become horizontally scrollable; when tables overflow, only the table region should scroll horizontally inside its card. Reuse the same pattern you used when you fixed the Barcodes table.
+
+
+
+
+2. Tab 1 – PO History & Issues
+Data and fields
+
+
+Extend PurchaseOrder and PurchaseOrderLine if needed with fields for tracking lifecycle and issues, for example:
+
+
+PurchaseOrder:
+
+
+orderDate (created/issued date)
+
+
+sentAt (when PO was sent to supplier)
+
+
+receivedAt (when goods fully received)
+
+
+paidAt (when invoice paid)
+
+
+status (DRAFT, PENDING_APPROVAL, SENT, PARTIAL_RECEIVED, RECEIVED, PAID, CANCELLED)
+
+
+hasIssue (boolean)
+
+
+issueStatus (NONE, OPEN, IN_PROGRESS, RESOLVED)
+
+
+issueType (enum or string: late, damaged, short shipment, quality, invoice mismatch, other)
+
+
+issueNotes (text)
+
+
+refundStatus (NONE, REQUESTED, PARTIAL_REFUND, FULL_REFUND)
+
+
+refundAmount (number)
+
+
+
+
+PurchaseOrderLine: keep existing fields (item, qty, unit price) and add receivedQty if we don’t already track partial receipts.
+
+
+
+
+PO table UI
+
+
+In the PO History & Issues tab, show a main table listing all POs with columns like:
+
+
+PO #
+
+
+Supplier (name)
+
+
+Status
+
+
+Order Date
+
+
+Day Sent
+
+
+Day Received
+
+
+Day Paid
+
+
+Total
+
+
+Issue / Refund (badge summarizing issueStatus/refundStatus)
+
+
+Actions
+
+
+
+
+Add filters above the table: by supplier, by status, by date range, and a simple “Only POs with Issues” toggle.
+
+
+The PO table should live inside a card/container that allows horizontal scroll only for the table, not for the whole page. Use the same fixed-page, scrollable-table pattern already used elsewhere.
+
+
+Row actions and issue handling
+
+
+In the Actions column for each PO, provide buttons/icons:
+
+
+View / Edit (open PO detail drawer or page)
+
+
+Mark Paid (sets paidAt and status → PAID)
+
+
+Report Issue (opens an Issue modal)
+
+
+
+
+The Issue modal should allow:
+
+
+Selecting issueType (late delivery, damaged items, short shipment, quality issue, wrong items, invoice mismatch, other).
+
+
+Writing issueNotes.
+
+
+Optionally entering expected/actual dates or quantities if helpful.
+
+
+Setting refundStatus and refundAmount if applicable (or leaving them as “Requested”).
+
+
+
+
+When saving:
+
+
+Update hasIssue = true, issueStatus appropriately, and store all notes.
+
+
+Keep a clear audit trail in the PO detail (who changed what and when) using the existing transaction/logging pattern if available.
+
+
+
+
+PO detail view
+
+
+When I click View / Edit on a PO:
+
+
+Show a detail view (drawer or full-page) with:
+
+
+Header: supplier info, PO status, dates (order/sent/received/paid).
+
+
+Lines table: item, ordered qty, received qty, unit price, line total.
+
+
+Issue/refund section: current issueStatus, issueType, issueNotes, refundStatus, refundAmount.
+
+
+Buttons: Edit, Mark Sent, Mark Received, Mark Paid, Report Issue (opens the same modal), and Download / Print.
+
+
+
+
+
+
+This tab should become the main “PO history and problem handling” hub for suppliers.
+
+
+3. Tab 2 – Supplier Discovery & Creation
+I want this tab to be where we find, qualify, and create suppliers (including from data scrapers like PhantomBuster), and use AI to draft outreach.
+Data model for leads
+
+
+Add a SupplierLead (or similar) model to hold candidate suppliers that are not yet fully created as Supplier records:
+
+
+id
+
+
+name
+
+
+websiteUrl
+
+
+contactEmail (optional)
+
+
+contactPhone (optional)
+
+
+source (enum/string: PHANTOMBUSTER, MANUAL, IMPORT, etc.)
+
+
+category / tags (e.g., fasteners, packaging, etc.)
+
+
+notes
+
+
+status (NEW, RESEARCHING, CONTACTED, QUALIFIED, REJECTED, CONVERTED)
+
+
+lastContactedAt
+
+
+aiOutreachDraft (text)
+
+
+
+
+This model should be separate from Supplier, but with an easy way to convert a qualified lead into a real Supplier.
+
+
+Discovery & Creation UI
+
+
+In the Discovery & Creation tab, build a layout with:
+
+
+A toolbar at the top:
+
+
+Search field (by name / website).
+
+
+Filters by status and source.
+
+
+Buttons: Add Lead Manually, Import from CSV, and a placeholder Fetch from PhantomBuster.
+
+
+
+
+Below, a table of leads with columns:
+
+
+Name
+
+
+Website (clickable link)
+
+
+Source
+
+
+Status
+
+
+Last Contacted
+
+
+Category/Tags
+
+
+Actions
+
+
+
+
+
+
+The Actions column for each lead should have buttons:
+
+
+View / Edit (open side panel with full details)
+
+
+Generate Outreach (AI)
+
+
+Convert to Supplier
+
+
+
+
+PhantomBuster / scraper integration (stub)
+
+
+Add a backend endpoint or function stub that represents “import leads from PhantomBuster”:
+
+
+It can be a placeholder that reads from a mocked data source or a simple in-app list for now, but structure it so we can later plug in real PhantomBuster API results.
+
+
+Make sure there is a clear place to add API keys / config via environment variables, but do not hard-code secrets.
+
+
+
+
+When Fetch from PhantomBuster is clicked, call that endpoint and create/update SupplierLead records (e.g., name, website, category, source = PHANTOMBUSTER).
+
+
+Note: keep this flexible and generic—no assumption about a single scraping source.
+
+
+AI outreach drafting
+
+
+For a given lead, Generate Outreach should:
+
+
+Call the existing AI integration once with: the lead’s name, website, category/tags, and any notes.
+
+
+Ask the AI to draft a short, professional outreach email to the supplier explaining who we are, what we’re looking for (e.g., inventory components, reliability, pricing), and inviting next steps.
+
+
+Store the result in aiOutreachDraft on the SupplierLead.
+
+
+Show the draft in the lead detail panel with a “Copy” button so the user can paste it into their email client.
+
+
+
+
+Do not send emails automatically—this tab is about preparing smart drafts for humans to approve and send.
+
+
+Convert lead → Supplier
+
+
+Implement a Convert to Supplier action for leads with status QUALIFIED or CONTACTED:
+
+
+Open a small confirmation/edit dialog pre-filled with:
+
+
+Supplier name, website, email, phone, notes.
+
+
+
+
+On confirm:
+
+
+Create a Supplier record.
+
+
+Link back to the original SupplierLead (e.g., store convertedSupplierId on the lead and set status = CONVERTED).
+
+
+Optionally pre-create basic SupplierItemConfig entries later (for now it’s ok to just create the Supplier).
+
+
+
+
+
+
+After conversion, the new supplier should appear in whatever supplier list or selector is used elsewhere (e.g., in Stock Inventory purchasing config).
+
+
+4. Legal / compliance note (very important)
+
+
+When you implement any stubs for PhantomBuster or web scraping, add a short comment in code reminding that real scraping must respect each website’s Terms of Service and applicable laws. Do not hard-code any scraping URLs or behaviors that would violate TOS; keep it generic.
+
+
+5. Verification
+
+
+After implementing:
+
+
+Verify the Suppliers page loads and the tab system works.
+
+
+In PO History & Issues, confirm the PO table shows correct data, scrolls horizontally only inside its card, and supports filtering.
+
+
+Confirm you can open a PO, mark it paid, and create an issue record (issueType, notes, refund info).
+
+
+In Discovery & Creation, manually add a lead, generate an outreach draft, and convert it to a Supplier.
+
+
+Trigger the PhantomBuster/import stub and see leads appear with source = PHANTOMBUSTER.
+
+
+
+
+Finally, summarize which files/components you changed and how this new Supplier page ties together PO history, issue/refund handling, and supplier discovery/creation.
+
+
+
+

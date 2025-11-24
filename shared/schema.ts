@@ -137,19 +137,23 @@ export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
 
 // ============================================================================
-// PURCHASE ORDERS (Lead Time Tracking)
+// PURCHASE ORDERS (with Issue & Refund Tracking)
 // ============================================================================
 
 export const purchaseOrders = pgTable("purchase_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
-  itemId: varchar("item_id").notNull().references(() => items.id),
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
-  expectedDeliveryDate: timestamp("expected_delivery_date"),
-  actualReceiptDate: timestamp("actual_receipt_date"),
-  quantity: integer("quantity").notNull(),
-  unitPrice: real("unit_price"),
-  status: text("status").notNull().default('pending'), // 'pending', 'shipped', 'received', 'cancelled'
+  sentAt: timestamp("sent_at"),
+  receivedAt: timestamp("received_at"),
+  paidAt: timestamp("paid_at"),
+  status: text("status").notNull().default('DRAFT'), // DRAFT, PENDING_APPROVAL, SENT, PARTIAL_RECEIVED, RECEIVED, PAID, CANCELLED
+  hasIssue: boolean("has_issue").notNull().default(false),
+  issueStatus: text("issue_status").notNull().default('NONE'), // NONE, OPEN, IN_PROGRESS, RESOLVED
+  issueType: text("issue_type"), // late, damaged, short_shipment, quality, invoice_mismatch, other
+  issueNotes: text("issue_notes"),
+  refundStatus: text("refund_status").notNull().default('NONE'), // NONE, REQUESTED, PARTIAL_REFUND, FULL_REFUND
+  refundAmount: real("refund_amount").default(0),
   notes: text("notes"),
 });
 
@@ -157,6 +161,53 @@ export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit
 export const updatePurchaseOrderSchema = insertPurchaseOrderSchema.partial();
 export type InsertPurchaseOrder = z.infer<typeof insertPurchaseOrderSchema>;
 export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
+
+// ============================================================================
+// PURCHASE ORDER LINES (Line Items for each PO)
+// ============================================================================
+
+export const purchaseOrderLines = pgTable("purchase_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  purchaseOrderId: varchar("purchase_order_id").notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  quantity: integer("quantity").notNull(),
+  receivedQuantity: integer("received_quantity").notNull().default(0),
+  unitPrice: real("unit_price"),
+}, (table) => ({
+  purchaseOrderIdIdx: index("purchase_order_lines_purchase_order_id_idx").on(table.purchaseOrderId),
+}));
+
+export const insertPurchaseOrderLineSchema = createInsertSchema(purchaseOrderLines).omit({ id: true });
+export type InsertPurchaseOrderLine = z.infer<typeof insertPurchaseOrderLineSchema>;
+export type PurchaseOrderLine = typeof purchaseOrderLines.$inferSelect;
+
+// ============================================================================
+// SUPPLIER LEADS (Discovery & Qualification)
+// ============================================================================
+
+export const supplierLeads = pgTable("supplier_leads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  websiteUrl: text("website_url"),
+  contactEmail: text("contact_email"),
+  contactPhone: text("contact_phone"),
+  source: text("source").notNull().default('MANUAL'), // PHANTOMBUSTER, MANUAL, IMPORT, etc.
+  category: text("category"),
+  notes: text("notes"),
+  status: text("status").notNull().default('NEW'), // NEW, RESEARCHING, CONTACTED, QUALIFIED, REJECTED, CONVERTED
+  lastContactedAt: timestamp("last_contacted_at"),
+  aiOutreachDraft: text("ai_outreach_draft"),
+  convertedSupplierId: varchar("converted_supplier_id").references(() => suppliers.id),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  statusIdx: index("supplier_leads_status_idx").on(table.status),
+  sourceIdx: index("supplier_leads_source_idx").on(table.source),
+}));
+
+export const insertSupplierLeadSchema = createInsertSchema(supplierLeads).omit({ id: true, createdAt: true });
+export const updateSupplierLeadSchema = insertSupplierLeadSchema.partial();
+export type InsertSupplierLead = z.infer<typeof insertSupplierLeadSchema>;
+export type SupplierLead = typeof supplierLeads.$inferSelect;
 
 // ============================================================================
 // SALES HISTORY (from GoHighLevel)

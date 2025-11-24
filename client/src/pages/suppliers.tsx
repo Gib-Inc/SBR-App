@@ -373,7 +373,7 @@ export default function Suppliers() {
                           <th className="text-left p-2 font-medium whitespace-nowrap bg-card">Days to Receive</th>
                           <th className="text-left p-2 font-medium whitespace-nowrap bg-card">GHL Rep</th>
                           <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Total</th>
-                          <th className="text-right p-2 font-medium whitespace-nowrap bg-card">Actions</th>
+                          <th className="sticky right-0 z-10 text-right p-2 font-medium whitespace-nowrap bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                         </tr>
                       </thead>
                     <tbody>
@@ -430,7 +430,7 @@ export default function Suppliers() {
                               <td className="p-2 text-sm text-right whitespace-nowrap font-medium">
                                 ${orderTotal.toFixed(2)}
                               </td>
-                              <td className="p-2 text-right whitespace-nowrap">
+                              <td className="sticky right-0 z-10 bg-card p-2 text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                                 <div className="flex items-center justify-end gap-1">
                                   <Button 
                                     size="sm" 

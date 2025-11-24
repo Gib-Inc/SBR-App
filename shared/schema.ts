@@ -469,3 +469,80 @@ export type ItemWithComputedQuantities = Item & {
   availableToShip?: number;
   bufferStock?: number;
 };
+
+// ============================================================================
+// RETURNS MODULE
+// ============================================================================
+// Returns are customer-initiated requests for refund/replacement.
+// GHL's support bot handles customer communication and approval decisions.
+// This app tracks return status, generates shipping labels (via pluggable service),
+// and updates inventory when returns are received.
+
+export const returnRequests = pgTable("return_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  externalOrderId: text("external_order_id").notNull(), // Upstream order ID from Shopify/Amazon/etc.
+  salesChannel: text("sales_channel").notNull(), // 'SHOPIFY', 'AMAZON', 'DIRECT', 'OTHER'
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+  ghlContactId: text("ghl_contact_id"), // Link back to GHL contact for workflows
+  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'REFUNDED', 'REPLACED', 'CANCELLED'
+  resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT'
+  resolutionFinal: text("resolution_final"), // What actually happened (nullable)
+  reason: text("reason"), // High-level reason from GHL bot
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  externalOrderIdIdx: index("return_requests_external_order_id_idx").on(table.externalOrderId),
+  statusIdx: index("return_requests_status_idx").on(table.status),
+  createdAtIdx: index("return_requests_created_at_idx").on(table.createdAt),
+}));
+
+export const insertReturnRequestSchema = createInsertSchema(returnRequests).omit({ 
+  id: true, 
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertReturnRequest = z.infer<typeof insertReturnRequestSchema>;
+export type ReturnRequest = typeof returnRequests.$inferSelect;
+
+export const returnItems = pgTable("return_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id),
+  inventoryItemId: varchar("inventory_item_id").notNull().references(() => items.id),
+  sku: text("sku").notNull(), // Denormalized for quick viewing
+  qtyRequested: integer("qty_requested").notNull(),
+  qtyApproved: integer("qty_approved").notNull().default(0), // What we allow to be returned
+  qtyReceived: integer("qty_received").notNull().default(0), // What actually came back
+  disposition: text("disposition"), // 'RESTOCK', 'SCRAP', 'INSPECT' (null until received)
+  notes: text("notes"),
+}, (table) => ({
+  returnRequestIdIdx: index("return_items_return_request_id_idx").on(table.returnRequestId),
+  inventoryItemIdIdx: index("return_items_inventory_item_id_idx").on(table.inventoryItemId),
+}));
+
+export const insertReturnItemSchema = createInsertSchema(returnItems).omit({ id: true });
+export type InsertReturnItem = z.infer<typeof insertReturnItemSchema>;
+export type ReturnItem = typeof returnItems.$inferSelect;
+
+export const returnShipments = pgTable("return_shipments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id),
+  carrier: text("carrier").notNull(), // 'UPS', 'USPS', 'FEDEX', etc.
+  trackingNumber: text("tracking_number").notNull(),
+  labelUrl: text("label_url").notNull(), // URL to PDF/label image
+  status: text("status").notNull().default('LABEL_CREATED'), // 'LABEL_CREATED', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'CANCELLED'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  returnRequestIdIdx: index("return_shipments_return_request_id_idx").on(table.returnRequestId),
+  trackingNumberIdx: index("return_shipments_tracking_number_idx").on(table.trackingNumber),
+}));
+
+export const insertReturnShipmentSchema = createInsertSchema(returnShipments).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertReturnShipment = z.infer<typeof insertReturnShipmentSchema>;
+export type ReturnShipment = typeof returnShipments.$inferSelect;

@@ -1,0 +1,145 @@
+I want to add a first-version Returns module to this inventory app. The business rule is:
+• GHL’s support bot handles troubleshooting and decides whether a replacement/refund is approved.
+• This app is responsible only for: creating structured return records, generating shipping/return labels via a pluggable service, storing tracking numbers, and updating inventory when returns are received.
+• All customer communication happens in GHL (SMS/email), using data this app returns via API.
+
+Please design and implement this in a clean, minimal, production-style way.
+
+Data model for returns
+
+Add new models that plug into the existing schema and transaction system:
+
+ReturnRequest:
+• id
+• externalOrderId (the upstream order ID from Shopify/Amazon/direct/etc.)
+• salesChannel: 'SHOPIFY' | 'AMAZON' | 'DIRECT' | 'OTHER'
+• customerName (string)
+• customerEmail (string, optional)
+• customerPhone (string, optional)
+• ghlContactId (string, optional – for linking back to GHL)
+• status: 'OPEN' | 'LABEL_ISSUED' | 'IN_TRANSIT' | 'RECEIVED' | 'REFUNDED' | 'REPLACED' | 'CANCELLED'
+• resolutionRequested: 'REFUND' | 'REPLACEMENT' | 'STORE_CREDIT'
+• resolutionFinal: same enum, optional (what we actually did)
+• reason (text – high-level reason from GHL bot)
+• createdAt, updatedAt
+
+ReturnItem:
+• id
+• returnRequestId
+• inventoryItemId (link to the existing stock/BOM item)
+• sku (denormalized for quick viewing)
+• qtyRequested
+• qtyApproved (what we actually allow to be returned)
+• qtyReceived (what came back)
+• disposition: 'RESTOCK' | 'SCRAP' | 'INSPECT'
+• notes (optional)
+
+ReturnShipment:
+• id
+• returnRequestId
+• carrier (string – e.g. UPS/USPS/FedEx/etc.)
+• trackingNumber (string)
+• labelUrl (string – URL to the PDF/label image)
+• status: 'LABEL_CREATED' | 'IN_TRANSIT' | 'DELIVERED' | 'LOST' | 'CANCELLED'
+• createdAt, updatedAt
+
+Make sure these models integrate cleanly with the existing inventory transaction system so we can re-use the same TransactionService pattern used for POs and stock movements.
+
+Shipping label service (stub for now)
+
+Introduce a small, provider-agnostic label service that we can later back with a real provider like Shippo:
+
+• Define an interface like ReturnLabelService with a method that takes: customer shipping details, carrier preference (optional), list of items/weights (for now you can fake weights), and returns a simple object with: trackingNumber (fake but unique), labelUrl (fake URL), carrier.
+• Implement a StubReturnLabelService that just generates deterministic fake data (e.g. "FAKE-TRK-{id}", "https://example.com/labels/{id}
+").
+• Wire the app to use this stub implementation only. DO NOT call real external shipping APIs yet. Keep the design clean so we can swap in a real provider later via environment config.
+
+API endpoints for GHL workflows
+
+Expose simple JSON endpoints that GHL can call from workflows/webhooks. They should be clearly documented in the code and live under a “/api/returns” namespace.
+
+a) Create a return request
+POST /api/returns
+
+Body should allow:
+• externalOrderId
+• salesChannel
+• customerName, customerEmail, customerPhone, ghlContactId
+• resolutionRequested
+• reason
+• items: [{ inventoryItemId or sku, qtyRequested }]
+
+Behavior:
+• Create ReturnRequest + ReturnItem rows.
+• Default status: 'OPEN'.
+• Respond with the ReturnRequest including an internal id so GHL can store it in custom fields.
+
+b) Issue return label for an existing request
+POST /api/returns/:id/label
+
+Behavior:
+• Validate that the ReturnRequest exists and is in an allowed state (OPEN or LABEL_ISSUED).
+• Call the StubReturnLabelService to generate carrier, trackingNumber, and labelUrl.
+• Create a ReturnShipment row and update ReturnRequest.status → 'LABEL_ISSUED'.
+• Respond with trackingNumber and labelUrl so the GHL workflow can immediately send that link to the customer via SMS/email.
+• DO NOT send any email/SMS from this app – just return data.
+
+c) Mark return as received
+POST /api/returns/:id/receive
+
+Body:
+• items: [{ returnItemId, qtyReceived, disposition }]
+• resolutionFinal (optional: 'REFUND' | 'REPLACEMENT' | 'STORE_CREDIT')
+
+Behavior:
+• For each ReturnItem:
+– Update qtyReceived and disposition.
+– If disposition is 'RESTOCK', create appropriate RECEIVE/ADJUST transactions using the existing TransactionService to increase stock at the correct location (for now you can assume a default warehouse or reuse the same location logic as incoming POs).
+• Update ReturnRequest.status to 'RECEIVED' (and optionally 'REFUNDED' or 'REPLACED' if resolutionFinal is provided).
+• Do NOT talk to payment processors here – this is just inventory + internal status; refunds/replacements will be handled either in GHL or the upstream channel.
+
+d) Simple read endpoint
+GET /api/returns/:id
+
+Return the ReturnRequest + items + shipments so the GHL bot or an internal tool can show the full context if needed.
+
+Internal Returns UI (for staff)
+
+Add a lightweight internal UI so humans can see and manage returns, but keep it scoped:
+
+• Add a “Returns” tab or section under Suppliers OR a separate sidebar entry, whichever best matches current navigation.
+• In that view, show a table of ReturnRequests with columns:
+– ID (internal)
+– External Order ID
+– Sales Channel
+– Customer
+– Status
+– ResolutionRequested / ResolutionFinal
+– CreatedAt
+• Row click opens a detail drawer/modal:
+– Header: customer + externalOrderId + status.
+– Items table: item name, qtyRequested, qtyApproved, qtyReceived, disposition.
+– Shipment area: trackingNumber, carrier, labelUrl (clickable), current shipment status.
+• Include a simple action in the UI to call the same “receive” endpoint for manual processing (this should use the same backend service you build for the API, not duplicate logic).
+
+Inventory and safety rules
+
+• Make sure all stock adjustments caused by returns go through the same TransactionService used elsewhere so audit trails stay consistent.
+• If any error occurs while processing a return receive operation, fail the operation cleanly and do NOT partially update items. You can follow the same “validate everything first, then apply” pattern used in bulk PO receipt.
+• Clearly comment where we would need true database transactions in the future if we want perfect atomicity.
+
+Security and risk notes
+
+• Treat all API endpoints as private/secured; whatever auth mechanism is already used for existing APIs should be applied here as well.
+• Do NOT log raw customer PII in plain text beyond what is already logged by the app.
+• For now, the label URLs and tracking numbers are fake; add TODO comments to ensure that when we plug in a real shipping provider we respect their ToS, handle any carrier-specific requirements, and avoid doing anything illegal or against marketplace policies for Amazon/Shopify/etc.
+
+Overall goal:
+Create a clean, well-factored Returns engine with:
+• Schema + models for ReturnRequest, ReturnItem, ReturnShipment.
+• A stubbed label-generation service.
+• API endpoints that GHL workflows can hit to create returns, issue labels, and mark items received.
+• A minimal internal UI to view/manage returns.
+• Re-use of the existing transaction/audit system for inventory changes.
+
+If anything I described already exists partially, reuse and align it instead of duplicating logic or models.

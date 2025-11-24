@@ -695,7 +695,14 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
   const currentStock = item.currentStock ?? 0;
   const dailyUsage = item.dailyUsage ?? 1;
   const daysOfCover = dailyUsage > 0 ? Math.floor(currentStock / dailyUsage) : 0;
-  const suggestedOrderQty = item.primarySupplier?.minimumOrderQuantity || Math.max(dailyUsage * 30, 100);
+  
+  // Calculate suggested order quantity: target 30 days supply minus current stock, clamped to 0
+  const targetStock = Math.max(dailyUsage * 30, 100);
+  const calculatedOrderQty = Math.max(0, targetStock - currentStock);
+  
+  // Respect MOQ if specified, otherwise use calculated quantity
+  const moq = item.primarySupplier?.minimumOrderQuantity || 0;
+  const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>

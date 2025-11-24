@@ -1,0 +1,559 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
+import { Package, ExternalLink, PackageCheck } from "lucide-react";
+import { format } from "date-fns";
+
+interface ReturnRequest {
+  id: string;
+  externalOrderId: string;
+  salesChannel: string;
+  customerName: string;
+  customerEmail: string | null;
+  customerPhone: string | null;
+  ghlContactId: string | null;
+  status: string;
+  resolutionRequested: string;
+  resolutionFinal: string | null;
+  reason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ReturnItem {
+  id: string;
+  returnRequestId: string;
+  inventoryItemId: string;
+  sku: string;
+  qtyRequested: number;
+  qtyApproved: number;
+  qtyReceived: number;
+  disposition: string | null;
+  notes: string | null;
+}
+
+interface ReturnShipment {
+  id: string;
+  returnRequestId: string;
+  carrier: string;
+  trackingNumber: string;
+  labelUrl: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ReturnDetails {
+  returnRequest: ReturnRequest;
+  items: ReturnItem[];
+  shipments: ReturnShipment[];
+}
+
+export default function Returns() {
+  const { toast } = useToast();
+  const [selectedReturnId, setSelectedReturnId] = useState<string | null>(null);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
+
+  const { data: returns, isLoading } = useQuery<ReturnRequest[]>({
+    queryKey: ["/api/returns"],
+  });
+
+  const { data: returnDetails } = useQuery<ReturnDetails>({
+    queryKey: ["/api/returns", selectedReturnId],
+    enabled: !!selectedReturnId,
+  });
+
+  const issueLabelMutation = useMutation({
+    mutationFn: async (returnId: string) => {
+      return await apiRequest(`/api/returns/${returnId}/label`, {
+        method: "POST",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      toast({ title: "Return label issued successfully" });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to issue label",
+        description: error.message,
+      });
+    },
+  });
+
+  const getStatusBadgeVariant = (status: string) => {
+    switch (status) {
+      case 'OPEN':
+        return 'default';
+      case 'LABEL_ISSUED':
+      case 'IN_TRANSIT':
+        return 'secondary';
+      case 'RECEIVED':
+      case 'REFUNDED':
+      case 'REPLACED':
+        return 'default';
+      case 'CANCELLED':
+        return 'outline';
+      default:
+        return 'default';
+    }
+  };
+
+  const getResolutionColor = (resolution: string) => {
+    switch (resolution) {
+      case 'REFUND':
+        return 'text-red-600 dark:text-red-400';
+      case 'REPLACEMENT':
+        return 'text-blue-600 dark:text-blue-400';
+      case 'STORE_CREDIT':
+        return 'text-green-600 dark:text-green-400';
+      default:
+        return '';
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Returns</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage customer return requests and inventory restocking
+          </p>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Return Requests
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="text-center py-8 text-muted-foreground">
+              Loading returns...
+            </div>
+          ) : !returns || returns.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No return requests yet
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order ID</TableHead>
+                    <TableHead>Channel</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Resolution</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {returns.map((returnRequest) => (
+                    <TableRow
+                      key={returnRequest.id}
+                      className="cursor-pointer hover-elevate"
+                      onClick={() => setSelectedReturnId(returnRequest.id)}
+                      data-testid={`row-return-${returnRequest.id}`}
+                    >
+                      <TableCell className="font-medium">
+                        {returnRequest.externalOrderId}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+                      </TableCell>
+                      <TableCell>{returnRequest.customerName}</TableCell>
+                      <TableCell>
+                        <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
+                          {returnRequest.status.replace(/_/g, ' ')}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className={getResolutionColor(returnRequest.resolutionRequested)}>
+                          {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedReturnId(returnRequest.id);
+                            setShowReceiveModal(true);
+                          }}
+                          disabled={returnRequest.status === 'RECEIVED' || returnRequest.status === 'REFUNDED' || returnRequest.status === 'REPLACED'}
+                          data-testid={`button-receive-${returnRequest.id}`}
+                        >
+                          <PackageCheck className="h-4 w-4 mr-1" />
+                          Receive
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedReturnId && returnDetails && !showReceiveModal && (
+        <ReturnDetailsModal
+          returnDetails={returnDetails}
+          onClose={() => setSelectedReturnId(null)}
+          onIssueLabel={() => issueLabelMutation.mutate(selectedReturnId)}
+          isIssuingLabel={issueLabelMutation.isPending}
+        />
+      )}
+
+      {selectedReturnId && returnDetails && showReceiveModal && (
+        <ReceiveReturnModal
+          returnDetails={returnDetails}
+          onClose={() => {
+            setShowReceiveModal(false);
+            setSelectedReturnId(null);
+          }}
+          onSuccess={() => {
+            setShowReceiveModal(false);
+            setSelectedReturnId(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface ReturnDetailsModalProps {
+  returnDetails: ReturnDetails;
+  onClose: () => void;
+  onIssueLabel: () => void;
+  isIssuingLabel: boolean;
+}
+
+function ReturnDetailsModal({
+  returnDetails,
+  onClose,
+  onIssueLabel,
+  isIssuingLabel,
+}: ReturnDetailsModalProps) {
+  const { returnRequest, items, shipments } = returnDetails;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Return Request Details</DialogTitle>
+          <DialogDescription>
+            Order #{returnRequest.externalOrderId} · {returnRequest.customerName}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-muted-foreground">Sales Channel</Label>
+              <p className="font-medium">{returnRequest.salesChannel}</p>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Status</Label>
+              <div className="mt-1">
+                <Badge>{returnRequest.status.replace(/_/g, ' ')}</Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Resolution Requested</Label>
+              <p className="font-medium">{returnRequest.resolutionRequested}</p>
+            </div>
+            {returnRequest.resolutionFinal && (
+              <div>
+                <Label className="text-muted-foreground">Final Resolution</Label>
+                <p className="font-medium">{returnRequest.resolutionFinal}</p>
+              </div>
+            )}
+          </div>
+
+          {returnRequest.reason && (
+            <div>
+              <Label className="text-muted-foreground">Reason</Label>
+              <p className="mt-1">{returnRequest.reason}</p>
+            </div>
+          )}
+
+          <div>
+            <h3 className="font-semibold mb-3">Items</h3>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>SKU</TableHead>
+                  <TableHead className="text-right">Requested</TableHead>
+                  <TableHead className="text-right">Approved</TableHead>
+                  <TableHead className="text-right">Received</TableHead>
+                  <TableHead>Disposition</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-medium">{item.sku}</TableCell>
+                    <TableCell className="text-right">{item.qtyRequested}</TableCell>
+                    <TableCell className="text-right">{item.qtyApproved}</TableCell>
+                    <TableCell className="text-right">{item.qtyReceived}</TableCell>
+                    <TableCell>
+                      {item.disposition ? (
+                        <Badge variant="outline">{item.disposition}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {shipments.length > 0 && (
+            <div>
+              <h3 className="font-semibold mb-3">Shipments</h3>
+              <div className="space-y-2">
+                {shipments.map((shipment) => (
+                  <Card key={shipment.id}>
+                    <CardContent className="pt-4">
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-1">
+                          <p className="font-medium">{shipment.carrier}</p>
+                          <p className="text-sm text-muted-foreground">
+                            Tracking: {shipment.trackingNumber}
+                          </p>
+                          <Badge variant="outline">{shipment.status.replace(/_/g, ' ')}</Badge>
+                        </div>
+                        <Button size="sm" variant="outline" asChild>
+                          <a
+                            href={shipment.labelUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            data-testid="link-label"
+                          >
+                            <ExternalLink className="h-4 w-4 mr-1" />
+                            View Label
+                          </a>
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            {returnRequest.status === 'OPEN' && (
+              <Button
+                onClick={onIssueLabel}
+                disabled={isIssuingLabel}
+                data-testid="button-issue-label"
+              >
+                Issue Return Label
+              </Button>
+            )}
+            <Button variant="outline" onClick={onClose} data-testid="button-close">
+              Close
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface ReceiveReturnModalProps {
+  returnDetails: ReturnDetails;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function ReceiveReturnModal({ returnDetails, onClose, onSuccess }: ReceiveReturnModalProps) {
+  const { toast } = useToast();
+  const [itemsData, setItemsData] = useState(
+    returnDetails.items.map((item) => ({
+      returnItemId: item.id,
+      qtyReceived: item.qtyApproved,
+      disposition: 'RESTOCK' as 'RESTOCK' | 'SCRAP' | 'INSPECT',
+      notes: '',
+    }))
+  );
+  const [resolutionFinal, setResolutionFinal] = useState<string>(
+    returnDetails.returnRequest.resolutionRequested
+  );
+
+  const receiveMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest(`/api/returns/${returnDetails.returnRequest.id}/receive`, {
+        method: "POST",
+        body: JSON.stringify({
+          items: itemsData,
+          resolutionFinal,
+        }),
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      toast({ title: "Return received successfully" });
+      onSuccess();
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to receive return",
+        description: error.message,
+      });
+    },
+  });
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Receive Return</DialogTitle>
+          <DialogDescription>
+            Process incoming return for order #{returnDetails.returnRequest.externalOrderId}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div>
+            <Label>Final Resolution</Label>
+            <Select value={resolutionFinal} onValueChange={setResolutionFinal}>
+              <SelectTrigger data-testid="select-resolution">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="REFUND">Refund</SelectItem>
+                <SelectItem value="REPLACEMENT">Replacement</SelectItem>
+                <SelectItem value="STORE_CREDIT">Store Credit</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <h3 className="font-semibold mb-3">Items</h3>
+            <div className="space-y-4">
+              {itemsData.map((itemData, index) => {
+                const originalItem = returnDetails.items[index];
+                return (
+                  <Card key={itemData.returnItemId}>
+                    <CardContent className="pt-4 space-y-3">
+                      <div className="font-medium">{originalItem.sku}</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <Label>Qty Received</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={originalItem.qtyApproved}
+                            value={itemData.qtyReceived}
+                            onChange={(e) => {
+                              const newData = [...itemsData];
+                              newData[index].qtyReceived = parseInt(e.target.value) || 0;
+                              setItemsData(newData);
+                            }}
+                            data-testid={`input-qty-${originalItem.sku}`}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <Label>Disposition</Label>
+                          <Select
+                            value={itemData.disposition}
+                            onValueChange={(value: any) => {
+                              const newData = [...itemsData];
+                              newData[index].disposition = value;
+                              setItemsData(newData);
+                            }}
+                          >
+                            <SelectTrigger data-testid={`select-disposition-${originalItem.sku}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="RESTOCK">Restock (add back to inventory)</SelectItem>
+                              <SelectItem value="SCRAP">Scrap (damaged/unusable)</SelectItem>
+                              <SelectItem value="INSPECT">Inspect (needs review)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Notes (optional)</Label>
+                        <Textarea
+                          value={itemData.notes}
+                          onChange={(e) => {
+                            const newData = [...itemsData];
+                            newData[index].notes = e.target.value;
+                            setItemsData(newData);
+                          }}
+                          placeholder="Add notes about condition, damage, etc."
+                          data-testid={`textarea-notes-${originalItem.sku}`}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose} data-testid="button-cancel">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => receiveMutation.mutate()}
+              disabled={receiveMutation.isPending}
+              data-testid="button-confirm-receive"
+            >
+              Confirm Receipt
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

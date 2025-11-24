@@ -78,44 +78,55 @@ export default function Suppliers() {
     enabled: !!selectedPO,
   });
 
-  // Calculate Active/Open count (SENT + PARTIAL_RECEIVED + APPROVAL_PENDING + APPROVED)
-  const activeOpenCount = useMemo(() => {
-    if (!poSummary) return 0;
-    return poSummary.sent + poSummary.partialReceived + poSummary.approvalPending + poSummary.approved;
-  }, [poSummary]);
+  // Filter purchase orders
+  const filteredPOs = useMemo(() => {
+    return purchaseOrders.filter(po => {
+      const supplier = suppliers.find(s => s.id === po.supplierId);
+      const supplierName = supplier?.name?.toLowerCase() || '';
+      
+      const matchesSearch = 
+        (po.poNumber?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+        supplierName.includes(searchQuery.toLowerCase());
+      
+      const matchesStatus = statusFilter === 'all' || po.status === statusFilter;
+      const matchesSupplier = supplierFilter === 'all' || String(po.supplierId) === supplierFilter;
 
-  // Calculate business analytics on filtered POs
-  const businessAnalytics = useMemo(() => {
-    const sent = purchaseOrders.filter(po => po.sentAt !== null).length;
-    const paid = purchaseOrders.filter(po => po.paidAt !== null).length;
-    const delivered = purchaseOrders.filter(po => po.receivedAt !== null).length;
+      return matchesSearch && matchesStatus && matchesSupplier;
+    });
+  }, [purchaseOrders, searchQuery, statusFilter, supplierFilter, suppliers]);
+
+  // Calculate analytics from filtered POs
+  const filteredAnalytics = useMemo(() => {
+    // Status counts
+    const total = filteredPOs.length;
+    const draft = filteredPOs.filter(po => po.status === 'DRAFT').length;
+    const approvalPending = filteredPOs.filter(po => po.status === 'APPROVAL_PENDING').length;
+    const activeOpen = filteredPOs.filter(po => 
+      po.status === 'SENT' || 
+      po.status === 'PARTIAL_RECEIVED' || 
+      po.status === 'APPROVAL_PENDING' || 
+      po.status === 'APPROVED'
+    ).length;
     
-    const deliveredPOs = purchaseOrders.filter(po => po.sentAt && po.receivedAt);
+    // Business metrics
+    const sent = filteredPOs.filter(po => po.sentAt !== null).length;
+    const paid = filteredPOs.filter(po => po.paidAt !== null).length;
+    const delivered = filteredPOs.filter(po => po.receivedAt !== null).length;
+    
+    const deliveredPOs = filteredPOs.filter(po => po.sentAt && po.receivedAt);
     let avgDeliveryDays: number | null = null;
     if (deliveredPOs.length > 0) {
       const totalDays = deliveredPOs.reduce((sum, po) => {
-        const sent = new Date(po.sentAt!);
-        const received = new Date(po.receivedAt!);
-        const days = Math.ceil((received.getTime() - sent.getTime()) / (1000 * 60 * 60 * 24));
+        const sentDate = new Date(po.sentAt!);
+        const receivedDate = new Date(po.receivedAt!);
+        const days = Math.ceil((receivedDate.getTime() - sentDate.getTime()) / (1000 * 60 * 60 * 24));
         return sum + days;
       }, 0);
       avgDeliveryDays = Math.round(totalDays / deliveredPOs.length);
     }
     
-    return { sent, paid, delivered, avgDeliveryDays };
-  }, [purchaseOrders]);
-
-  // Filter purchase orders
-  const filteredPOs = purchaseOrders.filter(po => {
-    const matchesSearch = 
-      (po.poNumber?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-      suppliers.find(s => s.id === po.supplierId)?.name.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesStatus = statusFilter === 'all' || po.status === statusFilter;
-    const matchesSupplier = supplierFilter === 'all' || po.supplierId === supplierFilter;
-
-    return matchesSearch && matchesStatus && matchesSupplier;
-  });
+    return { total, draft, approvalPending, activeOpen, sent, paid, delivered, avgDeliveryDays };
+  }, [filteredPOs]);
 
   // Helper to get products ordered summary
   const getProductsSummary = (lines?: PurchaseOrderLine[]) => {
@@ -283,45 +294,75 @@ export default function Suppliers() {
         </TabsList>
 
         <TabsContent value="purchase-orders" className="w-full max-w-full min-w-0 space-y-4">
-          {/* Business Analytics Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card data-testid="card-sent">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">POs Sent</CardTitle>
+          {/* Compact Analytics Cards - 8 cards in 2 rows */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {/* Row 1: Status Overview Cards */}
+            <Card data-testid="card-total" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">Total POs</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{businessAnalytics.sent}</div>
-                <p className="text-xs text-muted-foreground mt-1">Orders sent to suppliers</p>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.total}</div>
               </CardContent>
             </Card>
-            <Card data-testid="card-paid">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">POs Paid</CardTitle>
+            <Card data-testid="card-draft" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">Draft</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{businessAnalytics.paid}</div>
-                <p className="text-xs text-muted-foreground mt-1">Orders fully paid</p>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.draft}</div>
               </CardContent>
             </Card>
-            <Card data-testid="card-delivered">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">POs Delivered</CardTitle>
+            <Card data-testid="card-approval" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">Pending Approval</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{businessAnalytics.delivered}</div>
-                <p className="text-xs text-muted-foreground mt-1">Orders received</p>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.approvalPending}</div>
               </CardContent>
             </Card>
-            <Card data-testid="card-avg-delivery">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Avg Delivery Time</CardTitle>
+            <Card data-testid="card-active" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">Active/Open</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {businessAnalytics.avgDeliveryDays !== null ? businessAnalytics.avgDeliveryDays : '—'}
-                  {businessAnalytics.avgDeliveryDays !== null ? ' days' : ''}
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.activeOpen}</div>
+              </CardContent>
+            </Card>
+            
+            {/* Row 2: Business Metrics Cards */}
+            <Card data-testid="card-sent" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">POs Sent</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.sent}</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-paid" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">POs Paid</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.paid}</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-delivered" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">POs Delivered</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">{filteredAnalytics.delivered}</div>
+              </CardContent>
+            </Card>
+            <Card data-testid="card-avg-delivery" className="h-20">
+              <CardHeader className="pb-1 pt-3">
+                <CardTitle className="text-xs font-medium text-muted-foreground">Avg Delivery</CardTitle>
+              </CardHeader>
+              <CardContent className="pb-2">
+                <div className="text-xl font-bold">
+                  {filteredAnalytics.avgDeliveryDays !== null ? `${filteredAnalytics.avgDeliveryDays}d` : '—'}
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">From sent to received</p>
               </CardContent>
             </Card>
           </div>
@@ -373,7 +414,7 @@ export default function Suppliers() {
                     <SelectContent>
                       <SelectItem value="all">All Suppliers</SelectItem>
                       {suppliers.map(s => (
-                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                        <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

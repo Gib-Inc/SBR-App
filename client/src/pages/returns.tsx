@@ -88,7 +88,7 @@ export default function Returns() {
   });
 
   const { data: returnDetails } = useQuery<ReturnDetails>({
-    queryKey: ["/api/returns", selectedReturnId],
+    queryKey: selectedReturnId ? [`/api/returns/${selectedReturnId}`] : [],
     enabled: !!selectedReturnId,
   });
 

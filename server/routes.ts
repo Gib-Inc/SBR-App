@@ -2482,44 +2482,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Dispute - GHL integration stub for SMS workflow
-  app.post("/api/purchase-orders/:id/dispute", requireAuth, async (req: Request, res: Response) => {
+  // Toggle Dispute - Open or resolve disputes with GHL integration stub
+  app.post("/api/purchase-orders/:id/toggle-dispute", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { reason } = req.body;
+      const { action } = req.body; // 'open' or 'resolve'
       
       const po = await storage.getPurchaseOrder(id);
       if (!po) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
 
-      // Mark PO as having an issue
-      const updated = await storage.updatePurchaseOrder(id, {
-        hasIssue: true,
-        issueStatus: 'OPEN',
-        issueNotes: reason || 'No reason provided',
-        issueType: 'other',
-      });
+      const now = new Date();
+      let updateData: any = {};
 
-      // TODO: Integrate with GoHighLevel SMS workflow
-      // This will trigger a manual SMS workflow in GHL to notify the rep
-      console.log(`[PurchaseOrder] Dispute created for PO ${po.poNumber}:`, {
-        poId: id,
-        poNumber: po.poNumber,
-        supplierId: po.supplierId,
-        ghlRep: po.ghlRepName,
-        reason,
-        // Future: Call GHL API to send SMS to rep
-      });
+      if (action === 'open') {
+        updateData = {
+          hasIssue: true,
+          issueStatus: 'OPEN',
+          issueOpenedAt: now,
+          issueResolvedAt: null,
+        };
 
+        // TODO: Integrate with GoHighLevel SMS workflow
+        // This will trigger a manual SMS workflow in GHL to notify the rep
+        console.log(`[PurchaseOrder] Dispute opened for PO ${po.poNumber}:`, {
+          poId: id,
+          poNumber: po.poNumber,
+          supplierId: po.supplierId,
+          ghlRep: po.ghlRepName,
+          // Future: Call GHL API to send SMS to rep
+        });
+      } else if (action === 'resolve') {
+        updateData = {
+          issueStatus: 'RESOLVED',
+          issueResolvedAt: now,
+        };
+      } else {
+        return res.status(400).json({ error: "Invalid action. Must be 'open' or 'resolve'" });
+      }
+
+      const updated = await storage.updatePurchaseOrder(id, updateData);
       res.json({ 
         success: true, 
-        message: "Dispute created. GHL team will be notified.",
+        message: action === 'open' ? "Dispute opened. GHL team will be notified." : "Dispute resolved.",
         purchaseOrder: updated 
       });
     } catch (error: any) {
-      console.error("[PurchaseOrder] Error creating dispute:", error);
-      res.status(500).json({ error: error.message || "Failed to create dispute" });
+      console.error("[PurchaseOrder] Error toggling dispute:", error);
+      res.status(500).json({ error: error.message || "Failed to update dispute status" });
+    }
+  });
+
+  // Bulk Confirm Receipt - Mark PO as fully received and create RECEIVE transactions
+  app.post("/api/purchase-orders/:id/bulk-confirm-receipt", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const po = await storage.getPurchaseOrder(id);
+      
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      if (!['SENT', 'PARTIAL_RECEIVED'].includes(po.status)) {
+        return res.status(409).json({ error: `Cannot bulk confirm PO in ${po.status} status` });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      
+      // For each line, create RECEIVE transaction for remaining quantity
+      for (const line of lines) {
+        const remaining = line.qtyOrdered - line.qtyReceived;
+        if (remaining > 0) {
+          // Update line received quantity
+          await storage.updatePurchaseOrderLine(line.id, {
+            qtyReceived: line.qtyOrdered,
+          });
+
+          // Create RECEIVE transaction
+          const transaction = await storage.createInventoryTransaction({
+            itemId: line.itemId,
+            transactionType: 'RECEIVE',
+            quantity: remaining,
+            binId: null,
+            purchaseOrderId: id,
+            purchaseOrderLineId: line.id,
+            notes: `Bulk confirm receipt for PO ${po.poNumber}`,
+          });
+
+          // Update item currentStock
+          const item = await storage.getItem(line.itemId);
+          if (item) {
+            await storage.updateItem(line.itemId, {
+              currentStock: (item.currentStock || 0) + remaining,
+            });
+          }
+        }
+      }
+
+      // Update PO status to RECEIVED
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: 'RECEIVED',
+        receivedAt: new Date(),
+      });
+
+      res.json({ 
+        success: true,
+        message: "PO marked as fully received and inventory updated",
+        purchaseOrder: updated 
+      });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error bulk confirming receipt:", error);
+      res.status(500).json({ error: error.message || "Failed to bulk confirm receipt" });
     }
   });
 

@@ -25,6 +25,8 @@ import {
   MessageSquare,
   Brain,
   TrendingDown,
+  Flag,
+  PackageCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -54,6 +56,7 @@ export default function Suppliers() {
   const [supplierFilter, setSupplierFilter] = useState<string>("all");
   const [selectedPO, setSelectedPO] = useState<string | null>(null);
   const [showReceiveDialog, setShowReceiveDialog] = useState(false);
+  const [showConfirmDialog, setShowConfirmDialog] = useState<string | null>(null);
 
   const { data: poSummary } = useQuery<POSummary>({
     queryKey: ['/api/purchase-orders/summary'],
@@ -100,7 +103,7 @@ export default function Suppliers() {
   // Calculate analytics from filtered POs
   const filteredAnalytics = useMemo(() => {
     // Status counts
-    const total = filteredPOs.length;
+    const needsReview = filteredPOs.filter(po => po.issueStatus === 'OPEN').length;
     const draft = filteredPOs.filter(po => po.status === 'DRAFT').length;
     const approvalPending = filteredPOs.filter(po => po.status === 'APPROVAL_PENDING').length;
     const activeOpen = filteredPOs.filter(po => 
@@ -127,7 +130,7 @@ export default function Suppliers() {
       avgDeliveryDays = Math.round(totalDays / deliveredPOs.length);
     }
     
-    return { total, draft, approvalPending, activeOpen, sent, paid, delivered, avgDeliveryDays };
+    return { needsReview, draft, approvalPending, activeOpen, sent, paid, delivered, avgDeliveryDays };
   }, [filteredPOs]);
 
   // Helper to get products ordered summary
@@ -250,22 +253,52 @@ export default function Suppliers() {
     },
   });
 
-  const disputePOMutation = useMutation({
-    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
-      const res = await apiRequest("POST", `/api/purchase-orders/${id}/dispute`, { reason });
+  const toggleDisputeMutation = useMutation({
+    mutationFn: async ({ id, action }: { id: string; action: 'open' | 'resolve' }) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/toggle-dispute`, { action });
       if (!res.ok) {
         const error = await res.json();
-        throw new Error(error.error || "Failed to create dispute");
+        throw new Error(error.error || "Failed to update dispute status");
+      }
+      return res.json();
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
+      toast({ 
+        title: variables.action === 'open' 
+          ? "Dispute opened - GHL team will be notified" 
+          : "Dispute marked as resolved" 
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update dispute",
+        description: error.message,
+        variant: "destructive"
+      });
+    },
+  });
+
+  const bulkConfirmReceiptMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/bulk-confirm-receipt`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to confirm receipt");
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
-      toast({ title: "Dispute initiated - GHL team will be notified" });
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/items'] });
+      toast({ title: "Order marked as fully received and inventory updated" });
+      setShowConfirmDialog(null);
     },
     onError: (error: Error) => {
       toast({
-        title: "Failed to create dispute",
+        title: "Failed to confirm receipt",
         description: error.message,
         variant: "destructive"
       });
@@ -299,12 +332,13 @@ export default function Suppliers() {
           {/* Compact Analytics Cards - 8 cards in 2 rows */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {/* Row 1: Status Overview Cards */}
-            <Card data-testid="card-total" className="h-20">
+            <Card data-testid="card-needs-review" className="h-20">
               <CardHeader className="pb-1 pt-3">
-                <CardTitle className="text-xs font-medium text-muted-foreground">Total POs</CardTitle>
+                <CardTitle className="text-xs font-medium text-muted-foreground">Needs Review</CardTitle>
               </CardHeader>
               <CardContent className="pb-2">
-                <div className="text-xl font-bold">{filteredAnalytics.total}</div>
+                <div className="text-xl font-bold text-destructive">{filteredAnalytics.needsReview}</div>
+                <p className="text-xs text-muted-foreground">POs in dispute</p>
               </CardContent>
             </Card>
             <Card data-testid="card-draft" className="h-20">
@@ -458,8 +492,24 @@ export default function Suppliers() {
                         filteredPOs.map((po) => {
                           const daysToReceive = getDaysToReceive(po.orderDate, po.receivedAt);
                           const orderTotal = getOrderTotal(po.lines);
+                          const canConfirm = po.status === 'SENT' || po.status === 'PARTIAL_RECEIVED';
+                          
                           return (
-                            <tr key={po.id} className="border-b hover-elevate" data-testid={`row-po-${po.id}`}>
+                            <tr 
+                              key={po.id} 
+                              className="border-b hover-elevate cursor-pointer" 
+                              data-testid={`row-po-${po.id}`}
+                              onClick={() => setSelectedPO(po.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSelectedPO(po.id);
+                                }
+                              }}
+                              tabIndex={0}
+                              role="button"
+                              aria-label={`View purchase order ${po.poNumber}`}
+                            >
                               <td className="p-2">
                                 <span className="font-mono text-sm font-medium">{po.poNumber}</span>
                               </td>
@@ -501,41 +551,53 @@ export default function Suppliers() {
                               </td>
                               <td className="sticky right-0 z-10 bg-card p-2 text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                                 <div className="flex items-center justify-end gap-1">
-                                  <Button 
-                                    size="sm" 
-                                    variant="ghost" 
-                                    onClick={() => setSelectedPO(po.id)}
-                                    data-testid={`button-view-po-${po.id}`}
+                                  {/* Dispute / Resolve Icon */}
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const action = po.issueStatus === 'OPEN' ? 'resolve' : 'open';
+                                      toggleDisputeMutation.mutate({ id: po.id, action });
+                                    }}
+                                    disabled={toggleDisputeMutation.isPending}
+                                    data-testid={`button-dispute-${po.id}`}
+                                    title={
+                                      po.issueStatus === 'OPEN' 
+                                        ? "Mark dispute resolved" 
+                                        : po.issueStatus === 'RESOLVED'
+                                        ? "Dispute resolved"
+                                        : "Open dispute & notify in GHL"
+                                    }
                                   >
-                                    View
+                                    <Flag className={`h-4 w-4 ${
+                                      po.issueStatus === 'OPEN' ? 'fill-destructive text-destructive' : 
+                                      po.issueStatus === 'RESOLVED' ? 'text-muted-foreground' : 
+                                      ''
+                                    }`} />
                                   </Button>
-                                  {po.status === 'RECEIVED' && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => confirmReceiptMutation.mutate(po.id)}
-                                      disabled={confirmReceiptMutation.isPending}
-                                      data-testid={`button-confirm-receipt-${po.id}`}
-                                      title="Confirm receipt and update stock"
-                                    >
-                                      <CheckCircle className="h-4 w-4" />
-                                    </Button>
-                                  )}
-                                  {['SENT', 'PARTIAL_RECEIVED', 'RECEIVED'].includes(po.status) && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        const reason = prompt("Describe the issue with this PO:");
-                                        if (reason) disputePOMutation.mutate({ id: po.id, reason });
-                                      }}
-                                      disabled={disputePOMutation.isPending}
-                                      data-testid={`button-dispute-${po.id}`}
-                                      title="Create dispute (GHL)"
-                                    >
-                                      <MessageSquare className="h-4 w-4" />
-                                    </Button>
-                                  )}
+                                  {/* Confirm Received Icon */}
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (canConfirm) {
+                                        setShowConfirmDialog(po.id);
+                                      }
+                                    }}
+                                    disabled={!canConfirm}
+                                    data-testid={`button-confirm-receipt-${po.id}`}
+                                    title={
+                                      canConfirm
+                                        ? "Confirm order received in full"
+                                        : "Receiving not available in this status"
+                                    }
+                                  >
+                                    <PackageCheck className={`h-4 w-4 ${canConfirm ? '' : 'text-muted-foreground'}`} />
+                                  </Button>
                                 </div>
                               </td>
                             </tr>
@@ -846,6 +908,34 @@ export default function Suppliers() {
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Confirm Receipt Dialog */}
+      <Dialog open={!!showConfirmDialog} onOpenChange={() => setShowConfirmDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Full Receipt</DialogTitle>
+            <DialogDescription>
+              Mark this PO as fully received and update inventory based on all ordered quantities?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowConfirmDialog(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (showConfirmDialog) {
+                  bulkConfirmReceiptMutation.mutate(showConfirmDialog);
+                }
+              }}
+              disabled={bulkConfirmReceiptMutation.isPending}
+              data-testid="button-confirm-bulk-receipt"
+            >
+              {bulkConfirmReceiptMutation.isPending ? "Confirming..." : "Confirm"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

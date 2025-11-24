@@ -35,7 +35,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, count, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -215,6 +215,9 @@ export class MemStorage implements IStorage {
       barcodeSource: "AUTO_GENERATED",
       externalSystem: null,
       externalId: null,
+      forecastDirty: true,
+      lastForecastAt: null,
+      forecastData: null,
     });
 
     this.items.set(boltId, {
@@ -237,6 +240,9 @@ export class MemStorage implements IStorage {
       barcodeSource: "AUTO_GENERATED",
       externalSystem: null,
       externalId: null,
+      forecastDirty: true,
+      lastForecastAt: null,
+      forecastData: null,
     });
 
     this.items.set(springId, {
@@ -259,6 +265,9 @@ export class MemStorage implements IStorage {
       barcodeSource: "AUTO_GENERATED",
       externalSystem: null,
       externalId: null,
+      forecastDirty: true,
+      lastForecastAt: null,
+      forecastData: null,
     });
 
     this.items.set(barId, {
@@ -281,6 +290,9 @@ export class MemStorage implements IStorage {
       barcodeSource: "AUTO_GENERATED",
       externalSystem: null,
       externalId: null,
+      forecastDirty: true,
+      lastForecastAt: null,
+      forecastData: null,
     });
 
     // Demo finished product
@@ -305,6 +317,9 @@ export class MemStorage implements IStorage {
       barcodeSource: "AUTO_GENERATED",
       externalSystem: null,
       externalId: null,
+      forecastDirty: false,
+      lastForecastAt: new Date(),
+      forecastData: { shouldReorder: false, urgency: "low", daysOfCover: 90, recommendedOrderQuantity: 0, reasoning: "Demo seed data" },
     });
 
     // BOM for Sticker Bur Roller
@@ -524,6 +539,9 @@ export class MemStorage implements IStorage {
       barcodeSource: insertItem.barcodeSource ?? null,
       externalSystem: insertItem.externalSystem ?? null,
       externalId: insertItem.externalId ?? null,
+      forecastDirty: insertItem.forecastDirty ?? true,
+      lastForecastAt: insertItem.lastForecastAt ?? null,
+      forecastData: insertItem.forecastData ?? null,
     };
     this.items.set(id, item);
     return item;
@@ -727,7 +745,9 @@ export class MemStorage implements IStorage {
       id,
       supplierId: insertSupplierItem.supplierId,
       itemId: insertSupplierItem.itemId,
+      supplierSku: insertSupplierItem.supplierSku ?? null,
       price: insertSupplierItem.price ?? null,
+      minimumOrderQuantity: insertSupplierItem.minimumOrderQuantity ?? null,
       availableQuantity: insertSupplierItem.availableQuantity ?? null,
       leadTimeDays: insertSupplierItem.leadTimeDays ?? null,
       isDesignatedSupplier: insertSupplierItem.isDesignatedSupplier ?? false,
@@ -1147,24 +1167,45 @@ export class PostgresStorage implements IStorage {
     return minCapacity === Infinity ? 0 : minCapacity;
   }
 
-  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number; totalOwned?: number }>> {
-    // Use LEFT JOIN + COUNT to efficiently get BOM counts in a single query
+  async getItemsWithBOMCounts(): Promise<Array<Item & { componentsCount?: number; forecastQty?: number; totalOwned?: number; primarySupplier?: any }>> {
+    // Use LEFT JOIN + COUNT to efficiently get BOM counts and supplier info in a single query
     // Cast COUNT to integer explicitly to ensure consistent numeric type
     const results = await this.db
       .select({
         items: schema.items,
-        componentsCount: drizzleSql<number>`CAST(COUNT(${schema.billOfMaterials.id}) AS INTEGER)`,
+        componentsCount: drizzleSql<number>`CAST(COUNT(DISTINCT ${schema.billOfMaterials.id}) AS INTEGER)`,
+        supplierItem: schema.supplierItems,
+        supplier: schema.suppliers,
       })
       .from(schema.items)
       .leftJoin(
         schema.billOfMaterials,
         eq(schema.items.id, schema.billOfMaterials.finishedProductId)
       )
-      .groupBy(schema.items.id);
+      .leftJoin(
+        schema.supplierItems,
+        and(
+          eq(schema.items.id, schema.supplierItems.itemId),
+          eq(schema.supplierItems.isDesignatedSupplier, true)
+        )
+      )
+      .leftJoin(
+        schema.suppliers,
+        eq(schema.supplierItems.supplierId, schema.suppliers.id)
+      )
+      .groupBy(schema.items.id, schema.supplierItems.id, schema.suppliers.id);
     
     // Calculate forecast and totalOwned for each finished product
     const itemsWithForecast = await Promise.all(
       results.map(async (row) => {
+        const primarySupplier = row.supplierItem && row.supplier ? {
+          supplierName: row.supplier.name,
+          supplierSku: row.supplierItem.supplierSku,
+          unitCost: row.supplierItem.price,
+          minimumOrderQuantity: row.supplierItem.minimumOrderQuantity,
+          leadTimeDays: row.supplierItem.leadTimeDays,
+        } : null;
+        
         if (row.items.type === "finished_product") {
           const forecast = await this.calculateProductionForecast(row.items.id);
           const totalOwned = (row.items.pivotQty ?? 0) + (row.items.hildaleQty ?? 0);
@@ -1173,6 +1214,7 @@ export class PostgresStorage implements IStorage {
             componentsCount: row.componentsCount,
             forecastQty: forecast,
             totalOwned,
+            primarySupplier,
           };
         }
         // For components (non-finished products), return undefined instead of 0
@@ -1181,6 +1223,7 @@ export class PostgresStorage implements IStorage {
           componentsCount: undefined,
           forecastQty: undefined,
           totalOwned: undefined,
+          primarySupplier,
         };
       })
     );

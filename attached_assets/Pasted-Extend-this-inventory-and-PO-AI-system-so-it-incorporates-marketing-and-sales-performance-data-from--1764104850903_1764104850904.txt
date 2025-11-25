@@ -1,0 +1,187 @@
+Extend this inventory and PO AI system so it incorporates marketing and sales performance data from Google Ads, Meta (Facebook/Instagram) Ads, TikTok Ads, Shopify, and Amazon Seller Central, entirely inside this Replit project. Do not rely on n8n or any external orchestration. All ingestion, aggregation, and UI must live in this app’s backend and frontend.
+
+The goal is: for each finished product, the AI and humans can see a unified view of inventory, sales velocity, and ad performance, and we can later plug this data into the AI forecasting prompts.
+
+Add data structures for channels and mappings
+
+In the database/schema, add:
+
+A Channel table that defines canonical channels for this app. At minimum create channels for:
+
+google_ads
+
+meta_ads
+
+tiktok_ads
+
+shopify
+
+amazon
+
+A ProductChannelMapping table that links our internal finished product IDs to external identifiers per channel. Each mapping row must store:
+
+productId (internal finished product id)
+
+channelId (reference to Channel)
+
+externalId (e.g. Shopify product or variant ID, Amazon SKU/ASIN, Google Ads product or conversion identifier, Meta Ads product/conversion identifier, TikTok Ads identifier)
+
+Make these mappings reusable by all ingestion jobs so we do not hardcode external IDs anywhere else.
+
+Add fact tables for ad and sales performance
+
+Add two fact-like tables:
+
+AdPerformanceSnapshot
+
+id
+
+productId
+
+channelId (google_ads, meta_ads, tiktok_ads)
+
+date (daily grain)
+
+impressions
+
+clicks
+
+conversions
+
+revenue (if available from the ad platform)
+
+spend
+
+SalesSnapshot
+
+id
+
+productId
+
+channelId (shopify, amazon)
+
+date (daily grain)
+
+unitsSold
+
+revenue
+
+Integrate these into the existing schema in a way that matches the current ORM / repository patterns used elsewhere.
+
+Implement ingestion services and stubs inside this app
+
+Create dedicated backend services for ingesting metrics into AdPerformanceSnapshot and SalesSnapshot. These must live in this codebase and use the database directly.
+
+For AdPerformanceSnapshot:
+
+Implement functions such as “upsertAdPerformanceSnapshot(channelId, productId, date, metrics)”.
+
+Implement stubbed fetchers for:
+
+Google Ads or GA4 metrics
+
+Meta (Facebook/Instagram) Ads metrics
+
+TikTok Ads metrics
+
+The stubbed fetchers should have clear TODOs and expected input/output shapes so that, once credentials and external IDs are provided, we can wire the real HTTP calls without changing the rest of the code.
+
+For SalesSnapshot:
+
+Implement functions to upsert daily sales metrics per product and channel.
+
+Use the existing infrastructure that already sees orders from Shopify and Amazon through Extensiv and/or direct integrations.
+
+Normalize those orders into this SalesSnapshot table so that, for each product and each day, we know unitsSold and revenue by channel (shopify and amazon).
+
+Create a backend scheduler/job mechanism inside this app (follow the existing pattern for any batch jobs) that will periodically:
+
+Refresh AdPerformanceSnapshot for recent days using the stubbed fetchers.
+
+Refresh SalesSnapshot for recent days using order data already available in this system.
+
+Build a ProductForecastContext aggregation
+
+Add a ProductForecastContext view or materialized table that aggregates, per finished product, all the signals needed for forecasting. For each product, compute and store at minimum:
+
+onHandPivot and onHandHildale (from existing inventory/transactions)
+
+inboundUnits (sum of open POs not yet received)
+
+unitsSold_7d and unitsSold_30d (using SalesSnapshot, summed across channels and also broken out by channel)
+
+adSpend_7d and adSpend_30d per ad channel (from AdPerformanceSnapshot)
+
+conversions_7d per ad channel
+
+ROAS_7d per ad channel (where revenue is available)
+
+daysOfStockLeft based on recent sales velocity and current on-hand + inbound
+
+Build this using the existing transaction, PO, and inventory tables as the source of truth. Make ProductForecastContext easily queryable by both the AI layer and the UI.
+
+Add “Ad & Demand Signals” UI in both Dashboard and AI Agent pages
+
+Add a read-only “Ad & Demand Signals” section to both:
+
+The main Dashboard page.
+
+The AI Agent page (Insights or a new tab under AI Agent).
+
+In both places:
+
+Display a table where each row is a finished product, and columns show:
+
+Product name / SKU
+
+onHandPivot and onHandHildale
+
+inboundUnits
+
+unitsSold_7d and unitsSold_30d
+
+adSpend_7d and ROAS_7d for Google, Meta, and TikTok
+
+unitsSold_7d by channel (shopify and amazon)
+
+daysOfStockLeft
+
+Make the table:
+
+Filterable by product, channel, and date window (7d vs 30d).
+
+Horizontally scrollable inside its card/container only, without introducing page-level horizontal scrolling.
+
+Visually consistent with the existing table styles and cards used on Dashboard and Suppliers.
+
+This UI is for humans and for debugging AI inputs; do not add any AI prompts here yet.
+
+Prepare this data for AI forecasting (without changing existing prompts yet)
+
+Expose a backend function or API endpoint that returns ProductForecastContext for all products in a compact, structured format that is easy for the AI prompts to consume later (for example, a list of rows with all the fields defined above). This should:
+
+Use the ProductForecastContext aggregation.
+
+Be paginated or batched in a way that works with the current AI batch forecasting job.
+
+Do NOT modify the existing forecast prompts or AI workflows in this step. Only provide the data access layer so we can update the AI prompts in a later task to use ProductForecastContext.
+
+Safety and consistency
+
+Keep schema, services, and job scheduling aligned with existing patterns in this codebase (do not invent a completely different style).
+
+Do not hardcode credentials or API keys for Google, Meta, TikTok, Shopify, or Amazon; leave clear placeholders and TODO comments where those will be injected.
+
+Do not log sensitive PII from ad platforms or sales channels beyond what is already logged in the system.
+
+When finished, summarize:
+
+The new tables and how they relate to products and channels.
+
+How AdPerformanceSnapshot and SalesSnapshot are populated.
+
+How ProductForecastContext is computed.
+
+Where the “Ad & Demand Signals” tables appear on the Dashboard and AI Agent pages.
+
+How the AI layer will be able to fetch ProductForecastContext for future forecasting prompts.

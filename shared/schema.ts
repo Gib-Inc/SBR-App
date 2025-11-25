@@ -546,3 +546,173 @@ export const insertReturnShipmentSchema = createInsertSchema(returnShipments).om
 });
 export type InsertReturnShipment = z.infer<typeof insertReturnShipmentSchema>;
 export type ReturnShipment = typeof returnShipments.$inferSelect;
+
+// ============================================================================
+// CHANNELS (Marketing & Sales Channels)
+// ============================================================================
+// Defines canonical channels for ad platforms and sales channels.
+// Used for mapping products to external identifiers and tracking performance.
+
+export const channels = pgTable("channels", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(), // 'google_ads', 'meta_ads', 'tiktok_ads', 'shopify', 'amazon'
+  name: text("name").notNull(), // Display name
+  type: text("type").notNull(), // 'AD_PLATFORM' or 'SALES_CHANNEL'
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+export const insertChannelSchema = createInsertSchema(channels).omit({ id: true });
+export type InsertChannel = z.infer<typeof insertChannelSchema>;
+export type Channel = typeof channels.$inferSelect;
+
+// ============================================================================
+// PRODUCT CHANNEL MAPPING
+// ============================================================================
+// Links internal finished products to external identifiers per channel.
+// Enables tracking of ad performance and sales across platforms.
+
+export const productChannelMappings = pgTable("product_channel_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").notNull().references(() => items.id),
+  channelId: varchar("channel_id").notNull().references(() => channels.id),
+  externalId: text("external_id").notNull(), // Shopify variant ID, Amazon SKU/ASIN, Ad platform product ID
+  externalName: text("external_name"), // External product/variant name for reference
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdIdx: index("product_channel_mappings_product_id_idx").on(table.productId),
+  channelIdIdx: index("product_channel_mappings_channel_id_idx").on(table.channelId),
+  externalIdIdx: index("product_channel_mappings_external_id_idx").on(table.externalId),
+}));
+
+export const insertProductChannelMappingSchema = createInsertSchema(productChannelMappings).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertProductChannelMapping = z.infer<typeof insertProductChannelMappingSchema>;
+export type ProductChannelMapping = typeof productChannelMappings.$inferSelect;
+
+// ============================================================================
+// AD PERFORMANCE SNAPSHOT
+// ============================================================================
+// Daily grain fact table for ad performance metrics from Google Ads, Meta, TikTok.
+
+export const adPerformanceSnapshots = pgTable("ad_performance_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").notNull().references(() => items.id),
+  channelId: varchar("channel_id").notNull().references(() => channels.id),
+  date: timestamp("date").notNull(), // Daily grain
+  impressions: integer("impressions").notNull().default(0),
+  clicks: integer("clicks").notNull().default(0),
+  conversions: real("conversions").notNull().default(0), // Can be fractional (conversion tracking)
+  revenue: real("revenue").notNull().default(0), // Revenue attributed to ads (if available)
+  spend: real("spend").notNull().default(0), // Ad spend for the day
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdIdx: index("ad_performance_snapshots_product_id_idx").on(table.productId),
+  channelIdIdx: index("ad_performance_snapshots_channel_id_idx").on(table.channelId),
+  dateIdx: index("ad_performance_snapshots_date_idx").on(table.date),
+  productChannelDateIdx: index("ad_performance_snapshots_product_channel_date_idx").on(table.productId, table.channelId, table.date),
+}));
+
+export const insertAdPerformanceSnapshotSchema = createInsertSchema(adPerformanceSnapshots).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertAdPerformanceSnapshot = z.infer<typeof insertAdPerformanceSnapshotSchema>;
+export type AdPerformanceSnapshot = typeof adPerformanceSnapshots.$inferSelect;
+
+// ============================================================================
+// SALES SNAPSHOT
+// ============================================================================
+// Daily grain fact table for sales metrics from Shopify, Amazon, and other sales channels.
+
+export const salesSnapshots = pgTable("sales_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").notNull().references(() => items.id),
+  channelId: varchar("channel_id").notNull().references(() => channels.id),
+  date: timestamp("date").notNull(), // Daily grain
+  unitsSold: integer("units_sold").notNull().default(0),
+  revenue: real("revenue").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdIdx: index("sales_snapshots_product_id_idx").on(table.productId),
+  channelIdIdx: index("sales_snapshots_channel_id_idx").on(table.channelId),
+  dateIdx: index("sales_snapshots_date_idx").on(table.date),
+  productChannelDateIdx: index("sales_snapshots_product_channel_date_idx").on(table.productId, table.channelId, table.date),
+}));
+
+export const insertSalesSnapshotSchema = createInsertSchema(salesSnapshots).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertSalesSnapshot = z.infer<typeof insertSalesSnapshotSchema>;
+export type SalesSnapshot = typeof salesSnapshots.$inferSelect;
+
+// ============================================================================
+// PRODUCT FORECAST CONTEXT
+// ============================================================================
+// Aggregated view of all signals needed for AI forecasting per finished product.
+// Combines inventory, PO, sales velocity, ad performance, and stock calculations.
+
+export const productForecastContext = pgTable("product_forecast_context", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").notNull().references(() => items.id).unique(),
+  // Inventory Levels
+  onHandPivot: integer("on_hand_pivot").notNull().default(0),
+  onHandHildale: integer("on_hand_hildale").notNull().default(0),
+  onHandTotal: integer("on_hand_total").notNull().default(0),
+  inboundUnits: integer("inbound_units").notNull().default(0), // Sum of open POs not yet received
+  // Sales Velocity (all channels combined)
+  unitsSold7d: integer("units_sold_7d").notNull().default(0),
+  unitsSold30d: integer("units_sold_30d").notNull().default(0),
+  revenue7d: real("revenue_7d").notNull().default(0),
+  revenue30d: real("revenue_30d").notNull().default(0),
+  // Sales by Channel (Shopify)
+  shopifyUnitsSold7d: integer("shopify_units_sold_7d").notNull().default(0),
+  shopifyUnitsSold30d: integer("shopify_units_sold_30d").notNull().default(0),
+  shopifyRevenue7d: real("shopify_revenue_7d").notNull().default(0),
+  shopifyRevenue30d: real("shopify_revenue_30d").notNull().default(0),
+  // Sales by Channel (Amazon)
+  amazonUnitsSold7d: integer("amazon_units_sold_7d").notNull().default(0),
+  amazonUnitsSold30d: integer("amazon_units_sold_30d").notNull().default(0),
+  amazonRevenue7d: real("amazon_revenue_7d").notNull().default(0),
+  amazonRevenue30d: real("amazon_revenue_30d").notNull().default(0),
+  // Ad Performance (Google Ads)
+  googleAdSpend7d: real("google_ad_spend_7d").notNull().default(0),
+  googleAdSpend30d: real("google_ad_spend_30d").notNull().default(0),
+  googleConversions7d: real("google_conversions_7d").notNull().default(0),
+  googleRoas7d: real("google_roas_7d").notNull().default(0), // Return on Ad Spend
+  // Ad Performance (Meta Ads)
+  metaAdSpend7d: real("meta_ad_spend_7d").notNull().default(0),
+  metaAdSpend30d: real("meta_ad_spend_30d").notNull().default(0),
+  metaConversions7d: real("meta_conversions_7d").notNull().default(0),
+  metaRoas7d: real("meta_roas_7d").notNull().default(0),
+  // Ad Performance (TikTok Ads)
+  tiktokAdSpend7d: real("tiktok_ad_spend_7d").notNull().default(0),
+  tiktokAdSpend30d: real("tiktok_ad_spend_30d").notNull().default(0),
+  tiktokConversions7d: real("tiktok_conversions_7d").notNull().default(0),
+  tiktokRoas7d: real("tiktok_roas_7d").notNull().default(0),
+  // Stock Calculations
+  daysOfStockLeft: real("days_of_stock_left"), // Based on recent sales velocity
+  averageDailySales: real("average_daily_sales").notNull().default(0), // Rolling average
+  // Metadata
+  lastUpdatedAt: timestamp("last_updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdIdx: index("product_forecast_context_product_id_idx").on(table.productId),
+  daysOfStockLeftIdx: index("product_forecast_context_days_of_stock_left_idx").on(table.daysOfStockLeft),
+  lastUpdatedAtIdx: index("product_forecast_context_last_updated_at_idx").on(table.lastUpdatedAt),
+}));
+
+export const insertProductForecastContextSchema = createInsertSchema(productForecastContext).omit({ 
+  id: true,
+  lastUpdatedAt: true 
+});
+export type InsertProductForecastContext = z.infer<typeof insertProductForecastContextSchema>;
+export type ProductForecastContext = typeof productForecastContext.$inferSelect;

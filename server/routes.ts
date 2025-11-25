@@ -3322,6 +3322,7 @@ Generate only the email body text, no subject line.`;
     try {
       const { id } = req.params;
       const { items: receivedItems, resolutionFinal } = req.body;
+      const userId = req.session.userId!;
 
       const returnRequest = await storage.getReturnRequest(id);
       if (!returnRequest) {
@@ -3380,9 +3381,7 @@ Generate only the email body text, no subject line.`;
               type: 'RECEIVE',
               quantity: receivedItem.qtyReceived,
               location: 'Hildale',
-              referenceType: 'RETURN',
-              referenceId: id,
-              notes: `Restocked from return ${returnRequest.externalOrderId}`,
+              notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
               createdBy: userId,
             });
           } else {
@@ -3395,9 +3394,7 @@ Generate only the email body text, no subject line.`;
               type: 'RECEIVE',
               quantity: receivedItem.qtyReceived,
               location: 'Warehouse',
-              referenceType: 'RETURN',
-              referenceId: id,
-              notes: `Restocked from return ${returnRequest.externalOrderId}`,
+              notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
               createdBy: userId,
             });
           }
@@ -3833,6 +3830,18 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Sales Orders] Error cancelling sales order:", error);
       res.status(500).json({ error: error.message || "Failed to cancel sales order" });
+    }
+  });
+
+  // Get all backorder snapshots
+  // GET /api/backorder-snapshots
+  app.get("/api/backorder-snapshots", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const snapshots = await storage.getAllBackorderSnapshots();
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[Backorder Snapshots] Error fetching backorder snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch backorder snapshots" });
     }
   });
 

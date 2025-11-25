@@ -726,6 +726,8 @@ export const productForecastContext = pgTable("product_forecast_context", {
   // Stock Calculations
   daysOfStockLeft: real("days_of_stock_left"), // Based on recent sales velocity
   averageDailySales: real("average_daily_sales").notNull().default(0), // Rolling average
+  // Backorder Information
+  totalBackorderedQty: integer("total_backordered_qty").notNull().default(0), // Total units backordered across all open sales orders
   // Metadata
   lastUpdatedAt: timestamp("last_updated_at").notNull().default(sql`now()`),
 }, (table) => ({

@@ -278,6 +278,7 @@ export interface IStorage {
   deleteSalesOrderLine(id: string): Promise<boolean>;
 
   // Backorder Snapshots
+  getAllBackorderSnapshots(): Promise<BackorderSnapshot[]>;
   getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined>;
   upsertBackorderSnapshot(snapshot: InsertBackorderSnapshot): Promise<BackorderSnapshot>;
   refreshBackorderSnapshot(productId: string): Promise<BackorderSnapshot>;
@@ -2870,6 +2871,10 @@ export class PostgresStorage implements IStorage {
       throw new Error(`Product ${productId} not found`);
     }
 
+    // Fetch backorder snapshot for this product
+    const backorderSnapshot = await this.getBackorderSnapshot(productId);
+    const totalBackorderedQty = backorderSnapshot?.totalBackorderedQty || 0;
+
     const context: InsertProductForecastContext = {
       productId,
       onHandPivot: product.pivotQty || 0,
@@ -2902,6 +2907,7 @@ export class PostgresStorage implements IStorage {
       tiktokRoas7d: 0,
       daysOfStockLeft: null,
       averageDailySales: 0,
+      totalBackorderedQty,
     };
 
     return await this.upsertProductForecastContext(context);
@@ -2980,6 +2986,10 @@ export class PostgresStorage implements IStorage {
   }
 
   // Backorder Snapshots
+  async getAllBackorderSnapshots(): Promise<BackorderSnapshot[]> {
+    return await this.db.select().from(schema.backorderSnapshots);
+  }
+
   async getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined> {
     const results = await this.db.select().from(schema.backorderSnapshots)
       .where(eq(schema.backorderSnapshots.productId, productId));

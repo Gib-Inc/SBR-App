@@ -31,7 +31,8 @@ function ItemTableRow({
   onProduce,
   onViewHistory,
   onReorder,
-  aiRecommendations
+  aiRecommendations,
+  backorderSnapshots
 }: { 
   item: any; 
   onDelete: (item: any) => void;
@@ -42,6 +43,7 @@ function ItemTableRow({
   onViewHistory?: (item: any) => void;
   onReorder?: (item: any) => void;
   aiRecommendations?: any[];
+  backorderSnapshots?: any[];
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -379,6 +381,30 @@ function ItemTableRow({
               {item.pivotQty ?? 0}
             </div>
           )}
+        </td>
+      )}
+
+      {/* Backorders Column (only for finished products) */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle">
+          {(() => {
+            const snapshot = backorderSnapshots?.find((s: any) => s.productId === item.id);
+            const totalBackorderedQty = snapshot?.totalBackorderedQty || 0;
+            const hasBackorders = totalBackorderedQty > 0;
+
+            return (
+              <div className="flex items-center gap-2 justify-end" data-testid={`text-backorders-${item.id}`}>
+                <span className={hasBackorders ? "text-orange-600 dark:text-orange-400 font-medium" : ""}>
+                  {totalBackorderedQty}
+                </span>
+                {hasBackorders && (
+                  <Badge variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-600 dark:border-orange-400">
+                    Backordered
+                  </Badge>
+                )}
+              </div>
+            );
+          })()}
         </td>
       )}
 
@@ -1193,6 +1219,10 @@ export default function BOM() {
     queryKey: ["/api/ai-recommendations"],
   });
 
+  const { data: backorderSnapshots = [] } = useQuery<any[]>({
+    queryKey: ["/api/backorder-snapshots"],
+  });
+
   const allItems = (items as any[]) ?? [];
   
   const filteredItems = allItems.filter((item: any) =>
@@ -1362,6 +1392,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium">Pivot Qty</th>
+                  <th className="p-3 text-right text-sm font-medium">Backorders</th>
                   <th className="p-3 text-center text-sm font-medium">BOM</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
@@ -1377,6 +1408,7 @@ export default function BOM() {
                     onTransfer={setTransferItem}
                     onProduce={setProductionItem}
                     onViewHistory={setHistoryItem}
+                    backorderSnapshots={backorderSnapshots}
                   />
                 ))}
               </tbody>

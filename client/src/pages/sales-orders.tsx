@@ -143,7 +143,6 @@ export default function SalesOrders() {
           ...orderData,
           customerEmail: orderData.customerEmail || null,
           customerPhone: orderData.customerPhone || null,
-          requiredByDate: orderData.requiredByDate || null,
           notes: orderData.notes || null,
           orderDate: new Date(orderData.orderDate).toISOString(),
           requiredByDate: orderData.requiredByDate 

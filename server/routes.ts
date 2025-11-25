@@ -40,7 +40,11 @@ import {
   insertReturnRequestSchema,
   insertReturnItemSchema,
   insertReturnShipmentSchema,
+  insertSalesOrderSchema,
+  insertSalesOrderLineSchema,
+  updateSalesOrderSchema,
   type Item,
+  type SalesOrderLine,
 } from "@shared/schema";
 import { createReturnLabelService } from "./return-label-service";
 
@@ -1295,11 +1299,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (delta !== 0) {
             await storage.createInventoryTransaction({
               itemId: item.id,
-              transactionType: 'INTEGRATION_SYNC',
+              itemType: 'FINISHED',
+              type: 'INTEGRATION_SYNC',
               quantity: delta,
               location: 'Pivot',
               notes: `Extensiv sync: ${oldQty} → ${newQty}`,
-              performedBy: userId,
+              createdBy: userId,
             });
           }
 
@@ -3358,7 +3363,7 @@ Generate only the email body text, no subject line.`;
           notes: receivedItem.notes || null,
         });
 
-        // If disposition is RESTOCK, update inventory using TransactionService
+        // If disposition is RESTOCK, update inventory
         if (receivedItem.disposition === 'RESTOCK') {
           const item = await storage.getItem(returnItem.inventoryItemId);
           if (!item) continue;
@@ -3366,23 +3371,34 @@ Generate only the email body text, no subject line.`;
           // For finished products, restock to Hildale (buffer stock)
           // For components, update currentStock
           if (item.type === 'finished_product') {
-            await TransactionService.createTransaction({
+            await storage.updateItem(item.id, {
+              hildaleQty: item.hildaleQty + receivedItem.qtyReceived
+            });
+            await storage.createInventoryTransaction({
               itemId: item.id,
+              itemType: 'FINISHED',
               type: 'RECEIVE',
               quantity: receivedItem.qtyReceived,
-              location: 'HILDALE',
+              location: 'Hildale',
               referenceType: 'RETURN',
               referenceId: id,
               notes: `Restocked from return ${returnRequest.externalOrderId}`,
+              createdBy: userId,
             });
           } else {
-            await TransactionService.createTransaction({
+            await storage.updateItem(item.id, {
+              currentStock: item.currentStock + receivedItem.qtyReceived
+            });
+            await storage.createInventoryTransaction({
               itemId: item.id,
+              itemType: 'COMPONENT',
               type: 'RECEIVE',
               quantity: receivedItem.qtyReceived,
+              location: 'Warehouse',
               referenceType: 'RETURN',
               referenceId: id,
               notes: `Restocked from return ${returnRequest.externalOrderId}`,
+              createdBy: userId,
             });
           }
         }
@@ -3449,6 +3465,374 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Returns] Error fetching returns:", error);
       res.status(500).json({ error: error.message || "Failed to fetch returns" });
+    }
+  });
+
+  // ============================================================================
+  // SALES ORDERS & BACKORDERS
+  // ============================================================================
+
+  // Get all sales orders with summary info
+  // GET /api/sales-orders
+  app.get("/api/sales-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const orders = await storage.getAllSalesOrders();
+      
+      // Enhance with line counts and total units
+      const ordersWithSummary = await Promise.all(
+        orders.map(async (order) => {
+          const lines = await storage.getSalesOrderLines(order.id);
+          const linesCount = lines.length;
+          const totalUnits = lines.reduce((sum: number, line: SalesOrderLine) => sum + line.qtyOrdered, 0);
+          
+          return {
+            ...order,
+            linesCount,
+            totalUnits,
+          };
+        })
+      );
+
+      // Sort by orderDate DESC
+      ordersWithSummary.sort((a, b) => 
+        new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()
+      );
+
+      res.json(ordersWithSummary);
+    } catch (error: any) {
+      console.error("[Sales Orders] Error fetching sales orders:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch sales orders" });
+    }
+  });
+
+  // Get single sales order with all details
+  // GET /api/sales-orders/:id
+  app.get("/api/sales-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      const lines = await storage.getSalesOrderLines(id);
+
+      res.json({
+        ...order,
+        lines,
+      });
+    } catch (error: any) {
+      console.error("[Sales Orders] Error fetching sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch sales order" });
+    }
+  });
+
+  // Create new sales order with lines and allocation logic
+  // POST /api/sales-orders
+  app.post("/api/sales-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { order: orderData, lines: linesData } = req.body;
+
+      // Validate order data
+      const validatedOrder = insertSalesOrderSchema.parse(orderData);
+
+      // Validate lines data
+      if (!Array.isArray(linesData) || linesData.length === 0) {
+        return res.status(400).json({ error: "At least one order line is required" });
+      }
+
+      const validatedLines = linesData.map((line: any) => 
+        insertSalesOrderLineSchema.parse(line)
+      );
+
+      // Create order first
+      const createdOrder = await storage.createSalesOrder(validatedOrder);
+
+      // Process each line with allocation logic
+      const createdLines = [];
+      const affectedProductIds = new Set<string>();
+
+      for (const lineData of validatedLines) {
+        // Get product to verify it exists and get current stock
+        const product = await storage.getItem(lineData.productId);
+        if (!product) {
+          return res.status(400).json({ 
+            error: `Product not found: ${lineData.productId}` 
+          });
+        }
+
+        // Calculate available stock (hildaleQty + pivotQty for finished products)
+        const availableStock = (product.hildaleQty ?? 0) + (product.pivotQty ?? 0);
+
+        // Set qtyAllocated = min(qtyOrdered, availableStock)
+        const qtyAllocated = Math.min(lineData.qtyOrdered, availableStock);
+
+        // Set backorderQty = max(0, qtyOrdered - qtyAllocated)
+        const backorderQty = Math.max(0, lineData.qtyOrdered - qtyAllocated);
+
+        // Create line with calculated values
+        const line = await storage.createSalesOrderLine({
+          ...lineData,
+          salesOrderId: createdOrder.id,
+          qtyAllocated,
+          backorderQty,
+          qtyShipped: 0,
+        });
+
+        createdLines.push(line);
+        affectedProductIds.add(lineData.productId);
+      }
+
+      // Refresh backorder snapshots for all affected products
+      for (const productId of Array.from(affectedProductIds)) {
+        await storage.refreshBackorderSnapshot(productId);
+      }
+
+      res.status(201).json({
+        ...createdOrder,
+        lines: createdLines,
+      });
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      console.error("[Sales Orders] Error creating sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to create sales order" });
+    }
+  });
+
+  // Update sales order metadata only
+  // PATCH /api/sales-orders/:id
+  app.patch("/api/sales-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Validate using partial schema
+      const validatedData = updateSalesOrderSchema.partial().parse(req.body);
+
+      const updatedOrder = await storage.updateSalesOrder(id, validatedData);
+      if (!updatedOrder) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      res.json(updatedOrder);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      console.error("[Sales Orders] Error updating sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to update sales order" });
+    }
+  });
+
+  // Delete sales order
+  // DELETE /api/sales-orders/:id
+  app.delete("/api/sales-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Get lines to know which products to refresh
+      const lines = await storage.getSalesOrderLines(id);
+      const affectedProductIds = new Set(lines.map((line: SalesOrderLine) => line.productId));
+
+      // Delete order (cascade will delete lines)
+      const success = await storage.deleteSalesOrder(id);
+      if (!success) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Refresh backorder snapshots for all affected products
+      for (const productId of Array.from(affectedProductIds)) {
+        await storage.refreshBackorderSnapshot(productId);
+      }
+
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[Sales Orders] Error deleting sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to delete sales order" });
+    }
+  });
+
+  // Ship allocated quantities and update stock
+  // POST /api/sales-orders/:id/ship
+  app.post("/api/sales-orders/:id/ship", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { lineIds } = req.body;
+
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Get all lines for this order
+      const allLines = await storage.getSalesOrderLines(id);
+
+      // Determine which lines to ship
+      const linesToShip = lineIds && Array.isArray(lineIds)
+        ? allLines.filter((line: SalesOrderLine) => lineIds.includes(line.id))
+        : allLines.filter((line: SalesOrderLine) => line.qtyAllocated > 0);
+
+      if (linesToShip.length === 0) {
+        return res.status(400).json({ error: "No lines available to ship" });
+      }
+
+      const affectedProductIds = new Set<string>();
+      const transactionService = new TransactionService(storage);
+      const userId = req.session.userId!;
+
+      // Process each line being shipped
+      for (const line of linesToShip) {
+        const shipQty = line.qtyAllocated;
+        if (shipQty <= 0) continue;
+
+        // Get current product data
+        const product = await storage.getItem(line.productId);
+        if (!product) {
+          return res.status(400).json({ 
+            error: `Product not found: ${line.productId}` 
+          });
+        }
+
+        // Determine which warehouse to ship from (prioritize Pivot, then Hildale)
+        let location: 'Pivot' | 'Hildale';
+        if ((product.pivotQty ?? 0) >= shipQty) {
+          location = 'Pivot';
+          // Update product stock - decrease pivotQty
+          await storage.updateItem(product.id, {
+            pivotQty: (product.pivotQty ?? 0) - shipQty,
+          });
+        } else if ((product.hildaleQty ?? 0) >= shipQty) {
+          location = 'Hildale';
+          // Update product stock - decrease hildaleQty
+          await storage.updateItem(product.id, {
+            hildaleQty: (product.hildaleQty ?? 0) - shipQty,
+          });
+        } else {
+          // Not enough stock in either location
+          return res.status(400).json({ 
+            error: `Insufficient stock to ship line ${line.sku}` 
+          });
+        }
+
+        // Create SHIP transaction
+        await storage.createInventoryTransaction({
+          itemId: product.id,
+          itemType: 'FINISHED',
+          type: 'SHIP',
+          quantity: -shipQty,
+          location,
+          notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
+          createdBy: userId,
+        });
+
+        // Update line: qtyShipped += shipQty, qtyAllocated = 0, recalculate backorderQty
+        const newQtyShipped = line.qtyShipped + shipQty;
+        const newBackorderQty = line.qtyOrdered - newQtyShipped;
+
+        await storage.updateSalesOrderLine(line.id, {
+          qtyShipped: newQtyShipped,
+          qtyAllocated: 0,
+          backorderQty: newBackorderQty,
+        });
+
+        affectedProductIds.add(line.productId);
+      }
+
+      // Refresh backorder snapshots for affected products
+      for (const productId of Array.from(affectedProductIds)) {
+        await storage.refreshBackorderSnapshot(productId);
+      }
+
+      // Determine order status
+      const updatedLines = await storage.getSalesOrderLines(id);
+      const allFulfilled = updatedLines.every((line: SalesOrderLine) => line.qtyShipped >= line.qtyOrdered);
+      const anyShipped = updatedLines.some((line: SalesOrderLine) => line.qtyShipped > 0);
+
+      let newStatus = order.status;
+      if (allFulfilled) {
+        newStatus = 'FULFILLED';
+      } else if (anyShipped) {
+        newStatus = 'PARTIALLY_FULFILLED';
+      }
+
+      // Update order status if needed
+      if (newStatus !== order.status) {
+        await storage.updateSalesOrder(id, { status: newStatus });
+      }
+
+      // Return updated order with lines
+      const updatedOrder = await storage.getSalesOrder(id);
+      res.json({
+        ...updatedOrder,
+        lines: updatedLines,
+      });
+    } catch (error: any) {
+      console.error("[Sales Orders] Error shipping sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to ship sales order" });
+    }
+  });
+
+  // Mark order as fulfilled
+  // POST /api/sales-orders/:id/fulfill
+  app.post("/api/sales-orders/:id/fulfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const updatedOrder = await storage.updateSalesOrder(id, { 
+        status: 'FULFILLED' 
+      });
+
+      if (!updatedOrder) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      res.json(updatedOrder);
+    } catch (error: any) {
+      console.error("[Sales Orders] Error fulfilling sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to fulfill sales order" });
+    }
+  });
+
+  // Cancel sales order
+  // POST /api/sales-orders/:id/cancel
+  app.post("/api/sales-orders/:id/cancel", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Get all lines
+      const lines = await storage.getSalesOrderLines(id);
+      const affectedProductIds = new Set<string>();
+
+      // Update each line: set qtyAllocated = 0, backorderQty = 0
+      for (const line of lines) {
+        await storage.updateSalesOrderLine(line.id, {
+          qtyAllocated: 0,
+          backorderQty: 0,
+        });
+        affectedProductIds.add(line.productId);
+      }
+
+      // Update order status
+      await storage.updateSalesOrder(id, { status: 'CANCELLED' });
+
+      // Refresh backorder snapshots for all products
+      for (const productId of Array.from(affectedProductIds)) {
+        await storage.refreshBackorderSnapshot(productId);
+      }
+
+      // Return updated order
+      const updatedOrder = await storage.getSalesOrder(id);
+      res.json(updatedOrder);
+    } catch (error: any) {
+      console.error("[Sales Orders] Error cancelling sales order:", error);
+      res.status(500).json({ error: error.message || "Failed to cancel sales order" });
     }
   });
 

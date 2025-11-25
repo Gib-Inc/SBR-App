@@ -740,3 +740,74 @@ export const insertProductForecastContextSchema = createInsertSchema(productFore
 });
 export type InsertProductForecastContext = z.infer<typeof insertProductForecastContextSchema>;
 export type ProductForecastContext = typeof productForecastContext.$inferSelect;
+
+// ============================================================================
+// SALES ORDERS & BACKORDERS
+// ============================================================================
+
+export const salesOrders = pgTable("sales_orders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
+  channel: text("channel").notNull(), // 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+  ghlContactId: text("ghl_contact_id"), // GoHighLevel contact ID
+  status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
+  orderDate: timestamp("order_date").notNull().default(sql`now()`),
+  requiredByDate: timestamp("required_by_date"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  channelIdx: index("sales_orders_channel_idx").on(table.channel),
+  statusIdx: index("sales_orders_status_idx").on(table.status),
+  orderDateIdx: index("sales_orders_order_date_idx").on(table.orderDate),
+  externalOrderIdIdx: index("sales_orders_external_order_id_idx").on(table.externalOrderId),
+}));
+
+export const insertSalesOrderSchema = createInsertSchema(salesOrders).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export const updateSalesOrderSchema = insertSalesOrderSchema.partial();
+export type InsertSalesOrder = z.infer<typeof insertSalesOrderSchema>;
+export type SalesOrder = typeof salesOrders.$inferSelect;
+
+export const salesOrderLines = pgTable("sales_order_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  salesOrderId: varchar("sales_order_id").notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
+  productId: varchar("product_id").notNull().references(() => items.id), // Finished product
+  sku: text("sku").notNull(), // Denormalized for quick reference
+  qtyOrdered: integer("qty_ordered").notNull(),
+  qtyAllocated: integer("qty_allocated").notNull().default(0), // Reserved from available stock
+  qtyShipped: integer("qty_shipped").notNull().default(0),
+  backorderQty: integer("backorder_qty").notNull().default(0), // qtyOrdered - qtyAllocated
+  unitPrice: real("unit_price"), // Optional: price per unit
+  notes: text("notes"),
+}, (table) => ({
+  salesOrderIdIdx: index("sales_order_lines_sales_order_id_idx").on(table.salesOrderId),
+  productIdIdx: index("sales_order_lines_product_id_idx").on(table.productId),
+}));
+
+export const insertSalesOrderLineSchema = createInsertSchema(salesOrderLines).omit({ id: true });
+export const updateSalesOrderLineSchema = insertSalesOrderLineSchema.partial();
+export type InsertSalesOrderLine = z.infer<typeof insertSalesOrderLineSchema>;
+export type SalesOrderLine = typeof salesOrderLines.$inferSelect;
+
+export const backorderSnapshots = pgTable("backorder_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").notNull().references(() => items.id).unique(),
+  totalBackorderedQty: integer("total_backordered_qty").notNull().default(0),
+  lastUpdatedAt: timestamp("last_updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdIdx: index("backorder_snapshots_product_id_idx").on(table.productId),
+}));
+
+export const insertBackorderSnapshotSchema = createInsertSchema(backorderSnapshots).omit({ 
+  id: true,
+  lastUpdatedAt: true 
+});
+export type InsertBackorderSnapshot = z.infer<typeof insertBackorderSnapshotSchema>;
+export type BackorderSnapshot = typeof backorderSnapshots.$inferSelect;

@@ -1,0 +1,158 @@
+I want to add a proper Sales Orders + Backorders module to this app so we can model demand, open commitments, and backorders correctly, and later sync this with Shopify, Amazon, GHL, Extensiv, and ad-driven forecasting. Do not integrate external APIs yet; just design and implement the internal domain, transactions, and UI.
+
+Goals:
+
+Represent real customer orders as SalesOrders inside this app.
+
+Track when demand exceeds available stock as backorders.
+
+Connect SalesOrders and backorders to existing inventory and PO logic, so the AI and humans can see: on-hand, inbound (POs), AND outstanding demand.
+
+Data model
+Add the following entities to the schema, following the same ORM/repository patterns already used:
+
+SalesOrder
+
+id
+
+externalOrderId (string, optional; will later hold Shopify/Amazon IDs)
+
+channel: 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
+
+customerName
+
+customerEmail (optional)
+
+customerPhone (optional)
+
+ghlContactId (optional)
+
+status: 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
+
+orderDate
+
+requiredByDate (optional)
+
+createdAt, updatedAt
+
+SalesOrderLine
+
+id
+
+salesOrderId
+
+productId (finished product)
+
+sku (denormalized)
+
+qtyOrdered
+
+qtyAllocated (how many units of existing or inbound stock are reserved)
+
+qtyShipped
+
+backorderQty (computed or stored; we can store for simplicity)
+
+BackorderSnapshot (optional but recommended)
+
+id
+
+productId
+
+totalBackorderedQty
+
+lastUpdatedAt
+
+Inventory + transaction integration
+
+Extend the existing transaction/stock logic so that:
+
+Creating or updating a SalesOrderLine does not immediately move stock, but it does:
+
+Record demand against the product.
+
+Compute backorderQty = max(0, qtyOrdered - qtyAllocatableFromOnHand).
+
+When we “ship” or “fulfill” an order line later, we:
+
+Create a SHIP (or equivalent) transaction via the existing TransactionService.
+
+Decrease on-hand stock accordingly.
+
+Update qtyShipped and recompute backorderQty.
+
+Introduce a simple allocation rule for now:
+
+When a new order is created or increased:
+
+Allocate available on-hand units first (up to stock) and set qtyAllocated.
+
+Any remaining qtyOrdered beyond on-hand becomes backorderQty.
+
+Do NOT overcomplicate allocation across multiple POs yet; just assume allocation is against on-hand stock for v1.
+
+Make sure totalBackorderedQty per product is updated whenever orders are created, modified, shipped, or cancelled.
+
+UI for Sales Orders and backorders
+
+Add a “Sales Orders” page or tab in the app, consistent with existing navigation.
+
+On this page, show:
+
+A table of SalesOrders with columns: Order ID, Channel, Customer, Status, Order Date, Required By, Total Units, Total Backordered Units, Actions.
+
+Clicking a row opens a detail drawer/modal showing:
+
+Order metadata.
+
+Lines table: product, qtyOrdered, qtyAllocated, qtyShipped, backorderQty.
+
+Simple actions:
+
+Mark as Fulfilled (ships all allocated quantities and closes the order).
+
+Ship Partial (later; for now you can support a basic “Ship all allocatable” action).
+
+On the Products/BOM page:
+
+For finished products, add a read-only column or info chip that shows:
+
+totalBackorderedQty for that product.
+
+optionally, a small breakdown (e.g., “Backordered: 25 units”).
+
+On the AI/Insights side:
+
+Update any product-level context (like ProductForecastContext) to include totalBackorderedQty so we can later use it in forecasting prompts.
+
+Do not change the AI prompts yet; just surface this field in the aggregation.
+
+Backorders and POs
+
+Add logic to the PO creation/reorder flow so that:
+
+When suggesting reorder quantities, we can see both:
+
+Current on-hand + inbound
+
+totalBackorderedQty
+
+For now, simply make this data available to the suggestion logic; do not implement a complex optimization engine. The AI layer will later use this to decide how aggressively to order.
+
+Constraints
+
+Do NOT integrate external APIs (Shopify, Amazon, GHL) in this task; just prepare the internal structures to receive their data via externalOrderId and channel fields.
+
+Do NOT change the existing PO or inventory transaction semantics beyond what is needed to support order shipping.
+
+Keep UI consistent with existing pages and use scrollable tables in cards, not page-level horizontal scroll.
+
+When finished, summarize:
+
+The new entities and how they connect to products and stock.
+
+How backorderQty and totalBackorderedQty are computed and updated.
+
+How Sales Orders appear in the UI and how shipping affects inventory.
+
+How backorder data is exposed to the forecasting/AI context.

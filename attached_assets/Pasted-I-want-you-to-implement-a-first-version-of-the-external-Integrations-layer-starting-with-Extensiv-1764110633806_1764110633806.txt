@@ -1,0 +1,128 @@
+I want you to implement a first version of the external “Integrations” layer, starting with Extensiv. Do NOT do any deep architectural overhaul (no storage-level DB transactions, no multi-tenant redesign). Work inside the existing codebase and patterns you already created.
+
+Goals for this task:
+
+Treat Extensiv as the source of truth for Pivot warehouse stock.
+
+Keep Hildale quantities managed inside this app (production side).
+
+Create a clean integration layer and UI to connect, test, and run Extensiv syncs.
+
+Please implement the following:
+
+A. Integration model and configuration
+
+Add a simple IntegrationConfig model (if one does not exist yet) to store:
+
+id
+
+provider: 'EXTENSIV' | future providers later
+
+apiKey or token
+
+accountName / description
+
+isEnabled
+
+lastSyncAt
+
+lastSyncStatus: 'SUCCESS' | 'FAILED' | 'PENDING'
+
+lastSyncMessage (short text for errors)
+
+Add a way to securely load the Extensiv API key from environment variables (e.g. EXTENSIV_API_KEY) and associate it with the IntegrationConfig row. If the key is missing, show a clear warning in the UI.
+
+For now, assume a single Extensiv account. No multi-tenant behavior needed.
+
+B. Integrations UI (single page)
+
+Add a new “Integrations” page in the left navigation, below “AI Agent”.
+
+On this page, create a card for Extensiv with:
+
+Status pill (Connected / Not Configured / Error).
+
+Last sync time and result message.
+
+Buttons: “Test Connection” and “Sync Now”.
+
+“Test Connection” should call a backend endpoint that:
+
+Uses the configured API key.
+
+Makes a very lightweight Extensiv request (e.g. list warehouses or a small items page).
+
+Updates lastSyncStatus and lastSyncMessage accordingly.
+
+Returns a clear success or error message back to the UI.
+
+“Sync Now” will trigger the stock sync described in section C.
+
+C. Extensiv → Inventory sync (Pivot only)
+
+Implement a small ExtensivClient service class responsible for:
+
+Handling authentication (API key/headers).
+
+Fetching items/SKUs and current on-hand quantities per warehouse.
+
+Handling pagination if Extensiv uses it.
+
+Decide how to map Extensiv data to our existing models:
+
+Assume Pivot warehouse has a known Extensiv warehouse ID; define it as a constant or environment variable.
+
+For each Extensiv item/SKU, try to match it to our internal inventory items using SKU.
+
+If a SKU in Extensiv is unknown in our system, log it in lastSyncMessage and skip it (for now).
+
+For the first version, we only need to sync raw materials and finished products stock for Pivot:
+
+Read on-hand quantity for the Pivot warehouse from Extensiv.
+
+Update our internal “Pivot Qty” field for the matching item to that value.
+
+Do NOT change Hildale quantities here.
+
+Optionally create a simple “INTEGRATION_SYNC” transaction entry for auditing (so the history shows where the change came from).
+
+Sync reliability rules:
+
+Run all updates in a safe loop; if a single item fails, log it and continue with the rest.
+
+At the end, set lastSyncAt and lastSyncStatus with a summary (e.g. “Synced 120 items, 5 unmatched SKUs”).
+
+If the API call itself fails, set lastSyncStatus to FAILED and show the error.
+
+D. UX and safety
+
+On the Integrations page, clearly label Extensiv as:
+“Pivot warehouse inventory will be aligned to Extensiv. Hildale remains managed locally.”
+
+Do NOT automatically sync on every page load. Extensiv sync for now should be:
+
+Manual via the “Sync Now” button.
+
+Plus a simple backend cron/interval stub (e.g. a function we can later wire to run every X hours) but don’t enable any real scheduler unless one already exists.
+
+After “Sync Now” completes, refresh the UI so that:
+
+The Extensiv card shows the updated lastSyncAt and status.
+
+Pivot quantities in the BOM / Stock Inventory tables reflect the new values when those pages are reloaded.
+
+E. Non-goals for this task (important)
+
+Do NOT implement Shopify, Amazon, QuickBooks, or ad network integrations yet. Just Extensiv.
+
+Do NOT attempt to redesign the core transaction architecture or add DB-level transaction support. Use existing patterns (TransactionService etc.).
+
+Do NOT change the AI forecasting logic; simply make sure Pivot quantities are correct so the existing logic works on better data.
+
+When you are done, show me:
+
+Where the IntegrationConfig model lives and how Extensiv is configured.
+
+Screenshots or descriptions of the Integrations page and Extensiv card.
+
+How to run a manual “Sync Now” and what I should expect in the BOM / Stock Inventory tables afterward.

@@ -27,6 +27,8 @@ import {
   type InsertIntegrationHealth,
   type Settings,
   type InsertSettings,
+  type IntegrationConfig,
+  type InsertIntegrationConfig,
   type Barcode,
   type InsertBarcode,
   type BarcodeSettings,
@@ -131,6 +133,13 @@ export interface IStorage {
   getSettings(userId: string): Promise<Settings | undefined>;
   createOrUpdateSettings(settings: InsertSettings): Promise<Settings>;
   updateSettings(userId: string, updates: Partial<Omit<InsertSettings, 'userId'>>): Promise<Settings | undefined>;
+
+  // Integration Configs
+  getAllIntegrationConfigs(userId: string): Promise<IntegrationConfig[]>;
+  getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined>;
+  createIntegrationConfig(config: InsertIntegrationConfig): Promise<IntegrationConfig>;
+  updateIntegrationConfig(id: string, config: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
+  deleteIntegrationConfig(id: string): Promise<boolean>;
 
   // Barcodes
   getAllBarcodes(): Promise<Barcode[]>;
@@ -260,6 +269,7 @@ export class MemStorage implements IStorage {
   private finishedInventorySnapshots: Map<string, FinishedInventorySnapshot>;
   private integrationHealth: Map<string, IntegrationHealth>;
   private settings: Map<string, Settings>;
+  private integrationConfigs: Map<string, IntegrationConfig>;
   private barcodes: Map<string, Barcode>;
   private barcodeSettings: BarcodeSettings | null;
   private importProfiles: Map<string, ImportProfile>;
@@ -285,6 +295,7 @@ export class MemStorage implements IStorage {
     this.finishedInventorySnapshots = new Map();
     this.integrationHealth = new Map();
     this.settings = new Map();
+    this.integrationConfigs = new Map();
     this.barcodes = new Map();
     this.barcodeSettings = null;
     this.importProfiles = new Map();
@@ -1015,6 +1026,45 @@ export class MemStorage implements IStorage {
     const updated: Settings = { ...existing, ...normalized };
     this.settings.set(existing.id, updated);
     return updated;
+  }
+
+  // Integration Configs
+  async getAllIntegrationConfigs(userId: string): Promise<IntegrationConfig[]> {
+    return Array.from(this.integrationConfigs.values()).filter((c) => c.userId === userId);
+  }
+
+  async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
+    return Array.from(this.integrationConfigs.values()).find((c) => c.userId === userId && c.provider === provider);
+  }
+
+  async createIntegrationConfig(insertConfig: InsertIntegrationConfig): Promise<IntegrationConfig> {
+    const id = randomUUID();
+    const config: IntegrationConfig = {
+      id,
+      userId: insertConfig.userId,
+      provider: insertConfig.provider,
+      accountName: insertConfig.accountName ?? null,
+      apiKey: insertConfig.apiKey ?? null,
+      isEnabled: insertConfig.isEnabled ?? true,
+      lastSyncAt: insertConfig.lastSyncAt ?? null,
+      lastSyncStatus: insertConfig.lastSyncStatus ?? null,
+      lastSyncMessage: insertConfig.lastSyncMessage ?? null,
+      config: insertConfig.config ?? null,
+    };
+    this.integrationConfigs.set(id, config);
+    return config;
+  }
+
+  async updateIntegrationConfig(id: string, updates: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined> {
+    const existing = this.integrationConfigs.get(id);
+    if (!existing) return undefined;
+    const updated: IntegrationConfig = { ...existing, ...updates };
+    this.integrationConfigs.set(id, updated);
+    return updated;
+  }
+
+  async deleteIntegrationConfig(id: string): Promise<boolean> {
+    return this.integrationConfigs.delete(id);
   }
 
   // Barcodes
@@ -2052,6 +2102,32 @@ export class PostgresStorage implements IStorage {
     // Apply only the validated updates (Drizzle only updates provided columns)
     const results = await this.db.update(schema.settings).set(normalized).where(eq(schema.settings.userId, userId)).returning();
     return results[0];
+  }
+
+  // Integration Configs
+  async getAllIntegrationConfigs(userId: string): Promise<IntegrationConfig[]> {
+    return await this.db.select().from(schema.integrationConfigs).where(eq(schema.integrationConfigs.userId, userId));
+  }
+
+  async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
+    const results = await this.db.select().from(schema.integrationConfigs)
+      .where(and(eq(schema.integrationConfigs.userId, userId), eq(schema.integrationConfigs.provider, provider)));
+    return results[0];
+  }
+
+  async createIntegrationConfig(insertConfig: InsertIntegrationConfig): Promise<IntegrationConfig> {
+    const results = await this.db.insert(schema.integrationConfigs).values(insertConfig).returning();
+    return results[0];
+  }
+
+  async updateIntegrationConfig(id: string, updates: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined> {
+    const results = await this.db.update(schema.integrationConfigs).set(updates).where(eq(schema.integrationConfigs.id, id)).returning();
+    return results[0];
+  }
+
+  async deleteIntegrationConfig(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.integrationConfigs).where(eq(schema.integrationConfigs.id, id)).returning();
+    return results.length > 0;
   }
 
   // Barcodes

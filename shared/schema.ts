@@ -300,6 +300,29 @@ export type PatchSettings = z.infer<typeof patchSettingsSchema>;
 export type Settings = typeof settings.$inferSelect;
 
 // ============================================================================
+// INTEGRATION CONFIGS (External System Connections)
+// ============================================================================
+
+export const integrationConfigs = pgTable("integration_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  provider: text("provider").notNull(), // 'EXTENSIV', 'SHOPIFY', 'AMAZON', etc.
+  accountName: text("account_name"), // Descriptive name
+  apiKey: text("api_key"), // Stored securely (can also use env var)
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"), // 'SUCCESS', 'FAILED', 'PENDING'
+  lastSyncMessage: text("last_sync_message"), // Error details or summary
+  config: jsonb("config"), // Provider-specific configuration (warehouse IDs, etc.)
+}, (table) => ({
+  userProviderIdx: index("integration_configs_user_provider_idx").on(table.userId, table.provider),
+}));
+
+export const insertIntegrationConfigSchema = createInsertSchema(integrationConfigs).omit({ id: true });
+export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSchema>;
+export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
+
+// ============================================================================
 // BARCODES
 // ============================================================================
 

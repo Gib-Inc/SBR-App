@@ -1370,6 +1370,8 @@ export class MemStorage implements IStorage {
       status: insertPO.status ?? 'DRAFT',
       hasIssue: insertPO.hasIssue ?? false,
       issueStatus: insertPO.issueStatus ?? 'NONE',
+      issueOpenedAt: insertPO.issueOpenedAt ?? null,
+      issueResolvedAt: insertPO.issueResolvedAt ?? null,
       issueType: insertPO.issueType ?? null,
       issueNotes: insertPO.issueNotes ?? null,
       refundStatus: insertPO.refundStatus ?? 'NONE',

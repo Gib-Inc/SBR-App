@@ -95,7 +95,7 @@ const STATUS_COLORS = {
 
 const orderLineSchema = z.object({
   productId: z.string().min(1, "Product is required"),
-  qtyOrdered: z.number().min(1, "Quantity must be at least 1"),
+  qtyOrdered: z.coerce.number().min(1, "Quantity must be at least 1"),
 });
 
 const newOrderSchema = z.object({
@@ -165,6 +165,8 @@ export default function SalesOrders() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/backorder-snapshots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-forecast-context"] });
       toast({ title: "Sales order created successfully" });
       setShowNewOrderDialog(false);
     },
@@ -186,6 +188,9 @@ export default function SalesOrders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders", selectedOrderId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/backorder-snapshots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-forecast-context"] });
       toast({ title: "Order shipped successfully" });
     },
     onError: (error: Error) => {
@@ -206,6 +211,8 @@ export default function SalesOrders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders", selectedOrderId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/backorder-snapshots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-forecast-context"] });
       toast({ title: "Order marked as fulfilled" });
     },
     onError: (error: Error) => {
@@ -226,6 +233,8 @@ export default function SalesOrders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders", selectedOrderId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/backorder-snapshots"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/product-forecast-context"] });
       toast({ title: "Order cancelled" });
       setSelectedOrderId(null);
     },

@@ -3224,6 +3224,180 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // MULTI-CHANNEL MARKETING & SALES INTEGRATION
+  // ============================================================================
+
+  // Get all channels
+  // GET /api/channels
+  app.get("/api/channels", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const channels = await storage.getAllChannels();
+      res.json(channels);
+    } catch (error: any) {
+      console.error("[Channels] Error fetching channels:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch channels" });
+    }
+  });
+
+  // Get channel by ID
+  // GET /api/channels/:id
+  app.get("/api/channels/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const channel = await storage.getChannel(id);
+      if (!channel) {
+        return res.status(404).json({ error: "Channel not found" });
+      }
+      res.json(channel);
+    } catch (error: any) {
+      console.error("[Channels] Error fetching channel:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch channel" });
+    }
+  });
+
+  // Get all product channel mappings
+  // GET /api/product-channel-mappings
+  app.get("/api/product-channel-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const mappings = await storage.getAllProductChannelMappings();
+      res.json(mappings);
+    } catch (error: any) {
+      console.error("[Mappings] Error fetching mappings:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch mappings" });
+    }
+  });
+
+  // Get product channel mappings by product ID
+  // GET /api/products/:productId/channel-mappings
+  app.get("/api/products/:productId/channel-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      const mappings = await storage.getProductChannelMappingsByProduct(productId);
+      res.json(mappings);
+    } catch (error: any) {
+      console.error("[Mappings] Error fetching product mappings:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch product mappings" });
+    }
+  });
+
+  // Create product channel mapping
+  // POST /api/product-channel-mappings
+  app.post("/api/product-channel-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const mapping = await storage.createProductChannelMapping(req.body);
+      res.status(201).json(mapping);
+    } catch (error: any) {
+      console.error("[Mappings] Error creating mapping:", error);
+      res.status(500).json({ error: error.message || "Failed to create mapping" });
+    }
+  });
+
+  // Delete product channel mapping
+  // DELETE /api/product-channel-mappings/:id
+  app.delete("/api/product-channel-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const success = await storage.deleteProductChannelMapping(id);
+      if (!success) {
+        return res.status(404).json({ error: "Mapping not found" });
+      }
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[Mappings] Error deleting mapping:", error);
+      res.status(500).json({ error: error.message || "Failed to delete mapping" });
+    }
+  });
+
+  // Get ad performance snapshots by product
+  // GET /api/products/:productId/ad-performance
+  app.get("/api/products/:productId/ad-performance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      const { startDate, endDate } = req.query;
+      
+      const start = startDate ? new Date(startDate as string) : undefined;
+      const end = endDate ? new Date(endDate as string) : undefined;
+      
+      const snapshots = await storage.getAdPerformanceSnapshotsByProduct(productId, start, end);
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[Ad Performance] Error fetching snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ad performance" });
+    }
+  });
+
+  // Get sales snapshots by product
+  // GET /api/products/:productId/sales
+  app.get("/api/products/:productId/sales", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      const { startDate, endDate } = req.query;
+      
+      const start = startDate ? new Date(startDate as string) : undefined;
+      const end = endDate ? new Date(endDate as string) : undefined;
+      
+      const snapshots = await storage.getSalesSnapshotsByProduct(productId, start, end);
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[Sales] Error fetching snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch sales data" });
+    }
+  });
+
+  // Get product forecast context for all products
+  // GET /api/forecast-context
+  app.get("/api/forecast-context", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const contexts = await storage.getAllProductForecastContexts();
+      res.json(contexts);
+    } catch (error: any) {
+      console.error("[Forecast] Error fetching contexts:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch forecast contexts" });
+    }
+  });
+
+  // Get product forecast context by product ID
+  // GET /api/products/:productId/forecast-context
+  app.get("/api/products/:productId/forecast-context", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      const context = await storage.getProductForecastContext(productId);
+      if (!context) {
+        return res.status(404).json({ error: "Forecast context not found" });
+      }
+      res.json(context);
+    } catch (error: any) {
+      console.error("[Forecast] Error fetching context:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch forecast context" });
+    }
+  });
+
+  // Refresh forecast context for a specific product
+  // POST /api/products/:productId/refresh-forecast
+  app.post("/api/products/:productId/refresh-forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { productId } = req.params;
+      const context = await storage.refreshProductForecastContext(productId);
+      res.json(context);
+    } catch (error: any) {
+      console.error("[Forecast] Error refreshing context:", error);
+      res.status(500).json({ error: error.message || "Failed to refresh forecast context" });
+    }
+  });
+
+  // Refresh forecast context for all products
+  // POST /api/refresh-all-forecasts
+  app.post("/api/refresh-all-forecasts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      await storage.refreshAllProductForecastContexts();
+      res.json({ message: "All forecast contexts refreshed successfully" });
+    } catch (error: any) {
+      console.error("[Forecast] Error refreshing all contexts:", error);
+      res.status(500).json({ error: error.message || "Failed to refresh all forecast contexts" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

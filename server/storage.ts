@@ -45,6 +45,16 @@ import {
   type InsertReturnItem,
   type ReturnShipment,
   type InsertReturnShipment,
+  type Channel,
+  type InsertChannel,
+  type ProductChannelMapping,
+  type InsertProductChannelMapping,
+  type AdPerformanceSnapshot,
+  type InsertAdPerformanceSnapshot,
+  type SalesSnapshot,
+  type InsertSalesSnapshot,
+  type ProductForecastContext,
+  type InsertProductForecastContext,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -201,6 +211,41 @@ export interface IStorage {
   getReturnShipmentsByRequestId(returnRequestId: string): Promise<ReturnShipment[]>;
   createReturnShipment(shipment: InsertReturnShipment): Promise<ReturnShipment>;
   updateReturnShipment(id: string, shipment: Partial<InsertReturnShipment>): Promise<ReturnShipment | undefined>;
+
+  // Channels
+  getAllChannels(): Promise<Channel[]>;
+  getChannel(id: string): Promise<Channel | undefined>;
+  getChannelByCode(code: string): Promise<Channel | undefined>;
+  createChannel(channel: InsertChannel): Promise<Channel>;
+  updateChannel(id: string, channel: Partial<InsertChannel>): Promise<Channel | undefined>;
+
+  // Product Channel Mappings
+  getAllProductChannelMappings(): Promise<ProductChannelMapping[]>;
+  getProductChannelMappingsByProduct(productId: string): Promise<ProductChannelMapping[]>;
+  getProductChannelMappingsByChannel(channelId: string): Promise<ProductChannelMapping[]>;
+  getProductChannelMapping(productId: string, channelId: string): Promise<ProductChannelMapping | undefined>;
+  createProductChannelMapping(mapping: InsertProductChannelMapping): Promise<ProductChannelMapping>;
+  updateProductChannelMapping(id: string, mapping: Partial<InsertProductChannelMapping>): Promise<ProductChannelMapping | undefined>;
+  deleteProductChannelMapping(id: string): Promise<boolean>;
+
+  // Ad Performance Snapshots
+  getAllAdPerformanceSnapshots(): Promise<AdPerformanceSnapshot[]>;
+  getAdPerformanceSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]>;
+  getAdPerformanceSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]>;
+  upsertAdPerformanceSnapshot(snapshot: InsertAdPerformanceSnapshot): Promise<AdPerformanceSnapshot>;
+
+  // Sales Snapshots
+  getAllSalesSnapshots(): Promise<SalesSnapshot[]>;
+  getSalesSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]>;
+  getSalesSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]>;
+  upsertSalesSnapshot(snapshot: InsertSalesSnapshot): Promise<SalesSnapshot>;
+
+  // Product Forecast Context
+  getAllProductForecastContexts(): Promise<ProductForecastContext[]>;
+  getProductForecastContext(productId: string): Promise<ProductForecastContext | undefined>;
+  upsertProductForecastContext(context: InsertProductForecastContext): Promise<ProductForecastContext>;
+  refreshProductForecastContext(productId: string): Promise<ProductForecastContext>;
+  refreshAllProductForecastContexts(): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -2263,6 +2308,248 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.returnShipments.id, id))
       .returning();
     return results[0];
+  }
+
+  // Channels
+  async getAllChannels(): Promise<Channel[]> {
+    return await this.db.select().from(schema.channels);
+  }
+
+  async getChannel(id: string): Promise<Channel | undefined> {
+    const results = await this.db.select().from(schema.channels).where(eq(schema.channels.id, id));
+    return results[0];
+  }
+
+  async getChannelByCode(code: string): Promise<Channel | undefined> {
+    const results = await this.db.select().from(schema.channels).where(eq(schema.channels.code, code));
+    return results[0];
+  }
+
+  async createChannel(channel: InsertChannel): Promise<Channel> {
+    const results = await this.db.insert(schema.channels).values(channel).returning();
+    return results[0];
+  }
+
+  async updateChannel(id: string, updates: Partial<InsertChannel>): Promise<Channel | undefined> {
+    const results = await this.db.update(schema.channels).set(updates).where(eq(schema.channels.id, id)).returning();
+    return results[0];
+  }
+
+  // Product Channel Mappings
+  async getAllProductChannelMappings(): Promise<ProductChannelMapping[]> {
+    return await this.db.select().from(schema.productChannelMappings);
+  }
+
+  async getProductChannelMappingsByProduct(productId: string): Promise<ProductChannelMapping[]> {
+    return await this.db.select().from(schema.productChannelMappings).where(eq(schema.productChannelMappings.productId, productId));
+  }
+
+  async getProductChannelMappingsByChannel(channelId: string): Promise<ProductChannelMapping[]> {
+    return await this.db.select().from(schema.productChannelMappings).where(eq(schema.productChannelMappings.channelId, channelId));
+  }
+
+  async getProductChannelMapping(productId: string, channelId: string): Promise<ProductChannelMapping | undefined> {
+    const results = await this.db.select().from(schema.productChannelMappings)
+      .where(and(
+        eq(schema.productChannelMappings.productId, productId),
+        eq(schema.productChannelMappings.channelId, channelId)
+      ));
+    return results[0];
+  }
+
+  async createProductChannelMapping(mapping: InsertProductChannelMapping): Promise<ProductChannelMapping> {
+    const results = await this.db.insert(schema.productChannelMappings).values(mapping).returning();
+    return results[0];
+  }
+
+  async updateProductChannelMapping(id: string, updates: Partial<InsertProductChannelMapping>): Promise<ProductChannelMapping | undefined> {
+    const results = await this.db.update(schema.productChannelMappings)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.productChannelMappings.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteProductChannelMapping(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.productChannelMappings).where(eq(schema.productChannelMappings.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Ad Performance Snapshots
+  async getAllAdPerformanceSnapshots(): Promise<AdPerformanceSnapshot[]> {
+    return await this.db.select().from(schema.adPerformanceSnapshots);
+  }
+
+  async getAdPerformanceSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]> {
+    if (startDate && endDate) {
+      return await this.db.select().from(schema.adPerformanceSnapshots)
+        .where(and(
+          eq(schema.adPerformanceSnapshots.productId, productId),
+          drizzleSql`${schema.adPerformanceSnapshots.date} >= ${startDate}`,
+          drizzleSql`${schema.adPerformanceSnapshots.date} <= ${endDate}`
+        ));
+    }
+    
+    return await this.db.select().from(schema.adPerformanceSnapshots)
+      .where(eq(schema.adPerformanceSnapshots.productId, productId));
+  }
+
+  async getAdPerformanceSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]> {
+    if (startDate && endDate) {
+      return await this.db.select().from(schema.adPerformanceSnapshots)
+        .where(and(
+          eq(schema.adPerformanceSnapshots.channelId, channelId),
+          drizzleSql`${schema.adPerformanceSnapshots.date} >= ${startDate}`,
+          drizzleSql`${schema.adPerformanceSnapshots.date} <= ${endDate}`
+        ));
+    }
+    
+    return await this.db.select().from(schema.adPerformanceSnapshots)
+      .where(eq(schema.adPerformanceSnapshots.channelId, channelId));
+  }
+
+  async upsertAdPerformanceSnapshot(snapshot: InsertAdPerformanceSnapshot): Promise<AdPerformanceSnapshot> {
+    const results = await this.db.insert(schema.adPerformanceSnapshots)
+      .values(snapshot)
+      .onConflictDoUpdate({
+        target: [schema.adPerformanceSnapshots.productId, schema.adPerformanceSnapshots.channelId, schema.adPerformanceSnapshots.date],
+        set: {
+          impressions: snapshot.impressions,
+          clicks: snapshot.clicks,
+          conversions: snapshot.conversions,
+          revenue: snapshot.revenue,
+          spend: snapshot.spend,
+          updatedAt: drizzleSql`now()`
+        }
+      })
+      .returning();
+    return results[0];
+  }
+
+  // Sales Snapshots
+  async getAllSalesSnapshots(): Promise<SalesSnapshot[]> {
+    return await this.db.select().from(schema.salesSnapshots);
+  }
+
+  async getSalesSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]> {
+    if (startDate && endDate) {
+      return await this.db.select().from(schema.salesSnapshots)
+        .where(and(
+          eq(schema.salesSnapshots.productId, productId),
+          drizzleSql`${schema.salesSnapshots.date} >= ${startDate}`,
+          drizzleSql`${schema.salesSnapshots.date} <= ${endDate}`
+        ));
+    }
+    
+    return await this.db.select().from(schema.salesSnapshots)
+      .where(eq(schema.salesSnapshots.productId, productId));
+  }
+
+  async getSalesSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]> {
+    if (startDate && endDate) {
+      return await this.db.select().from(schema.salesSnapshots)
+        .where(and(
+          eq(schema.salesSnapshots.channelId, channelId),
+          drizzleSql`${schema.salesSnapshots.date} >= ${startDate}`,
+          drizzleSql`${schema.salesSnapshots.date} <= ${endDate}`
+        ));
+    }
+    
+    return await this.db.select().from(schema.salesSnapshots)
+      .where(eq(schema.salesSnapshots.channelId, channelId));
+  }
+
+  async upsertSalesSnapshot(snapshot: InsertSalesSnapshot): Promise<SalesSnapshot> {
+    const results = await this.db.insert(schema.salesSnapshots)
+      .values(snapshot)
+      .onConflictDoUpdate({
+        target: [schema.salesSnapshots.productId, schema.salesSnapshots.channelId, schema.salesSnapshots.date],
+        set: {
+          unitsSold: snapshot.unitsSold,
+          revenue: snapshot.revenue,
+          updatedAt: drizzleSql`now()`
+        }
+      })
+      .returning();
+    return results[0];
+  }
+
+  // Product Forecast Context
+  async getAllProductForecastContexts(): Promise<ProductForecastContext[]> {
+    return await this.db.select().from(schema.productForecastContext);
+  }
+
+  async getProductForecastContext(productId: string): Promise<ProductForecastContext | undefined> {
+    const results = await this.db.select().from(schema.productForecastContext)
+      .where(eq(schema.productForecastContext.productId, productId));
+    return results[0];
+  }
+
+  async upsertProductForecastContext(context: InsertProductForecastContext): Promise<ProductForecastContext> {
+    const results = await this.db.insert(schema.productForecastContext)
+      .values(context)
+      .onConflictDoUpdate({
+        target: schema.productForecastContext.productId,
+        set: {
+          ...context,
+          lastUpdatedAt: drizzleSql`now()`
+        }
+      })
+      .returning();
+    return results[0];
+  }
+
+  async refreshProductForecastContext(productId: string): Promise<ProductForecastContext> {
+    // TODO: Implement comprehensive aggregation logic
+    // For now, create a stub entry
+    const product = await this.getItem(productId);
+    if (!product) {
+      throw new Error(`Product ${productId} not found`);
+    }
+
+    const context: InsertProductForecastContext = {
+      productId,
+      onHandPivot: product.pivotQty || 0,
+      onHandHildale: product.hildaleQty || 0,
+      onHandTotal: (product.pivotQty || 0) + (product.hildaleQty || 0),
+      inboundUnits: 0, // TODO: Calculate from open POs
+      unitsSold7d: 0,
+      unitsSold30d: 0,
+      revenue7d: 0,
+      revenue30d: 0,
+      shopifyUnitsSold7d: 0,
+      shopifyUnitsSold30d: 0,
+      shopifyRevenue7d: 0,
+      shopifyRevenue30d: 0,
+      amazonUnitsSold7d: 0,
+      amazonUnitsSold30d: 0,
+      amazonRevenue7d: 0,
+      amazonRevenue30d: 0,
+      googleAdSpend7d: 0,
+      googleAdSpend30d: 0,
+      googleConversions7d: 0,
+      googleRoas7d: 0,
+      metaAdSpend7d: 0,
+      metaAdSpend30d: 0,
+      metaConversions7d: 0,
+      metaRoas7d: 0,
+      tiktokAdSpend7d: 0,
+      tiktokAdSpend30d: 0,
+      tiktokConversions7d: 0,
+      tiktokRoas7d: 0,
+      daysOfStockLeft: null,
+      averageDailySales: 0,
+    };
+
+    return await this.upsertProductForecastContext(context);
+  }
+
+  async refreshAllProductForecastContexts(): Promise<void> {
+    const products = await this.db.select().from(schema.items).where(eq(schema.items.type, 'finished_product'));
+    
+    for (const product of products) {
+      await this.refreshProductForecastContext(product.id);
+    }
   }
 }
 

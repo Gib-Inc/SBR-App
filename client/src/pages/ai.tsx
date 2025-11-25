@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { AdDemandSignals } from "@/components/ad-demand-signals";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
 
@@ -474,6 +475,9 @@ export default function AIAgent() {
 
         {/* Insights Tab */}
         <TabsContent value="insights" className="space-y-4">
+          {/* Ad & Demand Signals */}
+          <AdDemandSignals variant="ai-agent" />
+
           <Card>
             <CardHeader>
               <CardTitle>AI Recommendation History</CardTitle>

@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { AdDemandSignals } from "@/components/ad-demand-signals";
 
 export default function Dashboard() {
   const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
@@ -409,6 +410,9 @@ export default function Dashboard() {
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* Ad & Demand Signals */}
+      <AdDemandSignals variant="dashboard" />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* At-Risk Items */}

@@ -3581,9 +3581,10 @@ Generate only the email body text, no subject line.`;
         affectedProductIds.add(lineData.productId);
       }
 
-      // Refresh backorder snapshots for all affected products
+      // Refresh backorder snapshots and forecast context for all affected products
       for (const productId of Array.from(affectedProductIds)) {
         await storage.refreshBackorderSnapshot(productId);
+        await storage.refreshProductForecastContext(productId);
       }
 
       res.status(201).json({
@@ -3639,9 +3640,10 @@ Generate only the email body text, no subject line.`;
         return res.status(404).json({ error: "Sales order not found" });
       }
 
-      // Refresh backorder snapshots for all affected products
+      // Refresh backorder snapshots and forecast context for all affected products
       for (const productId of Array.from(affectedProductIds)) {
         await storage.refreshBackorderSnapshot(productId);
+        await storage.refreshProductForecastContext(productId);
       }
 
       res.status(204).send();
@@ -3737,9 +3739,10 @@ Generate only the email body text, no subject line.`;
         affectedProductIds.add(line.productId);
       }
 
-      // Refresh backorder snapshots for affected products
+      // Refresh backorder snapshots and forecast context for affected products
       for (const productId of Array.from(affectedProductIds)) {
         await storage.refreshBackorderSnapshot(productId);
+        await storage.refreshProductForecastContext(productId);
       }
 
       // Determine order status
@@ -3819,9 +3822,10 @@ Generate only the email body text, no subject line.`;
       // Update order status
       await storage.updateSalesOrder(id, { status: 'CANCELLED' });
 
-      // Refresh backorder snapshots for all products
+      // Refresh backorder snapshots and forecast context for all products
       for (const productId of Array.from(affectedProductIds)) {
         await storage.refreshBackorderSnapshot(productId);
+        await storage.refreshProductForecastContext(productId);
       }
 
       // Return updated order

@@ -1484,6 +1484,111 @@ export class MemStorage implements IStorage {
     this.returnShipments.set(id, updated);
     return updated;
   }
+
+  // Channels (Stubs - MemStorage not used in production)
+  async getAllChannels(): Promise<Channel[]> {
+    throw new Error("Channels not supported in MemStorage");
+  }
+
+  async getChannel(id: string): Promise<Channel | undefined> {
+    throw new Error("Channels not supported in MemStorage");
+  }
+
+  async getChannelByCode(code: string): Promise<Channel | undefined> {
+    throw new Error("Channels not supported in MemStorage");
+  }
+
+  async createChannel(channel: InsertChannel): Promise<Channel> {
+    throw new Error("Channels not supported in MemStorage");
+  }
+
+  async updateChannel(id: string, channel: Partial<InsertChannel>): Promise<Channel | undefined> {
+    throw new Error("Channels not supported in MemStorage");
+  }
+
+  // Product Channel Mappings (Stubs)
+  async getAllProductChannelMappings(): Promise<ProductChannelMapping[]> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async getProductChannelMappingsByProduct(productId: string): Promise<ProductChannelMapping[]> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async getProductChannelMappingsByChannel(channelId: string): Promise<ProductChannelMapping[]> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async getProductChannelMapping(productId: string, channelId: string): Promise<ProductChannelMapping | undefined> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async createProductChannelMapping(mapping: InsertProductChannelMapping): Promise<ProductChannelMapping> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async updateProductChannelMapping(id: string, mapping: Partial<InsertProductChannelMapping>): Promise<ProductChannelMapping | undefined> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  async deleteProductChannelMapping(id: string): Promise<boolean> {
+    throw new Error("Product channel mappings not supported in MemStorage");
+  }
+
+  // Ad Performance Snapshots (Stubs)
+  async getAllAdPerformanceSnapshots(): Promise<AdPerformanceSnapshot[]> {
+    throw new Error("Ad performance snapshots not supported in MemStorage");
+  }
+
+  async getAdPerformanceSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]> {
+    throw new Error("Ad performance snapshots not supported in MemStorage");
+  }
+
+  async getAdPerformanceSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<AdPerformanceSnapshot[]> {
+    throw new Error("Ad performance snapshots not supported in MemStorage");
+  }
+
+  async upsertAdPerformanceSnapshot(snapshot: InsertAdPerformanceSnapshot): Promise<AdPerformanceSnapshot> {
+    throw new Error("Ad performance snapshots not supported in MemStorage");
+  }
+
+  // Sales Snapshots (Stubs)
+  async getAllSalesSnapshots(): Promise<SalesSnapshot[]> {
+    throw new Error("Sales snapshots not supported in MemStorage");
+  }
+
+  async getSalesSnapshotsByProduct(productId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]> {
+    throw new Error("Sales snapshots not supported in MemStorage");
+  }
+
+  async getSalesSnapshotsByChannel(channelId: string, startDate?: Date, endDate?: Date): Promise<SalesSnapshot[]> {
+    throw new Error("Sales snapshots not supported in MemStorage");
+  }
+
+  async upsertSalesSnapshot(snapshot: InsertSalesSnapshot): Promise<SalesSnapshot> {
+    throw new Error("Sales snapshots not supported in MemStorage");
+  }
+
+  // Product Forecast Context (Stubs)
+  async getAllProductForecastContexts(): Promise<ProductForecastContext[]> {
+    throw new Error("Product forecast context not supported in MemStorage");
+  }
+
+  async getProductForecastContext(productId: string): Promise<ProductForecastContext | undefined> {
+    throw new Error("Product forecast context not supported in MemStorage");
+  }
+
+  async upsertProductForecastContext(context: InsertProductForecastContext): Promise<ProductForecastContext> {
+    throw new Error("Product forecast context not supported in MemStorage");
+  }
+
+  async refreshProductForecastContext(productId: string): Promise<ProductForecastContext> {
+    throw new Error("Product forecast context not supported in MemStorage");
+  }
+
+  async refreshAllProductForecastContexts(): Promise<void> {
+    throw new Error("Product forecast context not supported in MemStorage");
+  }
 }
 
 export class PostgresStorage implements IStorage {

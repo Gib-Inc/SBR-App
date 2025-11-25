@@ -6,6 +6,7 @@ import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
 import { ImportService } from "./import-service";
 import { TransactionService } from "./transaction-service";
+import { ExtensivClient } from "./services/extensiv-client";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
@@ -1060,6 +1061,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // INTEGRATION CONFIGS
+  // ============================================================================
+  
+  // Get all integration configs for user
+  app.get("/api/integration-configs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const configs = await storage.getAllIntegrationConfigs(userId);
+      res.json(configs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch integration configs" });
+    }
+  });
+
+  // Get specific integration config
+  app.get("/api/integration-configs/:provider", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const provider = req.params.provider.toUpperCase();
+      const config = await storage.getIntegrationConfig(userId, provider);
+      
+      if (!config) {
+        return res.status(404).json({ error: "Integration config not found" });
+      }
+      
+      res.json(config);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch integration config" });
+    }
+  });
+
+  // Create new integration config
+  app.post("/api/integration-configs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { provider, accountName, apiKey, config } = req.body;
+
+      if (!provider) {
+        return res.status(400).json({ error: "Provider is required" });
+      }
+
+      // Check if config already exists
+      const existing = await storage.getIntegrationConfig(userId, provider.toUpperCase());
+      if (existing) {
+        return res.status(409).json({ error: "Integration config already exists" });
+      }
+
+      const newConfig = await storage.createIntegrationConfig({
+        userId,
+        provider: provider.toUpperCase(),
+        accountName: accountName || null,
+        apiKey: apiKey || null,
+        isEnabled: true,
+        config: config || null,
+      });
+
+      res.status(201).json(newConfig);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create integration config" });
+    }
+  });
+
+  // Update integration config
+  app.patch("/api/integration-configs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const updates = req.body;
+      const updated = await storage.updateIntegrationConfig(req.params.id, updates);
+
+      if (!updated) {
+        return res.status(404).json({ error: "Integration config not found" });
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to update integration config" });
+    }
+  });
+
+  // Delete integration config
+  app.delete("/api/integration-configs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteIntegrationConfig(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Integration config not found" });
+      }
+      res.status(204).send();
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to delete integration config" });
+    }
+  });
+
+  // ============================================================================
   // INTEGRATIONS (Stubs)
   // ============================================================================
   
@@ -1100,29 +1193,159 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Extensiv - Test Connection
+  app.post("/api/integrations/extensiv/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get API key from integration config or environment variable
+      const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Extensiv API key not configured. Please add it in Settings or set EXTENSIV_API_KEY environment variable." 
+        });
+      }
+
+      const client = new ExtensivClient(apiKey);
+      const result = await client.testConnection();
+
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to test Extensiv connection" 
+      });
+    }
+  });
+
   // Extensiv/Pivot - Sync finished inventory
   app.post("/api/integrations/extensiv/sync", requireAuth, async (req: Request, res: Response) => {
     try {
-      // Stub implementation - would call Extensiv API
+      const userId = req.session.userId!;
       
-      // Simulate successful connection
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "extensiv",
-        lastSuccessAt: new Date(),
-        lastStatus: "connected",
-        lastAlertAt: null,
-        errorMessage: null,
+      // Get API key from integration config or environment variable
+      const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      
+      if (!apiKey) {
+        const message = "Extensiv API key not configured";
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, {
+            lastSyncAt: new Date(),
+            lastSyncStatus: 'FAILED',
+            lastSyncMessage: message,
+          });
+        }
+        return res.status(400).json({ success: false, message });
+      }
+
+      // Get Pivot warehouse ID from config or environment variable
+      const pivotWarehouseId = (config?.config as any)?.pivotWarehouseId || process.env.PIVOT_WAREHOUSE_ID || '1';
+
+      const client = new ExtensivClient(apiKey);
+      
+      // Set status to PENDING
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'PENDING',
+          lastSyncMessage: 'Sync in progress...',
+        });
+      }
+
+      // Fetch all inventory from Extensiv for Pivot warehouse
+      console.log(`[Extensiv] Fetching inventory for warehouse ${pivotWarehouseId}...`);
+      const extensivItems = await client.getAllInventory(pivotWarehouseId);
+      console.log(`[Extensiv] Fetched ${extensivItems.length} items from Extensiv`);
+
+      let syncedCount = 0;
+      const unmatchedSkus: string[] = [];
+      const errors: string[] = [];
+
+      // Update Pivot quantities for matching SKUs
+      for (const extensivItem of extensivItems) {
+        try {
+          const item = await storage.getItemBySku(extensivItem.sku);
+          
+          if (!item) {
+            unmatchedSkus.push(extensivItem.sku);
+            continue;
+          }
+
+          // Calculate the difference to update
+          const oldQty = item.pivotQty;
+          const newQty = extensivItem.quantity;
+          const delta = newQty - oldQty;
+
+          // Update pivotQty
+          await storage.updateItem(item.id, { pivotQty: newQty });
+
+          // Create audit trail transaction
+          if (delta !== 0) {
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              transactionType: 'INTEGRATION_SYNC',
+              quantity: delta,
+              location: 'Pivot',
+              notes: `Extensiv sync: ${oldQty} → ${newQty}`,
+              performedBy: userId,
+            });
+          }
+
+          syncedCount++;
+        } catch (error: any) {
+          errors.push(`${extensivItem.sku}: ${error.message}`);
+          console.error(`[Extensiv] Failed to sync ${extensivItem.sku}:`, error);
+        }
+      }
+
+      const summary = `Synced ${syncedCount} items. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      const hasErrors = errors.length > 0;
+      
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: hasErrors ? 'FAILED' : 'SUCCESS',
+          lastSyncMessage: summary,
+        });
+      }
+
+      res.json({
+        success: !hasErrors,
+        syncedItems: syncedCount,
+        unmatchedSkus,
+        errors,
+        message: summary,
       });
-      
-      res.json({ success: true, message: "Finished inventory sync initiated (stub)" });
     } catch (error: any) {
-      // Record failure in integration health
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "extensiv",
-        lastStatus: "failed",
-        errorMessage: error.message || "Integration sync failed",
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      
+      // Record failure in integration config
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message || "Sync failed",
+        });
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Integration sync failed" 
       });
-      res.status(500).json({ error: error.message || "Integration sync failed" });
     }
   });
 

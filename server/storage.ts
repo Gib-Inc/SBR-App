@@ -57,6 +57,12 @@ import {
   type InsertSalesSnapshot,
   type ProductForecastContext,
   type InsertProductForecastContext,
+  type SalesOrder,
+  type InsertSalesOrder,
+  type SalesOrderLine,
+  type InsertSalesOrderLine,
+  type BackorderSnapshot,
+  type InsertBackorderSnapshot,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -255,6 +261,27 @@ export interface IStorage {
   upsertProductForecastContext(context: InsertProductForecastContext): Promise<ProductForecastContext>;
   refreshProductForecastContext(productId: string): Promise<ProductForecastContext>;
   refreshAllProductForecastContexts(): Promise<void>;
+
+  // Sales Orders
+  getAllSalesOrders(): Promise<SalesOrder[]>;
+  getSalesOrder(id: string): Promise<SalesOrder | undefined>;
+  getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined>;
+  createSalesOrder(order: InsertSalesOrder): Promise<SalesOrder>;
+  updateSalesOrder(id: string, order: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined>;
+  deleteSalesOrder(id: string): Promise<boolean>;
+
+  // Sales Order Lines
+  getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]>;
+  getSalesOrderLine(id: string): Promise<SalesOrderLine | undefined>;
+  createSalesOrderLine(line: InsertSalesOrderLine): Promise<SalesOrderLine>;
+  updateSalesOrderLine(id: string, line: Partial<InsertSalesOrderLine>): Promise<SalesOrderLine | undefined>;
+  deleteSalesOrderLine(id: string): Promise<boolean>;
+
+  // Backorder Snapshots
+  getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined>;
+  upsertBackorderSnapshot(snapshot: InsertBackorderSnapshot): Promise<BackorderSnapshot>;
+  refreshBackorderSnapshot(productId: string): Promise<BackorderSnapshot>;
+  refreshAllBackorderSnapshots(): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -282,6 +309,9 @@ export class MemStorage implements IStorage {
   private returnRequests: Map<string, ReturnRequest>;
   private returnItems: Map<string, ReturnItem>;
   private returnShipments: Map<string, ReturnShipment>;
+  private salesOrders: Map<string, SalesOrder>;
+  private salesOrderLines: Map<string, SalesOrderLine>;
+  private backorderSnapshots: Map<string, BackorderSnapshot>;
 
   constructor() {
     this.users = new Map();
@@ -308,6 +338,9 @@ export class MemStorage implements IStorage {
     this.returnRequests = new Map();
     this.returnItems = new Map();
     this.returnShipments = new Map();
+    this.salesOrders = new Map();
+    this.salesOrderLines = new Map();
+    this.backorderSnapshots = new Map();
     this.seedData();
   }
 
@@ -1639,6 +1672,155 @@ export class MemStorage implements IStorage {
   async refreshAllProductForecastContexts(): Promise<void> {
     throw new Error("Product forecast context not supported in MemStorage");
   }
+
+  // Sales Orders
+  async getAllSalesOrders(): Promise<SalesOrder[]> {
+    return Array.from(this.salesOrders.values());
+  }
+
+  async getSalesOrder(id: string): Promise<SalesOrder | undefined> {
+    return this.salesOrders.get(id);
+  }
+
+  async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {
+    const order = this.salesOrders.get(id);
+    if (!order) return undefined;
+    
+    const lines = Array.from(this.salesOrderLines.values())
+      .filter(line => line.salesOrderId === id);
+    
+    return { ...order, lines };
+  }
+
+  async createSalesOrder(insertOrder: InsertSalesOrder): Promise<SalesOrder> {
+    const id = randomUUID();
+    const now = new Date();
+    const order: SalesOrder = {
+      id,
+      ...insertOrder,
+      externalOrderId: insertOrder.externalOrderId ?? null,
+      status: insertOrder.status ?? 'DRAFT',
+      orderDate: insertOrder.orderDate ?? now,
+      customerEmail: insertOrder.customerEmail ?? null,
+      customerPhone: insertOrder.customerPhone ?? null,
+      ghlContactId: insertOrder.ghlContactId ?? null,
+      requiredByDate: insertOrder.requiredByDate ?? null,
+      notes: insertOrder.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.salesOrders.set(id, order);
+    return order;
+  }
+
+  async updateSalesOrder(id: string, updates: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined> {
+    const order = this.salesOrders.get(id);
+    if (!order) return undefined;
+    const updated = { ...order, ...updates, updatedAt: new Date() };
+    this.salesOrders.set(id, updated);
+    return updated;
+  }
+
+  async deleteSalesOrder(id: string): Promise<boolean> {
+    return this.salesOrders.delete(id);
+  }
+
+  // Sales Order Lines
+  async getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]> {
+    return Array.from(this.salesOrderLines.values())
+      .filter(line => line.salesOrderId === salesOrderId);
+  }
+
+  async getSalesOrderLine(id: string): Promise<SalesOrderLine | undefined> {
+    return this.salesOrderLines.get(id);
+  }
+
+  async createSalesOrderLine(insertLine: InsertSalesOrderLine): Promise<SalesOrderLine> {
+    const id = randomUUID();
+    const line: SalesOrderLine = {
+      id,
+      ...insertLine,
+      qtyAllocated: insertLine.qtyAllocated ?? 0,
+      qtyShipped: insertLine.qtyShipped ?? 0,
+      backorderQty: insertLine.backorderQty ?? 0,
+      unitPrice: insertLine.unitPrice ?? null,
+      notes: insertLine.notes ?? null,
+    };
+    this.salesOrderLines.set(id, line);
+    return line;
+  }
+
+  async updateSalesOrderLine(id: string, updates: Partial<InsertSalesOrderLine>): Promise<SalesOrderLine | undefined> {
+    const line = this.salesOrderLines.get(id);
+    if (!line) return undefined;
+    const updated = { ...line, ...updates };
+    this.salesOrderLines.set(id, updated);
+    return updated;
+  }
+
+  async deleteSalesOrderLine(id: string): Promise<boolean> {
+    return this.salesOrderLines.delete(id);
+  }
+
+  // Backorder Snapshots
+  async getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined> {
+    return Array.from(this.backorderSnapshots.values())
+      .find(snapshot => snapshot.productId === productId);
+  }
+
+  async upsertBackorderSnapshot(insertSnapshot: InsertBackorderSnapshot): Promise<BackorderSnapshot> {
+    const existing = await this.getBackorderSnapshot(insertSnapshot.productId);
+    
+    if (existing) {
+      const updated: BackorderSnapshot = {
+        ...existing,
+        totalBackorderedQty: insertSnapshot.totalBackorderedQty ?? 0,
+        lastUpdatedAt: new Date(),
+      };
+      this.backorderSnapshots.set(existing.id, updated);
+      return updated;
+    }
+    
+    const id = randomUUID();
+    const snapshot: BackorderSnapshot = {
+      id,
+      productId: insertSnapshot.productId,
+      totalBackorderedQty: insertSnapshot.totalBackorderedQty ?? 0,
+      lastUpdatedAt: new Date(),
+    };
+    this.backorderSnapshots.set(id, snapshot);
+    return snapshot;
+  }
+
+  async refreshBackorderSnapshot(productId: string): Promise<BackorderSnapshot> {
+    const lines = Array.from(this.salesOrderLines.values())
+      .filter(line => line.productId === productId);
+    
+    const nonCancelledLines = await Promise.all(
+      lines.map(async (line) => {
+        const order = await this.getSalesOrder(line.salesOrderId);
+        return order && order.status !== 'CANCELLED' ? line : null;
+      })
+    );
+    
+    const totalBackorderedQty = nonCancelledLines
+      .filter((line): line is SalesOrderLine => line !== null)
+      .reduce((sum, line) => sum + (line.backorderQty || 0), 0);
+    
+    return await this.upsertBackorderSnapshot({
+      productId,
+      totalBackorderedQty,
+    });
+  }
+
+  async refreshAllBackorderSnapshots(): Promise<void> {
+    const allProducts = Array.from(this.items.values())
+      .filter(item => item.type === 'finished_product');
+    
+    for (const product of allProducts) {
+      await this.refreshBackorderSnapshot(product.id);
+    }
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -2730,6 +2912,121 @@ export class PostgresStorage implements IStorage {
     
     for (const product of products) {
       await this.refreshProductForecastContext(product.id);
+    }
+  }
+
+  // Sales Orders
+  async getAllSalesOrders(): Promise<SalesOrder[]> {
+    return await this.db.select().from(schema.salesOrders);
+  }
+
+  async getSalesOrder(id: string): Promise<SalesOrder | undefined> {
+    const results = await this.db.select().from(schema.salesOrders).where(eq(schema.salesOrders.id, id));
+    return results[0];
+  }
+
+  async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {
+    const order = await this.getSalesOrder(id);
+    if (!order) return undefined;
+    
+    const lines = await this.getSalesOrderLines(id);
+    return { ...order, lines };
+  }
+
+  async createSalesOrder(insertOrder: InsertSalesOrder): Promise<SalesOrder> {
+    const results = await this.db.insert(schema.salesOrders).values(insertOrder).returning();
+    return results[0];
+  }
+
+  async updateSalesOrder(id: string, updates: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined> {
+    const results = await this.db.update(schema.salesOrders)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.salesOrders.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteSalesOrder(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.salesOrders).where(eq(schema.salesOrders.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Sales Order Lines
+  async getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]> {
+    return await this.db.select().from(schema.salesOrderLines).where(eq(schema.salesOrderLines.salesOrderId, salesOrderId));
+  }
+
+  async getSalesOrderLine(id: string): Promise<SalesOrderLine | undefined> {
+    const results = await this.db.select().from(schema.salesOrderLines).where(eq(schema.salesOrderLines.id, id));
+    return results[0];
+  }
+
+  async createSalesOrderLine(insertLine: InsertSalesOrderLine): Promise<SalesOrderLine> {
+    const results = await this.db.insert(schema.salesOrderLines).values(insertLine).returning();
+    return results[0];
+  }
+
+  async updateSalesOrderLine(id: string, updates: Partial<InsertSalesOrderLine>): Promise<SalesOrderLine | undefined> {
+    const results = await this.db.update(schema.salesOrderLines)
+      .set(updates)
+      .where(eq(schema.salesOrderLines.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteSalesOrderLine(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.salesOrderLines).where(eq(schema.salesOrderLines.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Backorder Snapshots
+  async getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined> {
+    const results = await this.db.select().from(schema.backorderSnapshots)
+      .where(eq(schema.backorderSnapshots.productId, productId));
+    return results[0];
+  }
+
+  async upsertBackorderSnapshot(insertSnapshot: InsertBackorderSnapshot): Promise<BackorderSnapshot> {
+    const results = await this.db.insert(schema.backorderSnapshots)
+      .values(insertSnapshot)
+      .onConflictDoUpdate({
+        target: [schema.backorderSnapshots.productId],
+        set: {
+          totalBackorderedQty: insertSnapshot.totalBackorderedQty,
+          lastUpdatedAt: drizzleSql`now()`
+        }
+      })
+      .returning();
+    return results[0];
+  }
+
+  async refreshBackorderSnapshot(productId: string): Promise<BackorderSnapshot> {
+    const result = await this.db
+      .select({
+        totalBackorderedQty: drizzleSql<number>`CAST(COALESCE(SUM(${schema.salesOrderLines.backorderQty}), 0) AS INTEGER)`,
+      })
+      .from(schema.salesOrderLines)
+      .leftJoin(schema.salesOrders, eq(schema.salesOrderLines.salesOrderId, schema.salesOrders.id))
+      .where(
+        and(
+          eq(schema.salesOrderLines.productId, productId),
+          drizzleSql`${schema.salesOrders.status} != 'CANCELLED'`
+        )
+      );
+    
+    const totalBackorderedQty = result[0]?.totalBackorderedQty ?? 0;
+    
+    return await this.upsertBackorderSnapshot({
+      productId,
+      totalBackorderedQty,
+    });
+  }
+
+  async refreshAllBackorderSnapshots(): Promise<void> {
+    const products = await this.db.select().from(schema.items).where(eq(schema.items.type, 'finished_product'));
+    
+    for (const product of products) {
+      await this.refreshBackorderSnapshot(product.id);
     }
   }
 }

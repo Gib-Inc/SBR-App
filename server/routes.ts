@@ -1186,8 +1186,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       );
       
       if (canUseLLM) {
+        // Normalize provider name (handle "Custom Endpoint" → "custom")
+        const normalizedProvider = settings.llmProvider?.toLowerCase().replace(/\s+/g, "_") === "custom_endpoint" 
+          ? "custom" 
+          : settings.llmProvider!;
+        
         const recommendations = await LLMService.generateLLMReorderRecommendations(
-          settings.llmProvider as any,
+          normalizedProvider as any,
           settings.llmApiKey || undefined,
           settings.llmCustomEndpoint || undefined
         );

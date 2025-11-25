@@ -12,27 +12,37 @@ import { refreshAllProductForecastContexts } from "./forecast-context-service";
  */
 
 interface ChannelSchedule {
-  channelId: number;
+  channelId: string;
   channelName: string;
   timer: NodeJS.Timeout;
   intervalHours: number;
 }
 
-const channelSchedules: Map<number, ChannelSchedule> = new Map();
+const channelSchedules: Map<string, ChannelSchedule> = new Map();
 let forecastContextTimer: NodeJS.Timeout | null = null;
 
 /**
  * Performs a data refresh for a specific channel
  */
-async function performChannelRefresh(channelId: number, channelName: string, channelType: string): Promise<void> {
+async function performChannelRefresh(channelId: string, channelName: string, channelType: string): Promise<void> {
   console.log(`[Scheduler] Refreshing ${channelName} (ID: ${channelId})...`);
   const startTime = Date.now();
 
   try {
-    if (channelType === 'advertising') {
+    if (!channelType) {
+      console.warn(`[Scheduler] Channel type is null/undefined for channel ${channelName} (ID: ${channelId}). Skipping refresh.`);
+      return;
+    }
+
+    const normalizedType = channelType.toUpperCase();
+    
+    if (normalizedType === 'AD_PLATFORM' || normalizedType === 'ADVERTISING') {
       await refreshAdPerformanceData(channelId, 7); // Last 7 days
-    } else if (channelType === 'sales') {
+    } else if (normalizedType === 'SALES_CHANNEL' || normalizedType === 'SALES') {
       await refreshSalesData(channelId, 30); // Last 30 days
+    } else {
+      console.warn(`[Scheduler] Unsupported channel type "${channelType}" for channel ${channelName} (ID: ${channelId}). Skipping refresh.`);
+      return;
     }
 
     const duration = Date.now() - startTime;
@@ -45,7 +55,13 @@ async function performChannelRefresh(channelId: number, channelName: string, cha
 /**
  * Schedules a single channel for periodic refresh
  */
-function scheduleChannel(channelId: number, channelName: string, channelType: string, intervalHours: number): void {
+function scheduleChannel(channelId: string, channelName: string, channelType: string, intervalHours: number): void {
+  // Validate sync interval
+  if (!intervalHours || intervalHours <= 0) {
+    console.error(`[Scheduler] Invalid sync interval (${intervalHours}) for channel ${channelName}. Skipping.`);
+    return;
+  }
+
   // Clear existing schedule if present
   const existing = channelSchedules.get(channelId);
   if (existing) {
@@ -76,7 +92,7 @@ function scheduleChannel(channelId: number, channelName: string, channelType: st
 /**
  * Unschedules a specific channel
  */
-function unscheduleChannel(channelId: number): void {
+function unscheduleChannel(channelId: string): void {
   const schedule = channelSchedules.get(channelId);
   if (schedule) {
     clearInterval(schedule.timer);
@@ -110,16 +126,18 @@ export async function startScheduler(): Promise<void> {
 
   try {
     // Fetch all channels
-    const channels = await storage.getChannels();
+    const channels = await storage.getAllChannels();
     
     // Schedule each enabled channel
     for (const channel of channels) {
       if (channel.isActive) {
+        // Default to 24 hours if syncIntervalHours is missing
+        const intervalHours = channel.syncIntervalHours || 24;
         scheduleChannel(
           channel.id,
           channel.name,
           channel.type,
-          channel.syncIntervalHours
+          intervalHours
         );
       } else {
         console.log(`[Scheduler] Skipping disabled channel: ${channel.name}`);
@@ -182,7 +200,7 @@ export async function refreshScheduler(): Promise<void> {
 export function getSchedulerStatus(): { 
   running: boolean;
   activeChannels: number;
-  schedules: Array<{ channelId: number; channelName: string; intervalHours: number }>;
+  schedules: Array<{ channelId: string; channelName: string; intervalHours: number }>;
 } {
   return {
     running: channelSchedules.size > 0 || forecastContextTimer !== null,
@@ -204,7 +222,7 @@ export async function performDataRefreshCycle(): Promise<void> {
   const startTime = Date.now();
 
   try {
-    const channels = await storage.getChannels();
+    const channels = await storage.getAllChannels();
     const activeChannels = channels.filter(c => c.isActive);
 
     // Refresh each active channel

@@ -257,9 +257,9 @@ export async function upsertSalesSnapshots(
  * Refreshes ad performance data for a specific channel.
  * Used by the scheduler for per-channel sync intervals.
  */
-export async function refreshAdPerformanceData(channelId: number, daysBack: number = 7): Promise<void> {
+export async function refreshAdPerformanceData(channelId: string, daysBack: number = 7): Promise<void> {
   const channels = await storage.getAllChannels();
-  const channel = channels.find((c: any) => Number(c.id) === channelId);
+  const channel = channels.find((c: any) => c.id === channelId);
   if (!channel) {
     throw new Error(`Channel ${channelId} not found`);
   }
@@ -277,7 +277,7 @@ export async function refreshAdPerformanceData(channelId: number, daysBack: numb
   for (const product of finishedProducts) {
     try {
       const mappings = await storage.getProductChannelMappingsByProduct(product.id);
-      const mapping = mappings.find(m => Number(m.channelId) === channelId);
+      const mapping = mappings.find(m => m.channelId === channelId);
       
       if (!mapping) continue;
 
@@ -305,9 +305,9 @@ export async function refreshAdPerformanceData(channelId: number, daysBack: numb
  * Refreshes sales data for a specific channel.
  * Used by the scheduler for per-channel sync intervals.
  */
-export async function refreshSalesData(channelId: number, daysBack: number = 30): Promise<void> {
+export async function refreshSalesData(channelId: string, daysBack: number = 30): Promise<void> {
   const channels = await storage.getAllChannels();
-  const channel = channels.find((c: any) => Number(c.id) === channelId);
+  const channel = channels.find((c: any) => c.id === channelId);
   if (!channel) {
     throw new Error(`Channel ${channelId} not found`);
   }
@@ -325,7 +325,7 @@ export async function refreshSalesData(channelId: number, daysBack: number = 30)
   for (const product of finishedProducts) {
     try {
       const mappings = await storage.getProductChannelMappingsByProduct(product.id);
-      const mapping = mappings.find(m => Number(m.channelId) === channelId);
+      const mapping = mappings.find(m => m.channelId === channelId);
       
       if (!mapping) continue;
 

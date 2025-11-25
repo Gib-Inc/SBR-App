@@ -559,6 +559,7 @@ export const channels = pgTable("channels", {
   name: text("name").notNull(), // Display name
   type: text("type").notNull(), // 'AD_PLATFORM' or 'SALES_CHANNEL'
   isActive: boolean("is_active").notNull().default(true),
+  syncIntervalHours: integer("sync_interval_hours").notNull().default(24), // Hours between syncs (default: daily)
 });
 
 export const insertChannelSchema = createInsertSchema(channels).omit({ id: true });

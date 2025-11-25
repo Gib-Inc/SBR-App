@@ -254,6 +254,99 @@ export async function upsertSalesSnapshots(
 // ============================================================================
 
 /**
+ * Refreshes ad performance data for a specific channel.
+ * Used by the scheduler for per-channel sync intervals.
+ */
+export async function refreshAdPerformanceData(channelId: number, daysBack: number = 7): Promise<void> {
+  const channels = await storage.getAllChannels();
+  const channel = channels.find((c: any) => Number(c.id) === channelId);
+  if (!channel) {
+    throw new Error(`Channel ${channelId} not found`);
+  }
+
+  console.log(`[Channel Ingestion] Refreshing ad performance for ${channel.name} (last ${daysBack} days)`);
+  
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - daysBack);
+  
+  // Get all finished products with this channel mapping
+  const products = await storage.getAllItems();
+  const finishedProducts = products.filter(p => p.type === 'finished_product');
+  
+  for (const product of finishedProducts) {
+    try {
+      const mappings = await storage.getProductChannelMappingsByProduct(product.id);
+      const mapping = mappings.find(m => Number(m.channelId) === channelId);
+      
+      if (!mapping) continue;
+
+      let metrics: Array<{ date: Date; impressions: number; clicks: number; conversions: number; revenue: number; spend: number }> = [];
+      
+      if (channel.code === 'google_ads') {
+        metrics = await fetchGoogleAdsMetrics(product.id, startDate, endDate);
+        await upsertAdPerformanceSnapshots(product.id, 'google_ads', metrics);
+      } else if (channel.code === 'meta_ads') {
+        metrics = await fetchMetaAdsMetrics(product.id, startDate, endDate);
+        await upsertAdPerformanceSnapshots(product.id, 'meta_ads', metrics);
+      } else if (channel.code === 'tiktok_ads') {
+        metrics = await fetchTikTokAdsMetrics(product.id, startDate, endDate);
+        await upsertAdPerformanceSnapshots(product.id, 'tiktok_ads', metrics);
+      }
+    } catch (error) {
+      console.error(`[Channel Ingestion] Error refreshing ad data for product ${product.id}:`, error);
+    }
+  }
+  
+  console.log(`[Channel Ingestion] ${channel.name} ad data refresh completed`);
+}
+
+/**
+ * Refreshes sales data for a specific channel.
+ * Used by the scheduler for per-channel sync intervals.
+ */
+export async function refreshSalesData(channelId: number, daysBack: number = 30): Promise<void> {
+  const channels = await storage.getAllChannels();
+  const channel = channels.find((c: any) => Number(c.id) === channelId);
+  if (!channel) {
+    throw new Error(`Channel ${channelId} not found`);
+  }
+
+  console.log(`[Channel Ingestion] Refreshing sales data for ${channel.name} (last ${daysBack} days)`);
+  
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - daysBack);
+  
+  // Get all finished products with this channel mapping
+  const products = await storage.getAllItems();
+  const finishedProducts = products.filter(p => p.type === 'finished_product');
+  
+  for (const product of finishedProducts) {
+    try {
+      const mappings = await storage.getProductChannelMappingsByProduct(product.id);
+      const mapping = mappings.find(m => Number(m.channelId) === channelId);
+      
+      if (!mapping) continue;
+
+      let metrics: Array<{ date: Date; unitsSold: number; revenue: number }> = [];
+      
+      if (channel.code === 'shopify') {
+        metrics = await fetchShopifySalesMetrics(product.id, startDate, endDate);
+        await upsertSalesSnapshots(product.id, 'shopify', metrics);
+      } else if (channel.code === 'amazon') {
+        metrics = await fetchAmazonSalesMetrics(product.id, startDate, endDate);
+        await upsertSalesSnapshots(product.id, 'amazon', metrics);
+      }
+    } catch (error) {
+      console.error(`[Channel Ingestion] Error refreshing sales data for product ${product.id}:`, error);
+    }
+  }
+  
+  console.log(`[Channel Ingestion] ${channel.name} sales data refresh completed`);
+}
+
+/**
  * Refreshes ad performance data for all products across all ad platforms.
  * This should be called periodically (e.g., daily) by the scheduler.
  */
@@ -264,30 +357,35 @@ export async function refreshAllAdPerformanceData(daysBack: number = 7): Promise
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - daysBack);
   
+  // Pre-fetch all channels for lookup
+  const googleAdsChannel = await storage.getChannelByCode('google_ads');
+  const metaAdsChannel = await storage.getChannelByCode('meta_ads');
+  const tiktokAdsChannel = await storage.getChannelByCode('tiktok_ads');
+  
   // Get all finished products with channel mappings
   const products = await storage.getAllItems();
   const finishedProducts = products.filter(p => p.type === 'finished_product');
   
   for (const product of finishedProducts) {
     try {
-      // Fetch and upsert Google Ads data
-      const googleMappings = await storage.getProductChannelMappingsByProduct(product.id);
-      const googleMapping = googleMappings.find(m => m.channelId === (await storage.getChannelByCode('google_ads'))?.id);
+      const mappings = await storage.getProductChannelMappingsByProduct(product.id);
       
+      // Fetch and upsert Google Ads data
+      const googleMapping = mappings.find(m => Number(m.channelId) === Number(googleAdsChannel?.id));
       if (googleMapping) {
         const googleMetrics = await fetchGoogleAdsMetrics(product.id, startDate, endDate);
         await upsertAdPerformanceSnapshots(product.id, 'google_ads', googleMetrics);
       }
       
       // Fetch and upsert Meta Ads data
-      const metaMapping = googleMappings.find(m => m.channelId === (await storage.getChannelByCode('meta_ads'))?.id);
+      const metaMapping = mappings.find(m => Number(m.channelId) === Number(metaAdsChannel?.id));
       if (metaMapping) {
         const metaMetrics = await fetchMetaAdsMetrics(product.id, startDate, endDate);
         await upsertAdPerformanceSnapshots(product.id, 'meta_ads', metaMetrics);
       }
       
       // Fetch and upsert TikTok Ads data
-      const tiktokMapping = googleMappings.find(m => m.channelId === (await storage.getChannelByCode('tiktok_ads'))?.id);
+      const tiktokMapping = mappings.find(m => Number(m.channelId) === Number(tiktokAdsChannel?.id));
       if (tiktokMapping) {
         const tiktokMetrics = await fetchTikTokAdsMetrics(product.id, startDate, endDate);
         await upsertAdPerformanceSnapshots(product.id, 'tiktok_ads', tiktokMetrics);
@@ -311,23 +409,27 @@ export async function refreshAllSalesData(daysBack: number = 30): Promise<void> 
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - daysBack);
   
+  // Pre-fetch all channels for lookup
+  const shopifyChannel = await storage.getChannelByCode('shopify');
+  const amazonChannel = await storage.getChannelByCode('amazon');
+  
   // Get all finished products with channel mappings
   const products = await storage.getAllItems();
   const finishedProducts = products.filter(p => p.type === 'finished_product');
   
   for (const product of finishedProducts) {
     try {
-      // Fetch and upsert Shopify sales data
-      const shopifyMappings = await storage.getProductChannelMappingsByProduct(product.id);
-      const shopifyMapping = shopifyMappings.find(m => m.channelId === (await storage.getChannelByCode('shopify'))?.id);
+      const mappings = await storage.getProductChannelMappingsByProduct(product.id);
       
+      // Fetch and upsert Shopify sales data
+      const shopifyMapping = mappings.find(m => Number(m.channelId) === Number(shopifyChannel?.id));
       if (shopifyMapping) {
         const shopifyMetrics = await fetchShopifySalesMetrics(product.id, startDate, endDate);
         await upsertSalesSnapshots(product.id, 'shopify', shopifyMetrics);
       }
       
       // Fetch and upsert Amazon sales data
-      const amazonMapping = shopifyMappings.find(m => m.channelId === (await storage.getChannelByCode('amazon'))?.id);
+      const amazonMapping = mappings.find(m => Number(m.channelId) === Number(amazonChannel?.id));
       if (amazonMapping) {
         const amazonMetrics = await fetchAmazonSalesMetrics(product.id, startDate, endDate);
         await upsertSalesSnapshots(product.id, 'amazon', amazonMetrics);

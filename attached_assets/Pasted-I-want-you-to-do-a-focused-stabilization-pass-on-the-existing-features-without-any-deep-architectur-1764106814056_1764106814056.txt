@@ -1,0 +1,79 @@
+I want you to do a focused stabilization pass on the existing features, without any deep architectural refactors.
+
+Scope of this task:
+
+Suppliers → PO History & Issues (PO table, row click, Actions icons, dispute flow, Needs Review card).
+
+BOM / Products page (finished products + raw stock, BOM editor, forecast column).
+
+Barcodes / scanning page.
+
+AI Insights / AI Agent page (recommendation history, accuracy cards).
+
+The new Ad & Demand Signals view you just implemented.
+
+Do the following:
+
+Basic health checks
+
+For each of the pages listed above, verify:
+
+The page loads without runtime errors in the console.
+
+Main tables render even when there is no data (showing a clear empty state row instead of a blank page).
+
+Actions (buttons/icons) are visible and clickable, and they do not trigger unrelated side effects.
+
+Fix obvious bugs and inconsistencies
+
+Fix any UI glitches where:
+
+The page becomes horizontally scrollable instead of only the table scrolling inside its card.
+
+Icons behave differently than their tooltip/label suggests.
+
+Modals appear without primary actions (like a confirm button missing).
+
+If you find duplicated or conflicting actions (for example, two icons that both try to confirm/cancel/dispute), standardize them according to the current business intent:
+
+Confirm icon: only confirms receipt and updates inventory.
+
+Dispute icon: only opens/resolves disputes and feeds the Needs Review card and GHL dispute hook.
+
+Do not introduce new features in this pass; only fix and polish what is already supposed to be there.
+
+Error handling and messages
+
+For all main flows (create PO, reorder from stock, receive PO, edit BOM, scan inventory, trigger AI batch forecast, open Ad & Demand Signals), ensure:
+
+Backend errors are caught and surfaced as clear UI messages (toast/snackbar or inline messages) instead of silent failures.
+
+We avoid partial updates when possible; if an operation fails, inform the user that they should manually review the affected record.
+
+Add TODO comments where we still lack true transactional safety (for example, bulk PO receipt), but do not attempt to rewrite the storage layer or IStorage in this task.
+
+Small UX consistency tweaks
+
+Ensure:
+
+Row-click to open detail works consistently wherever it is implemented.
+
+Tooltips describe exactly what the action does (Confirm, Dispute, View details).
+
+The PO analytics cards, AI Insight cards, and any Ad & Demand cards update when related data changes.
+
+Important constraints:
+
+Do NOT change the underlying storage abstraction, IStorage, or TransactionService behavior beyond minor fixes.
+
+Do NOT add new domains (no returns, no backorders) in this task.
+
+Keep changes scoped to stabilizing and polishing the existing UX and wiring.
+
+When you are done, summarize:
+
+Which bugs you found and fixed.
+
+Any remaining known limitations you documented with TODOs.
+
+Any areas you deliberately did NOT change because they would require a larger refactor.

@@ -3967,7 +3967,16 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: "Unauthorized: Invalid GHL secret" });
       }
 
+      // Validate request body exists after authentication
+      if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({ error: "Invalid request body" });
+      }
+
       const { items: itemsData, ...requestData } = req.body;
+      
+      if (!itemsData || !Array.isArray(itemsData) || itemsData.length === 0) {
+        return res.status(400).json({ error: "At least one item is required" });
+      }
 
       // Look up SalesOrder if externalOrderId and channel provided
       let salesOrderId = requestData.salesOrderId;

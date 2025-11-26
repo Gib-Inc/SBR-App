@@ -999,12 +999,11 @@ const returnFormSchema = z.object({
     sku: z.string(),
     qtyOrdered: z.number(),
     qtyFulfilled: z.number().min(1, "Must have fulfilled items to return"),
-    qtyRequested: z.number().min(1).refine((val, ctx) => {
-      const item = ctx.parent as any;
-      return val <= item.qtyFulfilled;
-    }, "Cannot exceed fulfilled quantity"),
+    qtyRequested: z.number().min(1, "Quantity must be at least 1"),
     selected: z.boolean(),
-  })).refine(items => items.filter(item => item.selected && item.qtyRequested > 0 && item.qtyRequested <= item.qtyFulfilled && item.qtyFulfilled > 0).length > 0, {
+  }).refine((item) => !item.selected || (item.qtyRequested >= 1 && item.qtyRequested <= item.qtyFulfilled), {
+    message: "Quantity must be between 1 and fulfilled quantity for selected items"
+  })).refine(items => items.filter(item => item.selected && item.qtyRequested >= 1 && item.qtyRequested <= item.qtyFulfilled).length > 0, {
     message: "At least one valid item with fulfilled quantity must be selected",
   }),
 });
@@ -1145,10 +1144,18 @@ function CreateReturnForm({ order, onSubmit, isPending, onCancel }: CreateReturn
                                 type="number"
                                 min="1"
                                 max={item.qtyFulfilled}
-                                {...field}
+                                value={field.value}
                                 onChange={(e) => {
-                                  const value = parseInt(e.target.value) || 1;
-                                  field.onChange(Math.min(Math.max(value, 1), item.qtyFulfilled));
+                                  const value = e.target.value === '' ? '' : parseInt(e.target.value);
+                                  if (value === '' || !isNaN(value as number)) {
+                                    field.onChange(value === '' ? 1 : value);
+                                  }
+                                }}
+                                onBlur={() => {
+                                  const currentValue = field.value;
+                                  const numValue = typeof currentValue === 'number' ? currentValue : parseInt(String(currentValue));
+                                  const clamped = isNaN(numValue) || numValue < 1 ? 1 : Math.min(numValue, item.qtyFulfilled);
+                                  field.onChange(clamped);
                                 }}
                                 disabled={!form.watch(`items.${index}.selected`)}
                                 data-testid={`input-qty-return-${index}`}

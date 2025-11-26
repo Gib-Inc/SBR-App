@@ -557,7 +557,12 @@ export default function Suppliers() {
                                 </span>
                               </td>
                               <td className="px-3 align-middle whitespace-nowrap">
-                                <div className="flex items-center gap-1">
+                                {po.issueStatus === 'OPEN' ? (
+                                  <Badge variant="destructive" data-testid={`badge-dispute-${po.id}`}>
+                                    <Flag className="h-3 w-3 mr-1" />
+                                    In Dispute
+                                  </Badge>
+                                ) : (
                                   <Badge variant={
                                     po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
                                     po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :
@@ -566,13 +571,7 @@ export default function Suppliers() {
                                   } data-testid={`badge-status-${po.id}`}>
                                     {po.status.replace('_', ' ')}
                                   </Badge>
-                                  {po.issueStatus === 'OPEN' && (
-                                    <Badge variant="destructive" className="text-xs" data-testid={`badge-dispute-${po.id}`}>
-                                      <Flag className="h-3 w-3 mr-1" />
-                                      In Dispute
-                                    </Badge>
-                                  )}
-                                </div>
+                                )}
                               </td>
                               <td className="px-3 align-middle text-sm whitespace-nowrap">
                                 {po.orderDate ? new Date(po.orderDate).toLocaleDateString() : '-'}

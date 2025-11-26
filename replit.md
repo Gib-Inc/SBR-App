@@ -52,6 +52,7 @@ Preferred communication style: Simple, everyday language.
 *   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency, triggered by inventory transactions, rather than real-time per-transaction calls.
 *   **Multi-Channel Order Sync**: Shopify and Amazon orders sync with duplicate prevention using externalOrderId + channel combination, SKU-to-product mapping with graceful handling, and automatic backorder/forecast context refresh.
 *   **Integration Management**: All external integrations (Extensiv, Shopify, Amazon) managed through AI Agent → Data Sources tab with unified IntegrationSettings component, removing need for separate Integrations page.
+*   **Demo Data Seeding**: Development database can be populated with realistic demo data via `npx tsx server/seed.ts`. Includes 6 multi-channel sales orders (3 Shopify, 3 Amazon) with various statuses, and 2 linked return requests demonstrating the full order-to-return workflow.
 *   **Responsive Layout**: Implemented `min-w-0` on flex containers and explicit width constraints to ensure proper adaptation and prevent horizontal scrolling issues.
 *   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
 

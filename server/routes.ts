@@ -1911,6 +1911,363 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================================================
+  // GHL RETURNS API - Public endpoints for GHL bot to create/query returns
+  // ============================================================================
+
+  // Helper middleware to validate GHL API key from stored config
+  const validateGhlApiKey = async (req: Request, res: Response): Promise<{ valid: boolean; userId?: string }> => {
+    const providedKey = req.headers['x-ghl-api-key'] as string;
+    
+    if (!providedKey) {
+      res.status(401).json({ error: "Unauthorized: Missing X-GHL-API-Key header" });
+      return { valid: false };
+    }
+
+    // Find user with matching GHL config
+    const users = await storage.getAllUsers();
+    for (const user of users) {
+      const config = await storage.getIntegrationConfig(user.id, 'GOHIGHLEVEL');
+      if (config?.apiKey) {
+        // Timing-safe comparison
+        const expectedBuffer = Buffer.from(config.apiKey, 'utf-8');
+        const providedBuffer = Buffer.from(providedKey, 'utf-8');
+        
+        if (expectedBuffer.length === providedBuffer.length) {
+          const isValid = crypto.timingSafeEqual(expectedBuffer, providedBuffer);
+          if (isValid) {
+            return { valid: true, userId: user.id };
+          }
+        }
+      }
+    }
+
+    res.status(401).json({ error: "Unauthorized: Invalid API key" });
+    return { valid: false };
+  };
+
+  // POST /api/integrations/ghl/returns/create
+  // Create a return from GHL bot - Public endpoint authenticated via API key
+  // Headers: X-GHL-API-Key: <stored GHL API key>
+  // Body: { 
+  //   channel: "SHOPIFY" | "AMAZON" | "DIRECT" | "OTHER",
+  //   externalOrderId: string,
+  //   customer: { name, email?, phone? },
+  //   resolutionRequested: "REFUND" | "REPLACEMENT" | "STORE_CREDIT",
+  //   returnReason?: string,
+  //   shippingAddress?: object,
+  //   items: [{ sku: string, quantityToReturn: number }]
+  // }
+  app.post("/api/integrations/ghl/returns/create", async (req: Request, res: Response) => {
+    try {
+      // Validate API key FIRST
+      const authResult = await validateGhlApiKey(req, res);
+      if (!authResult.valid) return; // Response already sent
+
+      const userId = authResult.userId!;
+
+      // Validate request body
+      if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({ error: "Invalid request body" });
+      }
+
+      const { items: itemsData, customer, ...requestData } = req.body;
+      
+      // Validate required fields
+      if (!requestData.channel) {
+        return res.status(400).json({ error: "channel is required" });
+      }
+      if (!requestData.externalOrderId) {
+        return res.status(400).json({ error: "externalOrderId is required" });
+      }
+      if (!customer?.name) {
+        return res.status(400).json({ error: "customer.name is required" });
+      }
+      if (!requestData.resolutionRequested) {
+        return res.status(400).json({ error: "resolutionRequested is required" });
+      }
+      if (!itemsData || !Array.isArray(itemsData) || itemsData.length === 0) {
+        return res.status(400).json({ error: "At least one item is required" });
+      }
+
+      // Look up SalesOrder by channel + externalOrderId
+      const salesOrders = await storage.getAllSalesOrders();
+      const salesOrder = salesOrders.find(
+        so => so.externalOrderId === requestData.externalOrderId && 
+              so.channel === requestData.channel
+      );
+
+      if (!salesOrder) {
+        return res.status(404).json({ 
+          error: "Order not found",
+          details: `No order found with ID ${requestData.externalOrderId} on ${requestData.channel} channel`
+        });
+      }
+
+      // Get sales order lines to validate item quantities
+      const orderLines = await storage.getSalesOrderLines(salesOrder.id);
+      
+      // Validate items and quantities
+      const validationErrors: string[] = [];
+      for (const item of itemsData) {
+        if (!item.sku) {
+          validationErrors.push("Each item must have a sku");
+          continue;
+        }
+        if (!item.quantityToReturn || item.quantityToReturn <= 0) {
+          validationErrors.push(`Invalid quantityToReturn for SKU ${item.sku}`);
+          continue;
+        }
+
+        // Find matching order line
+        const orderLine = orderLines.find(line => line.sku === item.sku);
+        if (!orderLine) {
+          validationErrors.push(`SKU ${item.sku} not found in order ${requestData.externalOrderId}`);
+          continue;
+        }
+
+        // Check if quantity is eligible (must be fulfilled)
+        if (item.quantityToReturn > orderLine.qtyFulfilled) {
+          validationErrors.push(
+            `Cannot return ${item.quantityToReturn} units of ${item.sku} - only ${orderLine.qtyFulfilled} units were fulfilled`
+          );
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        return res.status(400).json({ 
+          error: "Validation failed", 
+          details: validationErrors 
+        });
+      }
+
+      // Create return request
+      const validatedRequest = insertReturnRequestSchema.parse({
+        salesOrderId: salesOrder.id,
+        orderNumber: salesOrder.orderNumber,
+        externalOrderId: requestData.externalOrderId,
+        salesChannel: requestData.channel,
+        source: 'GHL',
+        customerName: customer.name,
+        customerEmail: customer.email || null,
+        customerPhone: customer.phone || null,
+        shippingAddress: requestData.shippingAddress || null,
+        ghlContactId: requestData.ghlContactId || null,
+        resolutionRequested: requestData.resolutionRequested,
+        reason: requestData.returnReason || 'GHL bot return',
+        initiatedVia: 'GHL_BOT',
+        labelProvider: 'SHIPPO',
+        status: 'OPEN',
+      });
+
+      const returnRequest = await storage.createReturnRequest(validatedRequest);
+      const returnItems: ReturnItem[] = [];
+
+      // Create return items
+      for (const itemData of itemsData) {
+        const inventoryItem = await storage.getItemBySku(itemData.sku);
+        if (!inventoryItem) {
+          throw new Error(`Item not found: ${itemData.sku}`);
+        }
+
+        // Find matching sales order line
+        const orderLine = orderLines.find(line => line.sku === itemData.sku);
+
+        const returnItem = await storage.createReturnItem({
+          returnRequestId: returnRequest.id,
+          salesOrderLineId: orderLine?.id || null,
+          inventoryItemId: inventoryItem.id,
+          sku: inventoryItem.sku,
+          qtyOrdered: orderLine?.qtyOrdered || itemData.quantityToReturn,
+          qtyRequested: itemData.quantityToReturn,
+          qtyApproved: itemData.quantityToReturn,
+          itemReason: itemData.reason || null,
+          disposition: itemData.disposition || null,
+        });
+
+        returnItems.push(returnItem);
+      }
+
+      // Automatically generate shipping label if address is provided
+      let labelUrl = null;
+      let trackingNumber = null;
+      let carrier = null;
+      let labelStatus = 'PENDING';
+
+      if (requestData.shippingAddress) {
+        try {
+          const itemsForLabel = returnItems.map(ri => ({
+            sku: ri.sku,
+            name: ri.sku,
+            quantity: ri.qtyApproved,
+          }));
+
+          const labelResponse = await labelService.generateLabel({
+            customerName: returnRequest.customerName,
+            customerAddress: requestData.shippingAddress,
+            items: itemsForLabel,
+          });
+
+          // Create shipment record
+          await storage.createReturnShipment({
+            returnRequestId: returnRequest.id,
+            carrier: labelResponse.carrier,
+            trackingNumber: labelResponse.trackingNumber,
+            labelUrl: labelResponse.labelUrl,
+          });
+
+          // Update return request status
+          await storage.updateReturnRequest(returnRequest.id, {
+            status: 'LABEL_CREATED',
+            labelProvider: 'SHIPPO',
+          });
+
+          labelUrl = labelResponse.labelUrl;
+          trackingNumber = labelResponse.trackingNumber;
+          carrier = labelResponse.carrier;
+          labelStatus = 'CREATED';
+
+          console.log(`[GHL Returns] Label generated for return ${returnRequest.id}:`, {
+            trackingNumber,
+            carrier,
+          });
+        } catch (labelError: any) {
+          console.error("[GHL Returns] Failed to generate label:", labelError);
+          labelStatus = 'FAILED';
+          // Continue without label - return is still created
+        }
+      }
+
+      console.log(`[GHL Returns] Return created: ${returnRequest.id} for order ${salesOrder.orderNumber}`);
+
+      res.status(201).json({ 
+        success: true,
+        returnId: returnRequest.id,
+        returnNumber: returnRequest.id,
+        orderId: salesOrder.id,
+        orderNumber: salesOrder.orderNumber,
+        status: returnRequest.status,
+        resolution: returnRequest.resolutionRequested,
+        trackingNumber,
+        carrier,
+        labelUrl,
+        labelStatus,
+        items: returnItems.map(ri => ({
+          sku: ri.sku,
+          quantityApproved: ri.qtyApproved,
+        })),
+        createdAt: returnRequest.createdAt,
+      });
+    } catch (error: any) {
+      console.error("[GHL Returns] Error creating return:", error);
+      
+      // Return appropriate error code
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          error: "Validation failed", 
+          details: error.errors 
+        });
+      }
+      
+      res.status(500).json({ 
+        error: error.message || "Failed to create return" 
+      });
+    }
+  });
+
+  // GET /api/integrations/ghl/returns/status
+  // Get return status - Public endpoint authenticated via API key
+  // Headers: X-GHL-API-Key: <stored GHL API key>
+  // Query: returnId=... OR orderId=...
+  app.get("/api/integrations/ghl/returns/status", async (req: Request, res: Response) => {
+    try {
+      // Validate API key FIRST
+      const authResult = await validateGhlApiKey(req, res);
+      if (!authResult.valid) return; // Response already sent
+
+      const { returnId, orderId } = req.query;
+
+      if (!returnId && !orderId) {
+        return res.status(400).json({ 
+          error: "Either returnId or orderId query parameter is required" 
+        });
+      }
+
+      let returnRequests: ReturnRequest[] = [];
+
+      if (returnId) {
+        const returnRequest = await storage.getReturnRequest(returnId as string);
+        if (returnRequest) {
+          returnRequests = [returnRequest];
+        }
+      } else if (orderId) {
+        const allReturns = await storage.getAllReturnRequests();
+        returnRequests = allReturns.filter(r => 
+          r.salesOrderId === orderId || 
+          r.externalOrderId === orderId
+        );
+      }
+
+      if (returnRequests.length === 0) {
+        return res.status(404).json({ 
+          error: "No returns found",
+          query: { returnId, orderId }
+        });
+      }
+
+      // Get shipment info for each return
+      const returnsWithDetails = await Promise.all(
+        returnRequests.map(async (returnRequest) => {
+          const shipments = await storage.getReturnShipmentsByRequestId(returnRequest.id);
+          const items = await storage.getReturnItemsByRequestId(returnRequest.id);
+          
+          const shipment = shipments[0]; // Most recent shipment
+
+          return {
+            returnId: returnRequest.id,
+            orderId: returnRequest.salesOrderId,
+            orderNumber: returnRequest.orderNumber,
+            externalOrderId: returnRequest.externalOrderId,
+            status: returnRequest.status,
+            resolution: returnRequest.resolutionRequested,
+            resolutionFinal: returnRequest.resolutionFinal,
+            createdAt: returnRequest.createdAt,
+            updatedAt: returnRequest.updatedAt,
+            trackingNumber: shipment?.trackingNumber || null,
+            carrier: shipment?.carrier || null,
+            labelUrl: shipment?.labelUrl || null,
+            labelStatus: shipment ? 'CREATED' : 'NONE',
+            deliveryState: shipment?.trackingStatus || 'UNKNOWN',
+            customerName: returnRequest.customerName,
+            customerEmail: returnRequest.customerEmail,
+            customerPhone: returnRequest.customerPhone,
+            items: items.map(item => ({
+              sku: item.sku,
+              qtyRequested: item.qtyRequested,
+              qtyApproved: item.qtyApproved,
+              qtyReceived: item.qtyReceived,
+              reason: item.itemReason,
+              disposition: item.disposition,
+            })),
+            restocked: returnRequest.status === 'COMPLETED',
+          };
+        })
+      );
+
+      // Return single object if querying by returnId, array if by orderId
+      const response = returnId 
+        ? returnsWithDetails[0] 
+        : { returns: returnsWithDetails, count: returnsWithDetails.length };
+
+      res.json(response);
+    } catch (error: any) {
+      console.error("[GHL Returns] Error fetching return status:", error);
+      res.status(500).json({ 
+        error: error.message || "Failed to fetch return status" 
+      });
+    }
+  });
+
   // PhantomBuster - Test Connection
   app.post("/api/integrations/phantombuster/test", requireAuth, async (req: Request, res: Response) => {
     try {

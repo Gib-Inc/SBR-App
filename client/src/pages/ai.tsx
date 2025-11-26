@@ -744,12 +744,12 @@ function InsightsTab() {
                       <TableCell className="whitespace-nowrap max-w-[200px] truncate" title={rec.productName}>
                         {rec.productName}
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{rec.metrics.onHand}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{rec.metrics?.onHand ?? 0}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        {rec.metrics.dailySalesVelocity.toFixed(1)}/day
+                        {(rec.metrics?.dailySalesVelocity ?? 0).toFixed(1)}/day
                       </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        {Math.floor(rec.metrics.projectedDaysUntilStockout)}
+                        {Math.floor(rec.metrics?.projectedDaysUntilStockout ?? 0)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <Badge variant={getRiskBadgeVariant(rec.riskLevel)} data-testid={`badge-risk-${rec.itemId}`}>
@@ -824,37 +824,37 @@ function InsightsTab() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground">On Hand</p>
-                  <p className="font-medium">{selectedItem.metrics.onHand} units</p>
+                  <p className="font-medium">{selectedItem.metrics?.onHand ?? 0} units</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Daily Velocity</p>
-                  <p className="font-medium">{selectedItem.metrics.dailySalesVelocity.toFixed(2)} units/day</p>
+                  <p className="font-medium">{(selectedItem.metrics?.dailySalesVelocity ?? 0).toFixed(2)} units/day</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Days Until Stockout</p>
-                  <p className="font-medium">{Math.floor(selectedItem.metrics.projectedDaysUntilStockout)} days</p>
+                  <p className="font-medium">{Math.floor(selectedItem.metrics?.projectedDaysUntilStockout ?? 0)} days</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Reorder Point</p>
-                  <p className="font-medium">{selectedItem.metrics.reorderPoint} units</p>
+                  <p className="font-medium">{selectedItem.metrics?.reorderPoint ?? 0} units</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Return Rate</p>
-                  <p className="font-medium">{(selectedItem.metrics.returnRate * 100).toFixed(1)}%</p>
+                  <p className="font-medium">{((selectedItem.metrics?.returnRate ?? 0) * 100).toFixed(1)}%</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Supplier Lead Time</p>
-                  <p className="font-medium">{selectedItem.metrics.supplierLeadTimeDays} days</p>
+                  <p className="font-medium">{selectedItem.metrics?.supplierLeadTimeDays ?? 7} days</p>
                 </div>
               </div>
               
               <div className="flex flex-wrap gap-2">
-                {selectedItem.metrics.supplierScore < 80 && (
+                {(selectedItem.metrics?.supplierScore ?? 100) < 80 && (
                   <Badge variant="outline" className="text-xs text-orange-600">
-                    Supplier Score: {selectedItem.metrics.supplierScore}/100
+                    Supplier Score: {selectedItem.metrics?.supplierScore ?? 0}/100
                   </Badge>
                 )}
-                {selectedItem.metrics.returnRate > 0.1 && (
+                {(selectedItem.metrics?.returnRate ?? 0) > 0.1 && (
                   <Badge variant="outline" className="text-xs text-yellow-600">
                     High Return Rate
                   </Badge>

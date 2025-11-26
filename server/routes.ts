@@ -3624,14 +3624,32 @@ Generate only the email body text, no subject line.`;
 
   // Create a return request
   // POST /api/returns
-  // Body: { externalOrderId, salesChannel, customerName, customerEmail?, customerPhone?, ghlContactId?, resolutionRequested, reason, items: [{ inventoryItemId or sku, qtyRequested }] }
+  // Body: { externalOrderId, salesChannel, customerName, customerEmail?, customerPhone?, ghlContactId?, resolutionRequested, reason, initiatedVia?, labelProvider?, items: [{ inventoryItemId or sku, qtyOrdered, qtyRequested, itemReason?, disposition? }] }
   // Returns: ReturnRequest with id for GHL to store
   app.post("/api/returns", requireAuth, async (req: Request, res: Response) => {
     try {
       const { items: itemsData, ...requestData } = req.body;
 
+      // Look up SalesOrder if externalOrderId and salesChannel provided
+      let salesOrderId = requestData.salesOrderId;
+      if (!salesOrderId && requestData.externalOrderId && requestData.salesChannel) {
+        const salesOrders = await storage.getAllSalesOrders();
+        const salesOrder = salesOrders.find(
+          so => so.externalOrderId === requestData.externalOrderId && 
+                so.channel === requestData.salesChannel
+        );
+        if (salesOrder) {
+          salesOrderId = salesOrder.id;
+        }
+      }
+
       // Validate return request data
-      const validatedRequest = insertReturnRequestSchema.parse(requestData);
+      const validatedRequest = insertReturnRequestSchema.parse({
+        ...requestData,
+        salesOrderId: salesOrderId || null,
+        initiatedVia: requestData.initiatedVia || 'MANUAL_UI',
+        labelProvider: requestData.labelProvider || 'STUB',
+      });
       
       // Create return request
       const returnRequest = await storage.createReturnRequest(validatedRequest);
@@ -3665,10 +3683,14 @@ Generate only the email body text, no subject line.`;
 
         const returnItem = await storage.createReturnItem({
           returnRequestId: returnRequest.id,
+          salesOrderLineId: itemData.salesOrderLineId || null,
           inventoryItemId,
           sku: item.sku,
+          qtyOrdered: itemData.qtyOrdered || itemData.qtyRequested, // Required field
           qtyRequested: itemData.qtyRequested,
-          qtyApproved: itemData.qtyRequested, // Default: approve requested qty
+          qtyApproved: itemData.qtyApproved || itemData.qtyRequested, // Default: approve requested qty
+          itemReason: itemData.itemReason || null,
+          disposition: itemData.disposition || null,
         });
 
         returnItems.push(returnItem);

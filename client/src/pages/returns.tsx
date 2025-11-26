@@ -131,8 +131,10 @@ export default function Returns() {
       case 'OPEN':
         return 'default';
       case 'LABEL_CREATED':
+      case 'LABEL_ISSUED': // Legacy status
       case 'IN_TRANSIT':
         return 'secondary';
+      case 'RECEIVED': // Legacy status
       case 'RECEIVED_AT_WAREHOUSE':
       case 'COMPLETED':
         return 'default';
@@ -249,7 +251,7 @@ export default function Returns() {
                             {issuingLabelForId === returnRequest.id ? "Issuing..." : "Issue Label"}
                           </Button>
                         )}
-                        {(returnRequest.status === 'LABEL_CREATED' || returnRequest.status === 'IN_TRANSIT' || returnRequest.status === 'RECEIVED_AT_WAREHOUSE' || returnRequest.status === 'COMPLETED') && (
+                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -260,7 +262,7 @@ export default function Returns() {
                             View Label
                           </Button>
                         )}
-                        {(returnRequest.status === 'LABEL_CREATED' || returnRequest.status === 'IN_TRANSIT') && (
+                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) && (
                           <Button
                             size="sm"
                             variant="outline"

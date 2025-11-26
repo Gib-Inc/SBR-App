@@ -1573,7 +1573,20 @@ export class MemStorage implements IStorage {
 
     const updatedReturnItems = await this.getReturnItemsByRequestId(returnId);
     const allItemsReceived = updatedReturnItems.every(item => item.qtyReceived >= item.qtyApproved);
-    const newStatus = allItemsReceived ? 'CLOSED' : 'RECEIVED';
+    const anyItemsReceived = updatedReturnItems.some(item => item.qtyReceived > 0);
+    
+    // Status progression:
+    // - All items received + final resolution → COMPLETED
+    // - Any items received (partial or full, no resolution) → RECEIVED_AT_WAREHOUSE
+    // - No items received yet → Keep current status (OPEN, LABEL_CREATED, IN_TRANSIT)
+    let newStatus: string = returnRequest.status; // Default to current status
+    
+    if (allItemsReceived && returnRequest.resolutionFinal) {
+      newStatus = 'COMPLETED';
+    } else if (anyItemsReceived) {
+      newStatus = 'RECEIVED_AT_WAREHOUSE';
+    }
+    // else: no items received yet - keep existing status
 
     const updated = { ...returnRequest, status: newStatus, updatedAt: new Date() };
     this.returnRequests.set(returnId, updated);

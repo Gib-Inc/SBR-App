@@ -23,14 +23,21 @@ Preferred communication style: Simple, everyday language.
 *   **Database ORM**: Drizzle ORM.
 *   **Authentication**: Session-based with `connect-pg-simple`, `bcrypt` for password hashing.
 *   **API**: RESTful endpoints under `/api/*`.
-*   **Core Services**: LLMService (pluggable AI for forecasting), BarcodeService (generation), Storage Layer (abstracted data access).
+*   **Core Services**: 
+    *   LLMService (pluggable AI for forecasting)
+    *   BarcodeService (generation)
+    *   ShopifyClient (order sync via Admin API)
+    *   AmazonClient (order sync via SP-API with OAuth)
+    *   ExtensivClient (inventory sync via API)
+    *   Storage Layer (abstracted data access)
 *   **Production**: Static assets served via Express.
 
 ### Data Architecture
 
 *   **Database**: PostgreSQL (via Neon serverless driver) with Drizzle Kit for migrations.
-*   **Core Entities**: Users, Items (components, finished products), Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, FinishedInventorySnapshot, IntegrationHealth, Settings, Barcodes.
-*   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers.
+*   **Core Entities**: Users, Items (components, finished products), Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders (multi-channel with Shopify/Amazon/GHL/Direct), BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes.
+*   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers, SalesOrders to Items via line items with SKU mapping.
+*   **Integration Data**: SalesOrders include rawPayload JSONB field storing original external API responses for debugging and audit purposes.
 
 ### Forecasting & Analytics
 
@@ -43,6 +50,8 @@ Preferred communication style: Simple, everyday language.
 *   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.
 *   **Transaction Service**: Centralized logic for inventory movements, ensuring data consistency and validating quantity updates.
 *   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency, triggered by inventory transactions, rather than real-time per-transaction calls.
+*   **Multi-Channel Order Sync**: Shopify and Amazon orders sync with duplicate prevention using externalOrderId + channel combination, SKU-to-product mapping with graceful handling, and automatic backorder/forecast context refresh.
+*   **Integration Management**: All external integrations (Extensiv, Shopify, Amazon) managed through AI Agent → Data Sources tab with unified IntegrationSettings component, removing need for separate Integrations page.
 *   **Responsive Layout**: Implemented `min-w-0` on flex containers and explicit width constraints to ensure proper adaptation and prevent horizontal scrolling issues.
 *   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
 

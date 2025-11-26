@@ -686,7 +686,7 @@ export default function SalesOrders() {
                 </div>
               </div>
 
-              <SheetFooter className="gap-2">
+              <SheetFooter className="gap-2 flex-wrap">
                 <Button
                   variant="outline"
                   onClick={() => setSelectedOrderId(null)}

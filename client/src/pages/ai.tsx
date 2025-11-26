@@ -176,7 +176,7 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
-  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | null>(null);
+  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER" | null>(null);
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
@@ -196,6 +196,16 @@ export default function AIAgent() {
 
   const { data: amazonConfig } = useQuery<any>({
     queryKey: ["/api/integration-configs/AMAZON"],
+    retry: false,
+  });
+
+  const { data: ghlConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/GOHIGHLEVEL"],
+    retry: false,
+  });
+
+  const { data: phantomConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/PHANTOMBUSTER"],
     retry: false,
   });
 
@@ -308,21 +318,23 @@ export default function AIAgent() {
     },
     {
       id: "gohighlevel",
+      integrationType: "GOHIGHLEVEL" as const,
       name: "GoHighLevel",
       description: "CRM and sales data",
       icon: Database,
-      configured: !!(settingsData?.gohighlevelApiKey && settingsData.gohighlevelApiKey.trim()),
-      status: integrationHealth?.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "unknown",
-      hasConfigDialog: false,
+      configured: !!(ghlConfig?.apiKey),
+      status: getConfigStatus(ghlConfig),
+      hasConfigDialog: true,
     },
     {
       id: "phantombuster",
+      integrationType: "PHANTOMBUSTER" as const,
       name: "PhantomBuster",
       description: "Supplier data scraping",
       icon: Database,
-      configured: !!(settingsData?.phantombusterApiKey && settingsData.phantombusterApiKey.trim()),
-      status: integrationHealth?.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "unknown",
-      hasConfigDialog: false,
+      configured: !!(phantomConfig?.apiKey),
+      status: getConfigStatus(phantomConfig),
+      hasConfigDialog: true,
     },
   ];
 

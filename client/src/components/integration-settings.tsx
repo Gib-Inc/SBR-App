@@ -24,7 +24,7 @@ interface IntegrationConfig {
   config: any;
 }
 
-type IntegrationType = "EXTENSIV" | "SHOPIFY" | "AMAZON";
+type IntegrationType = "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER";
 
 interface IntegrationSettingsProps {
   integrationType: IntegrationType;
@@ -36,12 +36,16 @@ const INTEGRATION_LABELS = {
   EXTENSIV: "Extensiv (Pivot Warehouse)",
   SHOPIFY: "Shopify",
   AMAZON: "Amazon Seller Central",
+  GOHIGHLEVEL: "GoHighLevel",
+  PHANTOMBUSTER: "PhantomBuster",
 };
 
 const INTEGRATION_DESCRIPTIONS = {
   EXTENSIV: "Sync inventory from your Extensiv 3PL warehouse",
   SHOPIFY: "Connect your Shopify store to import orders and sync inventory",
   AMAZON: "Integrate with Amazon Seller Central for order management",
+  GOHIGHLEVEL: "Connect your CRM for return notifications and task management",
+  PHANTOMBUSTER: "Enrich supplier and product data through automated scraping",
 };
 
 export function IntegrationSettings({ integrationType, open, onClose }: IntegrationSettingsProps) {
@@ -65,6 +69,15 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [amazonSyncOrders, setAmazonSyncOrders] = useState(true);
+  
+  // GoHighLevel fields
+  const [ghlBaseUrl, setGhlBaseUrl] = useState("https://rest.gohighlevel.com/v1");
+  const [ghlApiKey, setGhlApiKey] = useState("");
+  const [ghlLocationId, setGhlLocationId] = useState("");
+  
+  // PhantomBuster fields
+  const [phantomApiKey, setPhantomApiKey] = useState("");
+  const [phantomAgentIds, setPhantomAgentIds] = useState("");
 
   // Fetch integration config
   const { data: config, isLoading } = useQuery<IntegrationConfig | null>({
@@ -94,6 +107,13 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         setClientId(config.config?.clientId || "");
         setClientSecret("");
         setAmazonSyncOrders(config.config?.syncOrders !== false);
+      } else if (integrationType === "GOHIGHLEVEL") {
+        setGhlBaseUrl(config.config?.baseUrl || "https://rest.gohighlevel.com/v1");
+        setGhlApiKey("");
+        setGhlLocationId(config.config?.locationId || "");
+      } else if (integrationType === "PHANTOMBUSTER") {
+        setPhantomApiKey("");
+        setPhantomAgentIds(config.config?.agentIds?.join(", ") || "");
       }
     }
   }, [config, integrationType]);
@@ -102,9 +122,7 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const testConnectionMutation = useMutation({
     mutationFn: async () => {
       const endpoint = integrationType.toLowerCase();
-      return await apiRequest(`/api/integrations/${endpoint}/test`, {
-        method: "POST",
-      });
+      return await apiRequest("POST", `/api/integrations/${endpoint}/test`);
     },
     onSuccess: (data: any) => {
       toast({
@@ -127,9 +145,7 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const syncMutation = useMutation({
     mutationFn: async () => {
       const endpoint = integrationType.toLowerCase();
-      return await apiRequest(`/api/integrations/${endpoint}/sync`, {
-        method: "POST",
-      });
+      return await apiRequest("POST", `/api/integrations/${endpoint}/sync`);
     },
     onSuccess: (data: any) => {
       toast({
@@ -170,36 +186,46 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
           clientId,
           syncOrders: amazonSyncOrders,
         };
+      } else if (integrationType === "GOHIGHLEVEL") {
+        configData = {
+          baseUrl: ghlBaseUrl,
+          locationId: ghlLocationId,
+        };
+      } else if (integrationType === "PHANTOMBUSTER") {
+        configData = {
+          agentIds: phantomAgentIds.split(",").map((id) => id.trim()).filter(Boolean),
+        };
       }
 
       const payload: any = {
         provider: integrationType,
-        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : "Pivot Warehouse",
+        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : integrationType === "GOHIGHLEVEL" ? "GoHighLevel" : integrationType === "PHANTOMBUSTER" ? "PhantomBuster" : "Pivot Warehouse",
         config: configData,
       };
 
       // Include credentials based on integration type
-      if (integrationType === "EXTENSIV" && apiKey) {
-        payload.apiKey = apiKey;
-      } else if (integrationType === "SHOPIFY" && accessToken) {
-        payload.apiKey = accessToken;
-      } else if (integrationType === "AMAZON" && (refreshToken || clientSecret)) {
-        payload.apiKey = refreshToken || config?.apiKey;
+      if (integrationType === "EXTENSIV") {
+        if (apiKey) payload.apiKey = apiKey;
+      } else if (integrationType === "SHOPIFY") {
+        if (accessToken) payload.apiKey = accessToken;
+      } else if (integrationType === "AMAZON") {
+        if (refreshToken) payload.apiKey = refreshToken;
+        else if (config?.apiKey) payload.apiKey = config.apiKey;
         if (clientSecret) {
           payload.config.clientSecret = clientSecret;
         }
+      } else if (integrationType === "GOHIGHLEVEL") {
+        if (ghlApiKey) payload.apiKey = ghlApiKey;
+        else if (config?.apiKey) payload.apiKey = config.apiKey;
+      } else if (integrationType === "PHANTOMBUSTER") {
+        if (phantomApiKey) payload.apiKey = phantomApiKey;
+        else if (config?.apiKey) payload.apiKey = config.apiKey;
       }
 
       if (config) {
-        return await apiRequest(`/api/integration-configs/${config.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-        });
+        return await apiRequest("PATCH", `/api/integration-configs/${config.id}`, payload);
       } else {
-        return await apiRequest("/api/integration-configs", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
+        return await apiRequest("POST", "/api/integration-configs", payload);
       }
     },
     onSuccess: () => {
@@ -225,6 +251,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
     setAccessToken("");
     setRefreshToken("");
     setClientSecret("");
+    setGhlApiKey("");
+    setPhantomApiKey("");
   };
 
   const handleClose = () => {
@@ -240,6 +268,10 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
       return shopDomain && (config?.apiKey || accessToken);
     } else if (integrationType === "AMAZON") {
       return sellerId && marketplaceIds && clientId && (config?.apiKey || refreshToken);
+    } else if (integrationType === "GOHIGHLEVEL") {
+      return ghlLocationId && (config?.apiKey || ghlApiKey);
+    } else if (integrationType === "PHANTOMBUSTER") {
+      return config?.apiKey || phantomApiKey;
     }
     return false;
   };
@@ -451,6 +483,81 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       onCheckedChange={setAmazonSyncOrders}
                       data-testid="switch-amazon-sync-orders"
                     />
+                  </div>
+                </>
+              )}
+
+              {integrationType === "GOHIGHLEVEL" && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="ghl-base-url" data-testid="label-ghl-base-url">
+                      Base URL
+                    </Label>
+                    <Input
+                      id="ghl-base-url"
+                      placeholder="https://rest.gohighlevel.com/v1"
+                      value={ghlBaseUrl}
+                      onChange={(e) => setGhlBaseUrl(e.target.value)}
+                      data-testid="input-ghl-base-url"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ghl-api-key" data-testid="label-ghl-api-key">
+                      API Key
+                    </Label>
+                    <Input
+                      id="ghl-api-key"
+                      type="password"
+                      placeholder="Enter your GoHighLevel API key"
+                      value={ghlApiKey}
+                      onChange={(e) => setGhlApiKey(e.target.value)}
+                      data-testid="input-ghl-api-key"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ghl-location-id" data-testid="label-ghl-location-id">
+                      Location ID
+                    </Label>
+                    <Input
+                      id="ghl-location-id"
+                      placeholder="Enter your GoHighLevel Location ID"
+                      value={ghlLocationId}
+                      onChange={(e) => setGhlLocationId(e.target.value)}
+                      data-testid="input-ghl-location-id"
+                    />
+                  </div>
+                </>
+              )}
+
+              {integrationType === "PHANTOMBUSTER" && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="phantom-api-key" data-testid="label-phantom-api-key">
+                      API Key
+                    </Label>
+                    <Input
+                      id="phantom-api-key"
+                      type="password"
+                      placeholder="Enter your PhantomBuster API key"
+                      value={phantomApiKey}
+                      onChange={(e) => setPhantomApiKey(e.target.value)}
+                      data-testid="input-phantom-api-key"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phantom-agent-ids" data-testid="label-phantom-agent-ids">
+                      Phantom Agent IDs (comma-separated, optional)
+                    </Label>
+                    <Input
+                      id="phantom-agent-ids"
+                      placeholder="agent123, agent456"
+                      value={phantomAgentIds}
+                      onChange={(e) => setPhantomAgentIds(e.target.value)}
+                      data-testid="input-phantom-agent-ids"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Optional: Specify default phantom agent IDs to use for enrichment
+                    </p>
                   </div>
                 </>
               )}

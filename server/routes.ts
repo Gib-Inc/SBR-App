@@ -10,6 +10,8 @@ import { TransactionService } from "./transaction-service";
 import { ExtensivClient } from "./services/extensiv-client";
 import { ShopifyClient } from "./services/shopify-client";
 import { AmazonClient } from "./services/amazon-client";
+import { GoHighLevelClient } from "./services/gohighlevel-client";
+import { PhantomBusterClient } from "./services/phantombuster-client";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
@@ -1801,29 +1803,215 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // PhantomBuster - Update supplier data
+  // GoHighLevel - Test Connection
+  app.post("/api/integrations/gohighlevel/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config
+      const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
+      const apiKey = config?.apiKey;
+      const locationId = (config?.config as any)?.locationId;
+      
+      if (!apiKey || !locationId) {
+        return res.status(400).json({ 
+          success: false,
+          message: "GoHighLevel credentials not configured. Please add API key and Location ID." 
+        });
+      }
+
+      const client = new GoHighLevelClient(baseUrl, apiKey, locationId);
+      const result = await client.testConnection();
+
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to test GoHighLevel connection" 
+      });
+    }
+  });
+
+  // GoHighLevel - Sync (placeholder)
+  app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config
+      const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
+      const apiKey = config?.apiKey;
+      const locationId = (config?.config as any)?.locationId;
+      
+      if (!apiKey || !locationId) {
+        const message = "GoHighLevel credentials not configured";
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, {
+            lastSyncAt: new Date(),
+            lastSyncStatus: 'FAILED',
+            lastSyncMessage: message,
+          });
+        }
+        return res.status(400).json({ success: false, message });
+      }
+
+      const client = new GoHighLevelClient(baseUrl, apiKey, locationId);
+      
+      // Set status to PENDING
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'PENDING',
+          lastSyncMessage: 'Sync in progress...',
+        });
+      }
+
+      // For now, just test connection as a sync placeholder
+      const result = await client.sync();
+      
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json({
+        success: result.success,
+        message: result.message,
+      });
+    } catch (error: any) {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      
+      // Record failure in integration config
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message || "Sync failed",
+        });
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Integration sync failed" 
+      });
+    }
+  });
+
+  // PhantomBuster - Test Connection
+  app.post("/api/integrations/phantombuster/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config
+      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
+      const apiKey = config?.apiKey;
+      
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false,
+          message: "PhantomBuster API key not configured." 
+        });
+      }
+
+      const client = new PhantomBusterClient(apiKey);
+      const result = await client.testConnection();
+
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to test PhantomBuster connection" 
+      });
+    }
+  });
+
+  // PhantomBuster - Sync (placeholder)
   app.post("/api/integrations/phantombuster/sync", requireAuth, async (req: Request, res: Response) => {
     try {
-      // Stub implementation - would call PhantomBuster API
+      const userId = req.session.userId!;
       
-      // Simulate successful connection
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "phantombuster",
-        lastSuccessAt: new Date(),
-        lastStatus: "connected",
-        lastAlertAt: null,
-        errorMessage: null,
+      // Get credentials from integration config
+      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
+      const apiKey = config?.apiKey;
+      
+      if (!apiKey) {
+        const message = "PhantomBuster API key not configured";
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, {
+            lastSyncAt: new Date(),
+            lastSyncStatus: 'FAILED',
+            lastSyncMessage: message,
+          });
+        }
+        return res.status(400).json({ success: false, message });
+      }
+
+      const client = new PhantomBusterClient(apiKey);
+      
+      // Set status to PENDING
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'PENDING',
+          lastSyncMessage: 'Sync in progress...',
+        });
+      }
+
+      // For now, just test connection as a sync placeholder
+      const result = await client.sync();
+      
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json({
+        success: result.success,
+        message: result.message,
       });
-      
-      res.json({ success: true, message: "Supplier data sync initiated (stub)" });
     } catch (error: any) {
-      // Record failure in integration health
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "phantombuster",
-        lastStatus: "failed",
-        errorMessage: error.message || "Integration sync failed",
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
+      
+      // Record failure in integration config
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message || "Sync failed",
+        });
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Integration sync failed" 
       });
-      res.status(500).json({ error: error.message || "Integration sync failed" });
     }
   });
 

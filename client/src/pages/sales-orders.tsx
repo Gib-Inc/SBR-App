@@ -45,7 +45,6 @@ import {
 import { 
   Plus, 
   Loader2, 
-  Eye, 
   Truck, 
   CheckCircle, 
   XCircle, 
@@ -435,7 +434,7 @@ export default function SalesOrders() {
                   <th className="p-3 text-right text-sm font-medium">Total Units</th>
                   <th className="p-3 text-right text-sm font-medium">Backordered</th>
                   <th className="p-3 text-right text-sm font-medium">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></th>
                 </tr>
               </thead>
               <tbody>
@@ -447,7 +446,8 @@ export default function SalesOrders() {
                   return (
                     <tr 
                       key={order.id} 
-                      className="h-11 border-b hover-elevate"
+                      className="h-11 border-b hover-elevate cursor-pointer"
+                      onClick={() => setSelectedOrderId(order.id)}
                       data-testid={`row-order-${order.id}`}
                     >
                       <td className="px-3 align-middle font-mono text-sm" data-testid={`text-order-id-${order.id}`}>
@@ -504,16 +504,7 @@ export default function SalesOrders() {
                         )}
                       </td>
                       <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setSelectedOrderId(order.id)}
-                            data-testid={`button-view-${order.id}`}
-                          >
-                            <Eye className="h-4 w-4 mr-2" />
-                            View
-                          </Button>
+                        <div className="flex items-center justify-end">
                           {(() => {
                             const hasAnyFulfilled = order.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
                             const canReturn = order.status !== "CANCELLED" && hasAnyFulfilled;
@@ -526,10 +517,10 @@ export default function SalesOrders() {
                                     <Button
                                       size="sm"
                                       variant="ghost"
-                                      onClick={() => {
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         setSelectedOrderId(order.id);
                                         if (canReturn) {
-                                          // Open drawer first, then show return dialog after a brief delay
                                           setTimeout(() => setShowCreateReturnDialog(true), 100);
                                         }
                                       }}
@@ -1015,7 +1006,7 @@ export default function SalesOrders() {
             <DialogHeader>
               <DialogTitle>Create Return Request</DialogTitle>
               <DialogDescription>
-                Create a return request for order {selectedOrder.orderNumber || selectedOrder.externalOrderId}
+                Create a return request for order {selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
               </DialogDescription>
             </DialogHeader>
 
@@ -1092,7 +1083,7 @@ function CreateReturnForm({ order, onSubmit, isPending, onCancel }: CreateReturn
     defaultValues: {
       resolutionRequested: "REFUND",
       reason: "",
-      items: order.lines
+      items: (order.lines || [])
         .filter(line => (line.qtyFulfilled || 0) > 0)
         .map(line => ({
           salesOrderLineId: line.id,

@@ -1,0 +1,58 @@
+Update the Sales Orders → Order Details and Returns flow so returns, shipping, and cancellation are consistent and the UI doesn’t overflow.
+
+Goals:
+• Keep the existing “box” icon in the Sales Orders Actions column as the dedicated “Return” action. Don’t introduce any new icons; just standardize the behavior.
+• Fix the Create Return Request modal so it never runs off the right edge and always shows items correctly when an order has been shipped/fulfilled.
+• Make the Ship / Mark Fulfilled / Cancel / Create Return buttons follow a simple, predictable state machine.
+
+Please do the following:
+
+Standardize return eligibility and quantities
+• Decide on a single source of truth for “how many units are eligible for return” per line item (for example: fulfilledQty or shippedQty minus returnedQty).
+• When the user clicks “Ship” OR “Mark Fulfilled” for a simple order (no partial shipments), update each line item so that this field equals the ordered quantity, and update the order status to FULFILLED.
+• The Create Return logic and modal should use this same field to decide which items are available to return and how many units can be selected.
+• If no line items have any fulfilled/shipped quantity, Create Return should be disabled with a tooltip such as “No fulfilled items yet – ship the order first.”
+
+Clean state machine for the footer buttons in Order Details
+In the Order Details drawer for a Sales Order, make the buttons behave like this:
+
+• Status = OPEN, no fulfilled/shipped units:
+– Ship: allowed. Marks items as fulfilled/shipped for all ordered units (for this MVP).
+– Mark Fulfilled: allowed. Same inventory effects as Ship, just without label generation.
+– Cancel Order: allowed. Cancels the order and should not create any shipments or returns.
+– Create Return: disabled (with tooltip).
+
+• Status = FULFILLED or any line item has fulfilled/shipped units:
+– Ship: either disabled or hidden (we already shipped everything).
+– Mark Fulfilled: disabled.
+– Cancel Order: disabled with tooltip “Order already fulfilled – use returns instead.”
+– Create Return: enabled and opens the Create Return Request modal.
+
+• Status = CANCELLED:
+– Ship / Mark Fulfilled / Create Return: disabled.
+– Cancel stays as a non-clickable label (or disabled button) to show the state.
+
+Standardize the return icon behavior in the Sales Orders table
+• Keep the existing “box” icon in the Actions column and standardize it:
+– For orders with NO fulfilled/shipped quantity: disable the icon and show a tooltip like “No items available to return yet.”
+– For orders with at least some fulfilled/shipped quantity: clicking the box icon should open the same Order Details drawer and immediately focus/open the Create Return Request modal (same modal as the footer button).
+• Ensure the Actions column is visually consistent on every row (eye/View, returns/box icon, badges, etc.), but do not add brand-new icon types.
+
+Fix the Create Return Request modal layout
+• Constrain the modal width to align with the other modals you use (like the PO detail / confirm dialogs). It should be centered and not overflow the viewport horizontally.
+• Inside the modal:
+– Keep the top summary (Order ID, channel, customer, etc.) but ensure it wraps on smaller widths instead of forcing horizontal scroll.
+– Put the “Select Items to Return” area into a scrollable container if needed (both horizontal and vertical), so the table never forces the overall modal to overflow.
+– Buttons (“Cancel”, “Create Return”) should remain visible without needing horizontal scrolling.
+
+Ensure data consistency with the Returns page
+• When a return is created from the modal:
+– Create a Returns record linked to the Sales Order and to specific line items and quantities.
+– Increment the “Returns” count/indicator in the Sales Orders table for that order.
+• The Returns page should already be wired; just ensure it reflects the same quantities and statuses used by the new return eligibility logic.
+• Do not change the Shippo integration behavior; keep using it for label generation when the API key is present. Just make sure the new return flow calls into the existing return/label logic instead of duplicating it.
+
+After these changes, test at least three flows:
+• Open order → Ship → Create Return (should see items and quantities, modal not overflowing).
+• Open order → Cancel (no shipping, no returns; Create Return remains disabled).
+• Fulfilled order with an existing return → clicking the box icon in the table (should open the details + modal and show correct remaining quantities).

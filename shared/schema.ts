@@ -803,6 +803,8 @@ export const salesOrderLines = pgTable("sales_order_lines", {
   qtyOrdered: integer("qty_ordered").notNull(),
   qtyAllocated: integer("qty_allocated").notNull().default(0), // Reserved from available stock
   qtyShipped: integer("qty_shipped").notNull().default(0),
+  qtyFulfilled: integer("qty_fulfilled").notNull().default(0), // Fulfilled (shipped OR marked fulfilled)
+  returnedQty: integer("returned_qty").notNull().default(0), // Total quantity returned
   backorderQty: integer("backorder_qty").notNull().default(0), // qtyOrdered - qtyAllocated
   unitPrice: real("unit_price"), // Optional: price per unit
   notes: text("notes"),

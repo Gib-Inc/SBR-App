@@ -3702,6 +3702,17 @@ Generate only the email body text, no subject line.`;
           disposition: itemData.disposition || null,
         });
 
+        // Increment returnedQty on the sales order line if linked
+        if (itemData.salesOrderLineId) {
+          const salesOrderLine = await storage.getSalesOrderLine(itemData.salesOrderLineId);
+          if (salesOrderLine) {
+            const newReturnedQty = (salesOrderLine.returnedQty ?? 0) + itemData.qtyRequested;
+            await storage.updateSalesOrderLine(itemData.salesOrderLineId, {
+              returnedQty: newReturnedQty,
+            });
+          }
+        }
+
         returnItems.push(returnItem);
       }
 

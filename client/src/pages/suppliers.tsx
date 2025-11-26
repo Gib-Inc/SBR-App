@@ -545,19 +545,19 @@ export default function Suppliers() {
                               role="button"
                               aria-label={`View purchase order ${po.poNumber}`}
                             >
-                              <td className="px-3 align-middle">
+                              <td className="px-3 align-middle whitespace-nowrap">
                                 <span className="font-mono text-sm font-medium">{po.poNumber}</span>
                               </td>
                               <td className="px-3 align-middle whitespace-nowrap">
                                 {suppliers.find((s) => s.id === po.supplierId)?.name || 'Unknown'}
                               </td>
-                              <td className="px-3 align-middle">
+                              <td className="px-3 align-middle whitespace-nowrap">
                                 <span className="text-sm max-w-xs truncate block" title={getProductsSummary(po.lines)}>
                                   {getProductsSummary(po.lines)}
                                 </span>
                               </td>
-                              <td className="px-3 align-middle">
-                                <div className="flex flex-wrap items-center gap-1">
+                              <td className="px-3 align-middle whitespace-nowrap">
+                                <div className="flex items-center gap-1">
                                   <Badge variant={
                                     po.status === 'RECEIVED' || po.status === 'CLOSED' ? 'default' :
                                     po.status === 'SENT' || po.status === 'APPROVED' ? 'secondary' :

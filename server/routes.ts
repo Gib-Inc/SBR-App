@@ -4483,6 +4483,413 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // SHOPIFY & AMAZON INTEGRATION ROUTES
+  // ============================================================================
+
+  // Get all integration configs
+  // GET /api/integrations
+  app.get("/api/integrations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const configs = await storage.getAllIntegrationConfigs(userId);
+      res.json(configs);
+    } catch (error: any) {
+      console.error("[Integrations] Error fetching configs:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch integration configs" });
+    }
+  });
+
+  // Save or update Shopify configuration
+  // POST /api/integrations/shopify/config
+  app.post("/api/integrations/shopify/config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { shopDomain, accessToken, importWindowDays, accountName } = req.body;
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "shopDomain and accessToken are required" });
+      }
+
+      const config = {
+        shopDomain,
+        accessToken,
+        importWindowDays: importWindowDays || 30,
+      };
+
+      // Check if config already exists
+      const existingConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      let savedConfig;
+      if (existingConfig) {
+        // Update existing
+        savedConfig = await storage.updateIntegrationConfig(existingConfig.id, {
+          accountName: accountName || shopDomain,
+          config,
+        });
+      } else {
+        // Create new
+        savedConfig = await storage.createIntegrationConfig({
+          userId,
+          provider: 'SHOPIFY',
+          accountName: accountName || shopDomain,
+          config,
+          isEnabled: true,
+        });
+      }
+
+      res.json(savedConfig);
+    } catch (error: any) {
+      console.error("[Shopify] Error saving config:", error);
+      res.status(500).json({ error: error.message || "Failed to save Shopify configuration" });
+    }
+  });
+
+  // Test Shopify connection
+  // POST /api/integrations/shopify/test
+  app.post("/api/integrations/shopify/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { shopDomain, accessToken } = req.body;
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "shopDomain and accessToken are required" });
+      }
+
+      const { ShopifyClient } = await import('./services/shopify-client.js');
+      const client = new ShopifyClient(shopDomain, accessToken);
+      const result = await client.testConnection();
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Shopify] Error testing connection:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to test connection" });
+    }
+  });
+
+  // Trigger Shopify order sync
+  // POST /api/integrations/shopify/sync
+  app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      
+      // Get Shopify config
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      if (!config || !config.config) {
+        return res.status(400).json({ error: "Shopify not configured" });
+      }
+
+      const { shopDomain, accessToken, importWindowDays } = config.config as any;
+
+      // Update sync status to pending
+      await storage.updateIntegrationConfig(config.id, {
+        lastSyncStatus: 'PENDING',
+        lastSyncMessage: 'Sync in progress...',
+      });
+
+      const { ShopifyClient } = await import('./services/shopify-client.js');
+      const client = new ShopifyClient(shopDomain, accessToken);
+      
+      // Fetch normalized orders
+      const normalizedOrders = await client.syncRecentOrders(importWindowDays || 30);
+      
+      console.log(`[Shopify] Fetched ${normalizedOrders.length} orders, syncing to database...`);
+
+      // Upsert each order into the database
+      let successCount = 0;
+      let errorCount = 0;
+      const errors: string[] = [];
+
+      for (const normalizedOrder of normalizedOrders) {
+        try {
+          // Check if order already exists
+          const existingOrders = await storage.getSalesOrdersByExternalId(
+            normalizedOrder.channel,
+            normalizedOrder.externalOrderId
+          );
+
+          if (existingOrders.length > 0) {
+            // Update existing order
+            const existing = existingOrders[0];
+            await storage.updateSalesOrder(existing.id, {
+              status: normalizedOrder.status,
+              externalCustomerId: normalizedOrder.externalCustomerId,
+              totalAmount: normalizedOrder.totalAmount,
+              currency: normalizedOrder.currency,
+              rawPayload: normalizedOrder.rawPayload,
+            });
+            successCount++;
+          } else {
+            // Create new sales order
+            const salesOrder = await storage.createSalesOrder({
+              externalOrderId: normalizedOrder.externalOrderId,
+              externalCustomerId: normalizedOrder.externalCustomerId,
+              channel: normalizedOrder.channel,
+              customerName: normalizedOrder.customerName,
+              customerEmail: normalizedOrder.customerEmail,
+              customerPhone: normalizedOrder.customerPhone,
+              status: normalizedOrder.status,
+              orderDate: normalizedOrder.orderDate,
+              totalAmount: normalizedOrder.totalAmount,
+              currency: normalizedOrder.currency,
+              rawPayload: normalizedOrder.rawPayload,
+            });
+
+            // Create order lines
+            for (const lineItem of normalizedOrder.lineItems) {
+              // Find product by SKU
+              const product = await storage.getItemBySku(lineItem.sku);
+              
+              if (product) {
+                await storage.createSalesOrderLine({
+                  salesOrderId: salesOrder.id,
+                  productId: product.id,
+                  sku: lineItem.sku,
+                  qtyOrdered: lineItem.qtyOrdered,
+                  unitPrice: lineItem.unitPrice,
+                });
+              } else {
+                console.warn(`[Shopify] SKU not found: ${lineItem.sku} for order ${normalizedOrder.externalOrderId}`);
+              }
+            }
+
+            successCount++;
+          }
+        } catch (orderError: any) {
+          errorCount++;
+          errors.push(`Order ${normalizedOrder.externalOrderId}: ${orderError.message}`);
+          console.error(`[Shopify] Error syncing order ${normalizedOrder.externalOrderId}:`, orderError);
+        }
+      }
+
+      // Update sync status
+      const statusMessage = `Synced ${successCount} orders successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}`;
+      await storage.updateIntegrationConfig(config.id, {
+        lastSyncAt: new Date(),
+        lastSyncStatus: errorCount === 0 ? 'SUCCESS' : 'PARTIAL',
+        lastSyncMessage: statusMessage,
+      });
+
+      res.json({
+        success: true,
+        message: statusMessage,
+        successCount,
+        errorCount,
+        errors: errors.slice(0, 10), // Only return first 10 errors
+      });
+    } catch (error: any) {
+      console.error("[Shopify] Error during sync:", error);
+      
+      // Update sync status to failed
+      const userId = req.user!.id;
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message,
+        });
+      }
+
+      res.status(500).json({ error: error.message || "Failed to sync Shopify orders" });
+    }
+  });
+
+  // Save or update Amazon configuration
+  // POST /api/integrations/amazon/config
+  app.post("/api/integrations/amazon/config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      const { sellerId, marketplaceId, region, refreshToken, clientId, clientSecret, importWindowDays, accountName } = req.body;
+
+      if (!sellerId || !marketplaceId || !refreshToken || !clientId || !clientSecret) {
+        return res.status(400).json({ error: "sellerId, marketplaceId, refreshToken, clientId, and clientSecret are required" });
+      }
+
+      const config = {
+        sellerId,
+        marketplaceId,
+        region: region || 'US',
+        refreshToken,
+        clientId,
+        clientSecret,
+        importWindowDays: importWindowDays || 30,
+      };
+
+      // Check if config already exists
+      const existingConfig = await storage.getIntegrationConfig(userId, 'AMAZON');
+      
+      let savedConfig;
+      if (existingConfig) {
+        // Update existing
+        savedConfig = await storage.updateIntegrationConfig(existingConfig.id, {
+          accountName: accountName || `Amazon ${region || 'US'}`,
+          config,
+        });
+      } else {
+        // Create new
+        savedConfig = await storage.createIntegrationConfig({
+          userId,
+          provider: 'AMAZON',
+          accountName: accountName || `Amazon ${region || 'US'}`,
+          config,
+          isEnabled: true,
+        });
+      }
+
+      res.json(savedConfig);
+    } catch (error: any) {
+      console.error("[Amazon] Error saving config:", error);
+      res.status(500).json({ error: error.message || "Failed to save Amazon configuration" });
+    }
+  });
+
+  // Test Amazon connection
+  // POST /api/integrations/amazon/test
+  app.post("/api/integrations/amazon/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sellerId, marketplaceId, refreshToken, clientId, clientSecret } = req.body;
+
+      if (!sellerId || !marketplaceId || !refreshToken || !clientId || !clientSecret) {
+        return res.status(400).json({ error: "All Amazon credentials are required" });
+      }
+
+      const { AmazonClient } = await import('./services/amazon-client.js');
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      const result = await client.testConnection();
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Amazon] Error testing connection:", error);
+      res.status(500).json({ success: false, message: error.message || "Failed to test connection" });
+    }
+  });
+
+  // Trigger Amazon order sync
+  // POST /api/integrations/amazon/sync
+  app.post("/api/integrations/amazon/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user!.id;
+      
+      // Get Amazon config
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      if (!config || !config.config) {
+        return res.status(400).json({ error: "Amazon not configured" });
+      }
+
+      const { sellerId, marketplaceId, refreshToken, clientId, clientSecret, importWindowDays } = config.config as any;
+
+      // Update sync status to pending
+      await storage.updateIntegrationConfig(config.id, {
+        lastSyncStatus: 'PENDING',
+        lastSyncMessage: 'Sync in progress...',
+      });
+
+      const { AmazonClient } = await import('./services/amazon-client.js');
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      
+      // Fetch normalized orders
+      const normalizedOrders = await client.syncRecentOrders(importWindowDays || 30);
+      
+      console.log(`[Amazon] Fetched ${normalizedOrders.length} orders, syncing to database...`);
+
+      // Upsert each order into the database
+      let successCount = 0;
+      let errorCount = 0;
+      const errors: string[] = [];
+
+      for (const normalizedOrder of normalizedOrders) {
+        try {
+          // Check if order already exists
+          const existingOrders = await storage.getSalesOrdersByExternalId(
+            normalizedOrder.channel,
+            normalizedOrder.externalOrderId
+          );
+
+          if (existingOrders.length > 0) {
+            // Update existing order
+            const existing = existingOrders[0];
+            await storage.updateSalesOrder(existing.id, {
+              status: normalizedOrder.status,
+              externalCustomerId: normalizedOrder.externalCustomerId,
+              totalAmount: normalizedOrder.totalAmount,
+              currency: normalizedOrder.currency,
+              rawPayload: normalizedOrder.rawPayload,
+            });
+            successCount++;
+          } else {
+            // Create new sales order
+            const salesOrder = await storage.createSalesOrder({
+              externalOrderId: normalizedOrder.externalOrderId,
+              externalCustomerId: normalizedOrder.externalCustomerId,
+              channel: normalizedOrder.channel,
+              customerName: normalizedOrder.customerName,
+              customerEmail: normalizedOrder.customerEmail,
+              customerPhone: normalizedOrder.customerPhone,
+              status: normalizedOrder.status,
+              orderDate: normalizedOrder.orderDate,
+              totalAmount: normalizedOrder.totalAmount,
+              currency: normalizedOrder.currency,
+              rawPayload: normalizedOrder.rawPayload,
+            });
+
+            // Create order lines
+            for (const lineItem of normalizedOrder.lineItems) {
+              // Find product by SKU
+              const product = await storage.getItemBySku(lineItem.sku);
+              
+              if (product) {
+                await storage.createSalesOrderLine({
+                  salesOrderId: salesOrder.id,
+                  productId: product.id,
+                  sku: lineItem.sku,
+                  qtyOrdered: lineItem.qtyOrdered,
+                  unitPrice: lineItem.unitPrice,
+                });
+              } else {
+                console.warn(`[Amazon] SKU not found: ${lineItem.sku} for order ${normalizedOrder.externalOrderId}`);
+              }
+            }
+
+            successCount++;
+          }
+        } catch (orderError: any) {
+          errorCount++;
+          errors.push(`Order ${normalizedOrder.externalOrderId}: ${orderError.message}`);
+          console.error(`[Amazon] Error syncing order ${normalizedOrder.externalOrderId}:`, orderError);
+        }
+      }
+
+      // Update sync status
+      const statusMessage = `Synced ${successCount} orders successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}`;
+      await storage.updateIntegrationConfig(config.id, {
+        lastSyncAt: new Date(),
+        lastSyncStatus: errorCount === 0 ? 'SUCCESS' : 'PARTIAL',
+        lastSyncMessage: statusMessage,
+      });
+
+      res.json({
+        success: true,
+        message: statusMessage,
+        successCount,
+        errorCount,
+        errors: errors.slice(0, 10), // Only return first 10 errors
+      });
+    } catch (error: any) {
+      console.error("[Amazon] Error during sync:", error);
+      
+      // Update sync status to failed
+      const userId = req.user!.id;
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message,
+        });
+      }
+
+      res.status(500).json({ error: error.message || "Failed to sync Amazon orders" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

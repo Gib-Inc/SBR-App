@@ -37,6 +37,7 @@ interface ReturnRequest {
   id: string;
   externalOrderId: string;
   salesChannel: string;
+  salesOrderId: string | null;
   customerName: string;
   customerEmail: string | null;
   customerPhone: string | null;
@@ -45,6 +46,8 @@ interface ReturnRequest {
   resolutionRequested: string;
   resolutionFinal: string | null;
   reason: string | null;
+  initiatedVia: string;
+  labelProvider: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -52,11 +55,14 @@ interface ReturnRequest {
 interface ReturnItem {
   id: string;
   returnRequestId: string;
+  salesOrderLineId: string | null;
   inventoryItemId: string;
   sku: string;
+  qtyOrdered: number;
   qtyRequested: number;
   qtyApproved: number;
   qtyReceived: number;
+  itemReason: string | null;
   disposition: string | null;
   notes: string | null;
 }
@@ -179,6 +185,7 @@ export default function Returns() {
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium">Order ID</th>
                   <th className="p-3 text-left text-sm font-medium">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium">Source</th>
                   <th className="p-3 text-left text-sm font-medium">Customer</th>
                   <th className="p-3 text-left text-sm font-medium">Status</th>
                   <th className="p-3 text-left text-sm font-medium">Resolution</th>
@@ -199,6 +206,11 @@ export default function Returns() {
                     </td>
                     <td className="px-3 align-middle">
                       <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+                    </td>
+                    <td className="px-3 align-middle">
+                      <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
+                        {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual'}
+                      </Badge>
                     </td>
                     <td className="px-3 align-middle">{returnRequest.customerName}</td>
                     <td className="px-3 align-middle">
@@ -302,6 +314,18 @@ function ReturnDetailsModal({
               </div>
             </div>
             <div>
+              <Label className="text-muted-foreground">Initiated Via</Label>
+              <div className="mt-1">
+                <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
+                  {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual UI'}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Label Provider</Label>
+              <p className="font-medium">{returnRequest.labelProvider}</p>
+            </div>
+            <div>
               <Label className="text-muted-foreground">Resolution Requested</Label>
               <p className="font-medium">{returnRequest.resolutionRequested}</p>
             </div>
@@ -326,9 +350,11 @@ function ReturnDetailsModal({
               <TableHeader>
                 <TableRow>
                   <TableHead>SKU</TableHead>
+                  <TableHead className="text-right">Ordered</TableHead>
                   <TableHead className="text-right">Requested</TableHead>
                   <TableHead className="text-right">Approved</TableHead>
                   <TableHead className="text-right">Received</TableHead>
+                  <TableHead>Reason</TableHead>
                   <TableHead>Disposition</TableHead>
                 </TableRow>
               </TableHeader>
@@ -336,9 +362,17 @@ function ReturnDetailsModal({
                 {items.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-medium">{item.sku}</TableCell>
+                    <TableCell className="text-right">{item.qtyOrdered}</TableCell>
                     <TableCell className="text-right">{item.qtyRequested}</TableCell>
                     <TableCell className="text-right">{item.qtyApproved}</TableCell>
                     <TableCell className="text-right">{item.qtyReceived}</TableCell>
+                    <TableCell>
+                      {item.itemReason ? (
+                        <span className="text-sm text-muted-foreground">{item.itemReason}</span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {item.disposition ? (
                         <Badge variant="outline">{item.disposition}</Badge>

@@ -53,7 +53,8 @@ import {
   CheckCircle, 
   XCircle, 
   Trash2, 
-  Package 
+  Package,
+  PackageX
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -61,6 +62,7 @@ import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
+import { Link } from "wouter";
 import type { SalesOrder, SalesOrderLine, Item } from "@shared/schema";
 
 interface EnrichedSalesOrder extends SalesOrder {
@@ -123,6 +125,10 @@ export default function SalesOrders() {
 
   const { data: items = [] } = useQuery<Item[]>({
     queryKey: ["/api/items"],
+  });
+
+  const { data: returns = [] } = useQuery<Array<{ id: string; salesOrderId: string | null }>>({
+    queryKey: ["/api/returns"],
   });
 
   const finishedProducts = useMemo(() => 
@@ -369,6 +375,7 @@ export default function SalesOrders() {
                     <TableHead>Order Date</TableHead>
                     <TableHead className="text-right">Total Units</TableHead>
                     <TableHead className="text-right">Backordered</TableHead>
+                    <TableHead className="text-right">Returns</TableHead>
                     <TableHead className="sticky right-0 bg-card z-10 text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -376,6 +383,7 @@ export default function SalesOrders() {
                   {filteredOrders.map((order) => {
                     const totalUnits = order.totalUnits || 0;
                     const backorderedUnits = order.backorderedUnits || 0;
+                    const returnCount = returns.filter(r => r.salesOrderId === order.id).length;
                     
                     return (
                       <TableRow 
@@ -416,6 +424,25 @@ export default function SalesOrders() {
                           data-testid={`text-backorder-${order.id}`}
                         >
                           {backorderedUnits}
+                        </TableCell>
+                        <TableCell className="text-right" data-testid={`text-returns-${order.id}`}>
+                          {returnCount > 0 ? (
+                            <Link href="/returns">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 gap-1"
+                                data-testid={`button-view-returns-${order.id}`}
+                              >
+                                <PackageX className="h-4 w-4" />
+                                <span className="text-orange-600 dark:text-orange-400 font-medium">
+                                  {returnCount}
+                                </span>
+                              </Button>
+                            </Link>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
                         </TableCell>
                         <TableCell className="sticky right-0 bg-card z-10 text-right">
                           <Button

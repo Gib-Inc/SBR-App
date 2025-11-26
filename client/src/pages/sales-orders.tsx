@@ -1144,18 +1144,29 @@ function CreateReturnForm({ order, onSubmit, isPending, onCancel }: CreateReturn
                                 type="number"
                                 min="1"
                                 max={item.qtyFulfilled}
-                                value={field.value}
+                                value={field.value === 0 ? '' : field.value}
                                 onChange={(e) => {
-                                  const value = e.target.value === '' ? '' : parseInt(e.target.value);
-                                  if (value === '' || !isNaN(value as number)) {
-                                    field.onChange(value === '' ? 1 : value);
+                                  const rawValue = e.target.value;
+                                  if (rawValue === '') {
+                                    field.onChange(0);  // Temporarily set to 0 to allow clearing
+                                  } else {
+                                    const numValue = parseInt(rawValue);
+                                    if (!isNaN(numValue)) {
+                                      field.onChange(numValue);
+                                    }
                                   }
                                 }}
                                 onBlur={() => {
                                   const currentValue = field.value;
-                                  const numValue = typeof currentValue === 'number' ? currentValue : parseInt(String(currentValue));
-                                  const clamped = isNaN(numValue) || numValue < 1 ? 1 : Math.min(numValue, item.qtyFulfilled);
-                                  field.onChange(clamped);
+                                  if (currentValue === 0 || currentValue === null || currentValue === undefined || isNaN(currentValue)) {
+                                    field.onChange(Math.min(1, item.qtyFulfilled));
+                                  } else if (currentValue < 1) {
+                                    field.onChange(1);
+                                  } else if (currentValue > item.qtyFulfilled) {
+                                    field.onChange(item.qtyFulfilled);
+                                  }
+                                  // Trigger validation
+                                  form.trigger(`items.${index}.qtyRequested`);
                                 }}
                                 disabled={!form.watch(`items.${index}.selected`)}
                                 data-testid={`input-qty-return-${index}`}

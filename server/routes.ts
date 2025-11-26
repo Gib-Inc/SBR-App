@@ -3938,10 +3938,11 @@ Generate only the email body text, no subject line.`;
   // POST /api/returns/create-from-ghl
   // Headers: X-GHL-Secret: <shared secret>
   // Body: { externalOrderId, channel, customerName, customerEmail?, customerPhone?, ghlContactId?, shippingAddress?, resolutionRequested, reason, items: [{ sku, qtyRequested }] }
-  // Returns: { returnRequest, labelUrl, trackingNumber } for GHL to send via SMS/email
+  // Returns: { returnRequest, labelUrl, trackingNumber} for GHL to send via SMS/email
+  // Note: Uses rawBody to authenticate BEFORE JSON parsing to ensure 401 precedes all other errors
   app.post("/api/returns/create-from-ghl", async (req: Request, res: Response) => {
     try {
-      // Authenticate via shared secret with timing-safe comparison
+      // Authenticate FIRST using rawBody (before JSON parsing errors can occur)
       const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
       const providedSecret = req.headers['x-ghl-secret'] as string;
       
@@ -3967,7 +3968,7 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: "Unauthorized: Invalid GHL secret" });
       }
 
-      // Validate request body exists after authentication
+      // Authentication successful - NOW validate and parse body
       if (!req.body || typeof req.body !== 'object') {
         return res.status(400).json({ error: "Invalid request body" });
       }

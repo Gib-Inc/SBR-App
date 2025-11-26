@@ -3933,6 +3933,133 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Create return from GHL (authenticated via shared secret)
+  // POST /api/returns/create-from-ghl
+  // Headers: X-GHL-Secret: <shared secret>
+  // Body: { externalOrderId, channel, customerName, customerEmail?, customerPhone?, ghlContactId?, shippingAddress?, resolutionRequested, reason, items: [{ sku, qtyRequested }] }
+  // Returns: { returnRequest, labelUrl, trackingNumber } for GHL to send via SMS/email
+  app.post("/api/returns/create-from-ghl", async (req: Request, res: Response) => {
+    try {
+      // Authenticate via shared secret
+      const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
+      const providedSecret = req.headers['x-ghl-secret'];
+      
+      if (!ghlSecret || providedSecret !== ghlSecret) {
+        return res.status(401).json({ error: "Unauthorized: Invalid or missing GHL secret" });
+      }
+
+      const { items: itemsData, ...requestData } = req.body;
+
+      // Look up SalesOrder if externalOrderId and channel provided
+      let salesOrderId = requestData.salesOrderId;
+      let orderNumber = null;
+      if (!salesOrderId && requestData.externalOrderId && requestData.channel) {
+        const salesOrders = await storage.getAllSalesOrders();
+        const salesOrder = salesOrders.find(
+          so => so.externalOrderId === requestData.externalOrderId && 
+                so.channel === requestData.channel
+        );
+        if (salesOrder) {
+          salesOrderId = salesOrder.id;
+          orderNumber = salesOrder.orderNumber;
+        }
+      }
+
+      // Validate return request data
+      const validatedRequest = insertReturnRequestSchema.parse({
+        ...requestData,
+        salesOrderId: salesOrderId || null,
+        orderNumber: orderNumber,
+        salesChannel: requestData.channel,
+        source: 'GHL',
+        initiatedVia: 'GHL_BOT',
+      });
+
+      const returnRequest = await storage.createReturnRequest(validatedRequest);
+      const returnItems: ReturnItem[] = [];
+
+      // Create return items
+      for (const itemData of itemsData) {
+        let inventoryItem: Item | undefined;
+        
+        // Find item by SKU
+        if (itemData.sku) {
+          inventoryItem = await storage.getItemBySku(itemData.sku);
+        } else if (itemData.inventoryItemId) {
+          inventoryItem = await storage.getItem(itemData.inventoryItemId);
+        }
+
+        if (!inventoryItem) {
+          throw new Error(`Item not found: ${itemData.sku || itemData.inventoryItemId}`);
+        }
+
+        const returnItem = await storage.createReturnItem({
+          returnRequestId: returnRequest.id,
+          salesOrderLineId: itemData.salesOrderLineId || null,
+          inventoryItemId: inventoryItem.id,
+          sku: inventoryItem.sku,
+          qtyOrdered: itemData.qtyOrdered || itemData.qtyRequested,
+          qtyRequested: itemData.qtyRequested,
+          qtyApproved: itemData.qtyApproved || itemData.qtyRequested,
+          itemReason: itemData.itemReason || null,
+          disposition: itemData.disposition || null,
+        });
+
+        returnItems.push(returnItem);
+      }
+
+      // Automatically generate shipping label if address is provided
+      let labelUrl = null;
+      let trackingNumber = null;
+
+      if (requestData.shippingAddress) {
+        try {
+          const itemsForLabel = returnItems.map(ri => ({
+            sku: ri.sku,
+            name: ri.sku,
+            quantity: ri.qtyApproved,
+          }));
+
+          const labelResponse = await labelService.generateLabel({
+            customerName: returnRequest.customerName,
+            customerAddress: requestData.shippingAddress,
+            items: itemsForLabel,
+          });
+
+          // Create shipment record
+          await storage.createReturnShipment({
+            returnRequestId: returnRequest.id,
+            carrier: labelResponse.carrier,
+            trackingNumber: labelResponse.trackingNumber,
+            labelUrl: labelResponse.labelUrl,
+          });
+
+          // Update return request status
+          await storage.updateReturnRequest(returnRequest.id, {
+            status: 'LABEL_ISSUED',
+            labelProvider: 'SHIPPO',
+          });
+
+          labelUrl = labelResponse.labelUrl;
+          trackingNumber = labelResponse.trackingNumber;
+        } catch (labelError: any) {
+          console.error("[Returns] Failed to generate label for GHL return:", labelError);
+          // Continue without label - GHL can retry later
+        }
+      }
+
+      res.status(201).json({ 
+        returnRequest,
+        items: returnItems,
+        labelUrl,
+        trackingNumber,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error creating return from GHL:", error);
+      res.status(400).json({ error: error.message || "Failed to create return from GHL" });
+    }
+  });
+
   // ============================================================================
   // SALES ORDERS & BACKORDERS
   // ============================================================================

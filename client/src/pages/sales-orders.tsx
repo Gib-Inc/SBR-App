@@ -117,6 +117,7 @@ export default function SalesOrders() {
   const { toast } = useToast();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showNewOrderDialog, setShowNewOrderDialog] = useState(false);
+  const [showCreateReturnDialog, setShowCreateReturnDialog] = useState(false);
   const [channelFilter, setChannelFilter] = useState<string>("ALL");
 
   const { data: orders = [], isLoading } = useQuery<EnrichedSalesOrder[]>({
@@ -253,6 +254,46 @@ export default function SalesOrders() {
     onError: (error: Error) => {
       toast({ 
         title: "Failed to cancel order", 
+        description: error.message,
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const createReturnMutation = useMutation({
+    mutationFn: async (data: {
+      salesOrderId: string;
+      externalOrderId: string;
+      salesChannel: string;
+      customerName: string;
+      customerEmail: string | null;
+      customerPhone: string | null;
+      resolutionRequested: string;
+      reason: string;
+      items: Array<{
+        inventoryItemId: string;
+        sku: string;
+        qtyOrdered: number;
+        qtyRequested: number;
+      }>;
+    }) => {
+      const res = await apiRequest("POST", "/api/returns", {
+        ...data,
+        source: "Manual",
+        initiatedVia: "MANUAL_UI",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      toast({ title: "Return request created successfully" });
+      setShowCreateReturnDialog(false);
+    },
+    onError: (error: Error) => {
+      toast({ 
+        title: "Failed to create return", 
         description: error.message,
         variant: "destructive" 
       });
@@ -601,6 +642,14 @@ export default function SalesOrders() {
                   data-testid="button-close-drawer"
                 >
                   Close
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowCreateReturnDialog(true)}
+                  data-testid="button-create-return"
+                >
+                  <PackageX className="h-4 w-4 mr-2" />
+                  Create Return
                 </Button>
                 {canCancel && (
                   <Button

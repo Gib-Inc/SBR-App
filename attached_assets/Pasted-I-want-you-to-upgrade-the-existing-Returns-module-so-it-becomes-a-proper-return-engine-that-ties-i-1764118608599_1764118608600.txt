@@ -1,0 +1,94 @@
+I want you to upgrade the existing Returns module so it becomes a proper “return engine” that ties into Sales Orders, inventory, and (later) GHL. Do NOT add any new top-level pages or routes; use the existing Returns page and current models, extending them where needed. Keep all visual styles consistent with the current app.
+
+Data model: standard Return + ReturnLine
+– Reuse or extend the existing return models so that every return has:
+• id
+• salesOrderId (link back to the SalesOrder)
+• channel (enum aligned with SalesOrder: SHOPIFY, AMAZON, MANUAL, etc.)
+• externalOrderId (Shopify order id, Amazon order id, etc.)
+• status: OPEN, LABEL_ISSUED, IN_TRANSIT, RECEIVED, CLOSED
+• resolution: REFUND, REPLACEMENT, TROUBLESHOOTED, CANCELLED
+• labelProvider: SHIPPO, EASYPOST, STUB, etc. (for now use STUB)
+• labelTrackingNumber
+• labelUrl (PDF/link the customer gets)
+• initiatedVia: GHL_BOT or MANUAL_UI
+• createdAt, updatedAt
+
+– Each return must have ReturnLine entries with at least:
+• id
+• returnId
+• salesOrderLineId (if available)
+• sku / inventoryItemId
+• qtyOrdered (from the original order)
+• qtyApprovedForReturn
+• qtyReceived
+• disposition: RETURN_TO_STOCK, SCRAP, REPLACE_ONLY
+• reason (text)
+
+Use the existing schema style; extend current tables instead of creating redundant ones.
+
+Ingestion: create API entry for GHL and for manual UI
+– Add a backend endpoint to create a return request from external systems (this will be used by a GHL workflow later). Example shape:
+• orderChannel (SHOPIFY / AMAZON / MANUAL)
+• externalOrderId
+• customer name + contact details
+• array of items (sku, quantity, reason, disposition)
+
+– When this endpoint is called:
+• Look up the SalesOrder using channel + externalOrderId.
+• Create a Return record + ReturnLine records tied to that SalesOrder.
+• Generate a return shipping label via a dedicated “ReturnLabelService” (stub, see below).
+• Save labelTrackingNumber and labelUrl on the Return.
+• Set status to LABEL_ISSUED and resolution to REFUND or REPLACEMENT based on the payload.
+
+– Also allow creation of a return from the UI on the Returns page (for now, this can be a simple “Create Return” button that lets a user search by external order id or SalesOrder and pick items/qty).
+
+ReturnLabelService stub (for Shippo/EasyPost later)
+– Implement a ReturnLabelService that has a clear interface, e.g. createReturnLabel(returnId, salesOrder) which:
+• Uses the shipping address from the linked SalesOrder and a configured warehouse address (you can read this from an env var or config).
+• For now, returns a fake but realistic tracking number and a dummy label URL.
+• Persists these values on the Return record.
+
+– Do NOT hardwire Shippo/EasyPost directly yet; keep the code clearly separated so we can swap in a real provider later by only changing ReturnLabelService.
+
+Returns page UI behavior (reuse the existing page)
+– Keep the Returns page route and layout as-is, but wire it to the new Return/ReturnLine models.
+– The table should list real Return records with columns like:
+• Return ID
+• Order ID (externalOrderId)
+• Channel (badge: SHOPIFY, AMAZON, MANUAL, etc.)
+• Customer
+• Status (OPEN, LABEL_ISSUED, IN_TRANSIT, RECEIVED, CLOSED)
+• Resolution (REFUND, REPLACEMENT, etc.)
+• Created date
+• Actions
+
+– Clicking a row or a “View / Receive” action should open a Return Detail modal:
+• Show order + customer info.
+• Show the list of ReturnLines with: item name, sku, qtyApprovedForReturn, qtyReceived, disposition.
+• Show labelTrackingNumber and a link button for labelUrl.
+• If status is LABEL_ISSUED or IN_TRANSIT, allow the user to mark the return as RECEIVED.
+
+– When the user clicks “Receive” in the detail modal:
+• Let them edit qtyReceived for each line (default to qtyApprovedForReturn).
+• On confirm, create appropriate inventory transactions:
+– For disposition RETURN_TO_STOCK, increase raw or finished stock using the existing TransactionService.
+– For SCRAP, do not increase stock, but still mark qtyReceived.
+• Update ReturnLine.qtyReceived and set Return.status to RECEIVED (or CLOSED if there is no additional processing).
+
+Link Returns to Sales Orders and inventory
+– Ensure Returns are discoverable from Sales Orders:
+• On the Sales Orders page, add a small indicator if an order has one or more Returns (e.g., a “Returns” pill with count).
+• Clicking the pill can open the relevant return in the Returns page or modal.
+
+– Make sure inventory updates done via returns use the same transaction/audit system already used for PO receipts and barcode scans, so analytics and AI forecasts stay consistent.
+
+Prepare for GHL bot integration (stub, not full integration yet)
+– Add a clear service function that the GHL webhook will eventually call (for example createReturnFromSupportDecision(payload)), which internally calls the new “create return request” logic and ReturnLabelService.
+– Log enough info so that when GHL triggers a return, we can easily trace it in the UI (initiatedVia = GHL_BOT, plus the original support-case id if we pass it in later).
+– Do not build any UI inside GHL, just make sure our side is ready to accept that call.
+
+After this is done, I should be able to:
+– See real Return records on the Returns page tied back to Shopify/Amazon/Manual sales orders.
+– Generate a (stub) return label and tracking number whenever a return is created.
+– Receive returned items, update inventory correctly, and close out the return—all using the existing app layout and transaction logic.

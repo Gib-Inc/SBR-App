@@ -503,19 +503,23 @@ export type ItemWithComputedQuantities = Item & {
 
 export const returnRequests = pgTable("return_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  salesOrderId: varchar("sales_order_id").references(() => salesOrders.id), // Link to SalesOrder
   externalOrderId: text("external_order_id").notNull(), // Upstream order ID from Shopify/Amazon/etc.
   salesChannel: text("sales_channel").notNull(), // 'SHOPIFY', 'AMAZON', 'DIRECT', 'OTHER'
   customerName: text("customer_name").notNull(),
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone"),
   ghlContactId: text("ghl_contact_id"), // Link back to GHL contact for workflows
-  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'REFUNDED', 'REPLACED', 'CANCELLED'
-  resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT'
+  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED', 'CANCELLED'
+  resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT', 'TROUBLESHOOT'
   resolutionFinal: text("resolution_final"), // What actually happened (nullable)
+  labelProvider: text("label_provider"), // 'SHIPPO', 'EASYPOST', 'STUB', etc.
+  initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI'
   reason: text("reason"), // High-level reason from GHL bot
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
+  salesOrderIdIdx: index("return_requests_sales_order_id_idx").on(table.salesOrderId),
   externalOrderIdIdx: index("return_requests_external_order_id_idx").on(table.externalOrderId),
   statusIdx: index("return_requests_status_idx").on(table.status),
   createdAtIdx: index("return_requests_created_at_idx").on(table.createdAt),
@@ -532,16 +536,20 @@ export type ReturnRequest = typeof returnRequests.$inferSelect;
 export const returnItems = pgTable("return_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id),
+  salesOrderLineId: varchar("sales_order_line_id"), // Link to SalesOrderLine if available
   inventoryItemId: varchar("inventory_item_id").notNull().references(() => items.id),
   sku: text("sku").notNull(), // Denormalized for quick viewing
-  qtyRequested: integer("qty_requested").notNull(),
+  qtyOrdered: integer("qty_ordered").notNull(), // Original qty from order
+  qtyRequested: integer("qty_requested").notNull(), // What customer wants to return
   qtyApproved: integer("qty_approved").notNull().default(0), // What we allow to be returned
   qtyReceived: integer("qty_received").notNull().default(0), // What actually came back
-  disposition: text("disposition"), // 'RESTOCK', 'SCRAP', 'INSPECT' (null until received)
+  disposition: text("disposition"), // 'RETURN_TO_STOCK', 'SCRAP', 'REPLACE_ONLY', 'INSPECT' (null until received)
+  itemReason: text("item_reason"), // Specific reason for this item
   notes: text("notes"),
 }, (table) => ({
   returnRequestIdIdx: index("return_items_return_request_id_idx").on(table.returnRequestId),
   inventoryItemIdIdx: index("return_items_inventory_item_id_idx").on(table.inventoryItemId),
+  salesOrderLineIdIdx: index("return_items_sales_order_line_id_idx").on(table.salesOrderLineId),
 }));
 
 export const insertReturnItemSchema = createInsertSchema(returnItems).omit({ id: true });

@@ -3963,7 +3963,19 @@ Generate only the email body text, no subject line.`;
   app.get("/api/returns", requireAuth, async (req: Request, res: Response) => {
     try {
       const returnRequests = await storage.getAllReturnRequests();
-      res.json(returnRequests);
+      
+      // Include shipments for each return to enable transit time tracking
+      const returnsWithShipments = await Promise.all(
+        returnRequests.map(async (returnRequest) => {
+          const shipments = await storage.getReturnShipmentsByRequestId(returnRequest.id);
+          return {
+            ...returnRequest,
+            shipments: shipments || [],
+          };
+        })
+      );
+      
+      res.json(returnsWithShipments);
     } catch (error: any) {
       console.error("[Returns] Error fetching returns:", error);
       res.status(500).json({ error: error.message || "Failed to fetch returns" });

@@ -10,10 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
+import { IntegrationSettings } from "@/components/integration-settings";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
 
@@ -175,10 +176,27 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
+  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | null>(null);
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
     queryKey: ["/api/settings"],
+  });
+
+  // Fetch integration configs
+  const { data: extensivConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/EXTENSIV"],
+    retry: false,
+  });
+
+  const { data: shopifyConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/SHOPIFY"],
+    retry: false,
+  });
+
+  const { data: amazonConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/AMAZON"],
+    retry: false,
   });
 
   // Fetch integration health
@@ -250,7 +268,44 @@ export default function AIAgent() {
     }
   };
 
+  const getConfigStatus = (config: any) => {
+    if (!config || !config.apiKey) return "not_configured";
+    if (config.lastSyncStatus === "SUCCESS") return "connected";
+    if (config.lastSyncStatus === "FAILED") return "failed";
+    return "pending";
+  };
+
   const dataSources = [
+    {
+      id: "extensiv",
+      integrationType: "EXTENSIV" as const,
+      name: "Extensiv/Pivot",
+      description: "3PL warehouse inventory",
+      icon: Database,
+      configured: !!(extensivConfig?.apiKey),
+      status: getConfigStatus(extensivConfig),
+      hasConfigDialog: true,
+    },
+    {
+      id: "shopify",
+      integrationType: "SHOPIFY" as const,
+      name: "Shopify",
+      description: "E-commerce orders and inventory",
+      icon: ShoppingBag,
+      configured: !!(shopifyConfig?.apiKey),
+      status: getConfigStatus(shopifyConfig),
+      hasConfigDialog: true,
+    },
+    {
+      id: "amazon",
+      integrationType: "AMAZON" as const,
+      name: "Amazon Seller Central",
+      description: "Marketplace orders and fulfillment",
+      icon: Package,
+      configured: !!(amazonConfig?.apiKey),
+      status: getConfigStatus(amazonConfig),
+      hasConfigDialog: true,
+    },
     {
       id: "gohighlevel",
       name: "GoHighLevel",
@@ -258,14 +313,7 @@ export default function AIAgent() {
       icon: Database,
       configured: !!(settingsData?.gohighlevelApiKey && settingsData.gohighlevelApiKey.trim()),
       status: integrationHealth?.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "unknown",
-    },
-    {
-      id: "extensiv",
-      name: "Extensiv/Pivot",
-      description: "3PL warehouse inventory",
-      icon: Database,
-      configured: !!(settingsData?.extensivApiKey && settingsData.extensivApiKey.trim()),
-      status: integrationHealth?.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "unknown",
+      hasConfigDialog: false,
     },
     {
       id: "phantombuster",
@@ -274,22 +322,7 @@ export default function AIAgent() {
       icon: Database,
       configured: !!(settingsData?.phantombusterApiKey && settingsData.phantombusterApiKey.trim()),
       status: integrationHealth?.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "unknown",
-    },
-    {
-      id: "quickbooks",
-      name: "QuickBooks",
-      description: "Accounting and invoicing",
-      icon: Database,
-      configured: false,
-      status: "not_configured",
-    },
-    {
-      id: "stripe",
-      name: "Stripe",
-      description: "Payment transactions",
-      icon: Database,
-      configured: false,
-      status: "not_configured",
+      hasConfigDialog: false,
     },
   ];
 
@@ -392,7 +425,7 @@ export default function AIAgent() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-2">
                           <Badge
                             variant={
                               !source.configured
@@ -413,18 +446,31 @@ export default function AIAgent() {
                                 ? "Failed"
                                 : "Pending Test"}
                           </Badge>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleSync(source.id)}
-                            disabled={!source.configured || syncingSource === source.id}
-                            data-testid={`button-sync-${source.id}`}
-                          >
-                            <RefreshCw
-                              className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                            />
-                            {syncingSource === source.id ? "Syncing..." : "Sync"}
-                          </Button>
+                          <div className="flex gap-2">
+                            {source.hasConfigDialog && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setOpenIntegration(source.integrationType)}
+                                data-testid={`button-configure-${source.id}`}
+                              >
+                                <Settings2 className="mr-2 h-4 w-4" />
+                                Configure
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleSync(source.id)}
+                              disabled={!source.configured || syncingSource === source.id}
+                              data-testid={`button-sync-${source.id}`}
+                            >
+                              <RefreshCw
+                                className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                              />
+                              {syncingSource === source.id ? "Syncing..." : "Sync"}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </CardContent>
@@ -595,6 +641,15 @@ export default function AIAgent() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Integration Settings Dialogs */}
+      {openIntegration && (
+        <IntegrationSettings
+          integrationType={openIntegration}
+          open={!!openIntegration}
+          onClose={() => setOpenIntegration(null)}
+        />
+      )}
     </div>
   );
 }

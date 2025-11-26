@@ -115,6 +115,7 @@ export default function SalesOrders() {
   const { toast } = useToast();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showNewOrderDialog, setShowNewOrderDialog] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<string>("ALL");
 
   const { data: orders = [], isLoading } = useQuery<EnrichedSalesOrder[]>({
     queryKey: ["/api/sales-orders"],
@@ -128,6 +129,11 @@ export default function SalesOrders() {
     items.filter(item => item.type === "finished_product"),
     [items]
   );
+
+  const filteredOrders = useMemo(() => {
+    if (channelFilter === "ALL") return orders;
+    return orders.filter(order => order.channel === channelFilter);
+  }, [orders, channelFilter]);
 
   const { data: selectedOrder } = useQuery<SalesOrder & { lines: SalesOrderLine[] }>({
     queryKey: ["/api/sales-orders", selectedOrderId],
@@ -334,7 +340,22 @@ export default function SalesOrders() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>All Orders</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>All Orders</CardTitle>
+              <Select value={channelFilter} onValueChange={setChannelFilter}>
+                <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
+                  <SelectValue placeholder="Filter by channel" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Channels</SelectItem>
+                  <SelectItem value="SHOPIFY">Shopify</SelectItem>
+                  <SelectItem value="AMAZON">Amazon</SelectItem>
+                  <SelectItem value="GHL">GoHighLevel</SelectItem>
+                  <SelectItem value="DIRECT">Direct</SelectItem>
+                  <SelectItem value="OTHER">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[calc(100vh-280px)]">
@@ -352,7 +373,7 @@ export default function SalesOrders() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {orders.map((order) => {
+                  {filteredOrders.map((order) => {
                     const totalUnits = order.totalUnits || 0;
                     const backorderedUnits = order.backorderedUnits || 0;
                     

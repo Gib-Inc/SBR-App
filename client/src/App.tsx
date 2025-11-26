@@ -21,7 +21,6 @@ import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
-import Integrations from "@/pages/integrations";
 import Settings from "@/pages/settings";
 import Suppliers from "@/pages/suppliers";
 import SalesOrders from "@/pages/sales-orders";
@@ -109,7 +108,6 @@ function AuthenticatedApp() {
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
-                    <Route path="/integrations" component={Integrations} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />
                   </Switch>

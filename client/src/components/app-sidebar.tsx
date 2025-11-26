@@ -1,4 +1,4 @@
-import { LayoutDashboard, Package, Barcode, Brain, Settings, Building2, PackageOpen, Plug, ShoppingCart } from "lucide-react";
+import { LayoutDashboard, Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -48,11 +48,6 @@ const mainMenuItems = [
     title: "AI Agent",
     url: "/ai",
     icon: Brain,
-  },
-  {
-    title: "Integrations",
-    url: "/integrations",
-    icon: Plug,
   },
 ];
 

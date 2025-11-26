@@ -1,0 +1,25 @@
+When I run the app, the behavior does not match what you described:
+– On the Sales Orders page I only see the empty state (“No sales orders yet” with a “Create First Order” button). There are no Shopify/Amazon demo orders and no channel badges.
+– On the Returns page I see two static Shopify rows, but these look like hard-coded examples rather than real Return records tied to Sales Orders.
+
+Please fix this so the integration is actually visible and testable in the UI:
+
+Seed demo Sales Orders
+– When the database has zero SalesOrder records (development/demo mode), automatically seed a small set of example orders from Shopify and Amazon Seller Central.
+– Each seeded order must populate the existing SalesOrder schema fields, including: id, orderNumber, channel (SHOPIFY or AMAZON), customer name, created date, items, quantities, and linked Inventory/BOM items where applicable.
+– Show these orders in the Sales Orders table with proper “Channel” badges (SHOPIFY / AMAZON) exactly as designed in the UI.
+– Make sure clicking a row still opens the Sales Order detail drawer/modal and shows the line items correctly.
+
+Wire Returns to the same data model
+– Remove any hard-coded example rows from the Returns page.
+– Make the Returns table read from an actual Return/ReturnRequest model that links back to a SalesOrder (e.g., by orderId or orderNumber).
+– Seed matching demo Return records for some of the seeded Sales Orders (e.g., one Shopify refund and one Amazon replacement) so the Returns page shows realistic data.
+– Ensure the “Channel” and “Source” badges on the Returns table are driven from the underlying data (SHOPIFY / AMAZON / Manual) and not hard-coded.
+
+Keep everything inside the existing pages
+– Do not add new routes or pages.
+– Use the existing Sales Orders and Returns pages and the existing AI Agent → Data Sources cards; just make sure the Shopify/Amazon mock sync populates these tables so I can see and test the full flow end-to-end.
+
+After this change, I should be able to:
+– Run the app and immediately see several Shopify and Amazon orders in the Sales Orders table with the correct channel badges.
+– See corresponding demo return requests on the Returns page that are driven from the same data model, not mock rows.

@@ -198,7 +198,7 @@ export class AmazonClient {
     });
 
     const totalAmount = order.OrderTotal ? parseFloat(order.OrderTotal.Amount) : undefined;
-    const currency = order.OrderTotal?.CurrencyCode || 'USD';
+    const currency = order.OrderTotal?.CurrencyCode || 'USD'; // Default to USD if not provided
 
     return {
       externalOrderId: order.AmazonOrderId,

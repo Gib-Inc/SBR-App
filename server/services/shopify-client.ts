@@ -154,7 +154,7 @@ export class ShopifyClient {
     }));
 
     const totalAmount = order.total_price ? parseFloat(order.total_price) : undefined;
-    const currency = order.currency || 'USD';
+    const currency = order.currency || 'USD'; // Default to USD if not provided
 
     return {
       externalOrderId: String(order.id),

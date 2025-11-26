@@ -504,15 +504,49 @@ export default function SalesOrders() {
                         )}
                       </td>
                       <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setSelectedOrderId(order.id)}
-                          data-testid={`button-view-${order.id}`}
-                        >
-                          <Eye className="h-4 w-4 mr-2" />
-                          View
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setSelectedOrderId(order.id)}
+                            data-testid={`button-view-${order.id}`}
+                          >
+                            <Eye className="h-4 w-4 mr-2" />
+                            View
+                          </Button>
+                          {(() => {
+                            const hasAnyFulfilled = order.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
+                            const canReturn = order.status !== "CANCELLED" && hasAnyFulfilled;
+                            const tooltip = !hasAnyFulfilled ? "No items available to return yet" : undefined;
+                            
+                            return (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setSelectedOrderId(order.id);
+                                        if (canReturn) {
+                                          // Open drawer first, then show return dialog after a brief delay
+                                          setTimeout(() => setShowCreateReturnDialog(true), 100);
+                                        }
+                                      }}
+                                      disabled={!canReturn}
+                                      data-testid={`button-return-${order.id}`}
+                                    >
+                                      <Package className="h-4 w-4" />
+                                    </Button>
+                                  </span>
+                                </TooltipTrigger>
+                                {tooltip && (
+                                  <TooltipContent>{tooltip}</TooltipContent>
+                                )}
+                              </Tooltip>
+                            );
+                          })()}
+                        </div>
                       </td>
                     </tr>
                   );

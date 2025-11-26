@@ -291,6 +291,16 @@ export const settings = pgTable("settings", {
   enableVisionCapture: boolean("enable_vision_capture").notNull().default(false),
   visionProvider: text("vision_provider"), // 'gpt-4-vision', 'claude-vision'
   visionModel: text("vision_model"), // 'gpt-4o', 'gpt-4o-mini', 'claude-3-opus', 'claude-3-sonnet'
+  // AI Decision Engine Rules Configuration
+  aiVelocityLookbackDays: integer("ai_velocity_lookback_days").notNull().default(14), // 7, 14, or 30
+  aiSafetyStockDays: integer("ai_safety_stock_days").notNull().default(7), // Buffer stock in days
+  aiRiskThresholdHighDays: integer("ai_risk_threshold_high_days").notNull().default(0), // HIGH if daysUntilStockout < leadTime + this
+  aiRiskThresholdMediumDays: integer("ai_risk_threshold_medium_days").notNull().default(7), // MEDIUM if < leadTime + this
+  aiReturnRateImpact: real("ai_return_rate_impact").notNull().default(0.5), // 0-1, how much high returns reduce reorderQty
+  aiAdDemandImpact: real("ai_ad_demand_impact").notNull().default(0.2), // 0-1, weight for ad-driven demand (future)
+  aiSupplierDisputePenaltyDays: integer("ai_supplier_dispute_penalty_days").notNull().default(3), // Extra lead time days per dispute
+  aiDefaultLeadTimeDays: integer("ai_default_lead_time_days").notNull().default(7), // Default supplier lead time
+  aiMinOrderQuantity: integer("ai_min_order_quantity").notNull().default(1), // Default MOQ if not set on item
 });
 
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });

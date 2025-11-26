@@ -4,12 +4,26 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
+
+interface AIAtRiskItem {
+  id: string;
+  name: string;
+  sku: string;
+  currentStock: number;
+  dailyUsage: number;
+  daysOfCover: number;
+  riskLevel: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+  recommendedQty: number;
+  recommendedAction: "ORDER" | "MONITOR" | "OK";
+  explanation: string;
+}
 
 export default function Dashboard() {
   const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
@@ -35,6 +49,12 @@ export default function Dashboard() {
   // Fetch demand forecasts
   const { data: demandForecasts, isLoading: isLoadingForecasts } = useQuery<any[]>({
     queryKey: ["/api/llm/demand-forecast"],
+  });
+
+  // Fetch AI-powered at-risk items from decision engine
+  const { data: aiAtRiskItems, isLoading: isLoadingAIAtRisk } = useQuery<AIAtRiskItem[]>({
+    queryKey: ["/api/ai/at-risk"],
+    staleTime: 60000, // Cache for 1 minute
   });
 
   // Sync mutation - must be before early return to avoid hooks violation
@@ -415,43 +435,93 @@ export default function Dashboard() {
       <AdDemandSignals variant="dashboard" />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* At-Risk Items */}
+        {/* AI-Powered At-Risk Items */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Top 5 At-Risk Items</CardTitle>
-            <p className="text-sm text-muted-foreground">Lowest days of cover</p>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-primary" />
+                  Top 5 At-Risk Items
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">AI-powered risk analysis</p>
+              </div>
+              {isLoadingAIAtRisk && (
+                <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            {atRiskItems.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">No at-risk items</p>
+            {!aiAtRiskItems || aiAtRiskItems.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {isLoadingAIAtRisk ? "Analyzing inventory..." : "No at-risk items"}
+              </p>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="whitespace-nowrap">Item</TableHead>
-                    <TableHead className="whitespace-nowrap">SKU</TableHead>
+                    <TableHead className="whitespace-nowrap">Risk</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Stock</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Daily Usage</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Days of Cover</TableHead>
-                    <TableHead className="whitespace-nowrap"></TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Days Left</TableHead>
+                    <TableHead className="whitespace-nowrap">Action</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">Why</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {atRiskItems.map((item: any) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-medium whitespace-nowrap">{item.name}</TableCell>
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{item.sku}</TableCell>
+                  {aiAtRiskItems.map((item: AIAtRiskItem) => (
+                    <TableRow key={item.id} data-testid={`row-at-risk-${item.id}`}>
+                      <TableCell className="whitespace-nowrap">
+                        <div>
+                          <p className="font-medium">{item.name}</p>
+                          <p className="text-xs font-mono text-muted-foreground">{item.sku}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge 
+                          variant={
+                            item.riskLevel === "HIGH" ? "destructive" : 
+                            item.riskLevel === "MEDIUM" ? "secondary" : 
+                            "outline"
+                          }
+                          data-testid={`badge-risk-${item.id}`}
+                        >
+                          {item.riskLevel}
+                        </Badge>
+                      </TableCell>
                       <TableCell className="text-right whitespace-nowrap">{item.currentStock}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{item.dailyUsage}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">
-                        <Badge variant={item.daysOfCover < 7 ? "destructive" : "secondary"}>
+                        <Badge variant={item.daysOfCover <= 0 ? "destructive" : item.daysOfCover < 7 ? "secondary" : "outline"}>
                           {item.daysOfCover} days
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        <Button size="sm" variant="outline" data-testid={`button-order-${item.id}`}>
-                          Order Now
-                        </Button>
+                      <TableCell className="whitespace-nowrap">
+                        {item.recommendedAction === "ORDER" && item.recommendedQty > 0 ? (
+                          <Button size="sm" variant="default" data-testid={`button-order-${item.id}`}>
+                            Order {item.recommendedQty}
+                          </Button>
+                        ) : item.recommendedAction === "MONITOR" ? (
+                          <Badge variant="secondary">Monitor</Badge>
+                        ) : (
+                          <Badge variant="outline">OK</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center whitespace-nowrap">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              data-testid={`button-why-${item.id}`}
+                            >
+                              <HelpCircle className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="left" className="max-w-xs">
+                            <p className="text-sm">{item.explanation}</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   ))}

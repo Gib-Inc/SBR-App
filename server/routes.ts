@@ -52,8 +52,12 @@ import {
   type SalesOrderLine,
 } from "@shared/schema";
 import { createReturnLabelService } from "./return-label-service";
+import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 
 const SALT_ROUNDS = 10;
+
+// Create a single instance of the decision engine
+const decisionEngine = new InventoryDecisionEngine(storage);
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
@@ -292,6 +296,170 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch dashboard data" });
+    }
+  });
+
+  // ============================================================================
+  // AI DECISION ENGINE
+  // ============================================================================
+
+  // GET /api/ai/insights - Get all SKU recommendations from the decision engine
+  app.get("/api/ai/insights", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const forceRefresh = req.query.refresh === "true";
+      
+      const result = await decisionEngine.computeRecommendations(userId, forceRefresh);
+      
+      res.json({
+        recommendations: result.recommendations,
+        computedAt: result.computedAt,
+        rulesApplied: result.rulesApplied,
+        summary: {
+          total: result.recommendations.length,
+          high: result.recommendations.filter(r => r.riskLevel === "HIGH").length,
+          medium: result.recommendations.filter(r => r.riskLevel === "MEDIUM").length,
+          low: result.recommendations.filter(r => r.riskLevel === "LOW").length,
+          unknown: result.recommendations.filter(r => r.riskLevel === "UNKNOWN").length,
+          actionRequired: result.recommendations.filter(r => r.recommendedAction === "ORDER").length,
+        },
+      });
+    } catch (error: any) {
+      console.error("[AI Insights] Error computing recommendations:", error);
+      res.status(500).json({ error: error.message || "Failed to compute recommendations" });
+    }
+  });
+
+  // GET /api/ai/at-risk - Get top at-risk items for dashboard widget
+  app.get("/api/ai/at-risk", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const limit = parseInt(req.query.limit as string) || 5;
+      
+      const atRiskItems = await decisionEngine.getTopAtRiskItems(userId, limit);
+      
+      // Format for dashboard consumption
+      const formatted = atRiskItems.map(item => ({
+        id: item.itemId,
+        name: item.productName,
+        sku: item.sku,
+        currentStock: item.metrics.onHand,
+        dailyUsage: item.metrics.dailySalesVelocity,
+        daysOfCover: Math.floor(item.metrics.projectedDaysUntilStockout),
+        riskLevel: item.riskLevel,
+        recommendedQty: item.recommendedQty,
+        recommendedAction: item.recommendedAction,
+        explanation: item.explanation,
+      }));
+      
+      res.json(formatted);
+    } catch (error: any) {
+      console.error("[AI At-Risk] Error fetching at-risk items:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch at-risk items" });
+    }
+  });
+
+  // GET /api/ai/rules - Get current AI rules configuration
+  app.get("/api/ai/rules", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      
+      // Return current rules or defaults
+      res.json({
+        velocityLookbackDays: settings?.aiVelocityLookbackDays ?? 14,
+        safetyStockDays: settings?.aiSafetyStockDays ?? 7,
+        riskThresholdHighDays: settings?.aiRiskThresholdHighDays ?? 0,
+        riskThresholdMediumDays: settings?.aiRiskThresholdMediumDays ?? 7,
+        returnRateImpact: settings?.aiReturnRateImpact ?? 0.5,
+        adDemandImpact: settings?.aiAdDemandImpact ?? 0.2,
+        supplierDisputePenaltyDays: settings?.aiSupplierDisputePenaltyDays ?? 3,
+        defaultLeadTimeDays: settings?.aiDefaultLeadTimeDays ?? 7,
+        minOrderQuantity: settings?.aiMinOrderQuantity ?? 1,
+      });
+    } catch (error: any) {
+      console.error("[AI Rules] Error fetching rules:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch AI rules" });
+    }
+  });
+
+  // PATCH /api/ai/rules - Update AI rules configuration
+  app.patch("/api/ai/rules", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Validate input
+      const rulesSchema = z.object({
+        velocityLookbackDays: z.number().int().min(1).max(90).optional(),
+        safetyStockDays: z.number().int().min(0).max(30).optional(),
+        riskThresholdHighDays: z.number().int().min(0).max(14).optional(),
+        riskThresholdMediumDays: z.number().int().min(0).max(30).optional(),
+        returnRateImpact: z.number().min(0).max(1).optional(),
+        adDemandImpact: z.number().min(0).max(1).optional(),
+        supplierDisputePenaltyDays: z.number().int().min(0).max(14).optional(),
+        defaultLeadTimeDays: z.number().int().min(1).max(60).optional(),
+        minOrderQuantity: z.number().int().min(1).max(1000).optional(),
+      });
+      
+      const validated = rulesSchema.parse(req.body);
+      
+      // Map to settings field names
+      const settingsUpdate: Record<string, any> = {};
+      if (validated.velocityLookbackDays !== undefined) {
+        settingsUpdate.aiVelocityLookbackDays = validated.velocityLookbackDays;
+      }
+      if (validated.safetyStockDays !== undefined) {
+        settingsUpdate.aiSafetyStockDays = validated.safetyStockDays;
+      }
+      if (validated.riskThresholdHighDays !== undefined) {
+        settingsUpdate.aiRiskThresholdHighDays = validated.riskThresholdHighDays;
+      }
+      if (validated.riskThresholdMediumDays !== undefined) {
+        settingsUpdate.aiRiskThresholdMediumDays = validated.riskThresholdMediumDays;
+      }
+      if (validated.returnRateImpact !== undefined) {
+        settingsUpdate.aiReturnRateImpact = validated.returnRateImpact;
+      }
+      if (validated.adDemandImpact !== undefined) {
+        settingsUpdate.aiAdDemandImpact = validated.adDemandImpact;
+      }
+      if (validated.supplierDisputePenaltyDays !== undefined) {
+        settingsUpdate.aiSupplierDisputePenaltyDays = validated.supplierDisputePenaltyDays;
+      }
+      if (validated.defaultLeadTimeDays !== undefined) {
+        settingsUpdate.aiDefaultLeadTimeDays = validated.defaultLeadTimeDays;
+      }
+      if (validated.minOrderQuantity !== undefined) {
+        settingsUpdate.aiMinOrderQuantity = validated.minOrderQuantity;
+      }
+      
+      // Update settings
+      const updated = await storage.updateSettings(userId, settingsUpdate);
+      
+      // Clear the decision engine cache so next request uses new rules
+      decisionEngine.clearCache();
+      
+      res.json({
+        success: true,
+        message: "AI rules updated successfully",
+        rules: {
+          velocityLookbackDays: updated?.aiVelocityLookbackDays ?? 14,
+          safetyStockDays: updated?.aiSafetyStockDays ?? 7,
+          riskThresholdHighDays: updated?.aiRiskThresholdHighDays ?? 0,
+          riskThresholdMediumDays: updated?.aiRiskThresholdMediumDays ?? 7,
+          returnRateImpact: updated?.aiReturnRateImpact ?? 0.5,
+          adDemandImpact: updated?.aiAdDemandImpact ?? 0.2,
+          supplierDisputePenaltyDays: updated?.aiSupplierDisputePenaltyDays ?? 3,
+          defaultLeadTimeDays: updated?.aiDefaultLeadTimeDays ?? 7,
+          minOrderQuantity: updated?.aiMinOrderQuantity ?? 1,
+        },
+      });
+    } catch (error: any) {
+      console.error("[AI Rules] Error updating rules:", error);
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Invalid rules configuration", details: error.errors });
+      }
+      res.status(500).json({ error: error.message || "Failed to update AI rules" });
     }
   });
 

@@ -1,0 +1,100 @@
+I want you to implement the AI Agent “Rules” and “Insights” layers so this app can generate real inventory decisions, not just show data. Do not add new pages. Only enhance the existing AI Agent tabs and reuse the current data models (Products/BOM, Stock Inventory, POs, Sales Orders, Returns, Extensiv, Shopify, Amazon).
+
+Goals:
+• Centralize inventory logic in a single decision engine that computes:
+– Reorder recommendation per finished product and key raw materials.
+– Recommended order quantity.
+– Risk level (LOW / MEDIUM / HIGH).
+– Key drivers (sales velocity, lead time, backorders, returns rate, supplier reliability, ads demand).
+• Surface this clearly in:
+– AI Agent → Rules (configuration of thresholds and weights).
+– AI Agent → Insights (per-SKU recommendation list with explanations).
+– Dashboard (small “Top 5 Attention Items” widget fed by the engine).
+• Keep everything read-only for now (no automatic POs), but make the engine easy to call later from an LLM or GHL bot.
+
+Decision engine module (backend only)
+• Create a dedicated service/module (e.g. InventoryDecisionEngine) that:
+– Reads data from existing tables:
+· Products & BOM (finished vs components, MOQ, lead time, unit cost).
+· Stock Inventory (current on-hand, safety stock if present).
+· PurchaseOrders (open POs, expected dates, issue/dispute flags).
+· SalesOrders (fulfilled units, daily/weekly sales velocity, backorders).
+· Returns (return rate per SKU, refund vs replacement ratios).
+· Extensiv snapshots (3PL stock) for any SKUs mapped to external warehouse.
+– Computes per SKU:
+· dailySalesVelocity (smoothed over last N days).
+· projectedDaysUntilStockout = (onHand + inboundPO) / dailySalesVelocity (guard for zero).
+· effectiveLeadTime = supplierLeadTime + buffer days if disputes/late POs are common.
+· recommendedReorderPoint = dailySalesVelocity * effectiveLeadTime + safetyStock.
+· recommendedReorderQty = max(recommendedReorderPoint – (onHand + inboundPO), 0) rounded to MOQ.
+· returnRate = returnsUnits / shippedUnits, used to DOWN-WEIGHT reorderQty when returns are high.
+· riskLevel:
+
+HIGH if projectedDaysUntilStockout < leadTime or backorders > 0.
+
+MEDIUM if close to reorder point or supplier reliability is poor.
+
+LOW otherwise.
+– Returns a structured object per SKU with:
+· sku, productName.
+· recommendedAction: "ORDER", "WATCH", or "NO_ACTION".
+· recommendedQty.
+· riskLevel.
+· metrics snapshot (velocity, daysUntilStockout, onHand, inboundPO, returnRate, supplierScore).
+· human-readable explanation string, e.g.:
+“Order 300 units: on-hand 120, inbound 0, selling 10/day, 4-day lead time, no active disputes.”
+
+AI Agent → Rules tab (configuration UI)
+• Use the existing Rules tab; do not create new navigation.
+• Add a simple configuration panel for:
+– Velocity lookback window (e.g. 7 / 14 / 30 days).
+– Default safety stock days.
+– Risk thresholds (e.g. HIGH if daysUntilStockout < leadTime, MEDIUM if < leadTime + N).
+– Weight sliders or dropdowns for:
+· “Return rate impact” (how aggressively high returns reduce recommendedQty).
+· “Ad demand impact” (placeholder numeric weight for future ad signals).
+– Supplier reliability settings:
+· How to penalize suppliers with frequent disputes/late POs (e.g. extra days in effectiveLeadTime).
+• Persist these settings in the same config/storage pattern already used for AI Agent and data sources.
+• Wire the InventoryDecisionEngine so it reads these rules when computing recommendations.
+
+AI Agent → Insights tab (decision UI)
+• Replace any placeholder content on Insights with:
+– A scrollable table of SKUs showing:
+· Product, SKU.
+· Current stock (local + Extensiv if applicable).
+· Days until stockout.
+· Risk level chip.
+· Recommended action and quantity.
+· Return rate.
+· A “Why?” link or icon that opens a small modal with the explanation string from the engine.
+– Filters:
+· Risk filter (ALL / HIGH / MEDIUM / LOW).
+· Channel filter (Shopify / Amazon / All) based on where most sales come from.
+• Ensure clicking a row can deep-link back to the BOM or Sales Orders view (reusing existing navigation patterns) but do not add new routes.
+
+Dashboard wiring
+• On the main Dashboard, add a compact widget (using existing card styles) called “AI Inventory Watchlist” that:
+– Shows the top 5 highest-risk items from the decision engine.
+– For each: SKU, short name, risk level, days until stockout, and recommendedQty.
+– Clicking “View all” takes the user to the AI Agent → Insights tab.
+
+Data freshness and performance
+• The engine should support both:
+– On-demand evaluation (when user visits Insights or Dashboard).
+– Light caching (e.g. store last computed results with a timestamp) so the UI doesn’t recompute on every small change.
+• Use existing patterns for async/background tasks if they exist; otherwise keep it simple and synchronous, but keep the module cleanly separated so we can later trigger it on a schedule.
+
+Non-breaking and test scenarios
+• Do not change existing behaviors for POs, Sales Orders, or Returns. This is a read-only analytics layer.
+• If there is not enough data (e.g. brand new SKU), the engine should:
+– Mark riskLevel as “UNKNOWN” or “NEEDS_DATA”.
+– recommendedAction = "WATCH".
+– Explanation: “Not enough history; using default safety stock.”
+• Test at least these scenarios with seed/demo data:
+– Fast-moving SKU with low stock and long lead time (should be HIGH risk, ORDER).
+– Slow-moving SKU with high returns (should reduce recommendedQty or move to WATCH).
+– SKU with active supplier disputes and late POs (leadTime padding increases risk).
+– New SKU with almost no history.
+
+Do not introduce any new external dependencies. Reuse all existing models and utilities. Keep naming consistent with the current codebase.

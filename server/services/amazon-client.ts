@@ -186,7 +186,8 @@ export class AmazonClient {
     const status = this.mapStatus(order.OrderStatus, totalOrdered, totalShipped);
 
     const lineItems = (order.OrderItems || []).map(item => {
-      const unitPrice = item.ItemPrice 
+      // Guard against division by zero/undefined to prevent NaN
+      const unitPrice = (item.ItemPrice && item.QuantityOrdered > 0)
         ? parseFloat(item.ItemPrice.Amount) / item.QuantityOrdered 
         : 0;
 

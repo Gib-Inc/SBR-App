@@ -767,8 +767,8 @@ export const salesOrders = pgTable("sales_orders", {
   status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
-  totalAmount: real("total_amount"), // Total order amount
-  currency: text("currency").default('USD'), // Order currency
+  totalAmount: real("total_amount").notNull().default(0), // Total order amount
+  currency: text("currency").notNull().default('USD'), // Order currency
   notes: text("notes"),
   rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
   createdAt: timestamp("created_at").notNull().default(sql`now()`),

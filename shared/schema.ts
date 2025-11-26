@@ -758,6 +758,7 @@ export type ProductForecastContext = typeof productForecastContext.$inferSelect;
 export const salesOrders = pgTable("sales_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
+  externalCustomerId: text("external_customer_id"), // Customer ID from external system
   channel: text("channel").notNull(), // 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
   customerName: text("customer_name").notNull(),
   customerEmail: text("customer_email"),
@@ -766,6 +767,8 @@ export const salesOrders = pgTable("sales_orders", {
   status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
+  totalAmount: real("total_amount"), // Total order amount
+  currency: text("currency").default('USD'), // Order currency
   notes: text("notes"),
   rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
   createdAt: timestamp("created_at").notNull().default(sql`now()`),

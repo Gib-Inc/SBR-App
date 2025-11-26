@@ -12,7 +12,10 @@ export interface ShopifyOrder {
   fulfillment_status: string | null; // fulfilled, partial, null
   created_at: string;
   updated_at: string;
+  total_price?: string;
+  currency?: string;
   customer?: {
+    id?: string | number;
     first_name?: string;
     last_name?: string;
     email?: string;
@@ -29,12 +32,15 @@ export interface ShopifyOrder {
 
 export interface ShopifyNormalizedOrder {
   externalOrderId: string;
+  externalCustomerId?: string;
   channel: string;
   customerName: string;
   customerEmail?: string;
   customerPhone?: string;
   status: string;
   orderDate: Date;
+  totalAmount?: number;
+  currency?: string;
   rawPayload: any;
   lineItems: Array<{
     sku: string;
@@ -137,6 +143,7 @@ export class ShopifyClient {
 
     const customerEmail = order.customer?.email || order.email;
     const customerPhone = order.customer?.phone || order.phone;
+    const externalCustomerId = order.customer?.id ? String(order.customer.id) : undefined;
 
     const status = this.mapStatus(order.financial_status, order.fulfillment_status);
 
@@ -146,14 +153,20 @@ export class ShopifyClient {
       unitPrice: parseFloat(item.price),
     }));
 
+    const totalAmount = order.total_price ? parseFloat(order.total_price) : undefined;
+    const currency = order.currency || 'USD';
+
     return {
       externalOrderId: String(order.id),
+      externalCustomerId,
       channel: 'SHOPIFY',
       customerName,
       customerEmail,
       customerPhone,
       status,
       orderDate: new Date(order.created_at),
+      totalAmount,
+      currency,
       rawPayload: order,
       lineItems,
     };

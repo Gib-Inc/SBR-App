@@ -42,12 +42,15 @@ export interface AmazonOrder {
 
 export interface AmazonNormalizedOrder {
   externalOrderId: string;
+  externalCustomerId?: string;
   channel: string;
   customerName: string;
   customerEmail?: string;
   customerPhone?: string;
   status: string;
   orderDate: Date;
+  totalAmount?: number;
+  currency?: string;
   rawPayload: any;
   lineItems: Array<{
     sku: string;
@@ -194,14 +197,20 @@ export class AmazonClient {
       };
     });
 
+    const totalAmount = order.OrderTotal ? parseFloat(order.OrderTotal.Amount) : undefined;
+    const currency = order.OrderTotal?.CurrencyCode || 'USD';
+
     return {
       externalOrderId: order.AmazonOrderId,
+      externalCustomerId: undefined, // Amazon doesn't expose buyer IDs via SP-API
       channel: 'AMAZON',
       customerName,
       customerEmail,
       customerPhone,
       status,
       orderDate: new Date(order.PurchaseDate),
+      totalAmount,
+      currency,
       rawPayload: order,
       lineItems,
     };

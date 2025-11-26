@@ -1,0 +1,239 @@
+I want you to fully implement Shopify + Amazon Seller Central data sync and map them into the existing Sales Orders and Returns flows. Do NOT add any new sidebar pages or dashboards. Reuse the current UI:
+
+Dashboard
+
+BOM
+
+Barcodes
+
+Suppliers (POs)
+
+Sales Orders
+
+Returns
+
+AI Agent → Data Sources (where all connectors live now)
+
+Data-source configuration (AI Agent → Data Sources)
+
+For the Shopify and Amazon Seller Central tiles in AI Agent → “Data Sources”:
+
+Each tile must have:
+
+“Configure” button → opens a config modal.
+
+“Sync” button → runs a one-time sync job using saved credentials.
+
+Status indicator: Not Configured / Connected / Error (with last sync time).
+
+Shopify config modal:
+
+Fields:
+
+Shop domain (e.g. mystore.myshopify.com)
+
+Admin API Access Token (string, stored securely – ENV or encrypted settings, not in client code)
+
+Order import window (e.g. “Last 30 days”, default 30)
+
+Actions:
+
+“Save & Test Connection”
+
+On test: call a backend route that pings Shopify Orders API and returns success/error.
+
+Persist:
+
+Save settings in whatever integration/config table you are already using for Extensiv, keyed by type = “SHOPIFY”.
+
+Amazon Seller Central config modal:
+
+Fields:
+
+Region / marketplace (dropdown)
+
+Seller ID
+
+Refresh token or SP-API credentials (whatever your existing schema expects; if none, create a generic “credentials JSON” field)
+
+Order import window (e.g. “Last 30 days”, default 30)
+
+Actions:
+
+“Save & Test Connection” that calls a simple SP-API orders list endpoint.
+
+Persist:
+
+Save in the same integration/config mechanism, type = “AMAZON_SELLER”.
+
+Make sure the existing Extensiv integration uses the same pattern so we end up with ONE consistent integrations/config system feeding the Data Sources tiles.
+
+Unified data model for external orders
+
+Extend or confirm the existing SalesOrder and SalesOrderLine (or equivalent) models so every order knows which channel it came from:
+
+SalesOrder:
+
+id
+
+channel: “SHOPIFY” | “AMAZON” | “MANUAL” (and any others you already use)
+
+externalOrderId (string)
+
+externalCustomerId (string, optional)
+
+customerName
+
+customerEmail
+
+orderDate
+
+status: PENDING | PAID | FULFILLED | CANCELLED | RETURNED | PARTIAL (reuse your current enum if you already have one; just map into it)
+
+totalAmount
+
+currency
+
+SalesOrderLine:
+
+id
+
+salesOrderId
+
+sku (string – MUST match the SKU used in BOM/Inventory)
+
+quantity
+
+unitPrice
+
+lineTotal
+
+any existing fields you already use
+
+Important mapping rule: when importing, match line items to existing products by SKU. If there is no SKU match, create a “UNMAPPED” placeholder and mark the order line clearly so we can fix SKUs later.
+
+Shopify → Sales Orders sync
+
+Implement a backend sync job triggered by the Shopify tile’s “Sync” button:
+
+Fetch orders for the configured time window (e.g. updated_at >= lastSyncAt).
+
+For each Shopify order:
+
+Map to SalesOrder with channel = “SHOPIFY” and externalOrderId = shopify order id.
+
+Use customer name/email/phone where available.
+
+Map financial_status + fulfillment_status into your existing SalesOrder.status.
+
+For each Shopify line item:
+
+Map line_item.sku → SalesOrderLine.sku.
+
+quantity, price, totals, etc.
+
+Upsert logic:
+
+If a SalesOrder already exists with (channel, externalOrderId), update it instead of creating a duplicate.
+
+Persist lastSyncAt per integration so subsequent syncs are incremental.
+
+After sync, the “Sales Orders” page must show Shopify orders alongside any manually created ones, with a visible “Channel” column (badge: Shopify / Amazon / Manual).
+
+Amazon Seller Central → Sales Orders sync
+
+Implement a parallel backend sync job for Amazon:
+
+Triggered by the Amazon tile’s “Sync” button.
+
+Fetch orders from SP-API for the configured window and marketplace.
+
+Map to SalesOrder:
+
+channel = “AMAZON”
+
+externalOrderId = Amazon order id
+
+customerName (if available), city/state if that’s all you get, and mask PII if you need to for compliance.
+
+Map line items to SalesOrderLine by SKU.
+
+Same upsert pattern: (channel, externalOrderId) as identity.
+
+Show in the same Sales Orders table with a “Channel” badge.
+
+Returns: use Shopify/Amazon data instead of dummy rows
+
+Update the existing Returns page so it can show and manage returns for orders imported from Shopify and Amazon:
+
+ReturnRequest model (use your existing one, or create one if missing):
+
+id
+
+salesOrderId (FK)
+
+channel (mirror from SalesOrder)
+
+externalOrderId
+
+externalReturnId (if the channel has one)
+
+customerName
+
+status: OPEN | LABEL_ISSUED | RECEIVED | REFUNDED | REPLACED
+
+resolution: REFUND | REPLACEMENT | STORE_CREDIT
+
+createdAt, updatedAt
+
+On initial implementation, just support creating ReturnRequest records manually from the Returns page by selecting:
+
+Channel
+
+External Order ID (search against SalesOrders)
+
+Resolution
+
+The Returns table rows must show which channel the return is from (Shopify vs Amazon), and tie back to the SalesOrder.
+
+We are NOT yet issuing real shipping labels here; just make sure the data model is ready and wired to Shopify/Amazon orders so we can hook label generation later.
+
+AI context wiring
+
+Once Shopify and Amazon sync into SalesOrders and ReturnRequests:
+
+Ensure the AI Agent’s data layer (whatever service feeds the LLM) can:
+
+Read aggregated sales by SKU and channel.
+
+See open backorders and returns by SKU.
+
+Update any existing AI “demand signals” or forecasting context to include:
+
+total sold per SKU (by channel),
+
+open backorders,
+
+open returns.
+
+You do NOT need to change the AI prompts yet; just make sure the internal data access layer exposes Shopify/Amazon sales in the same way as local/manual sales.
+
+UX constraints
+
+Do not add any new sidebar routes.
+
+Reuse the existing Sales Orders and Returns pages (just populate them with real synced data).
+
+The AI Agent → Data Sources page remains the single place to configure and run syncs.
+
+For all sync jobs, show a short “Last Sync: {time} – {success/error message}” in each tile.
+
+After you finish this, summarize:
+
+Exactly what fields you added/changed in the data models.
+
+Which routes handle Shopify and Amazon sync.
+
+How the Sales Orders and Returns tables look and how to filter by channel.
+
+Also, please keep in mind that in production we’ll need to comply with Shopify and Amazon’s API terms of service and any privacy rules when syncing and storing order/customer data.

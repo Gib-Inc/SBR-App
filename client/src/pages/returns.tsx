@@ -88,6 +88,7 @@ export default function Returns() {
   const { toast } = useToast();
   const [selectedReturnId, setSelectedReturnId] = useState<string | null>(null);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [issuingLabelForId, setIssuingLabelForId] = useState<string | null>(null);
 
   const { data: returns, isLoading } = useQuery<ReturnRequest[]>({
     queryKey: ["/api/returns"],
@@ -100,10 +101,20 @@ export default function Returns() {
 
   const issueLabelMutation = useMutation({
     mutationFn: async (returnId: string) => {
-      return await apiRequest("POST", `/api/returns/${returnId}/label`);
+      setIssuingLabelForId(returnId);
+      try {
+        const res = await apiRequest("POST", `/api/returns/${returnId}/label`, {});
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      } finally {
+        setIssuingLabelForId(null);
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      if (selectedReturnId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/returns/${selectedReturnId}`] });
+      }
       toast({ title: "Return label issued successfully" });
     },
     onError: (error: any) => {
@@ -227,20 +238,44 @@ export default function Returns() {
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
                     </td>
                     <td className="px-3 align-middle text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedReturnId(returnRequest.id);
-                          setShowReceiveModal(true);
-                        }}
-                        disabled={returnRequest.status === 'RECEIVED' || returnRequest.status === 'REFUNDED' || returnRequest.status === 'REPLACED'}
-                        data-testid={`button-receive-${returnRequest.id}`}
-                      >
-                        <PackageCheck className="h-4 w-4 mr-1" />
-                        Receive
-                      </Button>
+                      <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                        {returnRequest.status === 'OPEN' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => issueLabelMutation.mutate(returnRequest.id)}
+                            disabled={issuingLabelForId === returnRequest.id}
+                            data-testid={`button-issue-label-${returnRequest.id}`}
+                          >
+                            {issuingLabelForId === returnRequest.id ? "Issuing..." : "Issue Label"}
+                          </Button>
+                        )}
+                        {(returnRequest.status === 'LABEL_ISSUED' || returnRequest.status === 'IN_TRANSIT' || returnRequest.status === 'RECEIVED') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setSelectedReturnId(returnRequest.id)}
+                            data-testid={`button-view-label-${returnRequest.id}`}
+                          >
+                            <ExternalLink className="h-4 w-4 mr-1" />
+                            View Label
+                          </Button>
+                        )}
+                        {(returnRequest.status === 'LABEL_ISSUED' || returnRequest.status === 'IN_TRANSIT') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedReturnId(returnRequest.id);
+                              setShowReceiveModal(true);
+                            }}
+                            data-testid={`button-receive-${returnRequest.id}`}
+                          >
+                            <PackageCheck className="h-4 w-4 mr-1" />
+                            Receive
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

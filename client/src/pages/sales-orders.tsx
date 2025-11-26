@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { 
   Dialog, 
@@ -928,6 +929,270 @@ export default function SalesOrders() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      {/* Create Return Dialog */}
+      {selectedOrder && (
+        <Dialog open={showCreateReturnDialog} onOpenChange={setShowCreateReturnDialog}>
+          <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Create Return Request</DialogTitle>
+              <DialogDescription>
+                Create a return request for order {selectedOrder.orderNumber || selectedOrder.externalOrderId}
+              </DialogDescription>
+            </DialogHeader>
+
+            <CreateReturnForm
+              order={selectedOrder}
+              onSubmit={(data) => {
+                createReturnMutation.mutate({
+                  salesOrderId: selectedOrder.id,
+                  externalOrderId: selectedOrder.externalOrderId || '',
+                  salesChannel: selectedOrder.channel,
+                  customerName: selectedOrder.customerName,
+                  customerEmail: selectedOrder.customerEmail || null,
+                  customerPhone: selectedOrder.customerPhone || null,
+                  resolutionRequested: data.resolutionRequested,
+                  reason: data.reason,
+                  items: data.items.map(item => ({
+                    inventoryItemId: item.inventoryItemId,
+                    sku: item.sku,
+                    qtyOrdered: item.qtyOrdered,
+                    qtyRequested: item.qtyRequested,
+                    salesOrderLineId: item.salesOrderLineId,
+                  })),
+                });
+              }}
+              isPending={createReturnMutation.isPending}
+              onCancel={() => setShowCreateReturnDialog(false)}
+            />
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
+  );
+}
+
+// Create Return Form Component (scoped within sales-orders page)
+interface CreateReturnFormProps {
+  order: EnrichedSalesOrder;
+  onSubmit: (data: {
+    resolutionRequested: string;
+    reason: string;
+    items: Array<{
+      inventoryItemId: string;
+      sku: string;
+      qtyOrdered: number;
+      qtyRequested: number;
+      salesOrderLineId: string;
+    }>;
+  }) => void;
+  isPending: boolean;
+  onCancel: () => void;
+}
+
+const returnFormSchema = z.object({
+  resolutionRequested: z.string().min(1, "Resolution type is required"),
+  reason: z.string().min(1, "Reason is required"),
+  items: z.array(z.object({
+    salesOrderLineId: z.string(),
+    inventoryItemId: z.string(),
+    sku: z.string(),
+    qtyOrdered: z.number(),
+    qtyFulfilled: z.number().min(1, "Must have fulfilled items to return"),
+    qtyRequested: z.number().min(1).refine((val, ctx) => {
+      const item = ctx.parent as any;
+      return val <= item.qtyFulfilled;
+    }, "Cannot exceed fulfilled quantity"),
+    selected: z.boolean(),
+  })).refine(items => items.filter(item => item.selected && item.qtyRequested > 0 && item.qtyRequested <= item.qtyFulfilled && item.qtyFulfilled > 0).length > 0, {
+    message: "At least one valid item with fulfilled quantity must be selected",
+  }),
+});
+
+function CreateReturnForm({ order, onSubmit, isPending, onCancel }: CreateReturnFormProps) {
+  const form = useForm<z.infer<typeof returnFormSchema>>({
+    resolver: zodResolver(returnFormSchema),
+    defaultValues: {
+      resolutionRequested: "REFUND",
+      reason: "",
+      items: order.lines
+        .filter(line => (line.qtyFulfilled || 0) > 0)
+        .map(line => ({
+          salesOrderLineId: line.id,
+          inventoryItemId: line.productId,
+          sku: line.sku,
+          qtyOrdered: line.qtyOrdered,
+          qtyFulfilled: line.qtyFulfilled || 0,
+          qtyRequested: line.qtyFulfilled || 0,
+          selected: false,
+        })),
+    },
+  });
+
+  const handleSubmit = form.handleSubmit((data) => {
+    const selectedItems = data.items
+      .filter(item => item.selected && item.qtyRequested > 0 && item.qtyRequested <= item.qtyFulfilled)
+      .map(item => ({
+        inventoryItemId: item.inventoryItemId,
+        sku: item.sku,
+        qtyOrdered: item.qtyOrdered,
+        qtyRequested: item.qtyRequested,
+        salesOrderLineId: item.salesOrderLineId,
+      }));
+
+    onSubmit({
+      resolutionRequested: data.resolutionRequested,
+      reason: data.reason,
+      items: selectedItems,
+    });
+  });
+
+  return (
+    <Form {...form}>
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="grid grid-cols-2 gap-4">
+          <FormField
+            control={form.control}
+            name="resolutionRequested"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Resolution Requested</FormLabel>
+                <Select onValueChange={field.onChange} value={field.value}>
+                  <FormControl>
+                    <SelectTrigger data-testid="select-resolution">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="REFUND">Refund</SelectItem>
+                    <SelectItem value="REPLACEMENT">Replacement</SelectItem>
+                    <SelectItem value="STORE_CREDIT">Store Credit</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name="reason"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Return Reason</FormLabel>
+                <Select onValueChange={field.onChange} value={field.value}>
+                  <FormControl>
+                    <SelectTrigger data-testid="select-reason">
+                      <SelectValue placeholder="Select reason" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="DEFECTIVE">Defective/Damaged</SelectItem>
+                    <SelectItem value="WRONG_ITEM">Wrong Item Sent</SelectItem>
+                    <SelectItem value="NOT_AS_DESCRIBED">Not As Described</SelectItem>
+                    <SelectItem value="CHANGED_MIND">Changed Mind</SelectItem>
+                    <SelectItem value="OTHER">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </div>
+
+        <div className="space-y-3">
+          <FormLabel>Select Items to Return</FormLabel>
+          {form.watch("items").filter(item => item.qtyFulfilled > 0).length === 0 ? (
+            <div className="border rounded-lg p-6 text-center text-muted-foreground">
+              No items available to return (nothing has been fulfilled yet)
+            </div>
+          ) : (
+            <div className="border rounded-lg divide-y">
+              {form.watch("items").map((item, index) => {
+                if (item.qtyFulfilled <= 0) return null;
+
+                return (
+                  <div key={item.salesOrderLineId} className="p-4 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.selected`}
+                        render={({ field }) => (
+                          <FormItem className="flex items-center space-x-2 space-y-0">
+                            <FormControl>
+                              <Checkbox
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                                data-testid={`checkbox-item-${index}`}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                      <div className="flex-1">
+                        <div className="font-medium">{item.sku}</div>
+                        <div className="text-sm text-muted-foreground">
+                          Ordered: {item.qtyOrdered} • Fulfilled: {item.qtyFulfilled} • Max returnable: {item.qtyFulfilled}
+                        </div>
+                      </div>
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.qtyRequested`}
+                        render={({ field }) => (
+                          <FormItem className="w-24">
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="1"
+                                max={item.qtyFulfilled}
+                                {...field}
+                                onChange={(e) => {
+                                  const value = parseInt(e.target.value) || 1;
+                                  field.onChange(Math.min(Math.max(value, 1), item.qtyFulfilled));
+                                }}
+                                disabled={!form.watch(`items.${index}.selected`)}
+                                data-testid={`input-qty-return-${index}`}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {form.formState.errors.items?.root && (
+            <p className="text-sm text-destructive">{form.formState.errors.items.root.message}</p>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onCancel}
+            disabled={isPending}
+            data-testid="button-cancel-return"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            disabled={isPending}
+            data-testid="button-submit-return"
+          >
+            {isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <PackageX className="h-4 w-4 mr-2" />
+            )}
+            Create Return
+          </Button>
+        </DialogFooter>
+      </form>
+    </Form>
   );
 }

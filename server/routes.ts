@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
@@ -3940,12 +3941,30 @@ Generate only the email body text, no subject line.`;
   // Returns: { returnRequest, labelUrl, trackingNumber } for GHL to send via SMS/email
   app.post("/api/returns/create-from-ghl", async (req: Request, res: Response) => {
     try {
-      // Authenticate via shared secret
+      // Authenticate via shared secret with timing-safe comparison
       const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
-      const providedSecret = req.headers['x-ghl-secret'];
+      const providedSecret = req.headers['x-ghl-secret'] as string;
       
-      if (!ghlSecret || providedSecret !== ghlSecret) {
-        return res.status(401).json({ error: "Unauthorized: Invalid or missing GHL secret" });
+      if (!ghlSecret) {
+        console.error("[Returns] GHL_WEBHOOK_SECRET not configured - rejecting webhook request");
+        return res.status(401).json({ error: "Webhook authentication not configured" });
+      }
+      
+      if (!providedSecret) {
+        return res.status(401).json({ error: "Unauthorized: Missing GHL secret" });
+      }
+
+      // Timing-safe comparison
+      const expectedBuffer = Buffer.from(ghlSecret, 'utf-8');
+      const providedBuffer = Buffer.from(providedSecret, 'utf-8');
+      
+      if (expectedBuffer.length !== providedBuffer.length) {
+        return res.status(401).json({ error: "Unauthorized: Invalid GHL secret" });
+      }
+
+      const isValid = crypto.timingSafeEqual(expectedBuffer, providedBuffer);
+      if (!isValid) {
+        return res.status(401).json({ error: "Unauthorized: Invalid GHL secret" });
       }
 
       const { items: itemsData, ...requestData } = req.body;

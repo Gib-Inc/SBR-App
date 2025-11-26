@@ -634,12 +634,12 @@ export default function SalesOrders() {
                     <table className="w-full">
                       <thead className="bg-muted/50">
                         <tr className="border-b">
-                          <th className="p-3 text-left text-sm font-medium">SKU</th>
-                          <th className="p-3 text-left text-sm font-medium">Product</th>
-                          <th className="p-3 text-right text-sm font-medium">Ordered</th>
-                          <th className="p-3 text-right text-sm font-medium">Fulfilled</th>
-                          <th className="p-3 text-right text-sm font-medium">Returned</th>
-                          <th className="p-3 text-right text-sm font-medium">Backorder</th>
+                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Ordered</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Fulfilled</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returned</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorder</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -647,23 +647,23 @@ export default function SalesOrders() {
                           const product = items.find(i => i.id === line.productId);
                           return (
                             <tr key={line.id} className="border-b last:border-0" data-testid={`row-line-${line.id}`}>
-                              <td className="px-3 py-2 align-middle font-mono text-sm" data-testid={`text-line-sku-${line.id}`}>
+                              <td className="px-3 py-2 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-line-sku-${line.id}`}>
                                 {line.sku}
                               </td>
-                              <td className="px-3 py-2 align-middle" data-testid={`text-line-product-${line.id}`}>
+                              <td className="px-3 py-2 align-middle whitespace-nowrap" data-testid={`text-line-product-${line.id}`}>
                                 {product?.name || "Unknown"}
                               </td>
-                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-ordered-${line.id}`}>
+                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-ordered-${line.id}`}>
                                 {line.qtyOrdered}
                               </td>
-                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-fulfilled-${line.id}`}>
+                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-fulfilled-${line.id}`}>
                                 {line.qtyFulfilled ?? 0}
                               </td>
-                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-returned-${line.id}`}>
+                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-returned-${line.id}`}>
                                 {line.returnedQty ?? 0}
                               </td>
                               <td 
-                                className={`px-3 py-2 align-middle text-right ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
+                                className={`px-3 py-2 align-middle text-right whitespace-nowrap ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
                                 data-testid={`text-line-backorder-${line.id}`}
                               >
                                 {line.backorderQty}

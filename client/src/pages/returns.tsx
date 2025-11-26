@@ -193,14 +193,14 @@ export default function Returns() {
             <table className="w-full">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium">Order ID</th>
-                  <th className="p-3 text-left text-sm font-medium">Channel</th>
-                  <th className="p-3 text-left text-sm font-medium">Source</th>
-                  <th className="p-3 text-left text-sm font-medium">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium">Status</th>
-                  <th className="p-3 text-left text-sm font-medium">Resolution</th>
-                  <th className="p-3 text-left text-sm font-medium">Created</th>
-                  <th className="p-3 text-right text-sm font-medium">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,32 +211,32 @@ export default function Returns() {
                     onClick={() => setSelectedReturnId(returnRequest.id)}
                     data-testid={`row-return-${returnRequest.id}`}
                   >
-                    <td className="px-3 align-middle font-medium">
+                    <td className="px-3 align-middle font-medium whitespace-nowrap">
                       {returnRequest.externalOrderId}
                     </td>
-                    <td className="px-3 align-middle">
+                    <td className="px-3 align-middle whitespace-nowrap">
                       <Badge variant="outline">{returnRequest.salesChannel}</Badge>
                     </td>
-                    <td className="px-3 align-middle">
+                    <td className="px-3 align-middle whitespace-nowrap">
                       <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
                         {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual'}
                       </Badge>
                     </td>
-                    <td className="px-3 align-middle">{returnRequest.customerName}</td>
-                    <td className="px-3 align-middle">
+                    <td className="px-3 align-middle whitespace-nowrap">{returnRequest.customerName}</td>
+                    <td className="px-3 align-middle whitespace-nowrap">
                       <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
                         {returnRequest.status.replace(/_/g, ' ')}
                       </Badge>
                     </td>
-                    <td className="px-3 align-middle">
+                    <td className="px-3 align-middle whitespace-nowrap">
                       <span className={getResolutionColor(returnRequest.resolutionRequested)}>
                         {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
                       </span>
                     </td>
-                    <td className="px-3 align-middle">
+                    <td className="px-3 align-middle whitespace-nowrap">
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
                     </td>
-                    <td className="px-3 align-middle text-right">
+                    <td className="px-3 align-middle text-right whitespace-nowrap">
                       <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
                         {returnRequest.status === 'OPEN' && (
                           <Button
@@ -383,31 +383,31 @@ function ReturnDetailsModal({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>SKU</TableHead>
-                  <TableHead className="text-right">Ordered</TableHead>
-                  <TableHead className="text-right">Requested</TableHead>
-                  <TableHead className="text-right">Approved</TableHead>
-                  <TableHead className="text-right">Received</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Disposition</TableHead>
+                  <TableHead className="whitespace-nowrap">SKU</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Ordered</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Requested</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Approved</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Received</TableHead>
+                  <TableHead className="whitespace-nowrap">Reason</TableHead>
+                  <TableHead className="whitespace-nowrap">Disposition</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell className="font-medium">{item.sku}</TableCell>
-                    <TableCell className="text-right">{item.qtyOrdered}</TableCell>
-                    <TableCell className="text-right">{item.qtyRequested}</TableCell>
-                    <TableCell className="text-right">{item.qtyApproved}</TableCell>
-                    <TableCell className="text-right">{item.qtyReceived}</TableCell>
-                    <TableCell>
+                    <TableCell className="font-medium whitespace-nowrap">{item.sku}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyOrdered}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyRequested}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyApproved}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyReceived}</TableCell>
+                    <TableCell className="whitespace-nowrap">
                       {item.itemReason ? (
                         <span className="text-sm text-muted-foreground">{item.itemReason}</span>
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       {item.disposition ? (
                         <Badge variant="outline">{item.disposition}</Badge>
                       ) : (

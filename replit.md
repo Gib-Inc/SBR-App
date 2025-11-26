@@ -55,6 +55,7 @@ Preferred communication style: Simple, everyday language.
 *   **Demo Data Seeding**: Development database can be populated with realistic demo data via `npx tsx server/seed.ts`. Includes 6 multi-channel sales orders (3 Shopify, 3 Amazon) with various statuses, and 2 linked return requests demonstrating the full order-to-return workflow.
 *   **Responsive Layout**: Implemented `min-w-0` on flex containers and explicit width constraints to ensure proper adaptation and prevent horizontal scrolling issues.
 *   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
+*   **Table Standardization**: All data tables across the application use `whitespace-nowrap` on headers and cells to enforce single-line row heights, preventing text wrapping and maintaining consistent, scannable layouts.
 
 ## External Dependencies
 

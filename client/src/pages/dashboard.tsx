@@ -357,21 +357,21 @@ export default function Dashboard() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Item</TableHead>
-                      <TableHead className="text-right">Current Usage</TableHead>
-                      <TableHead className="text-right">Forecast</TableHead>
-                      <TableHead className="text-right">Confidence</TableHead>
-                      <TableHead className="text-center">Trend</TableHead>
+                      <TableHead className="whitespace-nowrap">Item</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Current Usage</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Forecast</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Confidence</TableHead>
+                      <TableHead className="text-center whitespace-nowrap">Trend</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {demandForecasts.slice(0, 10).map((forecast: any) => (
                       <TableRow key={forecast.itemId}>
-                        <TableCell className="font-medium">{forecast.itemName}</TableCell>
-                        <TableCell className="text-right font-mono text-sm">
+                        <TableCell className="font-medium whitespace-nowrap">{forecast.itemName}</TableCell>
+                        <TableCell className="text-right font-mono text-sm whitespace-nowrap">
                           {forecast.currentDailyUsage}/day
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right whitespace-nowrap">
                           <div className="flex flex-col items-end">
                             <span className="font-mono text-sm font-semibold">
                               {forecast.forecastedDailyUsage}/day
@@ -381,7 +381,7 @@ export default function Dashboard() {
                             </span>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right whitespace-nowrap">
                           <Badge 
                             variant={
                               forecast.confidence === 'high' ? 'default' :
@@ -392,7 +392,7 @@ export default function Dashboard() {
                             {forecast.confidence}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-center">
+                        <TableCell className="text-center whitespace-nowrap">
                           {forecast.trend === 'increasing' ? (
                             <ArrowUp className="h-4 w-4 text-green-600 inline" data-testid={`trend-${forecast.itemId}`} />
                           ) : forecast.trend === 'decreasing' ? (
@@ -428,27 +428,27 @@ export default function Dashboard() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Item</TableHead>
-                    <TableHead>SKU</TableHead>
-                    <TableHead className="text-right">Stock</TableHead>
-                    <TableHead className="text-right">Daily Usage</TableHead>
-                    <TableHead className="text-right">Days of Cover</TableHead>
-                    <TableHead></TableHead>
+                    <TableHead className="whitespace-nowrap">Item</TableHead>
+                    <TableHead className="whitespace-nowrap">SKU</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Stock</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Daily Usage</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Days of Cover</TableHead>
+                    <TableHead className="whitespace-nowrap"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {atRiskItems.map((item: any) => (
                     <TableRow key={item.id}>
-                      <TableCell className="font-medium">{item.name}</TableCell>
-                      <TableCell className="font-mono text-sm">{item.sku}</TableCell>
-                      <TableCell className="text-right">{item.currentStock}</TableCell>
-                      <TableCell className="text-right">{item.dailyUsage}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="font-medium whitespace-nowrap">{item.name}</TableCell>
+                      <TableCell className="font-mono text-sm whitespace-nowrap">{item.sku}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{item.currentStock}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">{item.dailyUsage}</TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
                         <Badge variant={item.daysOfCover < 7 ? "destructive" : "secondary"}>
                           {item.daysOfCover} days
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right whitespace-nowrap">
                         <Button size="sm" variant="outline" data-testid={`button-order-${item.id}`}>
                           Order Now
                         </Button>

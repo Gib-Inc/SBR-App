@@ -703,20 +703,20 @@ export default function Suppliers() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b">
-                        <th className="text-left p-2 font-medium">Name</th>
-                        <th className="text-left p-2 font-medium">Website</th>
-                        <th className="text-left p-2 font-medium">Source</th>
-                        <th className="text-left p-2 font-medium">Status</th>
-                        <th className="text-left p-2 font-medium">Category</th>
-                        <th className="text-left p-2 font-medium">Last Contacted</th>
-                        <th className="text-right p-2 font-medium">Actions</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Name</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Website</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Source</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Status</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Category</th>
+                        <th className="text-left p-2 font-medium whitespace-nowrap">Last Contacted</th>
+                        <th className="text-right p-2 font-medium whitespace-nowrap">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {supplierLeads.map((lead) => (
                         <tr key={lead.id} className="border-b hover-elevate" data-testid={`row-lead-${lead.id}`}>
-                          <td className="p-2 font-medium">{lead.name}</td>
-                          <td className="p-2">
+                          <td className="p-2 font-medium whitespace-nowrap">{lead.name}</td>
+                          <td className="p-2 whitespace-nowrap">
                             {lead.websiteUrl ? (
                               <a 
                                 href={lead.websiteUrl} 
@@ -730,12 +730,12 @@ export default function Suppliers() {
                               <span className="text-muted-foreground">-</span>
                             )}
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 whitespace-nowrap">
                             <Badge variant="outline" data-testid={`badge-source-${lead.id}`}>
                               {lead.source}
                             </Badge>
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 whitespace-nowrap">
                             <Badge variant={
                               lead.status === 'CONVERTED' ? 'default' :
                               lead.status === 'CONTACTED' ? 'secondary' :
@@ -744,11 +744,11 @@ export default function Suppliers() {
                               {lead.status}
                             </Badge>
                           </td>
-                          <td className="p-2 text-sm">{lead.category || '-'}</td>
-                          <td className="p-2 text-sm">
+                          <td className="p-2 text-sm whitespace-nowrap">{lead.category || '-'}</td>
+                          <td className="p-2 text-sm whitespace-nowrap">
                             {lead.lastContactedAt ? new Date(lead.lastContactedAt).toLocaleDateString() : '-'}
                           </td>
-                          <td className="p-2 text-right">
+                          <td className="p-2 text-right whitespace-nowrap">
                             <Button size="sm" variant="ghost" data-testid={`button-view-lead-${lead.id}`}>
                               View
                             </Button>
@@ -813,13 +813,13 @@ export default function Suppliers() {
                   <table className="w-full">
                     <thead className="bg-muted/50">
                       <tr className="border-b">
-                        <th className="text-left p-2 text-xs font-medium">Item</th>
-                        <th className="text-right p-2 text-xs font-medium">AI Suggested</th>
-                        <th className="text-right p-2 text-xs font-medium">Ordered</th>
-                        <th className="text-right p-2 text-xs font-medium">Received</th>
-                        <th className="text-right p-2 text-xs font-medium">Remaining</th>
-                        <th className="text-right p-2 text-xs font-medium">Unit Cost</th>
-                        <th className="text-center p-2 text-xs font-medium">Decision</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Item</th>
+                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">AI Suggested</th>
+                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Ordered</th>
+                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Received</th>
+                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Remaining</th>
+                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Unit Cost</th>
+                        <th className="text-center p-2 text-xs font-medium whitespace-nowrap">Decision</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -852,8 +852,8 @@ export default function Suppliers() {
                         
                         return (
                           <tr key={line.id} className="border-b">
-                            <td className="p-2 text-sm">{item?.name || 'Unknown'}</td>
-                            <td className="p-2 text-sm text-right">
+                            <td className="p-2 text-sm whitespace-nowrap">{item?.name || 'Unknown'}</td>
+                            <td className="p-2 text-sm text-right whitespace-nowrap">
                               {aiSuggested !== null && aiSuggested !== undefined ? (
                                 <div className="flex items-center justify-end gap-1">
                                   <Brain className="h-3 w-3 text-primary" />
@@ -863,10 +863,10 @@ export default function Suppliers() {
                                 <span className="text-muted-foreground">—</span>
                               )}
                             </td>
-                            <td className="p-2 text-sm text-right font-medium">{ordered}</td>
-                            <td className="p-2 text-sm text-right">{line.qtyReceived}</td>
-                            <td className="p-2 text-sm text-right">{remaining}</td>
-                            <td className="p-2 text-sm text-right">
+                            <td className="p-2 text-sm text-right font-medium whitespace-nowrap">{ordered}</td>
+                            <td className="p-2 text-sm text-right whitespace-nowrap">{line.qtyReceived}</td>
+                            <td className="p-2 text-sm text-right whitespace-nowrap">{remaining}</td>
+                            <td className="p-2 text-sm text-right whitespace-nowrap">
                               ${line.unitCost?.toFixed(2) || '0.00'}
                             </td>
                             <td className="p-2 text-center">

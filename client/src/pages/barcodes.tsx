@@ -84,7 +84,7 @@ function BarcodeTableRow({
   return (
     <tr className="h-11 border-b hover-elevate" data-testid={`row-barcode-${barcode.id}`}>
       {/* Name Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "name" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -114,7 +114,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Barcode Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "value" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -155,7 +155,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Type Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "purpose" ? (
           <div className="flex items-center gap-2">
             <Select value={editValue} onValueChange={setEditValue}>
@@ -187,7 +187,7 @@ function BarcodeTableRow({
       </td>
 
       {/* SKU Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "sku" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -217,7 +217,7 @@ function BarcodeTableRow({
       </td>
 
       {/* Actions Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         <div className="flex gap-1">
           <Button
             variant="ghost"
@@ -295,7 +295,7 @@ function ItemTableRow({
 
   return (
     <tr key={item.id} className="border-b hover-elevate" data-testid={`row-${testIdPrefix}-${item.id}`}>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {item.barcodeValue ? (
           <div className="flex flex-col items-center gap-1">
             <img 
@@ -311,7 +311,7 @@ function ItemTableRow({
           <span className="text-xs text-muted-foreground">No barcode</span>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {editingField === "name" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -339,7 +339,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {editingField === "sku" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -367,7 +367,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {editingField === "barcodeValue" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -395,7 +395,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {item.productKind ? (
           <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
             {item.productKind}
@@ -404,7 +404,7 @@ function ItemTableRow({
           <span className="text-xs text-muted-foreground">-</span>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {editingField === "barcodeFormat" ? (
           <div className="flex items-center gap-2">
             <Select value={editValue} onValueChange={setEditValue}>
@@ -440,7 +440,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         {item.barcodeUsage ? (
           <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
             {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
@@ -449,13 +449,13 @@ function ItemTableRow({
           <span className="text-xs text-muted-foreground">-</span>
         )}
       </td>
-      <td className="p-3">
+      <td className="p-3 whitespace-nowrap">
         <Badge variant="outline" className="text-xs">
           {item.barcodeSource || "None"}
         </Badge>
       </td>
-      <td className="p-3 text-right text-sm">{item.currentStock}</td>
-      <td className="sticky right-0 z-10 bg-card p-3 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+      <td className="p-3 text-right text-sm whitespace-nowrap">{item.currentStock}</td>
+      <td className="sticky right-0 z-10 bg-card p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
           <Button
             variant="ghost"
@@ -522,16 +522,16 @@ function BarcodeItemsSection({
           <table className="w-full min-w-[900px]">
             <thead className="bg-muted/50">
               <tr className="border-b">
-                <th className="p-3 text-left text-sm font-medium">Barcode</th>
-                <th className="p-3 text-left text-sm font-medium">Name</th>
-                <th className="p-3 text-left text-sm font-medium">SKU</th>
-                <th className="p-3 text-left text-sm font-medium">Barcode Value</th>
-                <th className="p-3 text-left text-sm font-medium">Product Kind</th>
-                <th className="p-3 text-left text-sm font-medium">Format</th>
-                <th className="p-3 text-left text-sm font-medium">Usage</th>
-                <th className="p-3 text-left text-sm font-medium">Barcode Source</th>
-                <th className="p-3 text-right text-sm font-medium">Stock</th>
-                <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode Value</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product Kind</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Format</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Usage</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode Source</th>
+                <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Stock</th>
+                <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
               </tr>
             </thead>
             <tbody>

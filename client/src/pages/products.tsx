@@ -129,7 +129,7 @@ function ItemTableRow({
   return (
     <tr className="h-11 border-b hover-elevate" data-testid={`row-item-${item.id}`}>
       {/* Name Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "name" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -159,7 +159,7 @@ function ItemTableRow({
       </td>
 
       {/* SKU Column */}
-      <td className="px-3 align-middle">
+      <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "sku" ? (
           <div className="flex items-center gap-2">
             <Input
@@ -192,35 +192,35 @@ function ItemTableRow({
       {item.type === "component" && (
         <>
           {/* Supplier Name */}
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 text-sm" data-testid={`text-supplier-name-${item.id}`}>
               {item.primarySupplier?.supplierName || <span className="text-muted-foreground">No supplier</span>}
             </div>
           </td>
 
           {/* Supplier SKU */}
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 font-mono text-sm" data-testid={`text-supplier-sku-${item.id}`}>
               {item.primarySupplier?.supplierSku || <span className="text-muted-foreground">—</span>}
             </div>
           </td>
 
           {/* Unit Cost */}
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 text-right text-sm" data-testid={`text-unit-cost-${item.id}`}>
               {item.primarySupplier?.unitCost ? `$${item.primarySupplier.unitCost.toFixed(2)}` : <span className="text-muted-foreground">—</span>}
             </div>
           </td>
 
           {/* MOQ */}
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 text-right text-sm" data-testid={`text-moq-${item.id}`}>
               {item.primarySupplier?.minimumOrderQuantity || <span className="text-muted-foreground">—</span>}
             </div>
           </td>
 
           {/* Lead Time */}
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 text-right text-sm" data-testid={`text-lead-time-${item.id}`}>
               {item.primarySupplier?.leadTimeDays || <span className="text-muted-foreground">—</span>}
             </div>
@@ -230,7 +230,7 @@ function ItemTableRow({
 
       {/* Current Stock Column (only for components) */}
       {item.type === "component" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           {editingField === "currentStock" ? (
             <div className="flex items-center gap-2">
               <Input
@@ -273,7 +273,7 @@ function ItemTableRow({
         );
         const latestRecommendation = itemRecommendations[0];
         return (
-          <td className="px-3 align-middle">
+          <td className="px-3 align-middle whitespace-nowrap">
             {latestRecommendation ? (
               <TooltipProvider>
                 <Tooltip>
@@ -306,7 +306,7 @@ function ItemTableRow({
 
       {/* Forecast Column (only for finished products) */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           <div 
             className="px-2 py-1 text-right font-medium text-primary" 
             data-testid={`text-item-forecast-${item.id}`}
@@ -318,7 +318,7 @@ function ItemTableRow({
 
       {/* Hildale Qty Column (only for finished products) */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           {editingField === "hildaleQty" ? (
             <div className="flex items-center gap-2">
               <Input
@@ -352,7 +352,7 @@ function ItemTableRow({
 
       {/* Pivot Qty Column (only for finished products) */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           {editingField === "pivotQty" ? (
             <div className="flex items-center gap-2">
               <Input
@@ -386,7 +386,7 @@ function ItemTableRow({
 
       {/* Backorders Column (only for finished products) */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           {(() => {
             const snapshot = backorderSnapshots?.find((s: any) => s.productId === item.id);
             const totalBackorderedQty = snapshot?.totalBackorderedQty || 0;
@@ -410,7 +410,7 @@ function ItemTableRow({
 
       {/* BOM Components Column (only for finished products) */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle text-center">
+        <td className="px-3 align-middle text-center whitespace-nowrap">
           {onEditBOM && (
             <Button
               variant="ghost"
@@ -427,7 +427,7 @@ function ItemTableRow({
 
       {/* Category Column (only for stock inventory) */}
       {item.type === "component" && (
-        <td className="px-3 align-middle">
+        <td className="px-3 align-middle whitespace-nowrap">
           {editingField === "category" ? (
             <div className="flex items-center gap-2">
               <Input
@@ -458,7 +458,7 @@ function ItemTableRow({
       )}
 
       {/* Actions Column */}
-      <td className="sticky right-0 z-10 bg-card px-3 align-middle shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+      <td className="sticky right-0 z-10 bg-card px-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
           {item.type === "finished_product" && onTransfer && (
             <Button
@@ -1387,14 +1387,14 @@ export default function BOM() {
             <table className="w-full">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium">Name</th>
-                  <th className="p-3 text-left text-sm font-medium">SKU</th>
-                  <th className="p-3 text-right text-sm font-medium">Forecast</th>
-                  <th className="p-3 text-right text-sm font-medium">Hildale Qty</th>
-                  <th className="p-3 text-right text-sm font-medium">Pivot Qty</th>
-                  <th className="p-3 text-right text-sm font-medium">Backorders</th>
-                  <th className="p-3 text-center text-sm font-medium">BOM</th>
-                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Forecast</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorders</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">BOM</th>
+                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1465,17 +1465,17 @@ export default function BOM() {
             <table className="w-full min-w-[1200px]">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium">Name</th>
-                  <th className="p-3 text-left text-sm font-medium">SKU</th>
-                  <th className="p-3 text-left text-sm font-medium">Supplier</th>
-                  <th className="p-3 text-left text-sm font-medium">Supplier SKU</th>
-                  <th className="p-3 text-right text-sm font-medium">Unit Cost</th>
-                  <th className="p-3 text-right text-sm font-medium">MOQ</th>
-                  <th className="p-3 text-right text-sm font-medium">Lead Time (days)</th>
-                  <th className="p-3 text-right text-sm font-medium">Stock</th>
-                  <th className="p-3 text-left text-sm font-medium">AI Reorder</th>
-                  <th className="p-3 text-left text-sm font-medium">Category</th>
-                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier SKU</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Unit Cost</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">MOQ</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Lead Time (days)</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Stock</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">AI Reorder</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Category</th>
+                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

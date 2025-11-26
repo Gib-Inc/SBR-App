@@ -578,17 +578,17 @@ export default function AIAgent() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Recommendation</TableHead>
-                      <TableHead>Action Taken</TableHead>
-                      <TableHead>Outcome</TableHead>
+                      <TableHead className="whitespace-nowrap">Date</TableHead>
+                      <TableHead className="whitespace-nowrap">Item</TableHead>
+                      <TableHead className="whitespace-nowrap">Recommendation</TableHead>
+                      <TableHead className="whitespace-nowrap">Action Taken</TableHead>
+                      <TableHead className="whitespace-nowrap">Outcome</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {aiRecommendations.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8 whitespace-nowrap">
                           No AI recommendations yet. Run a forecast to generate recommendations.
                         </TableCell>
                       </TableRow>
@@ -602,24 +602,24 @@ export default function AIAgent() {
                         
                         return (
                           <TableRow key={rec.id}>
-                            <TableCell className="font-mono text-sm">
+                            <TableCell className="font-mono text-sm whitespace-nowrap">
                               {new Date(rec.createdAt).toLocaleDateString()}
                             </TableCell>
-                            <TableCell>{item?.name || 'Unknown'}</TableCell>
-                            <TableCell className="text-sm">
+                            <TableCell className="whitespace-nowrap">{item?.name || 'Unknown'}</TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">
                               {rec.recommendedAction === 'ORDER' ? 'Order' : 'Monitor'} {rec.recommendedQty} units
                               {rec.contextSnapshot?.daysUntilStockout 
                                 ? ` (${rec.contextSnapshot.daysUntilStockout} days remaining)` 
                                 : ''}
                             </TableCell>
-                            <TableCell>
+                            <TableCell className="whitespace-nowrap">
                               <Badge variant={
                                 hasOutcome ? 'default' : 'secondary'
                               }>
                                 {hasOutcome ? 'Ordered' : 'Pending'}
                               </Badge>
                             </TableCell>
-                            <TableCell>
+                            <TableCell className="whitespace-nowrap">
                               {hasOutcome ? (
                                 isAccurate ? (
                                   <CheckCircle className="h-4 w-4 text-green-600 inline" />

@@ -38,15 +38,6 @@ import {
   FormMessage 
 } from "@/components/ui/form";
 import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
-} from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { 
   Plus, 
   Loader2, 
   Eye, 
@@ -386,125 +377,125 @@ export default function SalesOrders() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>All Orders</CardTitle>
-              <Select value={channelFilter} onValueChange={setChannelFilter}>
-                <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
-                  <SelectValue placeholder="Filter by channel" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">All Channels</SelectItem>
-                  <SelectItem value="SHOPIFY">Shopify</SelectItem>
-                  <SelectItem value="AMAZON">Amazon</SelectItem>
-                  <SelectItem value="GHL">GoHighLevel</SelectItem>
-                  <SelectItem value="DIRECT">Direct</SelectItem>
-                  <SelectItem value="OTHER">Other</SelectItem>
-                </SelectContent>
-              </Select>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">All Orders</h2>
+              <p className="text-sm text-muted-foreground">View and manage sales orders</p>
             </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-[calc(100vh-280px)]">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Order ID</TableHead>
-                    <TableHead>Channel</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Order Date</TableHead>
-                    <TableHead className="text-right">Total Units</TableHead>
-                    <TableHead className="text-right">Backordered</TableHead>
-                    <TableHead className="text-right">Returns</TableHead>
-                    <TableHead className="sticky right-0 bg-card z-10 text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredOrders.map((order) => {
-                    const totalUnits = order.totalUnits || 0;
-                    const backorderedUnits = order.backorderedUnits || 0;
-                    const returnCount = returns.filter(r => r.salesOrderId === order.id).length;
-                    
-                    return (
-                      <TableRow 
-                        key={order.id} 
-                        className="hover-elevate"
-                        data-testid={`row-order-${order.id}`}
-                      >
-                        <TableCell className="font-mono text-sm" data-testid={`text-order-id-${order.id}`}>
-                          {order.externalOrderId || order.id.slice(0, 8)}
-                        </TableCell>
-                        <TableCell>
-                          <Badge 
-                            className={CHANNEL_COLORS[order.channel as keyof typeof CHANNEL_COLORS] || CHANNEL_COLORS.OTHER}
-                            data-testid={`badge-channel-${order.id}`}
-                          >
-                            {order.channel}
-                          </Badge>
-                        </TableCell>
-                        <TableCell data-testid={`text-customer-${order.id}`}>
-                          {order.customerName}
-                        </TableCell>
-                        <TableCell>
-                          <Badge 
-                            className={STATUS_COLORS[order.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
-                            data-testid={`badge-status-${order.id}`}
-                          >
-                            {order.status.replace(/_/g, ' ')}
-                          </Badge>
-                        </TableCell>
-                        <TableCell data-testid={`text-order-date-${order.id}`}>
-                          {format(new Date(order.orderDate), 'MMM d, yyyy')}
-                        </TableCell>
-                        <TableCell className="text-right" data-testid={`text-total-units-${order.id}`}>
-                          {totalUnits}
-                        </TableCell>
-                        <TableCell 
-                          className={`text-right ${backorderedUnits > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
-                          data-testid={`text-backorder-${order.id}`}
+            <Select value={channelFilter} onValueChange={setChannelFilter}>
+              <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
+                <SelectValue placeholder="Filter by channel" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">All Channels</SelectItem>
+                <SelectItem value="SHOPIFY">Shopify</SelectItem>
+                <SelectItem value="AMAZON">Amazon</SelectItem>
+                <SelectItem value="GHL">GoHighLevel</SelectItem>
+                <SelectItem value="DIRECT">Direct</SelectItem>
+                <SelectItem value="OTHER">Other</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="overflow-x-auto rounded-md border">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium">Order ID</th>
+                  <th className="p-3 text-left text-sm font-medium">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium">Customer</th>
+                  <th className="p-3 text-left text-sm font-medium">Status</th>
+                  <th className="p-3 text-left text-sm font-medium">Order Date</th>
+                  <th className="p-3 text-right text-sm font-medium">Total Units</th>
+                  <th className="p-3 text-right text-sm font-medium">Backordered</th>
+                  <th className="p-3 text-right text-sm font-medium">Returns</th>
+                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredOrders.map((order) => {
+                  const totalUnits = order.totalUnits || 0;
+                  const backorderedUnits = order.backorderedUnits || 0;
+                  const returnCount = returns.filter(r => r.salesOrderId === order.id).length;
+                  
+                  return (
+                    <tr 
+                      key={order.id} 
+                      className="h-11 border-b hover-elevate"
+                      data-testid={`row-order-${order.id}`}
+                    >
+                      <td className="px-3 align-middle font-mono text-sm" data-testid={`text-order-id-${order.id}`}>
+                        {order.externalOrderId || order.id.slice(0, 8)}
+                      </td>
+                      <td className="px-3 align-middle">
+                        <Badge 
+                          className={CHANNEL_COLORS[order.channel as keyof typeof CHANNEL_COLORS] || CHANNEL_COLORS.OTHER}
+                          data-testid={`badge-channel-${order.id}`}
                         >
-                          {backorderedUnits}
-                        </TableCell>
-                        <TableCell className="text-right" data-testid={`text-returns-${order.id}`}>
-                          {returnCount > 0 ? (
-                            <Link href="/returns">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 gap-1"
-                                data-testid={`button-view-returns-${order.id}`}
-                              >
-                                <PackageX className="h-4 w-4" />
-                                <span className="text-orange-600 dark:text-orange-400 font-medium">
-                                  {returnCount}
-                                </span>
-                              </Button>
-                            </Link>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="sticky right-0 bg-card z-10 text-right">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setSelectedOrderId(order.id)}
-                            data-testid={`button-view-${order.id}`}
-                          >
-                            <Eye className="h-4 w-4 mr-2" />
-                            View
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </ScrollArea>
-          </CardContent>
-        </Card>
+                          {order.channel}
+                        </Badge>
+                      </td>
+                      <td className="px-3 align-middle" data-testid={`text-customer-${order.id}`}>
+                        {order.customerName}
+                      </td>
+                      <td className="px-3 align-middle">
+                        <Badge 
+                          className={STATUS_COLORS[order.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
+                          data-testid={`badge-status-${order.id}`}
+                        >
+                          {order.status.replace(/_/g, ' ')}
+                        </Badge>
+                      </td>
+                      <td className="px-3 align-middle" data-testid={`text-order-date-${order.id}`}>
+                        {format(new Date(order.orderDate), 'MMM d, yyyy')}
+                      </td>
+                      <td className="px-3 align-middle text-right" data-testid={`text-total-units-${order.id}`}>
+                        {totalUnits}
+                      </td>
+                      <td 
+                        className={`px-3 align-middle text-right ${backorderedUnits > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
+                        data-testid={`text-backorder-${order.id}`}
+                      >
+                        {backorderedUnits}
+                      </td>
+                      <td className="px-3 align-middle text-right" data-testid={`text-returns-${order.id}`}>
+                        {returnCount > 0 ? (
+                          <Link href="/returns">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 gap-1"
+                              data-testid={`button-view-returns-${order.id}`}
+                            >
+                              <PackageX className="h-4 w-4" />
+                              <span className="text-orange-600 dark:text-orange-400 font-medium">
+                                {returnCount}
+                              </span>
+                            </Button>
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setSelectedOrderId(order.id)}
+                          data-testid={`button-view-${order.id}`}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          View
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {/* Order Detail Drawer */}
@@ -589,49 +580,49 @@ export default function SalesOrders() {
                 {/* Order Lines */}
                 <div>
                   <Label className="text-sm font-medium mb-2 block">Line Items</Label>
-                  <div className="border rounded-md">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>SKU</TableHead>
-                          <TableHead>Product</TableHead>
-                          <TableHead className="text-right">Ordered</TableHead>
-                          <TableHead className="text-right">Allocated</TableHead>
-                          <TableHead className="text-right">Shipped</TableHead>
-                          <TableHead className="text-right">Backorder</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
+                  <div className="border rounded-md overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-muted/50">
+                        <tr className="border-b">
+                          <th className="p-3 text-left text-sm font-medium">SKU</th>
+                          <th className="p-3 text-left text-sm font-medium">Product</th>
+                          <th className="p-3 text-right text-sm font-medium">Ordered</th>
+                          <th className="p-3 text-right text-sm font-medium">Allocated</th>
+                          <th className="p-3 text-right text-sm font-medium">Shipped</th>
+                          <th className="p-3 text-right text-sm font-medium">Backorder</th>
+                        </tr>
+                      </thead>
+                      <tbody>
                         {selectedOrder.lines?.map((line) => {
                           const product = items.find(i => i.id === line.productId);
                           return (
-                            <TableRow key={line.id} data-testid={`row-line-${line.id}`}>
-                              <TableCell className="font-mono text-sm" data-testid={`text-line-sku-${line.id}`}>
+                            <tr key={line.id} className="border-b last:border-0" data-testid={`row-line-${line.id}`}>
+                              <td className="px-3 py-2 align-middle font-mono text-sm" data-testid={`text-line-sku-${line.id}`}>
                                 {line.sku}
-                              </TableCell>
-                              <TableCell data-testid={`text-line-product-${line.id}`}>
+                              </td>
+                              <td className="px-3 py-2 align-middle" data-testid={`text-line-product-${line.id}`}>
                                 {product?.name || "Unknown"}
-                              </TableCell>
-                              <TableCell className="text-right" data-testid={`text-line-ordered-${line.id}`}>
+                              </td>
+                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-ordered-${line.id}`}>
                                 {line.qtyOrdered}
-                              </TableCell>
-                              <TableCell className="text-right" data-testid={`text-line-allocated-${line.id}`}>
+                              </td>
+                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-allocated-${line.id}`}>
                                 {line.qtyAllocated}
-                              </TableCell>
-                              <TableCell className="text-right" data-testid={`text-line-shipped-${line.id}`}>
+                              </td>
+                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-shipped-${line.id}`}>
                                 {line.qtyShipped}
-                              </TableCell>
-                              <TableCell 
-                                className={`text-right ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
+                              </td>
+                              <td 
+                                className={`px-3 py-2 align-middle text-right ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
                                 data-testid={`text-line-backorder-${line.id}`}
                               >
                                 {line.backorderQty}
-                              </TableCell>
-                            </TableRow>
+                              </td>
+                            </tr>
                           );
                         })}
-                      </TableBody>
-                    </Table>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>

@@ -37,6 +37,11 @@ import {
   FormLabel, 
   FormMessage 
 } from "@/components/ui/form";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { 
   Plus, 
   Loader2, 
@@ -315,17 +320,37 @@ export default function SalesOrders() {
     createOrderMutation.mutate(data);
   };
 
+  // State machine for order actions based on fulfilled quantities
+  const hasAnyFulfilledQty = selectedOrder?.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
+
+  // Ship / Mark Fulfilled: allowed only for OPEN orders with no fulfilled items
   const canShip = selectedOrder && 
-    (selectedOrder.status === "OPEN" || selectedOrder.status === "PARTIALLY_FULFILLED") &&
-    selectedOrder.lines?.some(line => line.qtyAllocated > line.qtyShipped);
+    selectedOrder.status === "OPEN" && 
+    !hasAnyFulfilledQty;
 
   const canFulfill = selectedOrder && 
-    selectedOrder.status !== "FULFILLED" && 
-    selectedOrder.status !== "CANCELLED";
+    selectedOrder.status === "OPEN" && 
+    !hasAnyFulfilledQty;
 
+  // Cancel: allowed only for OPEN orders with no fulfilled items
   const canCancel = selectedOrder && 
+    selectedOrder.status === "OPEN" && 
+    !hasAnyFulfilledQty;
+
+  // Create Return: allowed only if there are fulfilled items
+  const canCreateReturn = selectedOrder && 
     selectedOrder.status !== "CANCELLED" && 
-    selectedOrder.status !== "FULFILLED";
+    hasAnyFulfilledQty;
+
+  const cancelTooltip = selectedOrder?.status === "CANCELLED" 
+    ? "Order is already cancelled" 
+    : hasAnyFulfilledQty 
+    ? "Order already fulfilled – use returns instead" 
+    : undefined;
+
+  const createReturnTooltip = !hasAnyFulfilledQty 
+    ? "No fulfilled items yet – ship the order first" 
+    : undefined;
 
   if (isLoading) {
     return (
@@ -587,8 +612,8 @@ export default function SalesOrders() {
                           <th className="p-3 text-left text-sm font-medium">SKU</th>
                           <th className="p-3 text-left text-sm font-medium">Product</th>
                           <th className="p-3 text-right text-sm font-medium">Ordered</th>
-                          <th className="p-3 text-right text-sm font-medium">Allocated</th>
-                          <th className="p-3 text-right text-sm font-medium">Shipped</th>
+                          <th className="p-3 text-right text-sm font-medium">Fulfilled</th>
+                          <th className="p-3 text-right text-sm font-medium">Returned</th>
                           <th className="p-3 text-right text-sm font-medium">Backorder</th>
                         </tr>
                       </thead>
@@ -606,11 +631,11 @@ export default function SalesOrders() {
                               <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-ordered-${line.id}`}>
                                 {line.qtyOrdered}
                               </td>
-                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-allocated-${line.id}`}>
-                                {line.qtyAllocated}
+                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-fulfilled-${line.id}`}>
+                                {line.qtyFulfilled ?? 0}
                               </td>
-                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-shipped-${line.id}`}>
-                                {line.qtyShipped}
+                              <td className="px-3 py-2 align-middle text-right" data-testid={`text-line-returned-${line.id}`}>
+                                {line.returnedQty ?? 0}
                               </td>
                               <td 
                                 className={`px-3 py-2 align-middle text-right ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
@@ -635,15 +660,25 @@ export default function SalesOrders() {
                 >
                   Close
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowCreateReturnDialog(true)}
-                  data-testid="button-create-return"
-                >
-                  <PackageX className="h-4 w-4 mr-2" />
-                  Create Return
-                </Button>
-                {canCancel && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        variant="outline"
+                        onClick={() => setShowCreateReturnDialog(true)}
+                        disabled={!canCreateReturn}
+                        data-testid="button-create-return"
+                      >
+                        <PackageX className="h-4 w-4 mr-2" />
+                        Create Return
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {createReturnTooltip && (
+                    <TooltipContent>{createReturnTooltip}</TooltipContent>
+                  )}
+                </Tooltip>
+                {canCancel ? (
                   <Button
                     variant="destructive"
                     onClick={() => cancelOrderMutation.mutate(selectedOrder.id)}
@@ -657,7 +692,25 @@ export default function SalesOrders() {
                     )}
                     Cancel Order
                   </Button>
-                )}
+                ) : (selectedOrder?.status !== "CANCELLED" && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span>
+                        <Button
+                          variant="destructive"
+                          disabled={true}
+                          data-testid="button-cancel-order-disabled"
+                        >
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Cancel Order
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    {cancelTooltip && (
+                      <TooltipContent>{cancelTooltip}</TooltipContent>
+                    )}
+                  </Tooltip>
+                ))}
                 {canFulfill && (
                   <Button
                     variant="default"

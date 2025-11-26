@@ -4375,12 +4375,14 @@ Generate only the email body text, no subject line.`;
           createdBy: userId,
         });
 
-        // Update line: qtyShipped += shipQty, qtyAllocated = 0, recalculate backorderQty
+        // Update line: qtyShipped += shipQty, qtyFulfilled = qtyShipped, qtyAllocated = 0, recalculate backorderQty
         const newQtyShipped = line.qtyShipped + shipQty;
+        const newQtyFulfilled = newQtyShipped; // Fulfilled qty equals shipped qty
         const newBackorderQty = line.qtyOrdered - newQtyShipped;
 
         await storage.updateSalesOrderLine(line.id, {
           qtyShipped: newQtyShipped,
+          qtyFulfilled: newQtyFulfilled,
           qtyAllocated: 0,
           backorderQty: newBackorderQty,
         });
@@ -4429,15 +4431,32 @@ Generate only the email body text, no subject line.`;
     try {
       const { id } = req.params;
 
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Get all lines for this order
+      const lines = await storage.getSalesOrderLines(id);
+
+      // Update each line to mark all ordered quantities as fulfilled (without shipping)
+      for (const line of lines) {
+        await storage.updateSalesOrderLine(line.id, {
+          qtyFulfilled: line.qtyOrdered,
+        });
+      }
+
+      // Update order status to FULFILLED
       const updatedOrder = await storage.updateSalesOrder(id, { 
         status: 'FULFILLED' 
       });
 
-      if (!updatedOrder) {
-        return res.status(404).json({ error: "Sales order not found" });
-      }
-
-      res.json(updatedOrder);
+      // Return updated order with lines
+      const updatedLines = await storage.getSalesOrderLines(id);
+      res.json({
+        ...updatedOrder,
+        lines: updatedLines,
+      });
     } catch (error: any) {
       console.error("[Sales Orders] Error fulfilling sales order:", error);
       res.status(500).json({ error: error.message || "Failed to fulfill sales order" });
@@ -4457,6 +4476,15 @@ Generate only the email body text, no subject line.`;
 
       // Get all lines
       const lines = await storage.getSalesOrderLines(id);
+
+      // Check if any items have been fulfilled - if so, cannot cancel
+      const anyFulfilled = lines.some((line: SalesOrderLine) => (line.qtyFulfilled ?? 0) > 0);
+      if (anyFulfilled) {
+        return res.status(400).json({ 
+          error: "Cannot cancel order with fulfilled items. Use returns instead." 
+        });
+      }
+
       const affectedProductIds = new Set<string>();
 
       // Update each line: set qtyAllocated = 0, backorderQty = 0

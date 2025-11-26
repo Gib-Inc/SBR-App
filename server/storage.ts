@@ -214,8 +214,10 @@ export interface IStorage {
   // Return Requests
   getAllReturnRequests(): Promise<ReturnRequest[]>;
   getReturnRequest(id: string): Promise<ReturnRequest | undefined>;
+  getReturnRequestsBySalesOrderId(salesOrderId: string): Promise<ReturnRequest[]>;
   createReturnRequest(request: InsertReturnRequest): Promise<ReturnRequest>;
   updateReturnRequest(id: string, request: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined>;
+  receiveReturn(returnId: string, itemUpdates: { itemId: string; qtyReceived: number }[]): Promise<ReturnRequest>;
 
   // Return Items
   getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]>;
@@ -1494,12 +1496,15 @@ export class MemStorage implements IStorage {
     const request: ReturnRequest = {
       id,
       ...insertRequest,
+      salesOrderId: insertRequest.salesOrderId ?? null,
       status: insertRequest.status ?? 'OPEN',
       resolutionFinal: insertRequest.resolutionFinal ?? null,
       reason: insertRequest.reason ?? null,
       customerEmail: insertRequest.customerEmail ?? null,
       customerPhone: insertRequest.customerPhone ?? null,
       ghlContactId: insertRequest.ghlContactId ?? null,
+      labelProvider: insertRequest.labelProvider ?? null,
+      initiatedVia: insertRequest.initiatedVia ?? 'MANUAL_UI',
       createdAt: now,
       updatedAt: now,
     };
@@ -1515,6 +1520,61 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async getReturnRequestsBySalesOrderId(salesOrderId: string): Promise<ReturnRequest[]> {
+    return Array.from(this.returnRequests.values())
+      .filter(request => request.salesOrderId === salesOrderId);
+  }
+
+  async receiveReturn(returnId: string, itemUpdates: { itemId: string; qtyReceived: number }[]): Promise<ReturnRequest> {
+    const returnRequest = this.returnRequests.get(returnId);
+    if (!returnRequest) {
+      throw new Error(`Return request ${returnId} not found`);
+    }
+
+    const returnItems = await this.getReturnItemsByRequestId(returnId);
+
+    for (const update of itemUpdates) {
+      const returnItem = returnItems.find(item => item.inventoryItemId === update.itemId);
+      if (!returnItem) {
+        throw new Error(`Return item for inventory item ${update.itemId} not found in return request ${returnId}`);
+      }
+
+      await this.updateReturnItem(returnItem.id, {
+        qtyReceived: update.qtyReceived,
+      });
+
+      if (returnItem.disposition === 'RETURN_TO_STOCK' && update.qtyReceived > 0) {
+        const item = await this.getItem(update.itemId);
+        if (!item) {
+          throw new Error(`Item ${update.itemId} not found`);
+        }
+
+        const updatedStock = (item.currentStock ?? 0) + update.qtyReceived;
+        await this.updateItem(update.itemId, {
+          currentStock: updatedStock,
+        });
+
+        await this.createInventoryTransaction({
+          itemId: update.itemId,
+          type: 'RECEIVE',
+          quantity: update.qtyReceived,
+          itemType: item.type === 'finished_product' ? 'FINISHED' : 'RAW',
+          location: 'HILDALE',
+          notes: `Return received: ${returnRequest.externalOrderId}`,
+          createdBy: 'SYSTEM',
+        });
+      }
+    }
+
+    const updatedReturnItems = await this.getReturnItemsByRequestId(returnId);
+    const allItemsReceived = updatedReturnItems.every(item => item.qtyReceived >= item.qtyApproved);
+    const newStatus = allItemsReceived ? 'CLOSED' : 'RECEIVED';
+
+    const updated = { ...returnRequest, status: newStatus, updatedAt: new Date() };
+    this.returnRequests.set(returnId, updated);
+    return updated;
+  }
+
   // Return Items
   async getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]> {
     return Array.from(this.returnItems.values())
@@ -1526,6 +1586,8 @@ export class MemStorage implements IStorage {
     const item: ReturnItem = {
       id,
       ...insertItem,
+      salesOrderLineId: insertItem.salesOrderLineId ?? null,
+      itemReason: insertItem.itemReason ?? null,
       qtyApproved: insertItem.qtyApproved ?? 0,
       qtyReceived: insertItem.qtyReceived ?? 0,
       disposition: insertItem.disposition ?? null,
@@ -1709,6 +1771,7 @@ export class MemStorage implements IStorage {
       ghlContactId: insertOrder.ghlContactId ?? null,
       requiredByDate: insertOrder.requiredByDate ?? null,
       notes: insertOrder.notes ?? null,
+      rawPayload: insertOrder.rawPayload ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -1766,6 +1829,10 @@ export class MemStorage implements IStorage {
   }
 
   // Backorder Snapshots
+  async getAllBackorderSnapshots(): Promise<BackorderSnapshot[]> {
+    return Array.from(this.backorderSnapshots.values());
+  }
+
   async getBackorderSnapshot(productId: string): Promise<BackorderSnapshot | undefined> {
     return Array.from(this.backorderSnapshots.values())
       .find(snapshot => snapshot.productId === productId);
@@ -2640,6 +2707,66 @@ export class PostgresStorage implements IStorage {
       .set({ ...updates, updatedAt: drizzleSql`now()` })
       .where(eq(schema.returnRequests.id, id))
       .returning();
+    return results[0];
+  }
+
+  async getReturnRequestsBySalesOrderId(salesOrderId: string): Promise<ReturnRequest[]> {
+    return await this.db.select()
+      .from(schema.returnRequests)
+      .where(eq(schema.returnRequests.salesOrderId, salesOrderId));
+  }
+
+  async receiveReturn(returnId: string, itemUpdates: { itemId: string; qtyReceived: number }[]): Promise<ReturnRequest> {
+    const returnRequest = await this.getReturnRequest(returnId);
+    if (!returnRequest) {
+      throw new Error(`Return request ${returnId} not found`);
+    }
+
+    const returnItems = await this.getReturnItemsByRequestId(returnId);
+
+    for (const update of itemUpdates) {
+      const returnItem = returnItems.find(item => item.inventoryItemId === update.itemId);
+      if (!returnItem) {
+        throw new Error(`Return item for inventory item ${update.itemId} not found in return request ${returnId}`);
+      }
+
+      await this.updateReturnItem(returnItem.id, {
+        qtyReceived: update.qtyReceived,
+      });
+
+      if (returnItem.disposition === 'RETURN_TO_STOCK' && update.qtyReceived > 0) {
+        const item = await this.getItem(update.itemId);
+        if (!item) {
+          throw new Error(`Item ${update.itemId} not found`);
+        }
+
+        await this.db.update(schema.items)
+          .set({ 
+            currentStock: drizzleSql`${schema.items.currentStock} + ${update.qtyReceived}` 
+          })
+          .where(eq(schema.items.id, update.itemId));
+
+        await this.createInventoryTransaction({
+          itemId: update.itemId,
+          type: 'RECEIVE',
+          quantity: update.qtyReceived,
+          itemType: item.type === 'finished_product' ? 'FINISHED' : 'RAW',
+          location: 'HILDALE',
+          notes: `Return received: ${returnRequest.externalOrderId}`,
+          createdBy: 'SYSTEM',
+        });
+      }
+    }
+
+    const updatedReturnItems = await this.getReturnItemsByRequestId(returnId);
+    const allItemsReceived = updatedReturnItems.every(item => item.qtyReceived >= item.qtyApproved);
+    const newStatus = allItemsReceived ? 'CLOSED' : 'RECEIVED';
+
+    const results = await this.db.update(schema.returnRequests)
+      .set({ status: newStatus, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.returnRequests.id, returnId))
+      .returning();
+    
     return results[0];
   }
 

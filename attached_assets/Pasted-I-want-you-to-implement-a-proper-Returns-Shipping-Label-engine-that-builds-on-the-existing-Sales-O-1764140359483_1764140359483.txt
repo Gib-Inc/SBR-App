@@ -1,0 +1,165 @@
+I want you to implement a proper Returns + Shipping Label engine that builds on the existing Sales Orders page, Returns page, and the data sources (Shopify, Amazon Seller Central, Extensiv/Pivot, GoHighLevel). Do NOT add any new sidebar routes or new stand-alone pages. Everything must live inside the existing Sales Orders and Returns views and the AI Agent → Data Sources section.
+
+High-level goals
+
+– All returns, regardless of source (Shopify, Amazon, direct site, GHL support bot), are represented as a single ReturnRequest model.
+– GHL agent/workflows decide “troubleshoot vs replacement vs refund”; this app generates and tracks the shipping label and inventory/warehouse side.
+– Returns are visible and manageable only from the existing Returns page and via actions from the Sales Orders page.
+– Returned items update inventory correctly (local stock + Extensiv) and provide data back to the AI layer for forecasting and decision making.
+
+Data model – extend existing Returns instead of creating new scattered models
+
+– Find the current schema used for the Returns page. Extend or rename it into a single ReturnRequest model rather than creating parallel structures.
+– ReturnRequest should have, at minimum (reuse existing field names where possible):
+
+id
+orderId (FK to SalesOrder)
+orderNumber (copy from SalesOrder for quick lookup)
+channel: 'SHOPIFY' | 'AMAZON' | 'DIRECT'
+source: 'GHL' | 'Manual' | 'System'
+customerName
+customerEmail
+shippingAddress (either structured or JSON)
+resolutionType: 'REFUND' | 'REPLACEMENT' | 'TROUBLESHOOT_ONLY'
+status: 'OPEN' | 'LABEL_CREATED' | 'IN_TRANSIT' | 'RECEIVED_AT_WAREHOUSE' | 'COMPLETED' | 'CANCELLED'
+reason (free text)
+resolutionNotes
+labelProvider: 'SHIPPO' (for now)
+labelTrackingNumber
+labelUrl (PDF/PNG link to the label)
+warehouseLocationCode (Extensiv location or similar)
+createdAt
+updatedAt
+
+– Also create/extend a ReturnLine model linked to ReturnRequest:
+
+id
+returnRequestId
+salesOrderLineId
+sku
+qtyOrdered
+qtyReturning
+qtyReceived
+condition: 'GOOD' | 'DAMAGED' | 'UNKNOWN'
+
+– Make sure ReturnRequest and ReturnLine are tightly linked to SalesOrder and SalesOrderLine so we can trace returns back to their source order and channel.
+
+Entry points – how returns get created
+
+A. From Sales Orders page (manual)
+
+– On the Sales Orders table, add an Actions option “Create Return”.
+– Clicking it opens a modal:
+
+– Shows orderNumber, channel, customer, items/quantities.
+– Lets the user select which lines to return and quantities (qtyReturning).
+– Choose resolutionType (refund vs replacement vs troubleshoot only).
+– Enter a reason.
+
+– On confirm, create a ReturnRequest + ReturnLine records, with:
+
+source = 'Manual'
+channel = order.channel
+status = 'OPEN'
+
+– After creation, the new return appears in the Returns table and is linked to this order.
+
+B. From GHL (API endpoint, used by support bot)
+
+– Implement an authenticated backend endpoint something like POST /api/returns/create-from-ghl.
+– It should accept a payload with: externalOrderId or orderNumber, channel, customer info, address, items + quantities to return, resolutionType, and reason.
+– The handler should:
+
+– Look up or create the corresponding SalesOrder record (based on Shopify/Amazon/direct data already synced).
+– Create ReturnRequest + ReturnLines (source = 'GHL').
+– Immediately attempt to generate a shipping label (see label section) and return labelUrl + trackingNumber in the response so GHL can send it via SMS/email.
+
+– For now, you can implement a simple auth mechanism (e.g. shared secret/token in an env var) and leave a clear TODO comment for wiring GHL webhooks/workflows later.
+
+Shipping label generation (server-side, via a single provider)
+
+– Implement a ShippingLabelService that talks to Shippo’s API (assume a SHIPPO_API_KEY env var). Do not add other providers right now; Shippo is the default.
+– The service should be able to:
+
+– Create a shipment + label for a given ReturnRequest (we’ll pass address and package details).
+– Return labelTrackingNumber and labelUrl.
+
+– If SHIPPO_API_KEY is missing or we’re in dev mode, return a mocked label URL and fake tracking number but still persist them to the database so the UI behaves the same.
+
+– Expose a backend mutation for “issueReturnLabel(returnRequestId)” that:
+
+– Validates the ReturnRequest is in status OPEN.
+– Calls ShippingLabelService to get tracking + label URL.
+– Updates the ReturnRequest: status = 'LABEL_CREATED', labelProvider, labelTrackingNumber, labelUrl.
+– Returns updated ReturnRequest so the UI can update.
+
+Returns page UX – use the existing page, no new routes
+
+– Keep the current Returns route/page. Replace any hard-coded rows with real ReturnRequest data.
+– Table should show:
+
+Order ID (orderNumber)
+Channel (badge: SHOPIFY / AMAZON / DIRECT)
+Source (badge: GHL / Manual / System)
+Customer
+Status (OPEN, LABEL_CREATED, IN_TRANSIT, RECEIVED_AT_WAREHOUSE, COMPLETED, CANCELLED)
+Resolution (REFUND / REPLACEMENT / TROUBLESHOOT_ONLY)
+Created date
+Actions
+
+– Make each row clickable to open a Return detail modal:
+
+– Show top-level info (orderNumber, channel, customer, address, resolutionType, status).
+– Show a line-items table from ReturnLine.
+– If a label exists: show tracking number, labelProvider, and a “Download/View Label” link (labelUrl).
+
+– Actions column on each row:
+
+– If status is OPEN and no label yet: show “Issue Label” button/icon.
+– Opens a confirmation modal showing destination address and item summary.
+– On confirm, calls issueReturnLabel(returnRequestId).
+– If a label exists (LABEL_CREATED or IN_TRANSIT): show “View Label / Tracking” action.
+– If the warehouse has physically received the return (either via Extensiv or manually): show “Mark Received” which transitions status and updates inventory (see next section).
+
+Inventory + Extensiv updates when a return is received
+
+– Implement a backend mutation “receiveReturn(returnRequestId, receivedLines)” that:
+
+– For each ReturnLine, updates qtyReceived.
+– Creates correct inventory transactions (or calls existing TransactionService) to add stock back or mark it as scrapped, depending on condition and resolutionType.
+– If Extensiv is configured, call the Extensiv API to adjust warehouse inventory at the correct location (warehouseLocationCode).
+– If all lines are processed, set ReturnRequest status to 'RECEIVED_AT_WAREHOUSE' or directly 'COMPLETED' depending on your chosen lifecycle.
+
+– The “Receive” button in the UI should open a modal showing all ReturnLines with fields for qty received and condition, then call receiveReturn on confirm.
+
+Status lifecycle and AI/analytics hooks
+
+– Define a clear status transition flow:
+
+NEW/OPEN → LABEL_CREATED → IN_TRANSIT → RECEIVED_AT_WAREHOUSE → COMPLETED (or CANCELLED)
+
+– Make sure the Returns page always reflects status from the database – no hard-coded logic.
+– Whenever a ReturnRequest is created or completed:
+
+– Flag the associated SKUs for forecast refresh (so the AI can learn from return rates).
+– Log basic metadata (channel, resolutionType, reason) into whatever structure the AI Agent Insights uses so we can later show charts like “returns by channel” or “returns by SKU”.
+
+No new sidebar pages or routes
+
+– Do NOT create new navigation entries.
+– Use only:
+
+– Sales Orders page for creating returns.
+– Returns page for managing them.
+– Existing AI Agent → Data Sources cards for configuring Shopify/Amazon/Extensiv, etc.
+
+After you implement this, I should be able to:
+
+– Create a return manually from a Sales Order.
+– See that Return on the Returns page with proper channel/source badges.
+– Click “Issue Label” to generate a label (real via Shippo or mocked).
+– See tracking and label link in the Return detail.
+– Mark items as received and see inventory updated (and Extensiv called when configured).
+– Use the GHL endpoint later so the GHL support bot can trigger the same flow automatically.
+
+If anything is unclear in the current schema, inspect the existing Returns and Sales Orders implementations and adapt your naming, but keep the behavior exactly as described.

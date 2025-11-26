@@ -504,17 +504,21 @@ export type ItemWithComputedQuantities = Item & {
 export const returnRequests = pgTable("return_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   salesOrderId: varchar("sales_order_id").references(() => salesOrders.id), // Link to SalesOrder
+  orderNumber: text("order_number"), // Denormalized from SalesOrder for quick lookup
   externalOrderId: text("external_order_id").notNull(), // Upstream order ID from Shopify/Amazon/etc.
   salesChannel: text("sales_channel").notNull(), // 'SHOPIFY', 'AMAZON', 'DIRECT', 'OTHER'
+  source: text("source").notNull().default('Manual'), // 'GHL' | 'Manual' | 'System'
   customerName: text("customer_name").notNull(),
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone"),
+  shippingAddress: jsonb("shipping_address"), // JSON object with address details
   ghlContactId: text("ghl_contact_id"), // Link back to GHL contact for workflows
   status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED', 'CANCELLED'
   resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT', 'TROUBLESHOOT'
   resolutionFinal: text("resolution_final"), // What actually happened (nullable)
   labelProvider: text("label_provider"), // 'SHIPPO', 'EASYPOST', 'STUB', etc.
-  initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI'
+  initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI' (deprecated, use 'source' instead)
+  warehouseLocationCode: text("warehouse_location_code"), // Extensiv location or similar
   reason: text("reason"), // High-level reason from GHL bot
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
@@ -543,6 +547,7 @@ export const returnItems = pgTable("return_items", {
   qtyRequested: integer("qty_requested").notNull(), // What customer wants to return
   qtyApproved: integer("qty_approved").notNull().default(0), // What we allow to be returned
   qtyReceived: integer("qty_received").notNull().default(0), // What actually came back
+  condition: text("condition"), // 'GOOD' | 'DAMAGED' | 'UNKNOWN' (null until received)
   disposition: text("disposition"), // 'RETURN_TO_STOCK', 'SCRAP', 'REPLACE_ONLY', 'INSPECT' (null until received)
   itemReason: text("item_reason"), // Specific reason for this item
   notes: text("notes"),

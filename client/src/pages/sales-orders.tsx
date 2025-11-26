@@ -426,15 +426,15 @@ export default function SalesOrders() {
             <table className="w-full">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium">Order ID</th>
-                  <th className="p-3 text-left text-sm font-medium">Channel</th>
-                  <th className="p-3 text-left text-sm font-medium">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium">Status</th>
-                  <th className="p-3 text-left text-sm font-medium">Order Date</th>
-                  <th className="p-3 text-right text-sm font-medium">Total Units</th>
-                  <th className="p-3 text-right text-sm font-medium">Backordered</th>
-                  <th className="p-3 text-right text-sm font-medium">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total Units</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backordered</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returns</th>
+                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></th>
                 </tr>
               </thead>
               <tbody>
@@ -450,10 +450,10 @@ export default function SalesOrders() {
                       onClick={() => setSelectedOrderId(order.id)}
                       data-testid={`row-order-${order.id}`}
                     >
-                      <td className="px-3 align-middle font-mono text-sm" data-testid={`text-order-id-${order.id}`}>
+                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-order-id-${order.id}`}>
                         {order.externalOrderId || order.id.slice(0, 8)}
                       </td>
-                      <td className="px-3 align-middle">
+                      <td className="px-3 align-middle whitespace-nowrap">
                         <Badge 
                           className={CHANNEL_COLORS[order.channel as keyof typeof CHANNEL_COLORS] || CHANNEL_COLORS.OTHER}
                           data-testid={`badge-channel-${order.id}`}
@@ -461,10 +461,10 @@ export default function SalesOrders() {
                           {order.channel}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle" data-testid={`text-customer-${order.id}`}>
+                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-customer-${order.id}`}>
                         {order.customerName}
                       </td>
-                      <td className="px-3 align-middle">
+                      <td className="px-3 align-middle whitespace-nowrap">
                         <Badge 
                           className={STATUS_COLORS[order.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
                           data-testid={`badge-status-${order.id}`}
@@ -472,19 +472,19 @@ export default function SalesOrders() {
                           {order.status.replace(/_/g, ' ')}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle" data-testid={`text-order-date-${order.id}`}>
+                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-order-date-${order.id}`}>
                         {format(new Date(order.orderDate), 'MMM d, yyyy')}
                       </td>
-                      <td className="px-3 align-middle text-right" data-testid={`text-total-units-${order.id}`}>
+                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-units-${order.id}`}>
                         {totalUnits}
                       </td>
                       <td 
-                        className={`px-3 align-middle text-right ${backorderedUnits > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
+                        className={`px-3 align-middle text-right whitespace-nowrap ${backorderedUnits > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
                         data-testid={`text-backorder-${order.id}`}
                       >
                         {backorderedUnits}
                       </td>
-                      <td className="px-3 align-middle text-right" data-testid={`text-returns-${order.id}`}>
+                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-returns-${order.id}`}>
                         {returnCount > 0 ? (
                           <Link href="/returns">
                             <Button
@@ -503,7 +503,7 @@ export default function SalesOrders() {
                           <span className="text-muted-foreground">-</span>
                         )}
                       </td>
-                      <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                      <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                         <div className="flex items-center justify-end">
                           {(() => {
                             const hasAnyFulfilled = order.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;

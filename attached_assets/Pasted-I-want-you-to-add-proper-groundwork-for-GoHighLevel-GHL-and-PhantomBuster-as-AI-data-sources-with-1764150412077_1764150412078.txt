@@ -1,0 +1,49 @@
+I want you to add proper groundwork for GoHighLevel (GHL) and PhantomBuster as AI data sources, without creating any new pages. Everything should be configured and surfaced through the existing AI Agent → Data Sources tab and the existing Sales Orders / Returns flows.
+
+Goals:
+• GoHighLevel: treat it as the main CRM/comms hub that will eventually drive returns, disputes, and notifications.
+• PhantomBuster: treat it as an optional enrichment/scraping source for supplier and product data (not required for core flows).
+• Do not change any of the existing layouts (Dashboard, BOM, Barcodes, Suppliers, Sales Orders, Returns). Use the existing “AI Agent → Data Sources” UI for configuration and sync only.
+
+Please do the following:
+
+GoHighLevel integration groundwork
+• Under AI Agent → Data Sources, wire the existing “GoHighLevel” card so “Configure” opens a modal that lets me enter and save:
+– GHL base URL
+– API key
+– Location ID
+• Store these securely (env + DB settings, consistent with how you handled Extensiv/Shopify/Amazon).
+• Create a small GHL client/service on the backend that supports (for now):
+– Fetching a contact by phone/email
+– Creating a “ticket” or “task” (or whatever generic object you use) with custom fields: orderId, returnId, poId, channel, status, notes.
+• Expose one internal function I can call from elsewhere, something like createGhlTaskForReturn(returnId) that:
+– Looks up the linked Sales Order and Return
+– Assembles a clear description (customer, channel, items, quantities, resolution requested)
+– Creates a GHL task/ticket tagged for “Returns” with those details.
+• Do not yet wire this into any UI buttons; just make the service, config modal, and “Test Connection” / “Sync” buttons work and log to the console so we know it’s ready to be used.
+
+PhantomBuster groundwork
+• Under AI Agent → Data Sources, wire the existing “PhantomBuster” card similarly with a Configure modal for:
+– PhantomBuster API key
+– Default workspace or phantoms IDs field (string list is fine for now).
+• Create a lightweight PhantomBuster service that can:
+– Trigger a phantom by ID with a payload (for example, supplier URL or product URL).
+– Poll or fetch a simple result JSON.
+• I don’t want any UI listing PhantomBuster jobs yet; just make sure the service works and we have one internal helper like enrichSupplierWithPhantom(supplierId) that:
+– Takes a supplier, calls a phantom, and logs the returned data.
+– Does not persist anything yet (we will decide the schema later).
+
+Connect these to the AI Agent context only
+• In the AI Agent backend context builder, add hooks so that when building the AI context for an order or return:
+– It can include a stub section like “GHL: <contact/task lookup placeholder>” and “Phantom: <enrichment available>” based on whether credentials are configured.
+• For now, if credentials are missing, simply mark those sections as “not configured” and don’t throw errors.
+
+Keep everything non-disruptive
+• Do not change the current behavior of Sales Orders, Returns, Shippo labels, or PO disputes.
+• This task is only to:
+– Make GHL and PhantomBuster properly configurable in the AI Agent → Data Sources tab.
+– Implement clean backend services and test helpers so we can later hook returns/disputes into GHL and use PhantomBuster for enrichment.
+
+After implementing, please:
+• Show me how to open each Configure modal, save credentials, and run a simple “Test Connection” for GHL and PhantomBuster.
+• Confirm that no existing flows (POs, Sales Orders, Returns, Shippo labels) were broken.

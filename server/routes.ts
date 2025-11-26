@@ -3958,6 +3958,35 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Track receipt printing
+  // POST /api/returns/:id/print-receipt
+  // Updates receiptPrintedAt (first time only) and increments receiptPrintCount
+  app.post("/api/returns/:id/print-receipt", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+
+      const updates: any = {
+        receiptPrintCount: (returnRequest.receiptPrintCount || 0) + 1,
+      };
+
+      // Set receiptPrintedAt only on first print
+      if (!returnRequest.receiptPrintedAt) {
+        updates.receiptPrintedAt = new Date();
+      }
+
+      const updated = await storage.updateReturnRequest(id, updates);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[Returns] Error tracking receipt print:", error);
+      res.status(500).json({ error: error.message || "Failed to track receipt print" });
+    }
+  });
+
   // List all return requests
   // GET /api/returns
   app.get("/api/returns", requireAuth, async (req: Request, res: Response) => {

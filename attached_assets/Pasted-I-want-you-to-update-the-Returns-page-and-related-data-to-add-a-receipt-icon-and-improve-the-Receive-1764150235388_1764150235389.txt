@@ -1,0 +1,106 @@
+I want you to update the Returns page and related data to add a receipt icon and improve the Receive action, while reusing the existing sales/returns/shipping logic and visual style from the Suppliers page.
+Goals:
+• Every Return row has a small receipt icon in the Actions column.
+• Clicking the receipt icon opens a clear “Return Receipt” modal with status + line items and a Print / Re-print button.
+• The existing “Receive” action is redesigned as a checkmark icon (grey = not received, green = received) with a confirmation + arrival-condition modal.
+• All changes reuse the current models and Shippo integration; no new providers or duplicated logic.
+
+
+Receipt action icon on the Returns page
+• On the Returns page table, add a small receipt-style icon in the Actions column for each row, next to the existing label/receive actions and visually consistent with the action icons on the Suppliers → Purchase Orders table.
+• The receipt icon should always be visible; if there is truly nothing to print yet, disable it with a tooltip explaining why.
+• Add a tooltip like “View Return Receipt”.
+• Clicking the receipt icon opens a new “Return Receipt” modal for that specific return.
+
+
+“Return Receipt” modal behavior
+When the receipt icon is clicked, open a modal with:
+
+
+• Title: “Return Receipt – {Order ID}”.
+• Header block showing existing metadata (reuse current models, do not invent new fields unnecessarily):
+– Order ID
+– Channel (Shopify, Amazon, etc.)
+– Source (Manual vs API)
+– Customer name and basic contact (email, phone if present)
+– Created date
+• Status summary section using existing fields:
+– Return status (OPEN, LABEL_ISSUED, RECEIVED, etc.)
+– Resolution (REFUND, REPLACEMENT, etc.)
+– Label state: whether a shipping label exists, carrier, tracking number, label created date (from existing Shippo integration).
+• Line items table:
+– SKU
+– Product name
+– Quantity ordered
+– Quantity shipped
+– Quantity being returned and disposition (restock vs scrap, etc., using existing fields if available).
+• Bottom buttons:
+– Primary: “Print Receipt” if this is the first print, or “Re-print Receipt” if it has already been printed.
+– Secondary: “Close”.
+
+
+Track receipt printing in the data model
+Extend the existing return entity with minimal tracking fields (follow current schema conventions):
+• receiptPrintedAt: Date | null – timestamp of first successful print.
+• receiptPrintCount: number – total number of times a receipt has been printed (default 0).
+
+
+Behavior:
+• On first successful print: set receiptPrintedAt to now and receiptPrintCount to 1.
+• On subsequent prints: keep receiptPrintedAt as first-print time and increment receiptPrintCount.
+• The modal chooses “Print Receipt” vs “Re-print Receipt” based on receiptPrintCount (0 vs >0) or receiptPrintedAt (null vs non-null).
+
+
+Implement printing in a reusable way
+• Create a printer-friendly “receipt view” component/route that renders the same data in a clean layout suitable for printing.
+• When the user clicks Print / Re-print:
+– Open the printer-friendly view and trigger the browser print flow.
+– After triggering print, update receiptPrintedAt and receiptPrintCount via an API/mutation.
+• Handle errors gracefully (toast/error state if generation fails).
+
+
+Redesign the Receive action as a checkmark icon
+Replace the current “Receive” button in the Returns table with a checkmark icon:
+
+
+• In the Returns table Actions column:
+– Use a checkmark icon to represent “Received”.
+– Grey checkmark = not yet received.
+– Green checkmark = received.
+• Add a tooltip:
+– Grey: “Mark return as received”.
+– Green: “Return received”.
+Behavior when clicking the icon:
+a) From NOT received → received (grey → green):
+• Clicking the grey checkmark opens a “Confirm Return Receipt” modal.
+• Modal content:
+– Title: “Confirm Return Receipt – {Order ID}”.
+– Show key info: Order ID, Channel, Customer, current Return status, created date.
+– Show a simple condition section that reuses existing disposition/notes fields (do NOT create a totally separate condition system if a suitable field already exists):
+· Dropdown like “Arrival Condition” (e.g., Good condition / Damaged – restock / Damaged – scrap / Other) mapped to the appropriate existing disposition/condition field(s).
+· Optional notes textarea for arrival comments.
+– Buttons: “Cancel” and “Mark Received”.
+• On “Mark Received”:
+– Call the same backend logic currently used by the “Receive” button to:
+· Update the Return status to RECEIVED.
+· Perform any existing inventory updates (return to stock vs scrap) based on disposition.
+– Save the arrival condition + notes to the existing fields you connected above.
+– Update the UI so the checkmark turns green and the Return row reflects the new status.
+b) From already received (green):
+• Clicking the green checkmark should NOT silently toggle back; either:
+– Do nothing except show a tooltip “Already received”, OR
+– Open a read-only version of the receipt/condition info.
+• Do not allow reverting to “not received” unless that is already a supported behavior in the backend; if revert is allowed, show a dedicated “Reopen return” modal and reuse existing fields.
+
+
+Keep everything aligned with existing patterns
+• Reuse current entities for Orders, Returns, and Shipments – no duplicate models.
+• Do NOT change the core logic of issuing labels, viewing labels, or shipping; only augment with the receipt icon and the checkmark-based receive UX.
+• Follow the existing styling, modal components, and accessibility patterns already used on the Suppliers and Returns pages.
+• If it is straightforward, also surface the receipt icon (or a “View Receipt” button) inside the Sales Orders → Order Details drawer, using the same receipt data and print logic.
+
+
+Finally, test at least these cases:
+• A return that is open and not received: confirm that clicking the grey checkmark opens the condition modal, updates status/inventory, and turns the icon green.
+• A return with a label issued: verify the “Return Receipt” modal shows label + tracking and allows Print / Re-print correctly.
+• A return already received: verify the checkmark stays green and the receipt modal still reflects the correct status and print history.

@@ -30,7 +30,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Package, ExternalLink, PackageCheck } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Package, ExternalLink, PackageCheck, Receipt, Check } from "lucide-react";
 import { format } from "date-fns";
 
 interface ReturnRequest {
@@ -48,6 +49,8 @@ interface ReturnRequest {
   reason: string | null;
   initiatedVia: string;
   labelProvider: string;
+  receiptPrintedAt: string | null;
+  receiptPrintCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -87,8 +90,9 @@ interface ReturnDetails {
 export default function Returns() {
   const { toast } = useToast();
   const [selectedReturnId, setSelectedReturnId] = useState<string | null>(null);
-  const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [issuingLabelForId, setIssuingLabelForId] = useState<string | null>(null);
+  const [showReceiptModalId, setShowReceiptModalId] = useState<string | null>(null);
+  const [showConfirmReceiveId, setShowConfirmReceiveId] = useState<string | null>(null);
 
   const { data: returns, isLoading } = useQuery<ReturnRequest[]>({
     queryKey: ["/api/returns"],
@@ -97,6 +101,16 @@ export default function Returns() {
   const { data: returnDetails } = useQuery<ReturnDetails>({
     queryKey: selectedReturnId ? [`/api/returns/${selectedReturnId}`] : [],
     enabled: !!selectedReturnId,
+  });
+
+  const { data: receiptDetails } = useQuery<ReturnDetails>({
+    queryKey: showReceiptModalId ? [`/api/returns/${showReceiptModalId}`] : [],
+    enabled: !!showReceiptModalId,
+  });
+
+  const { data: confirmReceiveDetails } = useQuery<ReturnDetails>({
+    queryKey: showConfirmReceiveId ? [`/api/returns/${showConfirmReceiveId}`] : [],
+    enabled: !!showConfirmReceiveId,
   });
 
   const issueLabelMutation = useMutation({
@@ -121,6 +135,29 @@ export default function Returns() {
       toast({
         variant: "destructive",
         title: "Failed to issue label",
+        description: error.message,
+      });
+    },
+  });
+
+  const printReceiptMutation = useMutation({
+    mutationFn: async (returnId: string) => {
+      const res = await apiRequest("POST", `/api/returns/${returnId}/print-receipt`, {});
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      if (showReceiptModalId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/returns/${showReceiptModalId}`] });
+      }
+      window.print();
+      toast({ title: "Receipt print tracked" });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to print receipt",
         description: error.message,
       });
     },
@@ -239,43 +276,94 @@ export default function Returns() {
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap">
-                      <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
-                        {returnRequest.status === 'OPEN' && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => issueLabelMutation.mutate(returnRequest.id)}
-                            disabled={issuingLabelForId === returnRequest.id}
-                            data-testid={`button-issue-label-${returnRequest.id}`}
-                          >
-                            {issuingLabelForId === returnRequest.id ? "Issuing..." : "Issue Label"}
-                          </Button>
-                        )}
-                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setSelectedReturnId(returnRequest.id)}
-                            data-testid={`button-view-label-${returnRequest.id}`}
-                          >
-                            <ExternalLink className="h-4 w-4 mr-1" />
-                            View Label
-                          </Button>
-                        )}
-                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setSelectedReturnId(returnRequest.id);
-                              setShowReceiveModal(true);
-                            }}
-                            data-testid={`button-receive-${returnRequest.id}`}
-                          >
-                            <PackageCheck className="h-4 w-4 mr-1" />
-                            Receive
-                          </Button>
-                        )}
+                      <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                        <TooltipProvider>
+                          {/* Receipt Icon - Always visible */}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8"
+                                onClick={() => setShowReceiptModalId(returnRequest.id)}
+                                data-testid={`button-receipt-${returnRequest.id}`}
+                              >
+                                <Receipt className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>View Return Receipt</TooltipContent>
+                          </Tooltip>
+
+                          {/* Issue Label Icon - Only for OPEN status */}
+                          {returnRequest.status === 'OPEN' && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  onClick={() => issueLabelMutation.mutate(returnRequest.id)}
+                                  disabled={issuingLabelForId === returnRequest.id}
+                                  data-testid={`button-issue-label-${returnRequest.id}`}
+                                >
+                                  <Package className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Issue Return Label</TooltipContent>
+                            </Tooltip>
+                          )}
+
+                          {/* View Label Icon - For statuses with label created */}
+                          {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  onClick={() => setSelectedReturnId(returnRequest.id)}
+                                  data-testid={`button-view-label-${returnRequest.id}`}
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>View Shipping Label</TooltipContent>
+                            </Tooltip>
+                          )}
+
+                          {/* Checkmark Icon - Grey when not received, Green when received */}
+                          {['OPEN', 'LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  onClick={() => setShowConfirmReceiveId(returnRequest.id)}
+                                  data-testid={`button-receive-${returnRequest.id}`}
+                                >
+                                  <Check className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Mark as Received</TooltipContent>
+                            </Tooltip>
+                          ) : ['RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  disabled
+                                  data-testid={`button-receive-${returnRequest.id}`}
+                                >
+                                  <Check className="h-4 w-4 text-green-600" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Return already received</TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                        </TooltipProvider>
                       </div>
                     </td>
                   </tr>
@@ -286,7 +374,7 @@ export default function Returns() {
         )}
       </div>
 
-      {selectedReturnId && returnDetails && !showReceiveModal && (
+      {selectedReturnId && returnDetails && (
         <ReturnDetailsModal
           returnDetails={returnDetails}
           onClose={() => setSelectedReturnId(null)}
@@ -295,17 +383,20 @@ export default function Returns() {
         />
       )}
 
-      {selectedReturnId && returnDetails && showReceiveModal && (
-        <ReceiveReturnModal
-          returnDetails={returnDetails}
-          onClose={() => {
-            setShowReceiveModal(false);
-            setSelectedReturnId(null);
-          }}
-          onSuccess={() => {
-            setShowReceiveModal(false);
-            setSelectedReturnId(null);
-          }}
+      {showReceiptModalId && receiptDetails && (
+        <ReturnReceiptModal
+          returnDetails={receiptDetails}
+          onClose={() => setShowReceiptModalId(null)}
+          onPrintReceipt={() => printReceiptMutation.mutate(showReceiptModalId)}
+          isPrinting={printReceiptMutation.isPending}
+        />
+      )}
+
+      {showConfirmReceiveId && confirmReceiveDetails && (
+        <ConfirmReturnReceiptModal
+          returnDetails={confirmReceiveDetails}
+          onClose={() => setShowConfirmReceiveId(null)}
+          onSuccess={() => setShowConfirmReceiveId(null)}
         />
       )}
     </div>
@@ -476,32 +567,166 @@ function ReturnDetailsModal({
   );
 }
 
-interface ReceiveReturnModalProps {
+interface ReturnReceiptModalProps {
+  returnDetails: ReturnDetails;
+  onClose: () => void;
+  onPrintReceipt: () => void;
+  isPrinting: boolean;
+}
+
+function ReturnReceiptModal({
+  returnDetails,
+  onClose,
+  onPrintReceipt,
+  isPrinting,
+}: ReturnReceiptModalProps) {
+  const { returnRequest, items, shipments } = returnDetails;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Return Receipt – {returnRequest.externalOrderId}</DialogTitle>
+          <DialogDescription>
+            Customer: {returnRequest.customerName}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          {/* Order Info */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-muted-foreground">Order ID</Label>
+              <p className="font-medium">{returnRequest.externalOrderId}</p>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Channel</Label>
+              <div className="mt-1">
+                <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Source</Label>
+              <div className="mt-1">
+                <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
+                  {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual'}
+                </Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Created</Label>
+              <p className="font-medium">{format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}</p>
+            </div>
+          </div>
+
+          {/* Status Summary */}
+          <div>
+            <h3 className="font-semibold mb-3">Status Summary</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label className="text-muted-foreground">Current Status</Label>
+                <div className="mt-1">
+                  <Badge>{returnRequest.status.replace(/_/g, ' ')}</Badge>
+                </div>
+              </div>
+              <div>
+                <Label className="text-muted-foreground">Resolution</Label>
+                <p className="font-medium">
+                  {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
+                </p>
+              </div>
+              {shipments.length > 0 && (
+                <>
+                  <div>
+                    <Label className="text-muted-foreground">Carrier</Label>
+                    <p className="font-medium">{shipments[0].carrier}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Tracking</Label>
+                    <p className="font-medium font-mono text-sm">{shipments[0].trackingNumber}</p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Line Items Table */}
+          <div>
+            <h3 className="font-semibold mb-3">Line Items</h3>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="whitespace-nowrap">SKU</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Qty Ordered</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Qty Requested</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Qty Received</TableHead>
+                  <TableHead className="whitespace-nowrap">Disposition</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-medium whitespace-nowrap">{item.sku}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyOrdered}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyRequested}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">{item.qtyReceived}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {item.disposition ? (
+                        <Badge variant="outline">{item.disposition}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Bottom Buttons */}
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={onPrintReceipt}
+              disabled={isPrinting}
+              data-testid="button-print-receipt"
+            >
+              {returnRequest.receiptPrintCount === 0 ? 'Print Receipt' : 'Re-print Receipt'}
+            </Button>
+            <Button variant="outline" onClick={onClose} data-testid="button-close-receipt">
+              Close
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface ConfirmReturnReceiptModalProps {
   returnDetails: ReturnDetails;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-function ReceiveReturnModal({ returnDetails, onClose, onSuccess }: ReceiveReturnModalProps) {
+function ConfirmReturnReceiptModal({ 
+  returnDetails, 
+  onClose, 
+  onSuccess 
+}: ConfirmReturnReceiptModalProps) {
   const { toast } = useToast();
-  const [itemsData, setItemsData] = useState(
-    returnDetails.items.map((item) => ({
-      returnItemId: item.id,
-      qtyReceived: item.qtyApproved,
-      disposition: 'RESTOCK' as 'RESTOCK' | 'SCRAP' | 'INSPECT',
-      notes: '',
-    }))
-  );
-  const [resolutionFinal, setResolutionFinal] = useState<string>(
-    returnDetails.returnRequest.resolutionRequested
-  );
+  const [condition, setCondition] = useState<'GOOD' | 'DAMAGED' | 'UNKNOWN'>('GOOD');
+  const [disposition, setDisposition] = useState<'RESTOCK' | 'SCRAP' | 'INSPECT'>('RESTOCK');
+  const [notes, setNotes] = useState('');
 
   const receiveMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("POST", `/api/returns/${returnDetails.returnRequest.id}/receive`, {
-        items: itemsData,
-        resolutionFinal,
+      const res = await apiRequest("POST", `/api/returns/${returnDetails.returnRequest.id}/receive`, {
+        condition,
+        disposition,
+        notes,
       });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
@@ -517,97 +742,128 @@ function ReceiveReturnModal({ returnDetails, onClose, onSuccess }: ReceiveReturn
     },
   });
 
+  // Update disposition based on condition
+  const handleConditionChange = (newCondition: 'GOOD' | 'DAMAGED' | 'UNKNOWN') => {
+    setCondition(newCondition);
+    if (newCondition === 'GOOD') {
+      setDisposition('RESTOCK');
+    } else if (newCondition === 'DAMAGED') {
+      setDisposition('SCRAP');
+    } else {
+      setDisposition('INSPECT');
+    }
+  };
+
+  const { returnRequest, items } = returnDetails;
+
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Receive Return</DialogTitle>
+          <DialogTitle>Confirm Return Receipt – {returnRequest.externalOrderId}</DialogTitle>
           <DialogDescription>
-            Process incoming return for order #{returnDetails.returnRequest.externalOrderId}
+            Process incoming return and update inventory
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
+          {/* Order Summary */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label className="text-muted-foreground">Order ID</Label>
+              <p className="font-medium">{returnRequest.externalOrderId}</p>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Channel</Label>
+              <div className="mt-1">
+                <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Customer</Label>
+              <p className="font-medium">{returnRequest.customerName}</p>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Status</Label>
+              <div className="mt-1">
+                <Badge>{returnRequest.status.replace(/_/g, ' ')}</Badge>
+              </div>
+            </div>
+            <div>
+              <Label className="text-muted-foreground">Created</Label>
+              <p className="font-medium">{format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}</p>
+            </div>
+          </div>
+
+          {/* Return Items */}
           <div>
-            <Label>Final Resolution</Label>
-            <Select value={resolutionFinal} onValueChange={setResolutionFinal}>
-              <SelectTrigger data-testid="select-resolution">
+            <h3 className="font-semibold mb-3">Items to Receive</h3>
+            <div className="space-y-2">
+              {items.map((item) => (
+                <div key={item.id} className="flex justify-between items-center p-3 bg-muted/50 rounded-md">
+                  <div>
+                    <p className="font-medium">{item.sku}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Qty to receive: {item.qtyApproved - item.qtyReceived}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Arrival Condition */}
+          <div>
+            <Label>Arrival Condition</Label>
+            <Select 
+              value={condition} 
+              onValueChange={(value: any) => handleConditionChange(value)}
+            >
+              <SelectTrigger data-testid="select-condition">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="REFUND">Refund</SelectItem>
-                <SelectItem value="REPLACEMENT">Replacement</SelectItem>
-                <SelectItem value="STORE_CREDIT">Store Credit</SelectItem>
+                <SelectItem value="GOOD">Good Condition</SelectItem>
+                <SelectItem value="DAMAGED">Damaged - Restock</SelectItem>
+                <SelectItem value="DAMAGED">Damaged - Scrap</SelectItem>
+                <SelectItem value="UNKNOWN">Inspect First</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
+          {/* Disposition */}
           <div>
-            <h3 className="font-semibold mb-3">Items</h3>
-            <div className="space-y-4">
-              {itemsData.map((itemData, index) => {
-                const originalItem = returnDetails.items[index];
-                return (
-                  <Card key={itemData.returnItemId}>
-                    <CardContent className="pt-4 space-y-3">
-                      <div className="font-medium">{originalItem.sku}</div>
-                      <div className="grid grid-cols-3 gap-3">
-                        <div>
-                          <Label>Qty Received</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={originalItem.qtyApproved}
-                            value={itemData.qtyReceived}
-                            onChange={(e) => {
-                              const newData = [...itemsData];
-                              newData[index].qtyReceived = parseInt(e.target.value) || 0;
-                              setItemsData(newData);
-                            }}
-                            data-testid={`input-qty-${originalItem.sku}`}
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <Label>Disposition</Label>
-                          <Select
-                            value={itemData.disposition}
-                            onValueChange={(value: any) => {
-                              const newData = [...itemsData];
-                              newData[index].disposition = value;
-                              setItemsData(newData);
-                            }}
-                          >
-                            <SelectTrigger data-testid={`select-disposition-${originalItem.sku}`}>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="RESTOCK">Restock (add back to inventory)</SelectItem>
-                              <SelectItem value="SCRAP">Scrap (damaged/unusable)</SelectItem>
-                              <SelectItem value="INSPECT">Inspect (needs review)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div>
-                        <Label>Notes (optional)</Label>
-                        <Textarea
-                          value={itemData.notes}
-                          onChange={(e) => {
-                            const newData = [...itemsData];
-                            newData[index].notes = e.target.value;
-                            setItemsData(newData);
-                          }}
-                          placeholder="Add notes about condition, damage, etc."
-                          data-testid={`textarea-notes-${originalItem.sku}`}
-                        />
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
+            <Label>Disposition</Label>
+            <Select value={disposition} onValueChange={(value: any) => setDisposition(value)}>
+              <SelectTrigger data-testid="select-disposition">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(condition === 'GOOD' || condition === 'DAMAGED') && (
+                  <SelectItem value="RESTOCK">Restock (add back to inventory)</SelectItem>
+                )}
+                {condition === 'DAMAGED' && (
+                  <SelectItem value="SCRAP">Scrap (damaged/unusable)</SelectItem>
+                )}
+                {condition === 'UNKNOWN' && (
+                  <SelectItem value="INSPECT">Inspect (needs review)</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
           </div>
 
+          {/* Notes */}
+          <div>
+            <Label>Notes (optional)</Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add notes about condition, damage, etc."
+              data-testid="textarea-notes"
+            />
+          </div>
+
+          {/* Bottom Buttons */}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose} data-testid="button-cancel">
               Cancel
@@ -615,9 +871,9 @@ function ReceiveReturnModal({ returnDetails, onClose, onSuccess }: ReceiveReturn
             <Button
               onClick={() => receiveMutation.mutate()}
               disabled={receiveMutation.isPending}
-              data-testid="button-confirm-receive"
+              data-testid="button-mark-received"
             >
-              Confirm Receipt
+              Mark Received
             </Button>
           </div>
         </div>

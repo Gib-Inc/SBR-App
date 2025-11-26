@@ -521,6 +521,8 @@ export const returnRequests = pgTable("return_requests", {
   initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI' (deprecated, use 'source' instead)
   warehouseLocationCode: text("warehouse_location_code"), // Extensiv location or similar
   reason: text("reason"), // High-level reason from GHL bot
+  receiptPrintedAt: timestamp("receipt_printed_at"), // First successful print timestamp
+  receiptPrintCount: integer("receipt_print_count").notNull().default(0), // Total number of prints
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({

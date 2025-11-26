@@ -1,0 +1,63 @@
+I want you to add a clean integration surface so that a GoHighLevel (GHL) support bot can create and manage returns through this app, using the existing Sales Orders, Returns, and Shippo-based label engine. Do not add any new pages or change the current UI. Everything should be server-side endpoints, config, and logging that plug into what already exists.
+
+Goals:
+• GHL will handle all customer-facing troubleshooting and messaging.
+• This app will be the “returns engine”: it receives a structured request from GHL, creates a Return tied to the correct Sales Order, generates a shipping label via the existing Shippo integration (or stub), stores tracking info, and exposes status back to GHL.
+• Returns created by GHL should simply appear in the existing Returns table (with Channel and Source set appropriately) and use the exact same logic as manual/Shopify/Amazon returns.
+
+Please do the following:
+
+GHL integration config
+• Under AI Agent → Data Sources, use the existing GoHighLevel card to store:
+– GHL_API_BASE_URL (text)
+– GHL_API_KEY (secure)
+– A toggle like “Use GHL for returns automation” (boolean flag).
+• Make sure these values are persisted in whatever config/settings storage you’re already using for other data sources.
+• Do not add any new pages – just extend the existing GoHighLevel data source card with Configure and Sync actions consistent with the other providers.
+
+Public API endpoints for GHL returns
+Add a small set of HTTP endpoints (e.g. under /api/integrations/ghl/returns) that the GHL bot can call. Keep the design simple and opinionated:
+
+a) Create return endpoint
+• Endpoint: POST /api/integrations/ghl/returns/create (or similar).
+• Auth: require a shared secret or API key header that is validated against the stored GHL config; reject requests if GHL integration is not enabled.
+• Request payload should be a compact object containing at least:
+– channel: “SHOPIFY” | “AMAZON” | “DIRECT” | “OTHER”
+– externalOrderId: the order ID known to GHL (should match the Sales Orders table, e.g. SHOP-123… or AMZ-123…)
+– customer: name, email, phone (for logging; do not use this to look up the order)
+– resolutionRequested: “REFUND” | “REPLACEMENT” | “STORE_CREDIT” (map to existing Resolution field)
+– returnReason: one of the existing reasons or a free-text string
+– items: array with { sku, quantityToReturn } – if empty, reject the request.
+• Behavior:
+– Look up the Sales Order by channel + externalOrderId using the existing schema.
+– Validate that the requested items/quantities have been fulfilled and are eligible for return.
+– Create a Return record using the same logic as the manual “Create Return” flow (same status transitions, resolution fields, and inventory implications).
+– Channel should match the order’s channel; Source should be “GHL Bot” (or similar) so we can distinguish in the Returns table.
+– Trigger the existing label-creation logic (Shippo or stub) if the requested resolution requires a physical return, and store carrier, trackingNumber, labelUrl, and labelStatus on the Return (reuse existing fields where possible).
+– Respond with a JSON object summarizing the new return: returnId, orderId, status, resolution, trackingNumber, labelUrl, and any validation warnings that were applied.
+
+b) Return status endpoint
+• Endpoint: GET /api/integrations/ghl/returns/status?returnId=… OR &orderId=…
+• Auth: same as above.
+• Behavior:
+– Return a compact status payload for the requested return, including: status, resolution, createdAt, updatedAt, trackingNumber, carrier, labelStatus, and whether the returned stock has been restocked.
+– If you already have a way to track delivery/scan events from Shippo, include a simple deliveryState field (“IN_TRANSIT”, “DELIVERED”, etc.) or stub this for now.
+
+Use existing flows and keep the UI unchanged
+• Do not add new tables or pages. Use the existing Sales Orders, Returns, and Shippo integration logic.
+• Returns created via GHL must:
+– Show up in the existing Returns table with Channel and Source clearly indicating they came from GHL.
+– Respect all existing status transitions (OPEN → LABEL_ISSUED → RECEIVED, etc.).
+– Use the same inventory and restock behavior that manual returns use.
+• If an order already has related returns, the “Returns” count in the Sales Orders table should increment accordingly; GHL-created returns should contribute to that count.
+
+Basic error handling and logging
+• Implement clear error responses for the GHL endpoints (e.g. 400 for validation issues like “order not found” or “requested quantity exceeds fulfilled quantity”, 401 for bad auth, 500 for unexpected errors).
+• Add lightweight logging for GHL integration events (create return, status lookup) so we can debug integration issues later (no new UI necessary – just server logs or an internal log table if you already have one).
+• Make sure that if label generation fails, the Return is still created with a clear status (e.g. OPEN, no label) and an error message field, so GHL can tell the customer a human will follow up.
+
+Safety and non-breaking changes
+• Do NOT break or change the existing Shopify/Amazon/manual return flows. GHL integration should be an additive layer on top of the current behavior.
+• If GHL integration is not configured or explicitly disabled, the new endpoints should reject calls gracefully and the rest of the app should behave exactly as it does today.
+
+Once this is done and tested, we’ll wire the GHL bot itself to call these endpoints, but that’s outside this codebase.

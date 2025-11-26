@@ -30,25 +30,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { Package, ExternalLink, PackageCheck, AlertTriangle, MoreVertical, Eye } from "lucide-react";
-import { format, differenceInDays } from "date-fns";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-
-interface ReturnShipment {
-  id: string;
-  returnRequestId: string;
-  carrier: string;
-  trackingNumber: string;
-  labelUrl: string;
-  status: string;
-  createdAt: string;
-  updatedAt: string;
-}
+import { Package, ExternalLink, PackageCheck } from "lucide-react";
+import { format } from "date-fns";
 
 interface ReturnRequest {
   id: string;
@@ -67,7 +50,6 @@ interface ReturnRequest {
   labelProvider: string;
   createdAt: string;
   updatedAt: string;
-  shipments?: ReturnShipment[];
 }
 
 interface ReturnItem {
@@ -83,6 +65,17 @@ interface ReturnItem {
   itemReason: string | null;
   disposition: string | null;
   notes: string | null;
+}
+
+interface ReturnShipment {
+  id: string;
+  returnRequestId: string;
+  carrier: string;
+  trackingNumber: string;
+  labelUrl: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ReturnDetails {
@@ -165,54 +158,6 @@ export default function Returns() {
     }
   };
 
-  const calculateTransitDays = (returnRequest: ReturnRequest): number | null => {
-    if (!returnRequest.shipments || returnRequest.shipments.length === 0) {
-      return null;
-    }
-    const latestShipment = returnRequest.shipments[0];
-    const labelCreatedDate = new Date(latestShipment.createdAt);
-    const now = new Date();
-    return differenceInDays(now, labelCreatedDate);
-  };
-
-  const getTransitStatusInfo = (returnRequest: ReturnRequest) => {
-    const transitDays = calculateTransitDays(returnRequest);
-    const MAX_TRANSIT_DAYS = 7;
-    
-    const hasLabel = returnRequest.shipments && returnRequest.shipments.length > 0;
-    const isInTransit = ['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status);
-    const isReceived = ['RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status);
-    
-    if (isReceived) {
-      return {
-        text: 'Received',
-        variant: 'default' as const,
-        alert: false,
-      };
-    }
-    
-    if (isInTransit && hasLabel) {
-      if (transitDays !== null && transitDays > MAX_TRANSIT_DAYS) {
-        return {
-          text: `In Transit (${transitDays}d)`,
-          variant: 'destructive' as const,
-          alert: true,
-        };
-      }
-      return {
-        text: transitDays !== null ? `In Transit (${transitDays}d)` : 'In Transit',
-        variant: 'secondary' as const,
-        alert: false,
-      };
-    }
-    
-    return {
-      text: 'Awaiting Label',
-      variant: 'outline' as const,
-      alert: false,
-    };
-  };
-
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
@@ -252,38 +197,50 @@ export default function Returns() {
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Label Status</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Transit Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Actions</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {returns.map((returnRequest) => {
-                  const transitInfo = getTransitStatusInfo(returnRequest);
-                  const hasLabel = returnRequest.shipments && returnRequest.shipments.length > 0;
-                  const canReceive = ['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status);
-                  
-                  return (
-                    <tr
-                      key={returnRequest.id}
-                      className="h-11 border-b hover-elevate cursor-pointer"
-                      onClick={() => setSelectedReturnId(returnRequest.id)}
-                      data-testid={`row-return-${returnRequest.id}`}
-                    >
-                      <td className="px-3 align-middle font-medium whitespace-nowrap">
-                        {returnRequest.externalOrderId}
-                      </td>
-                      <td className="px-3 align-middle whitespace-nowrap">
-                        <Badge variant="outline">{returnRequest.salesChannel}</Badge>
-                      </td>
-                      <td className="px-3 align-middle whitespace-nowrap">{returnRequest.customerName}</td>
-                      
-                      {/* Label Status Column */}
-                      <td className="px-3 align-middle whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {returnRequest.status === 'OPEN' ? (
+                {returns.map((returnRequest) => (
+                  <tr
+                    key={returnRequest.id}
+                    className="h-11 border-b hover-elevate cursor-pointer"
+                    onClick={() => setSelectedReturnId(returnRequest.id)}
+                    data-testid={`row-return-${returnRequest.id}`}
+                  >
+                    <td className="px-3 align-middle font-medium whitespace-nowrap">
+                      {returnRequest.externalOrderId}
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap">
+                      <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap">
+                      <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
+                        {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual'}
+                      </Badge>
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap">{returnRequest.customerName}</td>
+                    <td className="px-3 align-middle whitespace-nowrap">
+                      <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
+                        {returnRequest.status.replace(/_/g, ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap">
+                      <span className={getResolutionColor(returnRequest.resolutionRequested)}>
+                        {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
+                      </span>
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap">
+                      {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap">
+                      <div className="flex gap-2 justify-end" onClick={(e) => e.stopPropagation()}>
+                        {returnRequest.status === 'OPEN' && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -293,7 +250,8 @@ export default function Returns() {
                           >
                             {issuingLabelForId === returnRequest.id ? "Issuing..." : "Issue Label"}
                           </Button>
-                        ) : hasLabel ? (
+                        )}
+                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -303,66 +261,25 @@ export default function Returns() {
                             <ExternalLink className="h-4 w-4 mr-1" />
                             View Label
                           </Button>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">No Label</span>
                         )}
-                      </td>
-                      
-                      {/* Transit Status Column */}
-                      <td className="px-3 align-middle whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          {transitInfo.alert && (
-                            <AlertTriangle className="h-4 w-4 text-destructive" />
-                          )}
-                          <Badge variant={transitInfo.variant}>
-                            {transitInfo.text}
-                          </Badge>
-                        </div>
-                      </td>
-                      
-                      <td className="px-3 align-middle whitespace-nowrap">
-                        <span className={getResolutionColor(returnRequest.resolutionRequested)}>
-                          {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
-                        </span>
-                      </td>
-                      <td className="px-3 align-middle whitespace-nowrap">
-                        {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
-                      </td>
-                      
-                      {/* Actions Dropdown */}
-                      <td className="px-3 align-middle text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" data-testid={`button-actions-${returnRequest.id}`}>
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={() => setSelectedReturnId(returnRequest.id)}
-                              data-testid={`action-view-details-${returnRequest.id}`}
-                            >
-                              <Eye className="h-4 w-4 mr-2" />
-                              View Details
-                            </DropdownMenuItem>
-                            {canReceive && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setSelectedReturnId(returnRequest.id);
-                                  setShowReceiveModal(true);
-                                }}
-                                data-testid={`action-receive-${returnRequest.id}`}
-                              >
-                                <PackageCheck className="h-4 w-4 mr-2" />
-                                Receive Items
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedReturnId(returnRequest.id);
+                              setShowReceiveModal(true);
+                            }}
+                            data-testid={`button-receive-${returnRequest.id}`}
+                          >
+                            <PackageCheck className="h-4 w-4 mr-1" />
+                            Receive
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

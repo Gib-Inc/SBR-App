@@ -1011,7 +1011,7 @@ export default function SalesOrders() {
       {/* Create Return Dialog */}
       {selectedOrder && (
         <Dialog open={showCreateReturnDialog} onOpenChange={setShowCreateReturnDialog}>
-          <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Return Request</DialogTitle>
               <DialogDescription>

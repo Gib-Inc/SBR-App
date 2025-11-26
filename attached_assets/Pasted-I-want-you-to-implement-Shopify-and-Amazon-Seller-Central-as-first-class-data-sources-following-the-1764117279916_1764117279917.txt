@@ -1,0 +1,62 @@
+I want you to implement Shopify and Amazon Seller Central as first-class data sources, following the same IntegrationConfig and Extensiv patterns that already exist. Do not add any new top-level pages or change the database architecture or transaction model; only extend what is already there and wire it into the existing screens.
+
+Unify integrations into the AI Agent → Data Sources tab
+
+The AI Agent “Data Sources” tab is the canonical place to see and manage external systems.
+
+Add two new cards to the “Connected Data Sources” grid: “Shopify Store” and “Amazon Seller Central”, each with the same layout as the current GoHighLevel / Extensiv / PhantomBuster / QuickBooks / Stripe cards (status label, Sync button, and a Configure entry point).
+
+Remove the separate “Integrations” item from the left sidebar navigation. Do not create any new routes; we will reuse the existing /integrations implementation as a shared component.
+
+Take the current /integrations page UI for Extensiv (Configure, Test Connection, Sync Now, status badge) and refactor it into a reusable “IntegrationSettings” component.
+
+From each Data Source card on the AI Agent page, wire a “Configure” (or gear icon) action that opens the appropriate IntegrationSettings panel in a modal or side drawer, instead of navigating to a separate page. Use the same look and feel as the existing Extensiv settings.
+
+Extend IntegrationConfig for Shopify and Amazon
+
+Reuse the existing integration configuration model and storage pattern you already use for Extensiv and other sources.
+
+Add config fields for:
+• Shopify: shop domain, Admin API access token, API version, and a toggle for “sync orders”.
+• Amazon Seller Central: seller id, marketplace id(s), refresh token / LWA client credentials, and a toggle for “sync orders”.
+
+Make sure each integration has a clear “Not Configured / Configured / Error” state that drives both the Data Sources card and the IntegrationSettings panel.
+
+Keep secrets in environment variables where appropriate, as you already do for Extensiv; do not invent a new secrets pattern.
+
+Backend services for Shopify and Amazon order ingestion
+
+Following the same structure you used for Extensiv sync, create dedicated integration service modules for Shopify and Amazon that are responsible for fetching orders and normalizing them.
+
+Each service must expose at least: testConnection, syncRecentOrders, and any helper used by the UI “Sync” button.
+
+For Shopify, use the existing Shopify Admin Orders API pattern (with pagination and created_at filters) and normalize orders into the internal SalesOrder model.
+
+For Amazon, use the existing SP-API pattern or stub (Orders API) and normalize orders into the internal SalesOrder model. Assume we will plug in real credentials later; structure the code to read credentials from IntegrationConfig / env vars and return clear error messages if missing.
+
+Do not change the SalesOrder or inventory schema in a breaking way. If you need new fields, extend the existing models with: externalOrderId, channel (enum: SHOPIFY, AMAZON, MANUAL, etc.), and rawPayload (optional JSON blob for debugging).
+
+Wire sync into Sales Orders, Returns, and forecasting
+
+When syncRecentOrders runs for Shopify or Amazon, create or update SalesOrder records using the existing sales order creation logic, including line items, quantities, and channel metadata. Avoid duplicate orders by checking externalOrderId + channel.
+
+Map line items by SKU into existing Finished Products; if an order line’s SKU does not match any product, mark the SalesOrder as having mapping issues but still store it (do not crash the sync).
+
+Ensure Sales Orders page shows these ingested orders with a “Channel” badge (e.g., SHOPIFY, AMAZON) using the column and badge style that is already there. Filters for channel should work for the new channels.
+
+When orders are shipped / fulfilled using your existing flows, inventory updates and AI forecasting must behave exactly as they do for manually-created sales orders.
+
+For Returns, ensure the “Channel” column and any return workflow can reference the original SalesOrder and its channel so that Shopify / Amazon returns can later be automated via the GHL bot + return label engine. No new return logic yet; just make sure the data model can link a return record back to a Shopify or Amazon order.
+
+UI/UX details
+
+On the AI Agent → Data Sources tab, the Shopify and Amazon cards should:
+• Show status based on whether credentials are saved and the last sync succeeded.
+• Have a “Sync” button that triggers the syncRecentOrders backend and shows a loading state and success/failure toast.
+• Use the same visual style, spacing, and copy pattern as the existing Extensiv card.
+
+On the Dashboard, ensure that any metrics that depend on sales (inventory value, days until stockout, active alerts, etc.) already include Shopify and Amazon orders once they are ingested. Do not redesign the dashboard; just make sure it reads from the unified SalesOrder data.
+
+Keep the rest of the app exactly as it is. The only structural change to navigation is removing the separate “Integrations” nav item and moving its functionality behind the Data Source cards on the AI Agent page.
+
+When you are done, I should be able to: configure Shopify and Amazon from the AI Agent → Data Sources tab, test their connections, click Sync, see orders appear on the Sales Orders page with proper channel badges, and know that all sales (local, Shopify, and Amazon) feed the same inventory and AI forecasting logic.

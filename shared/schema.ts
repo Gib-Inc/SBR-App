@@ -759,6 +759,7 @@ export const salesOrders = pgTable("sales_orders", {
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
   notes: text("notes"),
+  rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({

@@ -7,6 +7,8 @@ import { BarcodeGenerator } from "./barcode-generator";
 import { ImportService } from "./import-service";
 import { TransactionService } from "./transaction-service";
 import { ExtensivClient } from "./services/extensiv-client";
+import { ShopifyClient } from "./services/shopify-client";
+import { AmazonClient } from "./services/amazon-client";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
@@ -1337,6 +1339,442 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       const userId = req.session.userId!;
       const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      
+      // Record failure in integration config
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message || "Sync failed",
+        });
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Integration sync failed" 
+      });
+    }
+  });
+
+  // Shopify - Test Connection
+  app.post("/api/integrations/shopify/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config or environment variables
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+      
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Shopify credentials not configured. Please add shop domain and access token in Settings." 
+        });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      const result = await client.testConnection();
+
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to test Shopify connection" 
+      });
+    }
+  });
+
+  // Shopify - Sync Recent Orders
+  app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { daysBack = 7 } = req.body;
+      
+      // Get credentials from integration config or environment variables
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+      
+      if (!shopDomain || !accessToken) {
+        const message = "Shopify credentials not configured";
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, {
+            lastSyncAt: new Date(),
+            lastSyncStatus: 'FAILED',
+            lastSyncMessage: message,
+          });
+        }
+        return res.status(400).json({ success: false, message });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      
+      // Set status to PENDING
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'PENDING',
+          lastSyncMessage: 'Sync in progress...',
+        });
+      }
+
+      // Fetch recent orders from Shopify
+      console.log(`[Shopify] Syncing orders from last ${daysBack} days...`);
+      const normalizedOrders = await client.syncRecentOrders(daysBack);
+      console.log(`[Shopify] Fetched ${normalizedOrders.length} orders`);
+
+      let createdCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
+      const unmatchedSkus: string[] = [];
+      const errors: string[] = [];
+      const affectedProductIds = new Set<string>();
+
+      // Process each order
+      for (const orderData of normalizedOrders) {
+        try {
+          // Check for existing order by externalOrderId + channel
+          const existingOrders = await storage.getAllSalesOrders();
+          const existingOrder = existingOrders.find(
+            o => o.externalOrderId === orderData.externalOrderId && o.channel === orderData.channel
+          );
+
+          if (existingOrder) {
+            // Update existing order
+            await storage.updateSalesOrder(existingOrder.id, {
+              status: orderData.status,
+              customerName: orderData.customerName,
+              customerEmail: orderData.customerEmail,
+              customerPhone: orderData.customerPhone,
+              rawPayload: orderData.rawPayload,
+            });
+            updatedCount++;
+          } else {
+            // Create new sales order
+            const salesOrder = await storage.createSalesOrder({
+              externalOrderId: orderData.externalOrderId,
+              channel: orderData.channel,
+              customerName: orderData.customerName,
+              customerEmail: orderData.customerEmail,
+              customerPhone: orderData.customerPhone,
+              status: orderData.status,
+              orderDate: orderData.orderDate,
+              rawPayload: orderData.rawPayload,
+            });
+
+            // Create order lines
+            for (const lineItem of orderData.lineItems) {
+              try {
+                // Try to find product by SKU
+                const product = await storage.getItemBySku(lineItem.sku);
+                
+                if (!product) {
+                  unmatchedSkus.push(lineItem.sku);
+                  console.warn(`[Shopify] SKU not found: ${lineItem.sku} - order ${salesOrder.id} will be created without this line`);
+                  continue;
+                }
+
+                if (product.type !== 'finished_product') {
+                  console.warn(`[Shopify] SKU ${lineItem.sku} is not a finished product - skipping`);
+                  continue;
+                }
+
+                // Track affected products for backorder refresh
+                affectedProductIds.add(product.id);
+
+                // Calculate backorder quantity (ordered - allocated)
+                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
+                const backorderQty = lineItem.qtyOrdered - qtyAllocated;
+
+                await storage.createSalesOrderLine({
+                  salesOrderId: salesOrder.id,
+                  productId: product.id,
+                  sku: lineItem.sku,
+                  qtyOrdered: lineItem.qtyOrdered,
+                  qtyAllocated,
+                  qtyShipped: 0,
+                  backorderQty,
+                  unitPrice: lineItem.unitPrice,
+                });
+              } catch (lineError: any) {
+                errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);
+                console.error(`[Shopify] Failed to create line for SKU ${lineItem.sku}:`, lineError);
+              }
+            }
+
+            createdCount++;
+          }
+        } catch (error: any) {
+          errors.push(`Order ${orderData.externalOrderId}: ${error.message}`);
+          console.error(`[Shopify] Failed to process order ${orderData.externalOrderId}:`, error);
+        }
+      }
+
+      // Refresh backorder snapshots and forecast context for affected products
+      console.log(`[Shopify] Refreshing backorder snapshots for ${affectedProductIds.size} products...`);
+      for (const productId of Array.from(affectedProductIds)) {
+        try {
+          await storage.refreshBackorderSnapshot(productId);
+          await storage.refreshProductForecastContext(productId);
+        } catch (error: any) {
+          console.warn(`[Shopify] Failed to refresh snapshot/forecast for product ${productId}:`, error);
+        }
+      }
+
+      const summary = `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      const hasErrors = errors.length > 0;
+      
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: hasErrors ? 'FAILED' : 'SUCCESS',
+          lastSyncMessage: summary,
+        });
+      }
+
+      res.json({
+        success: !hasErrors,
+        createdOrders: createdCount,
+        updatedOrders: updatedCount,
+        unmatchedSkus,
+        errors,
+        message: summary,
+      });
+    } catch (error: any) {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      // Record failure in integration config
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: 'FAILED',
+          lastSyncMessage: error.message || "Sync failed",
+        });
+      }
+      
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Integration sync failed" 
+      });
+    }
+  });
+
+  // Amazon - Test Connection
+  app.post("/api/integrations/amazon/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config or environment variables
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      const sellerId = (config?.config as any)?.sellerId || process.env.AMAZON_SELLER_ID;
+      const marketplaceId = (config?.config as any)?.marketplaceId || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'; // US default
+      const refreshToken = (config?.config as any)?.refreshToken || process.env.AMAZON_REFRESH_TOKEN;
+      const clientId = (config?.config as any)?.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = (config?.config as any)?.clientSecret || process.env.AMAZON_CLIENT_SECRET;
+      
+      if (!sellerId || !refreshToken || !clientId || !clientSecret) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Amazon SP-API credentials not configured. Please add seller ID, refresh token, client ID, and client secret in Settings." 
+        });
+      }
+
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      const result = await client.testConnection();
+
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
+          lastSyncMessage: result.message,
+        });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to test Amazon connection" 
+      });
+    }
+  });
+
+  // Amazon - Sync Recent Orders
+  app.post("/api/integrations/amazon/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { daysBack = 7 } = req.body;
+      
+      // Get credentials from integration config or environment variables
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      const sellerId = (config?.config as any)?.sellerId || process.env.AMAZON_SELLER_ID;
+      const marketplaceId = (config?.config as any)?.marketplaceId || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+      const refreshToken = (config?.config as any)?.refreshToken || process.env.AMAZON_REFRESH_TOKEN;
+      const clientId = (config?.config as any)?.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = (config?.config as any)?.clientSecret || process.env.AMAZON_CLIENT_SECRET;
+      
+      if (!sellerId || !refreshToken || !clientId || !clientSecret) {
+        const message = "Amazon SP-API credentials not configured";
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, {
+            lastSyncAt: new Date(),
+            lastSyncStatus: 'FAILED',
+            lastSyncMessage: message,
+          });
+        }
+        return res.status(400).json({ success: false, message });
+      }
+
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      
+      // Set status to PENDING
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncStatus: 'PENDING',
+          lastSyncMessage: 'Sync in progress...',
+        });
+      }
+
+      // Fetch recent orders from Amazon
+      console.log(`[Amazon] Syncing orders from last ${daysBack} days...`);
+      const normalizedOrders = await client.syncRecentOrders(daysBack);
+      console.log(`[Amazon] Fetched ${normalizedOrders.length} orders`);
+
+      let createdCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
+      const unmatchedSkus: string[] = [];
+      const errors: string[] = [];
+      const affectedProductIds = new Set<string>();
+
+      // Process each order
+      for (const orderData of normalizedOrders) {
+        try {
+          // Check for existing order by externalOrderId + channel
+          const existingOrders = await storage.getAllSalesOrders();
+          const existingOrder = existingOrders.find(
+            o => o.externalOrderId === orderData.externalOrderId && o.channel === orderData.channel
+          );
+
+          if (existingOrder) {
+            // Update existing order
+            await storage.updateSalesOrder(existingOrder.id, {
+              status: orderData.status,
+              customerName: orderData.customerName,
+              customerEmail: orderData.customerEmail,
+              customerPhone: orderData.customerPhone,
+              rawPayload: orderData.rawPayload,
+            });
+            updatedCount++;
+          } else {
+            // Create new sales order
+            const salesOrder = await storage.createSalesOrder({
+              externalOrderId: orderData.externalOrderId,
+              channel: orderData.channel,
+              customerName: orderData.customerName,
+              customerEmail: orderData.customerEmail,
+              customerPhone: orderData.customerPhone,
+              status: orderData.status,
+              orderDate: orderData.orderDate,
+              rawPayload: orderData.rawPayload,
+            });
+
+            // Create order lines
+            for (const lineItem of orderData.lineItems) {
+              try {
+                // Try to find product by SKU
+                const product = await storage.getItemBySku(lineItem.sku);
+                
+                if (!product) {
+                  unmatchedSkus.push(lineItem.sku);
+                  console.warn(`[Amazon] SKU not found: ${lineItem.sku} - order ${salesOrder.id} will be created without this line`);
+                  continue;
+                }
+
+                if (product.type !== 'finished_product') {
+                  console.warn(`[Amazon] SKU ${lineItem.sku} is not a finished product - skipping`);
+                  continue;
+                }
+
+                // Track affected products for backorder refresh
+                affectedProductIds.add(product.id);
+
+                // Calculate backorder quantity (ordered - allocated)
+                const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
+                const backorderQty = lineItem.qtyOrdered - qtyAllocated;
+
+                await storage.createSalesOrderLine({
+                  salesOrderId: salesOrder.id,
+                  productId: product.id,
+                  sku: lineItem.sku,
+                  qtyOrdered: lineItem.qtyOrdered,
+                  qtyAllocated,
+                  qtyShipped: 0,
+                  backorderQty,
+                  unitPrice: lineItem.unitPrice,
+                });
+              } catch (lineError: any) {
+                errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);
+                console.error(`[Amazon] Failed to create line for SKU ${lineItem.sku}:`, lineError);
+              }
+            }
+
+            createdCount++;
+          }
+        } catch (error: any) {
+          errors.push(`Order ${orderData.externalOrderId}: ${error.message}`);
+          console.error(`[Amazon] Failed to process order ${orderData.externalOrderId}:`, error);
+        }
+      }
+
+      // Refresh backorder snapshots and forecast context for affected products
+      console.log(`[Amazon] Refreshing backorder snapshots for ${affectedProductIds.size} products...`);
+      for (const productId of Array.from(affectedProductIds)) {
+        try {
+          await storage.refreshBackorderSnapshot(productId);
+          await storage.refreshProductForecastContext(productId);
+        } catch (error: any) {
+          console.warn(`[Amazon] Failed to refresh snapshot/forecast for product ${productId}:`, error);
+        }
+      }
+
+      const summary = `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      const hasErrors = errors.length > 0;
+      
+      // Update integration config status
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          lastSyncAt: new Date(),
+          lastSyncStatus: hasErrors ? 'FAILED' : 'SUCCESS',
+          lastSyncMessage: summary,
+        });
+      }
+
+      res.json({
+        success: !hasErrors,
+        createdOrders: createdCount,
+        updatedOrders: updatedCount,
+        unmatchedSkus,
+        errors,
+        message: summary,
+      });
+    } catch (error: any) {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
       
       // Record failure in integration config
       if (config) {

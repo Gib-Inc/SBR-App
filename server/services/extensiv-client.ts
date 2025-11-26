@@ -149,4 +149,48 @@ export class ExtensivClient {
     
     return allItems;
   }
+
+  /**
+   * Adjust inventory quantity for a SKU at a warehouse (for returns, corrections, etc.)
+   * @param warehouseId - The warehouse ID or location code
+   * @param sku - The SKU to adjust
+   * @param quantityChange - The quantity to add (positive) or subtract (negative)
+   * @param reason - Reason for adjustment (e.g., "Return received", "Damaged goods")
+   */
+  async adjustInventory(
+    warehouseId: string,
+    sku: string,
+    quantityChange: number,
+    reason: string = 'Inventory adjustment'
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/inventory/adjust`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          warehouseId,
+          sku,
+          quantityChange,
+          reason,
+          source: 'return_processing',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(
+          errorData?.message || `Extensiv API error: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        message: `Successfully adjusted inventory for SKU ${sku} by ${quantityChange}`,
+      };
+    } catch (error: any) {
+      console.error(`[Extensiv] Failed to adjust inventory for SKU ${sku}:`, error);
+      throw new Error(`Failed to adjust inventory: ${error.message}`);
+    }
+  }
 }

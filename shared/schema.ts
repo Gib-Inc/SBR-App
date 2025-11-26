@@ -513,9 +513,10 @@ export const returnRequests = pgTable("return_requests", {
   customerPhone: text("customer_phone"),
   shippingAddress: jsonb("shipping_address"), // JSON object with address details
   ghlContactId: text("ghl_contact_id"), // Link back to GHL contact for workflows
-  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'CLOSED', 'CANCELLED'
+  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_CREATED', 'IN_TRANSIT', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED', 'CANCELLED'
   resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT', 'TROUBLESHOOT'
   resolutionFinal: text("resolution_final"), // What actually happened (nullable)
+  resolutionNotes: text("resolution_notes"), // Additional notes about resolution outcome
   labelProvider: text("label_provider"), // 'SHIPPO', 'EASYPOST', 'STUB', etc.
   initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI' (deprecated, use 'source' instead)
   warehouseLocationCode: text("warehouse_location_code"), // Extensiv location or similar

@@ -130,12 +130,11 @@ export default function Returns() {
     switch (status) {
       case 'OPEN':
         return 'default';
-      case 'LABEL_ISSUED':
+      case 'LABEL_CREATED':
       case 'IN_TRANSIT':
         return 'secondary';
-      case 'RECEIVED':
-      case 'REFUNDED':
-      case 'REPLACED':
+      case 'RECEIVED_AT_WAREHOUSE':
+      case 'COMPLETED':
         return 'default';
       case 'CANCELLED':
         return 'outline';
@@ -250,7 +249,7 @@ export default function Returns() {
                             {issuingLabelForId === returnRequest.id ? "Issuing..." : "Issue Label"}
                           </Button>
                         )}
-                        {(returnRequest.status === 'LABEL_ISSUED' || returnRequest.status === 'IN_TRANSIT' || returnRequest.status === 'RECEIVED') && (
+                        {(returnRequest.status === 'LABEL_CREATED' || returnRequest.status === 'IN_TRANSIT' || returnRequest.status === 'RECEIVED_AT_WAREHOUSE' || returnRequest.status === 'COMPLETED') && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -261,7 +260,7 @@ export default function Returns() {
                             View Label
                           </Button>
                         )}
-                        {(returnRequest.status === 'LABEL_ISSUED' || returnRequest.status === 'IN_TRANSIT') && (
+                        {(returnRequest.status === 'LABEL_CREATED' || returnRequest.status === 'IN_TRANSIT') && (
                           <Button
                             size="sm"
                             variant="outline"

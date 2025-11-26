@@ -3728,7 +3728,7 @@ Generate only the email body text, no subject line.`;
       }
 
       // Validate that return is in an allowed state
-      if (!['OPEN', 'LABEL_ISSUED'].includes(returnRequest.status)) {
+      if (!['OPEN', 'LABEL_CREATED'].includes(returnRequest.status)) {
         return res.status(400).json({ 
           error: `Cannot issue label for return with status ${returnRequest.status}` 
         });
@@ -3769,7 +3769,7 @@ Generate only the email body text, no subject line.`;
 
       // Update return request status
       await storage.updateReturnRequest(id, {
-        status: 'LABEL_ISSUED',
+        status: 'LABEL_CREATED',
       });
 
       res.json({
@@ -3785,12 +3785,12 @@ Generate only the email body text, no subject line.`;
 
   // Mark return as received
   // POST /api/returns/:id/receive
-  // Body: { items: [{ returnItemId, qtyReceived, disposition }], resolutionFinal? }
+  // Body: { items: [{ returnItemId, qtyReceived, disposition }], resolutionFinal?, resolutionNotes? }
   // Updates inventory for RESTOCK items using TransactionService
   app.post("/api/returns/:id/receive", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { items: receivedItems, resolutionFinal } = req.body;
+      const { items: receivedItems, resolutionFinal, resolutionNotes } = req.body;
       const userId = req.session.userId!;
 
       const returnRequest = await storage.getReturnRequest(id);
@@ -3867,18 +3867,43 @@ Generate only the email body text, no subject line.`;
               createdBy: userId,
             });
           }
+
+          // Update Extensiv warehouse inventory if configured
+          const extensivApiKey = process.env.EXTENSIV_API_KEY;
+          if (extensivApiKey) {
+            try {
+              const { ExtensivClient } = await import('./services/extensiv-client');
+              const extensivClient = new ExtensivClient(extensivApiKey);
+              
+              // Use warehouseLocationCode from return request or default warehouse
+              const warehouseCode = returnRequest.warehouseLocationCode || 'DEFAULT_WAREHOUSE';
+              
+              await extensivClient.adjustInventory(
+                warehouseCode,
+                item.sku,
+                receivedItem.qtyReceived,
+                `Return received: ${returnRequest.externalOrderId || returnRequest.id}`
+              );
+              
+              console.log(`[Returns] Updated Extensiv inventory for SKU ${item.sku} at ${warehouseCode}: +${receivedItem.qtyReceived}`);
+            } catch (extensivError: any) {
+              // Log error but don't fail the entire operation
+              console.error(`[Returns] Failed to update Extensiv for SKU ${item.sku}:`, extensivError.message);
+              // Optionally track this failure for manual reconciliation
+            }
+          }
         }
       }
 
       // Update return request status
-      const updates: any = { status: 'RECEIVED' };
+      const updates: any = { status: 'RECEIVED_AT_WAREHOUSE' };
+      if (resolutionNotes) {
+        updates.resolutionNotes = resolutionNotes; // Store resolution notes
+      }
       if (resolutionFinal) {
-        updates.resolutionFinal = resolutionFinal;
-        if (resolutionFinal === 'REFUNDED') {
-          updates.status = 'REFUNDED';
-        } else if (resolutionFinal === 'REPLACED') {
-          updates.status = 'REPLACED';
-        }
+        updates.resolutionFinal = resolutionFinal; // Store final resolution outcome
+        // Mark as completed if final resolution is provided
+        updates.status = 'COMPLETED';
       }
 
       const updatedRequest = await storage.updateReturnRequest(id, updates);
@@ -4065,7 +4090,7 @@ Generate only the email body text, no subject line.`;
 
           // Update return request status
           await storage.updateReturnRequest(returnRequest.id, {
-            status: 'LABEL_ISSUED',
+            status: 'LABEL_CREATED',
             labelProvider: 'SHIPPO',
           });
 

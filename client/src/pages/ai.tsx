@@ -244,18 +244,16 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
   const [promptTemplate, setPromptTemplate] = useState<string>(DEFAULT_PROMPT_TEMPLATE);
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
-  const [apiKey, setApiKey] = useState<string>("");
-  const [customEndpoint, setCustomEndpoint] = useState<string>("");
   const [temperature, setTemperature] = useState<number>(0.7);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
+
+  const hasApiKey = !!settingsData?.llmApiKey;
 
   useEffect(() => {
     if (settingsData) {
       setPromptTemplate(settingsData.llmPromptTemplate || DEFAULT_PROMPT_TEMPLATE);
       setProvider(settingsData.llmProvider || "");
       setModel(settingsData.llmModel || "");
-      setApiKey(settingsData.llmApiKey || "");
-      setCustomEndpoint(settingsData.llmCustomEndpoint || "");
       setTemperature(settingsData.llmTemperature ?? 0.7);
       setMaxTokens(settingsData.llmMaxTokens ?? 2048);
     }
@@ -276,8 +274,6 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
       return await apiRequest("PATCH", "/api/settings", {
         llmProvider: provider || null,
         llmModel: model || null,
-        llmApiKey: apiKey || null,
-        llmCustomEndpoint: customEndpoint || null,
         llmTemperature: temperature,
         llmMaxTokens: maxTokens,
       });
@@ -331,7 +327,7 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
             AI Provider Configuration
           </CardTitle>
           <CardDescription>
-            Configure your AI provider to power intelligent inventory recommendations and analysis. You'll need an API key from your chosen provider.
+            Configure your AI provider to power intelligent inventory recommendations and analysis. Manage your API key in Settings → LLM Configuration.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -373,34 +369,25 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="llm-api-key">API Key</Label>
-            <Input
-              id="llm-api-key"
-              type="password"
-              placeholder="Enter your API key"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              data-testid="input-llm-api-key"
-            />
-            <p className="text-xs text-muted-foreground">
-              Your API key is stored securely and used only for AI-powered features.
-            </p>
-          </div>
-
-          {provider === "custom" && (
-            <div className="space-y-2">
-              <Label htmlFor="llm-endpoint">Custom Endpoint URL</Label>
-              <Input
-                id="llm-endpoint"
-                type="url"
-                placeholder="https://your-custom-endpoint.com/v1/chat"
-                value={customEndpoint}
-                onChange={(e) => setCustomEndpoint(e.target.value)}
-                data-testid="input-llm-endpoint"
-              />
+          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50">
+            <div className="flex items-center gap-2">
+              <Label className="text-muted-foreground text-sm">API Key Status:</Label>
+              {hasApiKey ? (
+                <Badge variant="outline" className="text-xs">
+                  <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
+                  Configured
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-xs text-amber-600">
+                  <AlertTriangle className="mr-1 h-3 w-3" />
+                  Not Set
+                </Badge>
+              )}
             </div>
-          )}
+            <Button variant="link" size="sm" className="ml-auto h-auto p-0" asChild>
+              <a href="/settings?tab=llm">Manage API Key</a>
+            </Button>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">

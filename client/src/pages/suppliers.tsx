@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { CreatePOSheet } from "@/components/create-po-sheet";
 import type { PurchaseOrder, SupplierLead, Supplier, Item, PurchaseOrderLine } from "@shared/schema";
 
 interface POSummary {
@@ -61,6 +62,7 @@ export default function Suppliers() {
   const [showResolveDisputeDialog, setShowResolveDisputeDialog] = useState<string | null>(null);
   const [disputeReason, setDisputeReason] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState("");
+  const [showCreatePOSheet, setShowCreatePOSheet] = useState(false);
 
   const { data: poSummary } = useQuery<POSummary>({
     queryKey: ['/api/purchase-orders/summary'],
@@ -441,7 +443,7 @@ export default function Suppliers() {
                 <h2 className="text-lg font-semibold">Purchase Orders</h2>
                 <p className="text-sm text-muted-foreground">Track and manage supplier purchase orders</p>
               </div>
-              <Button size="sm" data-testid="button-create-po">
+              <Button size="sm" onClick={() => setShowCreatePOSheet(true)} data-testid="button-create-po">
                 <Plus className="h-4 w-4 mr-2" />
                 Create PO
               </Button>
@@ -1228,6 +1230,12 @@ export default function Suppliers() {
         poId={selectedPO}
         poData={selectedPOData}
         items={items}
+      />
+
+      {/* Create PO Sheet */}
+      <CreatePOSheet
+        open={showCreatePOSheet}
+        onOpenChange={setShowCreatePOSheet}
       />
     </div>
   );

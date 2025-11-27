@@ -1,0 +1,125 @@
+I need you to correct the inventory logic and finish the work you started on the centralized InventoryMovement helper, while also adding my new “Pivot Projections” column. Please read this carefully and treat it as the single source of truth for V1.
+
+1. Correct return destination: all returns go to HILDALE
+
+You previously said returns “typically go to PIVOT warehouse” and started wiring logic that way. That is incorrect for my operation:
+
+Business rule: All customer returns (Shopify + Amazon) are received into Hildale, not Pivot.
+
+Update the Return Received flow so that, for finished products:
+
+The RECEIVE/RETURN transaction should increase hildaleQty.
+
+Do not adjust pivotQty from returns. Pivot is a 3PL mirror only.
+
+Any derived fields (e.g. “available to sell”, risk calculations, AI insights) must respect that returned units live in Hildale.
+
+Fix the bug you already noted where “Return Received updates currentStock but finished products use pivotQty/hildaleQty.” For finished products, update hildaleQty; for components/raw materials, currentStock is fine.
+
+2. Add “Pivot Projections” column and wire its behavior
+
+In the BOM → Finished Products table, I want a new numeric column:
+
+Name it something like pivotProjectionQty (DB/schema) and display it in the UI as “Pivot Projections”.
+
+Place it immediately to the right of the existing Pivot column.
+
+Semantics:
+
+pivotQty = the authoritative mirror of Extensiv/Pivot inventory. It should only be updated by the Extensiv integration/sync, not by sales/returns logic.
+
+pivotProjectionQty = our live projected 3PL stock, calculated by taking pivotQty as a baseline and applying new Shopify/Amazon orders and returns in real time so we can see “what inventory should be” even if Extensiv is delayed.
+
+Implementation details:
+
+On Extensiv sync:
+
+Set pivotQty from Extensiv as you already do.
+
+Also set pivotProjectionQty to match pivotQty as the new baseline (unless you already have outstanding local deltas you’re carefully tracking—if so, make sure we don’t double-apply them).
+
+On Sales Order Created for finished products where the channel is Shopify or Amazon and the fulfillment source is Pivot:
+
+Decrease pivotProjectionQty by the ordered quantity (or allocated quantity).
+
+Do not mutate pivotQty.
+
+Keep using qtyAllocated for allocation; pivotProjectionQty is the stock figure that should drive AI risk and “available to sell” numbers for Pivot.
+
+On Sales Order Cancelled:
+
+Reverse the projection: increase pivotProjectionQty by the cancelled quantity for Pivot-fulfilled orders.
+
+Reset qtyAllocated and backorderQty as you already do.
+
+On Return Received for a Shopify/Amazon order originally fulfilled from Pivot:
+
+Units physically come to Hildale → increase hildaleQty (as per section 1).
+
+Also increase pivotProjectionQty because those units are now effectively back in our overall available pool. (The 3PL will eventually reflect these via a restock or adjustment; pivotProjectionQty is our immediate correction.)
+
+On Sales Order Shipped:
+
+For Pivot, do not double-deduct: if you already adjusted pivotProjectionQty at order creation, do not decrement it again on SHIP. You can still create a SHIP transaction and log it, but the projection adjustment should happen at create/cancel/return.
+
+For Hildale-fulfilled orders, keep the existing behavior where SHIP reduces hildaleQty.
+
+Anywhere AI risk/forecasting currently reads pivotQty to decide 3PL stock risk, update it to use pivotProjectionQty instead. pivotQty remains reference; pivotProjectionQty is what we want for “true” current risk.
+
+3. Centralize inventory updates and close the gaps you listed
+
+Finish the InventoryMovement (or similarly named) helper you started, and route all inventory-changing events through it. The goals:
+
+Single place to mutate:
+
+hildaleQty (finished products)
+
+pivotProjectionQty (3PL projections)
+
+currentStock (raw materials/components)
+
+Any “available to sell” / snapshot fields you maintain.
+
+Events to handle via this helper at minimum:
+
+Sales Order Created (allocation + pivot projections)
+
+Sales Order Shipped (Hildale physical deduction, Pivot logging only)
+
+Sales Order Cancelled
+
+PO Received
+
+Return Received
+
+Backorder fulfillment
+
+Use this helper to explicitly fix the “Identified Gaps” you already wrote:
+
+Return flow bug: Make sure returns for finished products update hildaleQty and pivotProjectionQty correctly instead of just currentStock.
+
+No centralized audit logging: Every call to InventoryMovement must also write a record to the AI Logs / audit log you created earlier (movement type, SKU, qty, location, source event, timestamp, and any external IDs like PO#, SO#, channel).
+
+BackorderService not logging: When backorders are fulfilled, call the same helper so the movement is logged to AI Logs.
+
+Scattered logic: Remove any inline inventory math in routes and services; they should instead call InventoryMovement.record(...) (or similar) so we have one trustworthy place to reason about stock.
+
+4. UI + consistency checks
+
+In the BOM Finished Products table, render Pivot and Pivot Projections side by side so it’s obvious which is mirrored 3PL stock and which is our live projection.
+
+Ensure any dashboards, AI Insights cards, and “Top 5 At Risk Items” use pivotProjectionQty + hildaleQty + allocations/backorders when determining risk and days-until-stockout.
+
+Run through a simple end-to-end test scenario and fix any resulting issues:
+
+Receive PO for a finished product.
+
+Create Shopify and Amazon sales orders.
+
+Ship them.
+
+Process a return.
+
+Verify Hildale quantities, Pivot Projections, allocations, backorders, and AI Logs all line up with expectations.
+
+Please implement all of this in a way that keeps the system lean and production-ready for V1. Do not introduce any new pages or large features—just adjust the existing flows, add the pivotProjectionQty column, and complete the centralized inventory + AI logging behavior as described.

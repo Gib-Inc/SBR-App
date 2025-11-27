@@ -1,6 +1,7 @@
 import { storage } from "./storage";
 import { refreshAdPerformanceData, refreshSalesData } from "./channel-ingestion-service";
 import { refreshAllProductForecastContexts } from "./forecast-context-service";
+import { AISystemReviewer } from "./services/ai-system-reviewer";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -20,6 +21,10 @@ interface ChannelSchedule {
 
 const channelSchedules: Map<string, ChannelSchedule> = new Map();
 let forecastContextTimer: NodeJS.Timeout | null = null;
+let aiSystemReviewTimer: NodeJS.Timeout | null = null;
+
+// AI System Review interval: weekly (168 hours)
+const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
 
 /**
  * Performs a data refresh for a specific channel
@@ -118,6 +123,28 @@ async function performForecastContextRefresh(): Promise<void> {
 }
 
 /**
+ * Runs the AI System Review to analyze logs and generate recommendations
+ * This runs weekly by default to avoid excessive API costs
+ */
+async function performAISystemReview(): Promise<void> {
+  console.log("[Scheduler] Starting AI System Review...");
+  const startTime = Date.now();
+
+  try {
+    const result = await AISystemReviewer.runReview();
+    const duration = Date.now() - startTime;
+    
+    if (result.success) {
+      console.log(`[Scheduler] AI System Review completed in ${duration}ms: ${result.recommendationsGenerated} recommendations from ${result.logsAnalyzed} logs`);
+    } else {
+      console.warn(`[Scheduler] AI System Review completed with issues in ${duration}ms: ${result.error}`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Error during AI System Review:", error);
+  }
+}
+
+/**
  * Starts the scheduler for all enabled channels.
  * Reads channel configurations and schedules individual timers.
  */
@@ -160,6 +187,21 @@ export async function startScheduler(): Promise<void> {
       });
     }, 6 * 60 * 60 * 1000); // 6 hours
 
+    // Schedule AI System Review (weekly)
+    if (aiSystemReviewTimer) {
+      clearInterval(aiSystemReviewTimer);
+    }
+
+    // Note: We don't run immediately on startup to avoid hitting LLM API
+    // on every server restart. Instead, it runs on the scheduled interval.
+    console.log(`[Scheduler] AI System Review scheduled to run every ${AI_SYSTEM_REVIEW_INTERVAL_HOURS} hours (weekly)`);
+
+    aiSystemReviewTimer = setInterval(() => {
+      performAISystemReview().catch(err => {
+        console.error("[Scheduler] Scheduled AI System Review failed:", err);
+      });
+    }, AI_SYSTEM_REVIEW_INTERVAL_HOURS * 60 * 60 * 1000); // Weekly
+
     console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
   } catch (error) {
     console.error("[Scheduler] Failed to start scheduler:", error);
@@ -182,6 +224,12 @@ export function stopScheduler(): void {
     forecastContextTimer = null;
   }
 
+  // Stop AI System Review timer
+  if (aiSystemReviewTimer) {
+    clearInterval(aiSystemReviewTimer);
+    aiSystemReviewTimer = null;
+  }
+
   console.log("[Scheduler] All schedulers stopped");
 }
 
@@ -201,15 +249,17 @@ export function getSchedulerStatus(): {
   running: boolean;
   activeChannels: number;
   schedules: Array<{ channelId: string; channelName: string; intervalHours: number }>;
+  aiSystemReviewScheduled: boolean;
 } {
   return {
-    running: channelSchedules.size > 0 || forecastContextTimer !== null,
+    running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null,
     activeChannels: channelSchedules.size,
     schedules: Array.from(channelSchedules.values()).map(s => ({
       channelId: s.channelId,
       channelName: s.channelName,
       intervalHours: s.intervalHours,
     })),
+    aiSystemReviewScheduled: aiSystemReviewTimer !== null,
   };
 }
 
@@ -238,5 +288,40 @@ export async function performDataRefreshCycle(): Promise<void> {
   } catch (error) {
     console.error("[Scheduler] Error during manual data refresh cycle:", error);
     throw error;
+  }
+}
+
+/**
+ * Manually triggers an AI System Review.
+ * Useful for on-demand analysis outside the weekly schedule.
+ */
+export async function triggerAISystemReview(options?: {
+  periodStart?: Date;
+  periodEnd?: Date;
+  userId?: string;
+}): Promise<{
+  success: boolean;
+  logsAnalyzed: number;
+  recommendationsGenerated: number;
+  error?: string;
+}> {
+  console.log("[Scheduler] Manually triggering AI System Review...");
+  
+  try {
+    const result = await AISystemReviewer.runReview(options);
+    return {
+      success: result.success,
+      logsAnalyzed: result.logsAnalyzed,
+      recommendationsGenerated: result.recommendationsGenerated,
+      error: result.error,
+    };
+  } catch (error: any) {
+    console.error("[Scheduler] Error during manual AI System Review:", error);
+    return {
+      success: false,
+      logsAnalyzed: 0,
+      recommendationsGenerated: 0,
+      error: error.message || 'Unknown error',
+    };
   }
 }

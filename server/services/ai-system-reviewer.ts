@@ -111,6 +111,7 @@ class AISystemReviewerService {
   async runReview(options?: {
     periodStart?: Date;
     periodEnd?: Date;
+    userId?: string;
     provider?: LLMProvider;
     apiKey?: string;
     customEndpoint?: string;
@@ -135,11 +136,11 @@ class AISystemReviewerService {
 
       const startTime = Date.now();
 
-      // Get LLM settings
-      const settings = await storage.getSettings();
+      // Get LLM settings from user-specific settings if userId provided
+      const settings = options?.userId ? await storage.getSettings(options.userId) : undefined;
       const llmProvider = (options?.provider || settings?.llmProvider || 'chatgpt') as LLMProvider;
       const apiKey = options?.apiKey || settings?.llmApiKey;
-      const customEndpoint = options?.customEndpoint || settings?.llmCustomEndpoint;
+      const customEndpoint = options?.customEndpoint || settings?.llmCustomEndpoint || undefined;
 
       if (!apiKey) {
         const result: SystemReviewResult = {

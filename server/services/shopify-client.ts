@@ -39,6 +39,8 @@ export interface ShopifyNormalizedOrder {
   customerPhone?: string;
   status: string;
   orderDate: Date;
+  expectedDeliveryDate?: Date;
+  sourceUrl?: string;
   totalAmount?: number;
   currency?: string;
   rawPayload: any;
@@ -156,6 +158,14 @@ export class ShopifyClient {
     const totalAmount = order.total_price ? parseFloat(order.total_price) : undefined;
     const currency = order.currency || 'USD'; // Default to USD if not provided
 
+    // Generate source URL for Shopify admin
+    const sourceUrl = `https://${this.shopDomain}/admin/orders/${order.id}`;
+
+    // Calculate expected delivery date (order date + 7 days as default estimate)
+    const orderDate = new Date(order.created_at);
+    const expectedDeliveryDate = new Date(orderDate);
+    expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + 7);
+
     return {
       externalOrderId: String(order.id),
       externalCustomerId,
@@ -164,7 +174,9 @@ export class ShopifyClient {
       customerEmail,
       customerPhone,
       status,
-      orderDate: new Date(order.created_at),
+      orderDate,
+      expectedDeliveryDate,
+      sourceUrl,
       totalAmount,
       currency,
       rawPayload: order,

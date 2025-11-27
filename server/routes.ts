@@ -2612,13 +2612,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const existingOrder = existingOrders[0];
 
           if (existingOrder) {
-            // Update existing order
+            // Update existing order with new fields
             await storage.updateSalesOrder(existingOrder.id, {
               status: orderData.status,
               customerName: orderData.customerName,
               customerEmail: orderData.customerEmail,
               customerPhone: orderData.customerPhone,
               externalCustomerId: orderData.externalCustomerId,
+              expectedDeliveryDate: orderData.expectedDeliveryDate,
+              sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
@@ -2635,6 +2637,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               customerPhone: orderData.customerPhone,
               status: orderData.status,
               orderDate: orderData.orderDate,
+              expectedDeliveryDate: orderData.expectedDeliveryDate,
+              sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
@@ -2879,13 +2883,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const existingOrder = existingOrders[0];
 
           if (existingOrder) {
-            // Update existing order
+            // Update existing order with new fields
             await storage.updateSalesOrder(existingOrder.id, {
               status: orderData.status,
               customerName: orderData.customerName,
               customerEmail: orderData.customerEmail,
               customerPhone: orderData.customerPhone,
               externalCustomerId: orderData.externalCustomerId,
+              expectedDeliveryDate: orderData.expectedDeliveryDate,
+              sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
@@ -2902,6 +2908,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               customerPhone: orderData.customerPhone,
               status: orderData.status,
               orderDate: orderData.orderDate,
+              expectedDeliveryDate: orderData.expectedDeliveryDate,
+              sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
@@ -7165,17 +7173,19 @@ Generate only the email body text, no subject line.`;
     try {
       const orders = await storage.getAllSalesOrders();
       
-      // Enhance with line counts and total units
+      // Enhance with line counts, total units, and totalBackorderQty
       const ordersWithSummary = await Promise.all(
         orders.map(async (order) => {
           const lines = await storage.getSalesOrderLines(order.id);
           const linesCount = lines.length;
           const totalUnits = lines.reduce((sum: number, line: SalesOrderLine) => sum + line.qtyOrdered, 0);
+          const totalBackorderQty = lines.reduce((sum: number, line: SalesOrderLine) => sum + (line.backorderQty || 0), 0);
           
           return {
             ...order,
             linesCount,
             totalUnits,
+            totalBackorderQty,
           };
         })
       );
@@ -7204,10 +7214,12 @@ Generate only the email body text, no subject line.`;
       }
 
       const lines = await storage.getSalesOrderLines(id);
+      const totalBackorderQty = lines.reduce((sum: number, line: SalesOrderLine) => sum + (line.backorderQty || 0), 0);
 
       res.json({
         ...order,
         lines,
+        totalBackorderQty,
       });
     } catch (error: any) {
       console.error("[Sales Orders] Error fetching sales order:", error);
@@ -7298,8 +7310,34 @@ Generate only the email body text, no subject line.`;
         });
       }
 
+      // Calculate total backorder and components used from BOM
+      let totalBackorderQty = 0;
+      let componentsUsed = 0;
+      
+      for (const line of createdLines) {
+        totalBackorderQty += line.backorderQty;
+        
+        // Calculate components consumed based on qtyAllocated (fulfilled from stock)
+        const qtyFulfilledFromStock = line.qtyAllocated;
+        if (qtyFulfilledFromStock > 0) {
+          const bomEntries = await storage.getBillOfMaterialsByProductId(line.productId);
+          for (const bom of bomEntries) {
+            componentsUsed += bom.quantityRequired * qtyFulfilledFromStock;
+          }
+        }
+      }
+
+      // Set production status: 'ready' if no backorder, 'alerted' if any backorder
+      const productionStatus = totalBackorderQty > 0 ? 'alerted' : 'ready';
+
+      // Update order with computed values
+      const updatedOrder = await storage.updateSalesOrder(createdOrder.id, {
+        componentsUsed,
+        productionStatus,
+      });
+
       res.status(201).json({
-        ...createdOrder,
+        ...updatedOrder,
         lines: createdLines,
       });
     } catch (error: any) {

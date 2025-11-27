@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,12 @@ import {
   XCircle, 
   Trash2, 
   Package,
-  PackageX
+  PackageX,
+  ExternalLink,
+  MessageSquare,
+  Download,
+  Upload,
+  Share2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -65,6 +70,7 @@ interface EnrichedSalesOrder extends SalesOrder {
   lines?: SalesOrderLine[];
   totalUnits?: number;
   backorderedUnits?: number;
+  totalBackorderQty?: number;
 }
 
 const CHANNEL_COLORS = {
@@ -89,6 +95,36 @@ const STATUS_COLORS = {
   PARTIALLY_FULFILLED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
   FULFILLED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
   CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
+};
+
+const PRODUCTION_STATUS_COLORS: Record<string, string> = {
+  ready: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
+  alerted: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
+  pending: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+  in_transit: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
+  fulfilled: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
+};
+
+const PRODUCTION_STATUS_LABELS: Record<string, string> = {
+  ready: "Ready",
+  alerted: "Alerted",
+  pending: "Pending",
+  in_transit: "In Transit",
+  fulfilled: "Fulfilled",
+};
+
+// Shared date format helper for MM/DD/YYYY
+const formatDateMMDDYYYY = (date: Date | string | null | undefined): string => {
+  if (!date) return "-";
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return "-";
+  return format(d, 'MM/dd/yyyy');
+};
+
+// Format currency
+const formatCurrency = (amount: number | null | undefined, currency = 'USD'): string => {
+  if (amount == null) return "-";
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
 };
 
 const orderLineSchema = z.object({
@@ -351,6 +387,113 @@ export default function SalesOrders() {
     ? "No fulfilled items yet – ship the order first" 
     : undefined;
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const exportToCSV = () => {
+    const headers = [
+      "Order ID",
+      "External Order ID",
+      "Channel",
+      "Customer Name",
+      "Customer Email",
+      "Customer Phone",
+      "Status",
+      "Production Status",
+      "Order Date",
+      "Expected Delivery",
+      "Order Total",
+      "Currency",
+      "Total Units",
+      "Backordered",
+      "Components Used",
+      "Notes"
+    ];
+    
+    const rows = filteredOrders.map(order => [
+      order.id,
+      order.externalOrderId || "",
+      order.channel,
+      order.customerName,
+      order.customerEmail || "",
+      order.customerPhone || "",
+      order.status,
+      (order as any).productionStatus || "ready",
+      format(new Date(order.orderDate), 'yyyy-MM-dd'),
+      (order as any).expectedDeliveryDate ? format(new Date((order as any).expectedDeliveryDate), 'MM/dd/yyyy') : "",
+      order.totalAmount || 0,
+      order.currency || "USD",
+      order.totalUnits || 0,
+      order.totalBackorderQty || order.backorderedUnits || 0,
+      (order as any).componentsUsed || 0,
+      order.notes || ""
+    ]);
+    
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `sales-orders-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    
+    toast({ title: `Exported ${filteredOrders.length} orders to CSV` });
+  };
+
+  const handleFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const text = e.target?.result as string;
+        const lines = text.split('\n');
+        const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
+        
+        let importedCount = 0;
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+          
+          const values = line.match(/("([^"]|"")*"|[^,]*)/g)?.map(v => 
+            v.replace(/^"|"$/g, '').replace(/""/g, '"').trim()
+          ) || [];
+          
+          const record: Record<string, string> = {};
+          headers.forEach((h, idx) => {
+            record[h] = values[idx] || "";
+          });
+          
+          if (record["Customer Name"]) {
+            importedCount++;
+          }
+        }
+        
+        toast({ 
+          title: "Import Complete", 
+          description: `Processed ${importedCount} order records. Note: Full import requires backend integration.`
+        });
+        
+        queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      } catch (error) {
+        toast({ 
+          title: "Import Failed", 
+          description: "Could not parse the CSV file. Please check the format.",
+          variant: "destructive"
+        });
+      }
+    };
+    reader.readAsText(file);
+    
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -402,24 +545,62 @@ export default function SalesOrders() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
               <h2 className="text-lg font-semibold">All Orders</h2>
               <p className="text-sm text-muted-foreground">View and manage sales orders</p>
             </div>
-            <Select value={channelFilter} onValueChange={setChannelFilter}>
-              <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
-                <SelectValue placeholder="Filter by channel" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Channels</SelectItem>
-                <SelectItem value="SHOPIFY">Shopify</SelectItem>
-                <SelectItem value="AMAZON">Amazon</SelectItem>
-                <SelectItem value="GHL">GoHighLevel</SelectItem>
-                <SelectItem value="DIRECT">Direct</SelectItem>
-                <SelectItem value="OTHER">Other</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileImport}
+                accept=".csv"
+                className="hidden"
+                data-testid="input-import-csv"
+              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => fileInputRef.current?.click()}
+                    data-testid="button-import-csv"
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Import orders from CSV</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={exportToCSV}
+                    data-testid="button-export-csv"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export CSV
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Export {filteredOrders.length} orders to CSV</TooltipContent>
+              </Tooltip>
+              <Select value={channelFilter} onValueChange={setChannelFilter}>
+                <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
+                  <SelectValue placeholder="Filter by channel" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Channels</SelectItem>
+                  <SelectItem value="SHOPIFY">Shopify</SelectItem>
+                  <SelectItem value="AMAZON">Amazon</SelectItem>
+                  <SelectItem value="GHL">GoHighLevel</SelectItem>
+                  <SelectItem value="DIRECT">Direct</SelectItem>
+                  <SelectItem value="OTHER">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-md border">
@@ -430,18 +611,24 @@ export default function SalesOrders() {
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Production</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected Delivery</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Order Total</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total Units</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backordered</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Components</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></th>
+                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredOrders.map((order) => {
                   const totalUnits = order.totalUnits || 0;
-                  const backorderedUnits = order.backorderedUnits || 0;
+                  const backorderedUnits = order.totalBackorderQty || order.backorderedUnits || 0;
                   const returnCount = returns.filter(r => r.salesOrderId === order.id).length;
+                  const productionStatus = (order as any).productionStatus || 'ready';
+                  const componentsUsed = (order as any).componentsUsed || 0;
                   
                   return (
                     <tr 
@@ -472,8 +659,22 @@ export default function SalesOrders() {
                           {order.status.replace(/_/g, ' ')}
                         </Badge>
                       </td>
+                      <td className="px-3 align-middle whitespace-nowrap">
+                        <Badge 
+                          className={PRODUCTION_STATUS_COLORS[productionStatus] || PRODUCTION_STATUS_COLORS.ready}
+                          data-testid={`badge-production-${order.id}`}
+                        >
+                          {PRODUCTION_STATUS_LABELS[productionStatus] || productionStatus}
+                        </Badge>
+                      </td>
                       <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-order-date-${order.id}`}>
                         {format(new Date(order.orderDate), 'MMM d, yyyy')}
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-expected-delivery-${order.id}`}>
+                        {formatDateMMDDYYYY((order as any).expectedDeliveryDate)}
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-order-total-${order.id}`}>
+                        {formatCurrency(order.totalAmount, order.currency)}
                       </td>
                       <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-units-${order.id}`}>
                         {totalUnits}
@@ -483,6 +684,9 @@ export default function SalesOrders() {
                         data-testid={`text-backorder-${order.id}`}
                       >
                         {backorderedUnits}
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-components-${order.id}`}>
+                        {componentsUsed}
                       </td>
                       <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-returns-${order.id}`}>
                         {returnCount > 0 ? (
@@ -504,18 +708,71 @@ export default function SalesOrders() {
                         )}
                       </td>
                       <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
-                        <div className="flex items-center justify-end">
+                        <div className="flex items-center justify-end gap-1">
+                          {/* View Source Button */}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const sourceUrl = (order as any).sourceUrl;
+                                    if (sourceUrl) {
+                                      window.open(sourceUrl, "_blank", "noopener,noreferrer");
+                                    }
+                                  }}
+                                  disabled={!(order as any).sourceUrl}
+                                  data-testid={`button-view-source-${order.id}`}
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {(order as any).sourceUrl ? `View in ${order.channel}` : "No source link available"}
+                            </TooltipContent>
+                          </Tooltip>
+
+                          {/* GHL Conversation Button */}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const ghlConversationUrl = (order as any).ghlConversationUrl;
+                                    if (ghlConversationUrl) {
+                                      window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
+                                    }
+                                  }}
+                                  disabled={!(order as any).ghlConversationUrl && !order.ghlContactId}
+                                  data-testid={`button-ghl-conversation-${order.id}`}
+                                >
+                                  <MessageSquare className="h-4 w-4" />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {(order as any).ghlConversationUrl || order.ghlContactId ? "Open GHL Conversation" : "No GHL contact linked"}
+                            </TooltipContent>
+                          </Tooltip>
+
+                          {/* Return Button */}
                           {(() => {
                             const hasAnyFulfilled = order.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
                             const canReturn = order.status !== "CANCELLED" && hasAnyFulfilled;
-                            const tooltip = !hasAnyFulfilled ? "No items available to return yet" : undefined;
+                            const tooltip = !hasAnyFulfilled ? "No items available to return yet" : "Create Return";
                             
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <span>
                                     <Button
-                                      size="sm"
+                                      size="icon"
                                       variant="ghost"
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -531,9 +788,7 @@ export default function SalesOrders() {
                                     </Button>
                                   </span>
                                 </TooltipTrigger>
-                                {tooltip && (
-                                  <TooltipContent>{tooltip}</TooltipContent>
-                                )}
+                                <TooltipContent>{tooltip}</TooltipContent>
                               </Tooltip>
                             );
                           })()}

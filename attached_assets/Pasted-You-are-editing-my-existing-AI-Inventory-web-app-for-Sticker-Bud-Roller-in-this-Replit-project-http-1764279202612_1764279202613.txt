@@ -1,0 +1,65 @@
+You are editing my existing AI Inventory web app for Sticker Bud Roller in this Replit project:
+https://agent-senior-stack--saasbooster.replit.app
+
+Do NOT start from scratch. Extend the current codebase and reuse existing patterns, types, routes, and integrations. Keep all existing Sales Orders Actions intact and just add a new action button as described below.
+
+==================================================
+ADD: “GHL Conversation” ACTION BUTTON PER ORDER
+==================================================
+Goal: In the Sales Orders table, always show an action button that opens the GoHighLevel (GHL) Conversations page for that order’s customer in a new browser tab. The button should live in the Actions column, and the icon should visually resemble the GHL logo (three colored arrows pointing upward).
+
+DATA / MODEL
+- Ensure each Order has a way to link to the GHL contact:
+  - Add `ghlContactId` field on the Order model (string).
+  - If you already have a contact mapping elsewhere, reuse that; otherwise wire it from the same place you currently link orders to GHL (e.g. when creating GHL opportunities or contacts).
+- Add a derived field `ghlConversationUrl` on the backend or build it on the frontend from env/config:
+  - In a config file, introduce env vars such as:
+    - `GHL_BASE_URL` (e.g. `https://app.gohighlevel.com`)
+    - `GHL_LOCATION_ID` (this comes from my GHL location; assume it’s set via env var).
+  - Construct the conversation URL in one place, for example:
+
+    `ghlConversationUrl = \`${GHL_BASE_URL}/v2/location/${GHL_LOCATION_ID}/conversations/contact/${ghlContactId}\``
+
+  - Use whatever URL pattern is correct for the project’s existing GHL links; keep it centralized so it’s easy to tweak.
+
+API / TYPES
+- Update the Order TypeScript types/interfaces to include:
+  - `ghlContactId: string | null`
+  - `ghlConversationUrl: string | null`
+- Make sure all relevant backend endpoints that return orders include these fields so the frontend’s Sales Orders table can consume them.
+
+FRONTEND: ACTION BUTTON IN SALES ORDERS
+- In the Sales Orders page component (the one that renders the orders table):
+  - Locate or extend the “Actions” column renderer for each row.
+  - Add a new button/icon button labeled via tooltip as “GHL Conversation” (text label optional if you use an icon).
+  - This button must be ALWAYS visible for each order row (no hiding/overflow menus), even if `ghlConversationUrl` is null.
+    - If `ghlConversationUrl` is missing/null, disable the button and show a tooltip like: “No GHL contact linked”.
+- On click:
+  - If `ghlConversationUrl` is available:
+    - Open it in a new tab: `window.open(ghlConversationUrl, "_blank", "noopener,noreferrer")`.
+
+ICON: GHL THREE-ARROW LOGO
+- Implement a small custom icon that stylistically resembles the GHL logo’s three upward arrows:
+  - Create a reusable React component, e.g. `<GhlConversationIcon />`.
+  - Use inline SVG with three small upward-pointing arrows in a fan or stack:
+    - Use the existing design system’s icon size (e.g. 16x16 or 20x20).
+    - Use the app’s default color palette (if multi-color is not already supported, keep it a single accent color and comment that the intent is the GHL three-arrow mark).
+  - Plug `<GhlConversationIcon />` into the new action button.
+- Ensure hover/focus styles match existing action buttons (same padding, border radius, tooltip behavior, etc.).
+
+UI/UX BEHAVIOR
+- Place the “GHL Conversation” button next to any existing action buttons (e.g., “View Source”, edit, etc.) so it’s easy to find.
+- Maintain a consistent order for actions; for example:
+  - [GHL Conversation] [View Source] [Other Actions]
+- Confirm:
+  - The button appears on all pages of the Sales Orders table.
+  - It works correctly with pagination, filters, and sorting.
+  - It does not break any existing actions or layout on desktop or mobile.
+
+==================================================
+FINAL REQUIREMENT
+==================================================
+Implement this feature inside the existing AI Inventory project, following its current stack and styling, without removing or breaking any existing functionality. The only new behavior should be:
+- Orders carry `ghlContactId`/`ghlConversationUrl`.
+- The Sales Orders table shows a GHL Conversation button in the Actions column.
+- Clicking the button opens the associated GHL Conversations view for that customer in a new tab.

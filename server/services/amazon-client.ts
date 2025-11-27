@@ -49,6 +49,8 @@ export interface AmazonNormalizedOrder {
   customerPhone?: string;
   status: string;
   orderDate: Date;
+  expectedDeliveryDate?: Date;
+  sourceUrl?: string;
   totalAmount?: number;
   currency?: string;
   rawPayload: any;
@@ -201,6 +203,14 @@ export class AmazonClient {
     const totalAmount = order.OrderTotal ? parseFloat(order.OrderTotal.Amount) : undefined;
     const currency = order.OrderTotal?.CurrencyCode || 'USD'; // Default to USD if not provided
 
+    // Generate source URL for Amazon Seller Central order details
+    const sourceUrl = `https://sellercentral.amazon.com/orders-v3/order/${order.AmazonOrderId}`;
+
+    // Calculate expected delivery date (order date + 5-7 days for Amazon Prime/standard)
+    const orderDate = new Date(order.PurchaseDate);
+    const expectedDeliveryDate = new Date(orderDate);
+    expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + 5);
+
     return {
       externalOrderId: order.AmazonOrderId,
       externalCustomerId: undefined, // Amazon doesn't expose buyer IDs via SP-API
@@ -209,7 +219,9 @@ export class AmazonClient {
       customerEmail,
       customerPhone,
       status,
-      orderDate: new Date(order.PurchaseDate),
+      orderDate,
+      expectedDeliveryDate,
+      sourceUrl,
       totalAmount,
       currency,
       rawPayload: order,

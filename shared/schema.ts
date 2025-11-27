@@ -854,8 +854,14 @@ export const salesOrders = pgTable("sales_orders", {
   status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
+  expectedDeliveryDate: timestamp("expected_delivery_date"), // Promised delivery date from Amazon/Shopify or computed
   totalAmount: real("total_amount").notNull().default(0), // Total order amount
   currency: text("currency").notNull().default('USD'), // Order currency
+  componentsUsed: integer("components_used").notNull().default(0), // Total BOM components consumed for fulfilled quantity
+  productionStatus: text("production_status").notNull().default('ready'), // 'ready' | 'alerted' | 'pending' | 'in_transit' | 'fulfilled'
+  sourceUrl: text("source_url"), // Deep link to Amazon/Shopify order page
+  ghlProductionOpportunityId: text("ghl_production_opportunity_id"), // Linked GHL production opportunity
+  ghlConversationUrl: text("ghl_conversation_url"), // Deep link to GHL conversations for this contact
   notes: text("notes"),
   rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
@@ -865,6 +871,7 @@ export const salesOrders = pgTable("sales_orders", {
   statusIdx: index("sales_orders_status_idx").on(table.status),
   orderDateIdx: index("sales_orders_order_date_idx").on(table.orderDate),
   externalOrderIdIdx: index("sales_orders_external_order_id_idx").on(table.externalOrderId),
+  productionStatusIdx: index("sales_orders_production_status_idx").on(table.productionStatus),
   // V1: Unique constraint for idempotent order imports - prevents duplicate Shopify/Amazon orders
   channelExternalOrderUniqueIdx: uniqueIndex("sales_orders_channel_external_order_unique_idx")
     .on(table.channel, table.externalOrderId)

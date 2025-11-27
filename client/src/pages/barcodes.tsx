@@ -854,32 +854,20 @@ export default function Barcodes() {
           <h1 className="text-2xl font-semibold">Product Barcodes</h1>
           <p className="text-sm text-muted-foreground">Manage barcodes, UPCs, and print labels for your products</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button 
-            variant="outline" 
-            onClick={() => setIsImportWizardOpen(true)}
-            data-testid="button-import-items"
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Import
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={handleExport}
-            data-testid="button-export-barcodes"
-          >
-            <Upload className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-          <Button 
-            variant="outline" 
-            onClick={() => setIsPrintLabelsDialogOpen(true)}
-            data-testid="button-print-labels"
-          >
-            <Printer className="mr-2 h-4 w-4" />
-            Print Labels
-          </Button>
-        </div>
+        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-create-barcode">
+              <Plus className="mr-1 h-4 w-4" />
+              Create
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create New Barcode</DialogTitle>
+            </DialogHeader>
+            <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Filters Row */}
@@ -968,10 +956,11 @@ export default function Barcodes() {
           </Button>
         )}
 
-        <div className="flex-1" />
-        
-        {/* Search */}
-        <div className="relative w-72">
+      </div>
+
+      {/* Search Row with Action Buttons */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search name, SKU, or UPC..."
@@ -981,22 +970,31 @@ export default function Barcodes() {
             data-testid="input-search-barcodes"
           />
         </div>
-
-        {/* Create Button */}
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-create-barcode">
-              <Plus className="mr-1 h-4 w-4" />
-              Create
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create New Barcode</DialogTitle>
-            </DialogHeader>
-            <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
-          </DialogContent>
-        </Dialog>
+        
+        <Button 
+          variant="outline" 
+          onClick={() => setIsImportWizardOpen(true)}
+          data-testid="button-import-items"
+        >
+          <Download className="mr-2 h-4 w-4" />
+          Import
+        </Button>
+        <Button 
+          variant="outline" 
+          onClick={handleExport}
+          data-testid="button-export-barcodes"
+        >
+          <Upload className="mr-2 h-4 w-4" />
+          Export
+        </Button>
+        <Button 
+          variant="outline" 
+          onClick={() => setIsPrintLabelsDialogOpen(true)}
+          data-testid="button-print-labels"
+        >
+          <Printer className="mr-2 h-4 w-4" />
+          Print
+        </Button>
       </div>
 
       {/* Items with Barcode Metadata */}

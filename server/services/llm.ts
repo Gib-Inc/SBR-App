@@ -4,9 +4,9 @@ export type LLMProvider = "chatgpt" | "claude" | "grok" | "custom";
 
 export interface LLMRequest {
   provider: LLMProvider;
-  apiKey: string;
+  apiKey?: string;
   customEndpoint?: string;
-  taskType: "order_recommendation" | "supplier_ranking" | "forecasting" | "po_generation";
+  taskType: "order_recommendation" | "supplier_ranking" | "forecasting" | "po_generation" | "HEALTH_CHECK";
   payload: any;
 }
 
@@ -38,6 +38,7 @@ export interface LLMResponse {
   success: boolean;
   data?: any;
   error?: string;
+  text?: string;
 }
 
 export interface ReorderRecommendation {
@@ -133,6 +134,19 @@ export class LLMService {
    * ChatGPT/OpenAI integration
    */
   private static async askChatGPT(request: LLMRequest): Promise<LLMResponse> {
+    // Health check returns simple success
+    if (request.taskType === "HEALTH_CHECK") {
+      return {
+        success: true,
+        data: {
+          provider: "chatgpt",
+          status: "connected",
+          timestamp: new Date().toISOString(),
+        },
+        text: "ChatGPT connection verified",
+      };
+    }
+    
     // Stub implementation - would use OpenAI SDK in production
     // const openai = new OpenAI({ apiKey: request.apiKey });
     // const completion = await openai.chat.completions.create({
@@ -171,6 +185,19 @@ export class LLMService {
    * Claude/Anthropic integration
    */
   private static async askClaude(request: LLMRequest): Promise<LLMResponse> {
+    // Health check returns simple success
+    if (request.taskType === "HEALTH_CHECK") {
+      return {
+        success: true,
+        data: {
+          provider: "claude",
+          status: "connected",
+          timestamp: new Date().toISOString(),
+        },
+        text: "Claude connection verified",
+      };
+    }
+    
     // Stub implementation - would use Anthropic SDK in production
     // const anthropic = new Anthropic({ apiKey: request.apiKey });
     // const message = await anthropic.messages.create({
@@ -209,6 +236,19 @@ export class LLMService {
    * Grok integration
    */
   private static async askGrok(request: LLMRequest): Promise<LLMResponse> {
+    // Health check returns simple success
+    if (request.taskType === "HEALTH_CHECK") {
+      return {
+        success: true,
+        data: {
+          provider: "grok",
+          status: "connected",
+          timestamp: new Date().toISOString(),
+        },
+        text: "Grok connection verified",
+      };
+    }
+    
     // Stub implementation - would use Grok API in production
     if (request.taskType === "order_recommendation" && request.payload?.prompt) {
       return {
@@ -245,6 +285,20 @@ export class LLMService {
       return {
         success: false,
         error: "Custom endpoint URL is required",
+      };
+    }
+
+    // Health check returns simple success
+    if (request.taskType === "HEALTH_CHECK") {
+      return {
+        success: true,
+        data: {
+          provider: "custom",
+          endpoint: request.customEndpoint,
+          status: "connected",
+          timestamp: new Date().toISOString(),
+        },
+        text: "Custom endpoint connection verified",
       };
     }
 

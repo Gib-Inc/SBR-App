@@ -653,7 +653,7 @@ export default function SalesOrders() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backordered</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Components</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="sticky right-0 z-10 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

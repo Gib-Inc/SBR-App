@@ -877,14 +877,14 @@ export default function Barcodes() {
             data-testid="button-print-labels"
           >
             <Printer className="mr-2 h-4 w-4" />
-            Print
+            Print Labels
           </Button>
           
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-create-barcode">
                 <Plus className="mr-2 h-4 w-4" />
-                Create
+                Create Barcode
               </Button>
             </DialogTrigger>
             <DialogContent>

@@ -169,10 +169,6 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     }
   }, [selectedItems]);
 
-  useEffect(() => {
-    setPreviewIndex(0);
-  }, [selectedItems]);
-
   const loadSavedQuantities = () => {
     try {
       const saved = sessionStorage.getItem(STORAGE_KEY_QUANTITIES);
@@ -273,6 +269,15 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     });
     return labels;
   }, [selectedItems]);
+
+  useEffect(() => {
+    const labels = generateLabels();
+    if (previewIndex >= labels.length && labels.length > 0) {
+      setPreviewIndex(labels.length - 1);
+    } else if (labels.length === 0) {
+      setPreviewIndex(0);
+    }
+  }, [selectedItems, generateLabels, previewIndex]);
 
   const handlePrint = () => {
     if (selectedItems.size === 0) {
@@ -515,15 +520,30 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
 
         <div className="flex-1 flex flex-col min-h-0 gap-4">
           {/* Label Format Cards */}
-          <div className="flex-shrink-0">
+          <div className="flex-shrink-0" role="radiogroup" aria-label="Label Format">
             <Label className="mb-2 block text-sm font-medium">Label Format</Label>
-            <div className="grid grid-cols-4 gap-2">
-              {LABEL_FORMATS.map((format) => (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {LABEL_FORMATS.map((format, idx) => (
                 <button
                   key={format.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={labelFormat === format.value}
+                  tabIndex={labelFormat === format.value ? 0 : -1}
                   onClick={() => setLabelFormat(format.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      const nextIdx = (idx + 1) % LABEL_FORMATS.length;
+                      setLabelFormat(LABEL_FORMATS[nextIdx].value);
+                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      const prevIdx = (idx - 1 + LABEL_FORMATS.length) % LABEL_FORMATS.length;
+                      setLabelFormat(LABEL_FORMATS[prevIdx].value);
+                    }
+                  }}
                   className={cn(
-                    "relative flex flex-col items-center p-3 rounded-lg border-2 transition-all text-left",
+                    "relative flex flex-col items-center p-3 rounded-lg border-2 transition-all text-left focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
                     labelFormat === format.value
                       ? "border-primary bg-primary/5"
                       : "border-border hover-elevate"
@@ -537,7 +557,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
                     {format.icon}
                   </div>
                   <div className="text-sm font-medium mt-1">{format.label}</div>
-                  <div className="text-xs text-muted-foreground">{format.description}</div>
+                  <div className="text-xs text-muted-foreground text-center">{format.description}</div>
                   {labelFormat === format.value && (
                     <div className="absolute top-1 right-1">
                       <CheckCircle2 className="h-4 w-4 text-primary" />

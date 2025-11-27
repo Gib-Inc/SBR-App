@@ -336,7 +336,7 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
                   <div className="flex-1">
                     <Select
                       value={
-                        Object.entries(columnMapping).find(([, target]) => target === field.key)?.[0] || ""
+                        Object.entries(columnMapping).find(([, target]) => target === field.key)?.[0] || "__none__"
                       }
                       onValueChange={(value) => {
                         const newMapping = { ...columnMapping };
@@ -345,7 +345,7 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
                             newMapping[key] = null;
                           }
                         });
-                        if (value) {
+                        if (value && value !== "__none__") {
                           newMapping[value] = field.key;
                         }
                         setColumnMapping(newMapping);
@@ -355,7 +355,7 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
                         <SelectValue placeholder="Select column..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">None</SelectItem>
+                        <SelectItem value="__none__">None</SelectItem>
                         {availableColumns.map((col) => (
                           <SelectItem key={col} value={col}>
                             {col}

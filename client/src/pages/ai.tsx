@@ -19,7 +19,6 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
 import { IntegrationSettings } from "@/components/integration-settings";
-import { IntegrationHealth } from "@/components/integration-health";
 import { CreatePOSheet } from "@/components/create-po-sheet";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
@@ -2250,10 +2249,35 @@ export default function AIAgent() {
     companyName?: string;
     lastSalesSyncAt?: string;
     lastSalesSyncStatus?: string;
+    tokenLastRotatedAt?: string;
+    tokenNextRotationAt?: string;
   }>({
     queryKey: ["/api/quickbooks/status"],
     retry: false,
   });
+
+  // Helper function to format rotation dates
+  const formatRotationDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return "Never";
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return "Never";
+    }
+  };
+
+  // Helper function to calculate next required rotation (90 days from last rotation)
+  const getNextRotationDate = (lastRotatedAt: string | null | undefined): string => {
+    if (!lastRotatedAt) return "Set up credentials first";
+    try {
+      const lastDate = new Date(lastRotatedAt);
+      const nextDate = new Date(lastDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+      return formatRotationDate(nextDate.toISOString());
+    } catch {
+      return "Unknown";
+    }
+  };
 
   const handleQuickBooksConnect = async () => {
     try {
@@ -2493,6 +2517,9 @@ export default function AIAgent() {
       configured: !!(ghlConfig?.apiKey),
       status: getConfigStatus(ghlConfig),
       hasConfigDialog: true,
+      showRotation: true,
+      lastRotatedAt: ghlConfig?.tokenLastRotatedAt,
+      nextRotationAt: ghlConfig?.tokenNextRotationAt,
     },
     {
       id: "phantombuster",
@@ -2503,6 +2530,9 @@ export default function AIAgent() {
       configured: !!(phantomConfig?.apiKey),
       status: getConfigStatus(phantomConfig),
       hasConfigDialog: true,
+      showRotation: true,
+      lastRotatedAt: phantomConfig?.tokenLastRotatedAt,
+      nextRotationAt: phantomConfig?.tokenNextRotationAt,
     },
     {
       id: "quickbooks",
@@ -2516,6 +2546,9 @@ export default function AIAgent() {
       isOAuth: true,
       companyName: quickbooksStatus?.companyName,
       lastSyncAt: quickbooksStatus?.lastSalesSyncAt,
+      showRotation: true,
+      lastRotatedAt: quickbooksStatus?.tokenLastRotatedAt,
+      nextRotationAt: quickbooksStatus?.tokenNextRotationAt,
     },
     {
       id: "meta-ads",
@@ -2529,6 +2562,9 @@ export default function AIAgent() {
       isOAuth: true,
       accountName: metaAdsConfig?.accountName,
       lastSyncAt: metaAdsConfig?.lastSyncAt,
+      showRotation: true,
+      lastRotatedAt: metaAdsConfig?.tokenLastRotatedAt,
+      nextRotationAt: metaAdsConfig?.tokenNextRotationAt,
     },
     {
       id: "google-ads",
@@ -2542,6 +2578,9 @@ export default function AIAgent() {
       isOAuth: true,
       accountName: googleAdsConfig?.accountName,
       lastSyncAt: googleAdsConfig?.lastSyncAt,
+      showRotation: true,
+      lastRotatedAt: googleAdsConfig?.tokenLastRotatedAt,
+      nextRotationAt: googleAdsConfig?.tokenNextRotationAt,
     },
   ];
 
@@ -2635,6 +2674,20 @@ export default function AIAgent() {
                               </span>
                             )}
                           </div>
+                          {(source as any).showRotation && (
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs border-t pt-2 mt-1" data-testid={`rotation-info-${source.id}`}>
+                              <div className="text-muted-foreground">Last Rotated</div>
+                              <div className="text-right font-medium" data-testid={`last-rotated-${source.id}`}>
+                                {formatRotationDate((source as any).lastRotatedAt)}
+                              </div>
+                              <div className="text-muted-foreground">Next Required</div>
+                              <div className="text-right font-medium" data-testid={`next-rotation-${source.id}`}>
+                                {(source as any).nextRotationAt 
+                                  ? formatRotationDate((source as any).nextRotationAt)
+                                  : getNextRotationDate((source as any).lastRotatedAt)}
+                              </div>
+                            </div>
+                          )}
                           <div className="flex gap-2 flex-wrap">
                             <Button
                               size="sm"
@@ -2699,8 +2752,6 @@ export default function AIAgent() {
             </CardContent>
           </Card>
           
-          {/* Integration Health Monitoring */}
-          <IntegrationHealth />
         </TabsContent>
 
         {/* Rules Tab */}

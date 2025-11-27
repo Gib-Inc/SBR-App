@@ -3770,6 +3770,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Meta Ads - Get Config (for status display with rotation tracking)
+  app.get("/api/ads/meta/config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'META');
+      
+      if (!config) {
+        return res.json({ isConnected: false });
+      }
+
+      res.json({
+        isConnected: config.isConnected,
+        accountId: config.accountId,
+        accountName: config.accountName,
+        lastSyncAt: config.lastSyncAt,
+        tokenLastRotatedAt: config.tokenLastRotatedAt,
+        tokenNextRotationAt: config.tokenNextRotationAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get Meta Ads config" });
+    }
+  });
+
   // Google Ads - Get Auth URL
   app.get("/api/ads/google/auth-url", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -3913,6 +3936,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Google Ads - Get Config (for status display with rotation tracking)
+  app.get("/api/ads/google/config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
+      
+      if (!config) {
+        return res.json({ isConnected: false });
+      }
+
+      res.json({
+        isConnected: config.isConnected,
+        accountId: config.accountId,
+        accountName: config.accountName,
+        lastSyncAt: config.lastSyncAt,
+        tokenLastRotatedAt: config.tokenLastRotatedAt,
+        tokenNextRotationAt: config.tokenNextRotationAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get Google Ads config" });
     }
   });
 

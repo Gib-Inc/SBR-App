@@ -795,6 +795,8 @@ export class QuickBooksClient {
     companyName?: string;
     lastSalesSyncAt?: Date;
     lastSalesSyncStatus?: string;
+    tokenLastRotatedAt?: Date;
+    tokenNextRotationAt?: Date;
   }> {
     const auth = await this.storage.getQuickbooksAuth(this.userId);
     if (!auth) {
@@ -806,6 +808,8 @@ export class QuickBooksClient {
       companyName: auth.companyName || undefined,
       lastSalesSyncAt: auth.lastSalesSyncAt || undefined,
       lastSalesSyncStatus: auth.lastSalesSyncStatus || undefined,
+      tokenLastRotatedAt: auth.tokenLastRotatedAt || undefined,
+      tokenNextRotationAt: auth.tokenNextRotationAt || undefined,
     };
   }
 }

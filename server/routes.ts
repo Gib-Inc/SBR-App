@@ -964,11 +964,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/integration-health", requireAuth, async (req: Request, res: Response) => {
     try {
       const { integrationHealthService } = await import('./services/integration-health-service');
-      const userId = (req as any).user?.id;
-      
-      if (!userId) {
-        return res.status(401).json({ error: "User not authenticated" });
-      }
+      const userId = req.session.userId!;
       
       const summary = await integrationHealthService.getHealthSummary(userId);
       res.json(summary);
@@ -982,11 +978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/integration-health/check", requireAuth, async (req: Request, res: Response) => {
     try {
       const { integrationHealthService } = await import('./services/integration-health-service');
-      const userId = (req as any).user?.id;
-      
-      if (!userId) {
-        return res.status(401).json({ error: "User not authenticated" });
-      }
+      const userId = req.session.userId!;
       
       const results = await integrationHealthService.checkAllForUser(userId);
       res.json({ 
@@ -1004,11 +996,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/integration-health/rotation", requireAuth, async (req: Request, res: Response) => {
     try {
       const { integrationHealthService } = await import('./services/integration-health-service');
-      const userId = (req as any).user?.id;
-      
-      if (!userId) {
-        return res.status(401).json({ error: "User not authenticated" });
-      }
+      const userId = req.session.userId!;
       
       const rotationData = await integrationHealthService.getRotationMetadata(userId);
       res.json(rotationData);
@@ -1022,11 +1010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/integration-health/rotate", requireAuth, async (req: Request, res: Response) => {
     try {
       const { integrationHealthService } = await import('./services/integration-health-service');
-      const userId = (req as any).user?.id;
-      
-      if (!userId) {
-        return res.status(401).json({ error: "User not authenticated" });
-      }
+      const userId = req.session.userId!;
       
       const { provider, configId } = req.body;
       

@@ -1414,6 +1414,17 @@ export default function AIAgent() {
     retry: false,
   });
 
+  // Fetch Meta Ads and Google Ads platform configs (uses OAuth)
+  const { data: metaAdsConfig, refetch: refetchMetaAds } = useQuery<any>({
+    queryKey: ["/api/ads/meta/config"],
+    retry: false,
+  });
+
+  const { data: googleAdsConfig, refetch: refetchGoogleAds } = useQuery<any>({
+    queryKey: ["/api/ads/google/config"],
+    retry: false,
+  });
+
   // Fetch QuickBooks status (uses OAuth, not API key)
   const { data: quickbooksStatus, refetch: refetchQbStatus } = useQuery<{
     configured: boolean;
@@ -1454,6 +1465,112 @@ export default function AIAgent() {
       toast({
         title: "Sync Failed",
         description: error.message || "Failed to sync QuickBooks data",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // Meta Ads OAuth handlers
+  const handleMetaAdsConnect = async () => {
+    try {
+      const response = await apiRequest("GET", "/api/ads/meta/auth-url");
+      if (response.authUrl) {
+        window.open(response.authUrl, "_blank", "width=600,height=700");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Connection Error",
+        description: error.message || "Failed to initiate Meta Ads connection",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleMetaAdsDisconnect = async () => {
+    try {
+      await apiRequest("POST", "/api/ads/meta/disconnect", {});
+      refetchMetaAds();
+      toast({
+        title: "Disconnected",
+        description: "Meta Ads has been disconnected",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Disconnect Failed",
+        description: error.message || "Failed to disconnect Meta Ads",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleMetaAdsSync = async () => {
+    setSyncingSource("meta-ads");
+    try {
+      await apiRequest("POST", "/api/ads/meta/sync", {});
+      refetchMetaAds();
+      toast({
+        title: "Sync Complete",
+        description: "Meta Ads metrics synchronized",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync Meta Ads data",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // Google Ads OAuth handlers
+  const handleGoogleAdsConnect = async () => {
+    try {
+      const response = await apiRequest("GET", "/api/ads/google/auth-url");
+      if (response.authUrl) {
+        window.open(response.authUrl, "_blank", "width=600,height=700");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Connection Error",
+        description: error.message || "Failed to initiate Google Ads connection",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleGoogleAdsDisconnect = async () => {
+    try {
+      await apiRequest("POST", "/api/ads/google/disconnect", {});
+      refetchGoogleAds();
+      toast({
+        title: "Disconnected",
+        description: "Google Ads has been disconnected",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Disconnect Failed",
+        description: error.message || "Failed to disconnect Google Ads",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleGoogleAdsSync = async () => {
+    setSyncingSource("google-ads");
+    try {
+      await apiRequest("POST", "/api/ads/google/sync", {});
+      refetchGoogleAds();
+      toast({
+        title: "Sync Complete",
+        description: "Google Ads metrics synchronized",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync Google Ads data",
         variant: "destructive",
       });
     } finally {
@@ -1582,6 +1699,32 @@ export default function AIAgent() {
       companyName: quickbooksStatus?.companyName,
       lastSyncAt: quickbooksStatus?.lastSalesSyncAt,
     },
+    {
+      id: "meta-ads",
+      integrationType: "META_ADS" as const,
+      name: "Meta Ads",
+      description: "Facebook/Instagram ad performance",
+      icon: TrendingUp,
+      configured: metaAdsConfig?.isConnected ?? false,
+      status: metaAdsConfig?.isConnected ? "connected" : "not_configured",
+      hasConfigDialog: false,
+      isOAuth: true,
+      accountName: metaAdsConfig?.accountName,
+      lastSyncAt: metaAdsConfig?.lastSyncAt,
+    },
+    {
+      id: "google-ads",
+      integrationType: "GOOGLE_ADS" as const,
+      name: "Google Ads",
+      description: "Google ad performance & shopping",
+      icon: TrendingUp,
+      configured: googleAdsConfig?.isConnected ?? false,
+      status: googleAdsConfig?.isConnected ? "connected" : "not_configured",
+      hasConfigDialog: false,
+      isOAuth: true,
+      accountName: googleAdsConfig?.accountName,
+      lastSyncAt: googleAdsConfig?.lastSyncAt,
+    },
   ];
 
   return (
@@ -1668,6 +1811,11 @@ export default function AIAgent() {
                                 {(source as any).companyName}
                               </span>
                             )}
+                            {(source.id === "meta-ads" || source.id === "google-ads") && (source as any).accountName && (
+                              <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                {(source as any).accountName}
+                              </span>
+                            )}
                           </div>
                           <div className="flex gap-2 flex-wrap">
                             {source.id === "quickbooks" ? (
@@ -1705,13 +1853,83 @@ export default function AIAgent() {
                                   Connect QuickBooks
                                 </Button>
                               )
-                            ) : (
-                              <>
-                                {source.hasConfigDialog && (
+                            ) : source.id === "meta-ads" ? (
+                              source.configured ? (
+                                <>
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => setOpenIntegration(source.integrationType)}
+                                    onClick={handleMetaAdsSync}
+                                    disabled={syncingSource === source.id}
+                                    data-testid="button-sync-meta-ads"
+                                  >
+                                    <RefreshCw
+                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                                    />
+                                    {syncingSource === source.id ? "Syncing..." : "Sync"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={handleMetaAdsDisconnect}
+                                    data-testid="button-disconnect-meta-ads"
+                                  >
+                                    <LogOut className="mr-2 h-4 w-4" />
+                                    Disconnect
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={handleMetaAdsConnect}
+                                  data-testid="button-connect-meta-ads"
+                                >
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Connect Meta Ads
+                                </Button>
+                              )
+                            ) : source.id === "google-ads" ? (
+                              source.configured ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleGoogleAdsSync}
+                                    disabled={syncingSource === source.id}
+                                    data-testid="button-sync-google-ads"
+                                  >
+                                    <RefreshCw
+                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                                    />
+                                    {syncingSource === source.id ? "Syncing..." : "Sync"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={handleGoogleAdsDisconnect}
+                                    data-testid="button-disconnect-google-ads"
+                                  >
+                                    <LogOut className="mr-2 h-4 w-4" />
+                                    Disconnect
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={handleGoogleAdsConnect}
+                                  data-testid="button-connect-google-ads"
+                                >
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Connect Google Ads
+                                </Button>
+                              )
+                            ) : (
+                              <>
+                                {source.hasConfigDialog && source.integrationType !== "QUICKBOOKS" && source.integrationType !== "META_ADS" && source.integrationType !== "GOOGLE_ADS" && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER")}
                                     data-testid={`button-configure-${source.id}`}
                                   >
                                     <Settings2 className="mr-2 h-4 w-4" />

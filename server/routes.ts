@@ -1930,7 +1930,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.session.userId!;
       
       const settings = await storage.getSettings(userId);
-      res.json(settings || {});
+      
+      // Sanitize API keys - return masked values instead of actual keys
+      if (settings) {
+        const sanitized = { ...settings };
+        const sensitiveFields = [
+          'gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 
+          'phantombusterApiKey', 'llmApiKey', 'quickbooksAccessToken',
+          'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
+        ];
+        for (const field of sensitiveFields) {
+          if ((sanitized as any)[field]) {
+            (sanitized as any)[field] = "••••••••";
+          }
+        }
+        res.json(sanitized);
+      } else {
+        res.json({});
+      }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
@@ -2052,7 +2069,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      res.json(updated);
+      // Sanitize settings response - mask API keys before returning
+      const sensitiveFields = [
+        'gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 
+        'phantombusterApiKey', 'llmApiKey', 'quickbooksAccessToken',
+        'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
+      ];
+      const sanitized = { ...updated };
+      for (const field of sensitiveFields) {
+        if ((sanitized as any)[field]) {
+          (sanitized as any)[field] = "••••••••";
+        }
+      }
+      res.json(sanitized);
     } catch (error: any) {
       console.error("Settings update error:", error);
       res.status(400).json({ error: error.message || "Invalid settings data" });
@@ -2063,12 +2092,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // INTEGRATION CONFIGS
   // ============================================================================
   
+  // Helper to sanitize integration configs before sending to client
+  const sanitizeIntegrationConfig = (config: any) => {
+    if (!config) return config;
+    
+    const sanitized = { ...config };
+    
+    // Replace actual API key with boolean indicator (never send the real key)
+    if (sanitized.apiKey) {
+      sanitized.apiKey = "••••••••"; // Masked value - frontend checks for truthy
+    }
+    
+    // Sanitize nested config object for sensitive fields
+    if (sanitized.config) {
+      const sensitiveFields = ['clientSecret', 'refreshToken', 'accessToken'];
+      const sanitizedConfig = { ...sanitized.config };
+      for (const field of sensitiveFields) {
+        if (sanitizedConfig[field]) {
+          sanitizedConfig[field] = "••••••••";
+        }
+      }
+      sanitized.config = sanitizedConfig;
+    }
+    
+    return sanitized;
+  };
+
   // Get all integration configs for user
   app.get("/api/integration-configs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
       const configs = await storage.getAllIntegrationConfigs(userId);
-      res.json(configs);
+      // Sanitize all configs before sending to client
+      const sanitizedConfigs = configs.map(sanitizeIntegrationConfig);
+      res.json(sanitizedConfigs);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch integration configs" });
     }
@@ -2085,7 +2142,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Integration config not found" });
       }
       
-      res.json(config);
+      // Sanitize config before sending to client
+      res.json(sanitizeIntegrationConfig(config));
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch integration config" });
     }
@@ -2130,7 +2188,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn('[IntegrationConfig] Failed to log config creation:', logError);
       }
 
-      res.status(201).json(newConfig);
+      // Sanitize response before sending to client
+      res.status(201).json(sanitizeIntegrationConfig(newConfig));
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to create integration config" });
     }
@@ -2162,7 +2221,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.warn('[IntegrationConfig] Failed to log config update:', logError);
       }
 
-      res.json(updated);
+      // Sanitize response before sending to client
+      res.json(sanitizeIntegrationConfig(updated));
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to update integration config" });
     }

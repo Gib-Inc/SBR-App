@@ -594,9 +594,9 @@ function BarcodeItemsSection({
               </tr>
             </thead>
             <tbody>
-              {items.map((item: any) => (
+              {items.map((item: any, index: number) => (
                 <ItemTableRow
-                  key={item.id}
+                  key={`${testIdPrefix}-${item.id}-${index}`}
                   item={item}
                   testIdPrefix={testIdPrefix}
                   onUpdate={onUpdate}
@@ -1310,6 +1310,22 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
     autoGenerateMutation.mutate();
   };
 
+  const handleAutoGenerateSku = () => {
+    const prefix = productKind === "FINISHED" ? "FIN" : "RAW";
+    const nameAbbrev = name
+      .split(/\s+/)
+      .map((word) => word.charAt(0).toUpperCase())
+      .join("")
+      .slice(0, 3) || "ITM";
+    const timestamp = Date.now().toString().slice(-6);
+    const generatedSku = `${prefix}-${nameAbbrev}-${timestamp}`;
+    setSku(generatedSku);
+    toast({
+      title: "SKU Generated",
+      description: `Generated: ${generatedSku}`,
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !sku) {
@@ -1356,13 +1372,29 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
 
       <div className="space-y-2">
         <Label htmlFor="sku">SKU *</Label>
-        <Input
-          id="sku"
-          value={sku}
-          onChange={(e) => setSku(e.target.value)}
-          placeholder="e.g., SBR-001"
-          data-testid="input-item-sku"
-        />
+        <div className="flex gap-2">
+          <Input
+            id="sku"
+            value={sku}
+            onChange={(e) => setSku(e.target.value)}
+            placeholder="e.g., SBR-001"
+            className="font-mono"
+            data-testid="input-item-sku"
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleAutoGenerateSku}
+            data-testid="button-auto-generate-sku"
+          >
+            Auto-Generate
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {productKind === "FINISHED" 
+            ? "Format: FIN-XXX-123456" 
+            : "Format: RAW-XXX-123456"}
+        </p>
       </div>
 
       <div className="space-y-2">

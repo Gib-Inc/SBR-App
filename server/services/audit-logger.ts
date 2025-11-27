@@ -69,7 +69,13 @@ export type AuditEventType =
   | 'AD_SYNC_STARTED'
   | 'AD_SYNC_COMPLETED'
   | 'AD_SYNC_FAILED'
-  | 'AD_DEMAND_MULTIPLIER_APPLIED';
+  | 'AD_DEMAND_MULTIPLIER_APPLIED'
+  | 'AI_SYSTEM_REVIEW_STARTED'
+  | 'AI_SYSTEM_REVIEW_COMPLETED'
+  | 'AI_SYSTEM_REVIEW_FAILED'
+  | 'AI_RECOMMENDATION_CREATED'
+  | 'AI_RECOMMENDATION_ACKNOWLEDGED'
+  | 'AI_RECOMMENDATION_DISMISSED';
 
 export type AuditEntityType = 
   | 'PURCHASE_ORDER'
@@ -85,7 +91,8 @@ export type AuditEntityType =
   | 'USER'
   | 'BIN'
   | 'BACKORDER'
-  | 'AD_PLATFORM';
+  | 'AD_PLATFORM'
+  | 'AI_RECOMMENDATION';
 
 export interface LogEventParams {
   source: AuditSource;
@@ -1369,6 +1376,142 @@ class AuditLoggerService {
       description: `AI decision rules updated: ${changedFields}`,
       details: {
         changes: params.changes,
+      },
+    });
+  }
+
+  // ============================================================================
+  // AI SYSTEM REVIEW EVENTS (Weekly LLM-powered log analysis)
+  // ============================================================================
+
+  async logAISystemReviewStarted(params: {
+    periodStart: Date;
+    periodEnd: Date;
+    logsToAnalyze: number;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'AI_SYSTEM_REVIEW_STARTED',
+      entityType: 'AI_RECOMMENDATION',
+      status: 'INFO',
+      description: `AI System Review started: analyzing ${params.logsToAnalyze} logs from ${params.periodStart.toISOString()} to ${params.periodEnd.toISOString()}`,
+      details: {
+        periodStart: params.periodStart.toISOString(),
+        periodEnd: params.periodEnd.toISOString(),
+        logsToAnalyze: params.logsToAnalyze,
+      },
+    });
+  }
+
+  async logAISystemReviewCompleted(params: {
+    periodStart: Date;
+    periodEnd: Date;
+    logsAnalyzed: number;
+    recommendationsGenerated: number;
+    duration: number;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'AI_SYSTEM_REVIEW_COMPLETED',
+      entityType: 'AI_RECOMMENDATION',
+      status: 'INFO',
+      description: `AI System Review completed: ${params.recommendationsGenerated} recommendations from ${params.logsAnalyzed} logs (${params.duration}ms)`,
+      details: {
+        periodStart: params.periodStart.toISOString(),
+        periodEnd: params.periodEnd.toISOString(),
+        logsAnalyzed: params.logsAnalyzed,
+        recommendationsGenerated: params.recommendationsGenerated,
+        duration: params.duration,
+      },
+    });
+  }
+
+  async logAISystemReviewFailed(params: {
+    periodStart: Date;
+    periodEnd: Date;
+    error: string;
+    context?: Record<string, unknown>;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'AI_SYSTEM_REVIEW_FAILED',
+      entityType: 'AI_RECOMMENDATION',
+      status: 'ERROR',
+      description: `AI System Review failed: ${params.error}`,
+      details: {
+        periodStart: params.periodStart.toISOString(),
+        periodEnd: params.periodEnd.toISOString(),
+        error: params.error,
+        ...params.context,
+      },
+    });
+  }
+
+  async logAIRecommendationCreated(params: {
+    recommendationId: string;
+    title: string;
+    severity: string;
+    category: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'AI_RECOMMENDATION_CREATED',
+      entityType: 'AI_RECOMMENDATION',
+      entityId: params.recommendationId,
+      entityLabel: params.title,
+      status: 'INFO',
+      description: `AI recommendation created: [${params.severity}] ${params.title}`,
+      details: {
+        recommendationId: params.recommendationId,
+        title: params.title,
+        severity: params.severity,
+        category: params.category,
+      },
+    });
+  }
+
+  async logAIRecommendationAcknowledged(params: {
+    recommendationId: string;
+    title: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'AI_RECOMMENDATION_ACKNOWLEDGED',
+      entityType: 'AI_RECOMMENDATION',
+      entityId: params.recommendationId,
+      entityLabel: params.title,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `AI recommendation acknowledged: ${params.title}`,
+      details: {
+        recommendationId: params.recommendationId,
+        title: params.title,
+      },
+    });
+  }
+
+  async logAIRecommendationDismissed(params: {
+    recommendationId: string;
+    title: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'AI_RECOMMENDATION_DISMISSED',
+      entityType: 'AI_RECOMMENDATION',
+      entityId: params.recommendationId,
+      entityLabel: params.title,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `AI recommendation dismissed: ${params.title}`,
+      details: {
+        recommendationId: params.recommendationId,
+        title: params.title,
       },
     });
   }

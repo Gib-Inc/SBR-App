@@ -1,0 +1,32 @@
+I want to prepare this project for a real V1 launch. Do a V1 stabilization + readiness pass with these constraints:
+
+1. Freeze scope: DO NOT add any new big features. Only:
+   - Fix bugs / errors / type issues.
+   - Wire up missing pieces in already-existing flows.
+   - Hide or clearly mark any non-functional sections as “Coming soon”.
+
+2. Run a code-level audit focused on:
+   - Server console errors / unhandled rejections / warnings.
+   - Frontend console errors.
+   - TODOs / placeholders that would break a real user flow.
+   - Any “Invalid Date” or obviously broken values in tables.
+
+3. For these main flows, make sure they are fully functional, logged in System Logs, and error-free:
+   - Create SKU + BOM → sync inventory from Extensiv → see correct Hildale / Pivot / AvailableForSale values.
+   - Import sales orders from Shopify and Amazon → inventory decreases correctly, logs populated, Insights/SKU Recommendations update.
+   - Create and send a PO to a supplier via GHL → supplier contact auto-created if needed → email/SMS sent via GHL and logged.
+   - Process a return to Hildale → inventory + logs updated correctly (Extensiv remains READ-ONLY, no write-back).
+   - QuickBooks integration reads historical sales and exposes them where the decision engine expects them.
+   - AI Agent: Data Sources, Rules, Insights (SKU Recommendations + System Suggestions), Logs all show real data and support filtering.
+
+4. Hide or stub anything that is not ready for V1:
+   - Supplier “Discovery & Creation” must stay clearly labeled “Coming soon – V2”.
+   - Any partial Meta/Google Ads UI that is not needed yet for inventory decisions should be clearly marked or hidden.
+
+5. When you’re done:
+   - Fix all issues you can within this pass.
+   - Then give me two concise lists:
+     a) BLOCKERS – issues that must be fixed before we can safely run a real business on this (risk of bad orders, bad inventory, or data loss).
+     b) NICE-TO-HAVE – issues that can wait for V1.1+.
+
+Implement all necessary code changes for this stabilization pass, then report back with those two lists so I can decide if we’re ready to ship V1 or need one more tightening loop.

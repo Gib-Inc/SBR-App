@@ -1317,7 +1317,428 @@ function InsightsTab() {
         prefilledItems={createPOData?.items}
         onPOCreated={handlePOCreated}
       />
+      
+      {/* AI System Suggestions Section */}
+      <SystemSuggestionsSection />
     </div>
+  );
+}
+
+// Interface for System Recommendations (matches schema)
+interface SystemRecommendation {
+  id: string;
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  category: "INTEGRATION_ISSUE" | "INVENTORY_PATTERN" | "PROCESS_IMPROVEMENT" | "SECURITY_CONCERN" | "PERFORMANCE" | "DATA_QUALITY" | "OTHER";
+  title: string;
+  description: string;
+  suggestedChange: string;
+  status: "NEW" | "ACKNOWLEDGED" | "DISMISSED";
+  reviewPeriodStart?: string;
+  reviewPeriodEnd?: string;
+  createdAt: string;
+  acknowledgedAt?: string;
+  dismissedAt?: string;
+}
+
+interface SystemRecommendationsResponse {
+  recommendations: SystemRecommendation[];
+  summary: {
+    total: number;
+    new: number;
+    acknowledged: number;
+    dismissed: number;
+    bySeverity: {
+      critical: number;
+      high: number;
+      medium: number;
+      low: number;
+    };
+    byCategory: {
+      integration_issue: number;
+      inventory_pattern: number;
+      process_improvement: number;
+      security_concern: number;
+      performance: number;
+      data_quality: number;
+      other: number;
+    };
+  };
+  fetchedAt: string;
+}
+
+function SystemSuggestionsSection() {
+  const { toast } = useToast();
+  const [statusFilter, setStatusFilter] = useState<string>("NEW");
+  const [severityFilter, setSeverityFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [selectedSuggestion, setSelectedSuggestion] = useState<SystemRecommendation | null>(null);
+  
+  // Build query string
+  const queryParams = new URLSearchParams();
+  if (statusFilter !== "all") queryParams.set("status", statusFilter);
+  if (severityFilter !== "all") queryParams.set("severity", severityFilter);
+  if (categoryFilter !== "all") queryParams.set("category", categoryFilter);
+  const queryString = queryParams.toString();
+  
+  const { data, isLoading, isFetching } = useQuery<SystemRecommendationsResponse>({
+    queryKey: [`/api/ai/system-recommendations${queryString ? `?${queryString}` : ""}`],
+    staleTime: 60000,
+  });
+  
+  // Manual review trigger
+  const reviewMutation = useMutation({
+    mutationFn: async (periodDays: number) => {
+      return await apiRequest("POST", "/api/ai/system-recommendations/run-review", { periodDays });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/system-recommendations"] });
+      toast({
+        title: "Review Complete",
+        description: "AI system review has completed. Check for new suggestions.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Review Failed",
+        description: error.message || "Failed to run system review",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Update status mutation
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      return await apiRequest("PATCH", `/api/ai/system-recommendations/${id}`, { status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/system-recommendations"] });
+      setSelectedSuggestion(null);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Update Failed",
+        description: error.message || "Failed to update recommendation status",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case "CRITICAL": return "text-red-600 bg-red-100 dark:text-red-400 dark:bg-red-900/30";
+      case "HIGH": return "text-orange-600 bg-orange-100 dark:text-orange-400 dark:bg-orange-900/30";
+      case "MEDIUM": return "text-yellow-600 bg-yellow-100 dark:text-yellow-400 dark:bg-yellow-900/30";
+      case "LOW": return "text-blue-600 bg-blue-100 dark:text-blue-400 dark:bg-blue-900/30";
+      default: return "";
+    }
+  };
+  
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case "INTEGRATION_ISSUE": return <Database className="h-4 w-4" />;
+      case "INVENTORY_PATTERN": return <Package className="h-4 w-4" />;
+      case "PROCESS_IMPROVEMENT": return <Settings2 className="h-4 w-4" />;
+      case "SECURITY_CONCERN": return <AlertTriangle className="h-4 w-4" />;
+      case "PERFORMANCE": return <Zap className="h-4 w-4" />;
+      case "DATA_QUALITY": return <CheckCircle className="h-4 w-4" />;
+      default: return <Info className="h-4 w-4" />;
+    }
+  };
+  
+  const summary = data?.summary;
+  const recommendations = data?.recommendations || [];
+  
+  if (isLoading) {
+    return (
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" />
+            AI System Suggestions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {[1, 2, 3].map(i => (
+              <Skeleton key={i} className="h-16 w-full" />
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+  
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5" />
+              AI System Suggestions
+            </CardTitle>
+            <CardDescription>
+              Weekly AI-powered review of system logs and operations. Identifies improvement opportunities.
+              {data?.fetchedAt && (
+                <span className="block text-xs mt-1">
+                  Last reviewed: {new Date(data.fetchedAt).toLocaleString()}
+                </span>
+              )}
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-32" data-testid="select-system-status-filter">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="NEW">New</SelectItem>
+                <SelectItem value="ACKNOWLEDGED">Acknowledged</SelectItem>
+                <SelectItem value="DISMISSED">Dismissed</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={severityFilter} onValueChange={setSeverityFilter}>
+              <SelectTrigger className="w-28" data-testid="select-system-severity-filter">
+                <SelectValue placeholder="Severity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="CRITICAL">Critical</SelectItem>
+                <SelectItem value="HIGH">High</SelectItem>
+                <SelectItem value="MEDIUM">Medium</SelectItem>
+                <SelectItem value="LOW">Low</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-44" data-testid="select-system-category-filter">
+                <SelectValue placeholder="Category" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Categories</SelectItem>
+                <SelectItem value="INTEGRATION_ISSUE">Integration Issue</SelectItem>
+                <SelectItem value="INVENTORY_PATTERN">Inventory Pattern</SelectItem>
+                <SelectItem value="PROCESS_IMPROVEMENT">Process Improvement</SelectItem>
+                <SelectItem value="SECURITY_CONCERN">Security Concern</SelectItem>
+                <SelectItem value="PERFORMANCE">Performance</SelectItem>
+                <SelectItem value="DATA_QUALITY">Data Quality</SelectItem>
+                <SelectItem value="OTHER">Other</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => reviewMutation.mutate(7)}
+              disabled={reviewMutation.isPending || isFetching}
+              data-testid="button-run-system-review"
+            >
+              <RefreshCw className={`mr-2 h-4 w-4 ${reviewMutation.isPending ? "animate-spin" : ""}`} />
+              Run Review
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* Summary badges */}
+        {summary && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            <Badge variant="outline" data-testid="badge-system-total">
+              {summary.total} Total
+            </Badge>
+            {summary.bySeverity.critical > 0 && (
+              <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" data-testid="badge-system-critical">
+                {summary.bySeverity.critical} Critical
+              </Badge>
+            )}
+            {summary.bySeverity.high > 0 && (
+              <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" data-testid="badge-system-high">
+                {summary.bySeverity.high} High
+              </Badge>
+            )}
+            {summary.new > 0 && (
+              <Badge variant="default" data-testid="badge-system-new">
+                {summary.new} New
+              </Badge>
+            )}
+          </div>
+        )}
+        
+        {/* Recommendations list */}
+        {recommendations.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Brain className="h-12 w-12 mx-auto mb-3 opacity-50" />
+            <p>No system suggestions found.</p>
+            <p className="text-sm mt-1">Run a review to analyze recent system activity.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {recommendations.map((rec) => (
+              <div
+                key={rec.id}
+                className="border rounded-lg p-4 hover-elevate cursor-pointer transition-colors"
+                onClick={() => setSelectedSuggestion(rec)}
+                data-testid={`system-suggestion-${rec.id}`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div className={`p-2 rounded-lg ${getSeverityColor(rec.severity)}`}>
+                      {getCategoryIcon(rec.category)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-medium truncate">{rec.title}</h4>
+                        <Badge variant="outline" className="text-xs">
+                          {rec.category.replace(/_/g, " ")}
+                        </Badge>
+                        <Badge className={`text-xs ${getSeverityColor(rec.severity)}`}>
+                          {rec.severity}
+                        </Badge>
+                        {rec.status !== "NEW" && (
+                          <Badge variant={rec.status === "ACKNOWLEDGED" ? "secondary" : "outline"} className="text-xs">
+                            {rec.status}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                        {rec.description}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {rec.status === "NEW" && (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-green-600"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStatusMutation.mutate({ id: rec.id, status: "ACKNOWLEDGED" });
+                              }}
+                              disabled={updateStatusMutation.isPending}
+                              data-testid={`button-acknowledge-system-${rec.id}`}
+                            >
+                              <CheckCircle className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Acknowledge</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateStatusMutation.mutate({ id: rec.id, status: "DISMISSED" });
+                              }}
+                              disabled={updateStatusMutation.isPending}
+                              data-testid={`button-dismiss-system-${rec.id}`}
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Dismiss</TooltipContent>
+                        </Tooltip>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+      
+      {/* Detail Dialog */}
+      <Dialog open={!!selectedSuggestion} onOpenChange={(open) => !open && setSelectedSuggestion(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5" />
+              System Suggestion
+            </DialogTitle>
+            <DialogDescription>
+              Review period: {selectedSuggestion?.reviewPeriodStart ? new Date(selectedSuggestion.reviewPeriodStart).toLocaleDateString() : ""} - {selectedSuggestion?.reviewPeriodEnd ? new Date(selectedSuggestion.reviewPeriodEnd).toLocaleDateString() : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedSuggestion && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge className={getSeverityColor(selectedSuggestion.severity)}>
+                  {selectedSuggestion.severity}
+                </Badge>
+                <Badge variant="outline">
+                  {selectedSuggestion.category.replace(/_/g, " ")}
+                </Badge>
+                {selectedSuggestion.status !== "NEW" && (
+                  <Badge variant={selectedSuggestion.status === "ACKNOWLEDGED" ? "secondary" : "outline"}>
+                    {selectedSuggestion.status}
+                  </Badge>
+                )}
+              </div>
+              
+              <div>
+                <h4 className="font-medium mb-2">{selectedSuggestion.title}</h4>
+                <p className="text-sm text-muted-foreground">{selectedSuggestion.description}</p>
+              </div>
+              
+              <div className="p-4 bg-muted rounded-lg">
+                <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                  <Zap className="h-4 w-4" />
+                  Suggested Change
+                </p>
+                <p className="text-sm" data-testid="text-suggested-change">{selectedSuggestion.suggestedChange}</p>
+              </div>
+              
+              <div className="text-xs text-muted-foreground">
+                Created: {new Date(selectedSuggestion.createdAt).toLocaleString()}
+              </div>
+              
+              {/* Action buttons */}
+              <div className="flex items-center justify-end gap-2 pt-4 border-t">
+                {selectedSuggestion.status === "NEW" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => updateStatusMutation.mutate({ id: selectedSuggestion.id, status: "DISMISSED" })}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-dismiss-system"
+                    >
+                      <XCircle className="mr-2 h-4 w-4" />
+                      Dismiss
+                    </Button>
+                    <Button
+                      onClick={() => updateStatusMutation.mutate({ id: selectedSuggestion.id, status: "ACKNOWLEDGED" })}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-acknowledge-system"
+                    >
+                      <CheckCircle className="mr-2 h-4 w-4" />
+                      Acknowledge
+                    </Button>
+                  </>
+                )}
+                {selectedSuggestion.status !== "NEW" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => updateStatusMutation.mutate({ id: selectedSuggestion.id, status: "NEW" })}
+                    disabled={updateStatusMutation.isPending}
+                    data-testid="button-modal-reset-system"
+                  >
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Reset to New
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
   );
 }
 

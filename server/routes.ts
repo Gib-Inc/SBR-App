@@ -830,7 +830,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const summary = {
         total: allResult.total,
         new: allRecs.filter(r => r.status === "NEW").length,
-        accepted: allRecs.filter(r => r.status === "ACCEPTED").length,
+        acknowledged: allRecs.filter(r => r.status === "ACKNOWLEDGED").length,
         dismissed: allRecs.filter(r => r.status === "DISMISSED").length,
         bySeverity: {
           critical: allRecs.filter(r => r.severity === "CRITICAL" && r.status !== "DISMISSED").length,
@@ -839,11 +839,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           low: allRecs.filter(r => r.severity === "LOW" && r.status !== "DISMISSED").length,
         },
         byCategory: {
-          integration: allRecs.filter(r => r.category === "INTEGRATION" && r.status !== "DISMISSED").length,
+          integration_issue: allRecs.filter(r => r.category === "INTEGRATION_ISSUE" && r.status !== "DISMISSED").length,
+          inventory_pattern: allRecs.filter(r => r.category === "INVENTORY_PATTERN" && r.status !== "DISMISSED").length,
+          process_improvement: allRecs.filter(r => r.category === "PROCESS_IMPROVEMENT" && r.status !== "DISMISSED").length,
+          security_concern: allRecs.filter(r => r.category === "SECURITY_CONCERN" && r.status !== "DISMISSED").length,
           performance: allRecs.filter(r => r.category === "PERFORMANCE" && r.status !== "DISMISSED").length,
           data_quality: allRecs.filter(r => r.category === "DATA_QUALITY" && r.status !== "DISMISSED").length,
-          security: allRecs.filter(r => r.category === "SECURITY" && r.status !== "DISMISSED").length,
-          configuration: allRecs.filter(r => r.category === "CONFIGURATION" && r.status !== "DISMISSED").length,
           other: allRecs.filter(r => r.category === "OTHER" && r.status !== "DISMISSED").length,
         },
       };

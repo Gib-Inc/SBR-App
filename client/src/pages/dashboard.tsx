@@ -31,8 +31,8 @@ interface AISystemRecommendation {
   description: string;
   suggestedChange: string | null;
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
-  category: "INTEGRATION" | "PERFORMANCE" | "DATA_QUALITY" | "SECURITY" | "CONFIGURATION" | "OTHER";
-  status: "NEW" | "ACCEPTED" | "DISMISSED" | "IMPLEMENTED";
+  category: "INTEGRATION_ISSUE" | "INVENTORY_PATTERN" | "PROCESS_IMPROVEMENT" | "SECURITY_CONCERN" | "PERFORMANCE" | "DATA_QUALITY" | "OTHER";
+  status: "NEW" | "ACKNOWLEDGED" | "DISMISSED";
   createdAt: string;
 }
 
@@ -41,7 +41,7 @@ interface AISystemRecommendationsResponse {
   summary: {
     total: number;
     new: number;
-    accepted: number;
+    acknowledged: number;
     dismissed: number;
     bySeverity: { critical: number; high: number; medium: number; low: number };
   };

@@ -1157,13 +1157,14 @@ export const SystemRecommendationSeverity = {
 } as const;
 export type SystemRecommendationSeverity = typeof SystemRecommendationSeverity[keyof typeof SystemRecommendationSeverity];
 
-// Categories for system recommendations
+// Categories for system recommendations (matches ai-system-reviewer.ts RecommendationCategory)
 export const SystemRecommendationCategory = {
-  INTEGRATION: "INTEGRATION",
-  INVENTORY_RULES: "INVENTORY_RULES",
-  DATA_QUALITY: "DATA_QUALITY",
-  LLM_CONFIG: "LLM_CONFIG",
-  OPERATIONS: "OPERATIONS",
+  INTEGRATION_ISSUE: "INTEGRATION_ISSUE",    // API failures, sync problems, auth issues
+  INVENTORY_PATTERN: "INVENTORY_PATTERN",    // Stockout patterns, unusual consumption
+  PROCESS_IMPROVEMENT: "PROCESS_IMPROVEMENT", // Workflow inefficiencies
+  SECURITY_CONCERN: "SECURITY_CONCERN",      // Auth failures, access patterns
+  PERFORMANCE: "PERFORMANCE",                 // Slow operations, timeouts
+  DATA_QUALITY: "DATA_QUALITY",              // Inconsistencies, missing data
   OTHER: "OTHER",
 } as const;
 export type SystemRecommendationCategory = typeof SystemRecommendationCategory[keyof typeof SystemRecommendationCategory];
@@ -1179,8 +1180,8 @@ export type SystemRecommendationStatus = typeof SystemRecommendationStatus[keyof
 export const aiSystemRecommendations = pgTable("ai_system_recommendations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  severity: text("severity").notNull().default("MEDIUM"), // LOW, MEDIUM, HIGH, CRITICAL
-  category: text("category").notNull().default("OTHER"), // INTEGRATION, INVENTORY_RULES, DATA_QUALITY, LLM_CONFIG, OPERATIONS, OTHER
+  severity: text("severity").notNull().default("MEDIUM"), // CRITICAL, HIGH, MEDIUM, LOW
+  category: text("category").notNull().default("OTHER"), // INTEGRATION_ISSUE, INVENTORY_PATTERN, PROCESS_IMPROVEMENT, SECURITY_CONCERN, PERFORMANCE, DATA_QUALITY, OTHER
   title: text("title").notNull(), // Short summary line
   description: text("description").notNull(), // 1-3 sentence explanation
   suggestedChange: text("suggested_change"), // Specific action to take

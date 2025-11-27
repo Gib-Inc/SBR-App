@@ -1,0 +1,60 @@
+I want you to start IMPLEMENTING the Meta Ads and Google Ads integration according to the “Meta Ads & Google Ads Integration Architecture Plan (V1)” you just wrote, but keep it lean and strictly focused on inventory decisions, not marketing analytics.
+
+Goals for this step:
+- Store only the minimum ad data needed to improve SKU-level demand forecasting.
+- Feed that data into the InventoryDecisionEngine via the aiAdDemandImpact setting.
+- Surface a simple, clear view in the AI Agent → Insights so I can see which SKUs are being boosted by ads.
+- Stay inside the V1 scope you defined (no big marketing dashboards, ROAS charts, or campaign management UI).
+
+Please do the following in order:
+
+1) SCHEMA + STORAGE
+- Create and migrate the three tables you proposed:
+  • ad_platform_configs
+  • ad_sku_mappings
+  • ad_metrics_daily
+- Add the necessary repository/storage helpers to:
+  • Upsert ad platform configs per user.
+  • Upsert and list ad SKU mappings.
+  • Upsert daily aggregated metrics per SKU and fetch last N days by SKU.
+- Follow the same patterns you already use for QuickBooksSalesSnapshots and IntegrationConfigs.
+
+2) CLIENTS + SYNC SERVICE
+- Implement MetaAdsClient and GoogleAdsClient as you described:
+  • Handle OAuth (using existing patterns in the codebase for external OAuth where possible).
+  • Implement the minimum insight endpoints to get daily metrics by campaign/adset/adgroup and map them to SKUs via ad_sku_mappings (or product catalog when available).
+- Implement AdMetricsSync service that:
+  • For each connected ad_platform_configs row, calls the appropriate client.
+  • Aggregates to daily per-SKU metrics and upserts into ad_metrics_daily.
+  • Respects rate limits by batching.
+- Make sure AdMetricsSync reuses the new IntegrationHealth/IntegrationHealthService pattern and logs to AuditLogger with sources META_ADS and GOOGLE_ADS.
+
+3) DECISION ENGINE INTEGRATION
+- Wire ad metrics into InventoryDecisionEngine as you outlined:
+  • Add a storage method like getAdMetricsBySku(sku, windowDays).
+  • Implement computeAdDemandMultiplier(sku, adDemandImpact) with the simple 14-day logic you described (recent vs prior spend, capped boost, small baseline when ads active).
+  • In computeRecommendations(), apply this multiplier to the base sales velocity so that:
+      adjustedVelocity = baseVelocity * adMultiplier
+- Ensure the aiAdDemandImpact setting is actually read from Settings and defaults to 0.2 if not set.
+
+4) INSIGHTS / UI
+- In AI Agent → Insights:
+  • Add a small “Ad-Driven Demand Impact” section that, for each SKU in the recommendations table, shows:
+      – Whether it has active ad metrics in the last 14 days.
+      – The computed adMultiplier value (e.g. 1.00, 1.12, 1.40) and whether it’s driven by Meta, Google, or both.
+  • DO NOT build a full marketing dashboard. Just extend the existing Insights layout so I can understand which SKUs are being boosted and by how much.
+- In AI Logs, make sure when an adMultiplier is applied for a SKU, a SYSTEM AI_DECISION event is logged with a short explanation (e.g. “Ad demand multiplier 1.25 applied for SKU WIDGET-A due to increased Meta spend last 7 days”).
+
+5) SCOPE GUARDRAILS
+- Stay strictly within the V1 scope you documented:
+  • Daily aggregates only.
+  • No PII, no customer-level data.
+  • No campaign management, bid changes, or creative optimization.
+- Reuse the existing IntegrationHealth/key-rotation infrastructure so Meta/Google tokens are monitored the same way as QuickBooks and others.
+
+When you’re done with this step:
+- Summarize which files you touched.
+- Show me one concrete example in the Insights tab where:
+  • A SKU with active ads has its velocity boosted (show raw velocity vs adjusted velocity).
+  • The corresponding AI Log entry that explains the ad-driven adjustment.
+- After this is stable and tested end-to-end, I’ll tell you how I want to tighten and visually restructure the main Dashboard to highlight these AI signals.

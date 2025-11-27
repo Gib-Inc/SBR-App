@@ -648,6 +648,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // INTEGRATION HEALTH & KEY ROTATION
+  // ============================================================================
+  
+  // GET /api/integration-health - Get health summary for all integrations
+  app.get("/api/integration-health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { integrationHealthService } = await import('./services/integration-health-service');
+      const userId = (req as any).user?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "User not authenticated" });
+      }
+      
+      const summary = await integrationHealthService.getHealthSummary(userId);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[IntegrationHealth] Error fetching health summary:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch integration health" });
+    }
+  });
+  
+  // POST /api/integration-health/check - Run health check for all integrations
+  app.post("/api/integration-health/check", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { integrationHealthService } = await import('./services/integration-health-service');
+      const userId = (req as any).user?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "User not authenticated" });
+      }
+      
+      const results = await integrationHealthService.checkAllForUser(userId);
+      res.json({ 
+        message: "Health check completed",
+        results,
+        alertsSent: results.filter(r => r.alertSent).length,
+      });
+    } catch (error: any) {
+      console.error("[IntegrationHealth] Error running health check:", error);
+      res.status(500).json({ error: error.message || "Failed to run health check" });
+    }
+  });
+
+  // ============================================================================
   // ITEMS
   // ============================================================================
   

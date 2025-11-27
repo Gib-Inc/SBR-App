@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
 import { IntegrationSettings } from "@/components/integration-settings";
+import { IntegrationHealth } from "@/components/integration-health";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
 
@@ -1959,6 +1960,9 @@ export default function AIAgent() {
               </div>
             </CardContent>
           </Card>
+          
+          {/* Integration Health Monitoring */}
+          <IntegrationHealth />
         </TabsContent>
 
         {/* Rules Tab */}

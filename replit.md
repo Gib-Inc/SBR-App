@@ -79,6 +79,14 @@ Preferred communication style: Simple, everyday language.
 *   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
 *   **Table Standardization**: All data tables across the application use `whitespace-nowrap` on headers and cells to enforce single-line row heights, preventing text wrapping and maintaining consistent, scannable layouts.
 *   **LLM-Powered PO Creation**: Create PO flow via Suppliers page with 3-step wizard (select supplier → choose items sorted by criticality → review & send). LLM generates professional PO messages (email subject/body and SMS) with fallback templates. GoHighLevel integration sends PO via SMS or email to suppliers with automatic contact creation.
+*   **Integration Health & Key Rotation**: Automated monitoring of OAuth tokens and API keys across all integrations (QuickBooks, Meta Ads, Google Ads, Extensiv, Shopify, Amazon, GoHighLevel, PhantomBuster). Features include:
+    *   Health status classification: OK (>=14 days), WARNING (7-13 days), CRITICAL (<7 days), EXPIRED
+    *   API key age tracking for non-expiring keys (warns after 90 days)
+    *   Consecutive auth failure detection (CRITICAL after 3 failures)
+    *   GoHighLevel SMS/email alerts when tokens approach expiry (24h throttle to prevent spam)
+    *   UI component on AI Agent → Data Sources tab showing all integration health status
+    *   Audit trail logging for all health checks and rotation alerts
+    *   Manual "Run Check" button for on-demand health verification
 
 ### V1 Integration Architecture Rules
 

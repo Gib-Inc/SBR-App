@@ -305,6 +305,8 @@ export const settings = pgTable("settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().references(() => users.id),
   gohighlevelApiKey: text("gohighlevel_api_key"),
+  gohighlevelLocationId: text("gohighlevel_location_id"), // GHL Location/Sub-Account ID
+  gohighlevelBaseUrl: text("gohighlevel_base_url"), // GHL API base URL (defaults to leadconnectorhq)
   shopifyApiKey: text("shopify_api_key"),
   extensivApiKey: text("extensiv_api_key"),
   phantombusterApiKey: text("phantombuster_api_key"),
@@ -329,6 +331,9 @@ export const settings = pgTable("settings", {
   aiSupplierDisputePenaltyDays: integer("ai_supplier_dispute_penalty_days").notNull().default(3), // Extra lead time days per dispute
   aiDefaultLeadTimeDays: integer("ai_default_lead_time_days").notNull().default(7), // Default supplier lead time
   aiMinOrderQuantity: integer("ai_min_order_quantity").notNull().default(1), // Default MOQ if not set on item
+  // Integration Health & Key Rotation Alerts
+  alertAdminEmail: text("alert_admin_email"), // Email for rotation alerts via GHL
+  alertAdminPhone: text("alert_admin_phone"), // Phone for rotation alerts via GHL SMS
 });
 
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
@@ -352,11 +357,17 @@ export const integrationConfigs = pgTable("integration_configs", {
   lastSyncStatus: text("last_sync_status"), // 'SUCCESS', 'FAILED', 'PENDING'
   lastSyncMessage: text("last_sync_message"), // Error details or summary
   config: jsonb("config"), // Provider-specific configuration (warehouse IDs, etc.)
+  // Integration Health Check fields
+  keyCreatedAt: timestamp("key_created_at"), // When the API key was created/rotated
+  lastTokenCheckAt: timestamp("last_token_check_at"),
+  lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL
+  lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
+  consecutiveFailures: integer("consecutive_failures").default(0), // Track repeated auth errors
 }, (table) => ({
   userProviderIdx: index("integration_configs_user_provider_idx").on(table.userId, table.provider),
 }));
 
-export const insertIntegrationConfigSchema = createInsertSchema(integrationConfigs).omit({ id: true });
+export const insertIntegrationConfigSchema = createInsertSchema(integrationConfigs).omit({ id: true, lastTokenCheckAt: true, lastTokenCheckStatus: true, lastAlertSentAt: true, consecutiveFailures: true });
 export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSchema>;
 export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
 
@@ -941,6 +952,10 @@ export const quickbooksAuth = pgTable("quickbooks_auth", {
   isConnected: boolean("is_connected").notNull().default(true),
   lastSalesSyncAt: timestamp("last_sales_sync_at"),
   lastSalesSyncStatus: text("last_sales_sync_status"), // SUCCESS, FAILED
+  // Integration Health Check fields
+  lastTokenCheckAt: timestamp("last_token_check_at"),
+  lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL, EXPIRED
+  lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -948,7 +963,7 @@ export const quickbooksAuth = pgTable("quickbooks_auth", {
   realmIdIdx: uniqueIndex("quickbooks_auth_realm_id_idx").on(table.realmId),
 }));
 
-export const insertQuickbooksAuthSchema = createInsertSchema(quickbooksAuth).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertQuickbooksAuthSchema = createInsertSchema(quickbooksAuth).omit({ id: true, createdAt: true, updatedAt: true, lastTokenCheckAt: true, lastTokenCheckStatus: true, lastAlertSentAt: true });
 export type InsertQuickbooksAuth = z.infer<typeof insertQuickbooksAuthSchema>;
 export type QuickbooksAuth = typeof quickbooksAuth.$inferSelect;
 
@@ -1048,13 +1063,17 @@ export const adPlatformConfigs = pgTable("ad_platform_configs", {
   lastSyncStatus: text("last_sync_status"), // SUCCESS, FAILED
   lastSyncMessage: text("last_sync_message"),
   config: jsonb("config"), // Platform-specific (e.g., selected campaigns to track)
+  // Integration Health Check fields
+  lastTokenCheckAt: timestamp("last_token_check_at"),
+  lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL, EXPIRED
+  lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
   userPlatformIdx: uniqueIndex("ad_platform_user_platform_idx").on(table.userId, table.platform),
 }));
 
-export const insertAdPlatformConfigSchema = createInsertSchema(adPlatformConfigs).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertAdPlatformConfigSchema = createInsertSchema(adPlatformConfigs).omit({ id: true, createdAt: true, updatedAt: true, lastTokenCheckAt: true, lastTokenCheckStatus: true, lastAlertSentAt: true });
 export type InsertAdPlatformConfig = z.infer<typeof insertAdPlatformConfigSchema>;
 export type AdPlatformConfig = typeof adPlatformConfigs.$inferSelect;
 

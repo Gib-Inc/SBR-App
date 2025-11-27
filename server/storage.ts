@@ -335,8 +335,14 @@ export interface IStorage {
 
   // QuickBooks Auth
   getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null>;
+  getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]>;
   createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth>;
   updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null>;
+  updateQuickbooksAuthHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void>;
+  
+  // Integration Configs health check support (supplements existing methods)
+  getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]>;
+  updateIntegrationConfigHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null; consecutiveFailures?: number; lastSyncStatus?: string }): Promise<void>;
 
   // QuickBooks Sales Snapshots
   getQuickbooksSalesSnapshotsBySku(sku: string): Promise<QuickbooksSalesSnapshot[]>;
@@ -2196,12 +2202,36 @@ export class MemStorage implements IStorage {
     return null;
   }
 
+  async getQuickbooksAuthsByUserId(_userId: string): Promise<QuickbooksAuth[]> {
+    return [];
+  }
+
   async createQuickbooksAuth(_auth: InsertQuickbooksAuth): Promise<QuickbooksAuth> {
     throw new Error('QuickBooks not supported in MemStorage');
   }
 
   async updateQuickbooksAuth(_id: string, _auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null> {
     return null;
+  }
+
+  async updateQuickbooksAuthHealthStatus(_id: string, _status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void> {
+    // Not supported in MemStorage
+  }
+
+  // Integration Config health check methods
+  async getIntegrationConfig(id: string): Promise<IntegrationConfig | null> {
+    return this.integrationConfigs.get(id) || null;
+  }
+
+  async getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]> {
+    return Array.from(this.integrationConfigs.values()).filter(c => c.userId === userId);
+  }
+
+  async updateIntegrationConfigHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null; consecutiveFailures?: number; lastSyncStatus?: string }): Promise<void> {
+    const config = this.integrationConfigs.get(id);
+    if (config) {
+      this.integrationConfigs.set(id, { ...config, ...status } as IntegrationConfig);
+    }
   }
 
   // QuickBooks Sales Snapshots (not supported in MemStorage)
@@ -3884,6 +3914,11 @@ export class PostgresStorage implements IStorage {
     return results[0] || null;
   }
 
+  async getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]> {
+    return await this.db.select().from(schema.quickbooksAuth)
+      .where(eq(schema.quickbooksAuth.userId, userId));
+  }
+
   async createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth> {
     const id = randomUUID();
     const now = new Date();
@@ -3902,6 +3937,30 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.quickbooksAuth.id, id))
       .returning();
     return result[0] || null;
+  }
+
+  async updateQuickbooksAuthHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void> {
+    await this.db.update(schema.quickbooksAuth)
+      .set({ ...status, updatedAt: new Date() })
+      .where(eq(schema.quickbooksAuth.id, id));
+  }
+
+  // Integration Config health check methods
+  async getIntegrationConfig(id: string): Promise<IntegrationConfig | null> {
+    const results = await this.db.select().from(schema.integrationConfigs)
+      .where(eq(schema.integrationConfigs.id, id));
+    return results[0] || null;
+  }
+
+  async getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]> {
+    return await this.db.select().from(schema.integrationConfigs)
+      .where(eq(schema.integrationConfigs.userId, userId));
+  }
+
+  async updateIntegrationConfigHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null; consecutiveFailures?: number; lastSyncStatus?: string }): Promise<void> {
+    await this.db.update(schema.integrationConfigs)
+      .set(status)
+      .where(eq(schema.integrationConfigs.id, id));
   }
 
   // QuickBooks Sales Snapshots

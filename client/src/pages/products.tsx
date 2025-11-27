@@ -1349,6 +1349,34 @@ export default function BOM() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const response = await fetch("/api/export/items");
+      if (!response.ok) throw new Error("Export failed");
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bom-inventory-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast({
+        title: "Success",
+        description: "Export downloaded successfully",
+      });
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: error.message || "Failed to export",
+      });
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
@@ -1365,6 +1393,14 @@ export default function BOM() {
           >
             <Download className="mr-2 h-4 w-4" />
             Import
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            data-testid="button-export-products"
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Export
           </Button>
           <Button
             variant="outline"

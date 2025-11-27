@@ -102,7 +102,43 @@ interface InsightsResponse {
     unknown: number;
     actionRequired: number;
     anomalyCount?: number;
+    persisted?: number;
   };
+}
+
+interface PersistedRecommendation {
+  id: string;
+  sku: string;
+  itemId: string;
+  productName: string;
+  recommendationType: string;
+  riskLevel: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+  daysUntilStockout: number | null;
+  availableForSale: number | null;
+  recommendedQty: number | null;
+  stockGapPercent: number | null;
+  qtyOnPo: number | null;
+  status: "NEW" | "ACCEPTED" | "DISMISSED";
+  reasonSummary: string | null;
+  sourceSignals: Record<string, unknown> | null;
+  adMultiplier: number | null;
+  baseVelocity: number | null;
+  adjustedVelocity: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PersistedRecommendationsResponse {
+  recommendations: PersistedRecommendation[];
+  summary: {
+    total: number;
+    new: number;
+    accepted: number;
+    dismissed: number;
+    highRisk: number;
+    actionRequired: number;
+  };
+  fetchedAt: string;
 }
 
 function LLMConfigTab({ settingsData }: { settingsData: any }) {
@@ -540,29 +576,41 @@ function RulesTab() {
 
 function InsightsTab() {
   const { toast } = useToast();
+  const [statusFilter, setStatusFilter] = useState<string>("active");
   const [riskFilter, setRiskFilter] = useState<string>("all");
-  const [actionFilter, setActionFilter] = useState<string>("all");
-  const [selectedItem, setSelectedItem] = useState<SKURecommendation | null>(null);
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [selectedItem, setSelectedItem] = useState<PersistedRecommendation | null>(null);
   
-  // Fetch insights from decision engine
-  const { data: insights, isLoading, refetch, isFetching } = useQuery<InsightsResponse>({
-    queryKey: ["/api/ai/insights"],
+  // Fetch persisted recommendations from database
+  // Map frontend status filter to API query parameter
+  const apiStatusParam = statusFilter === "all" ? "all" : statusFilter === "active" ? "active" : statusFilter;
+  const { data: recsData, isLoading, isFetching } = useQuery<PersistedRecommendationsResponse>({
+    queryKey: ["/api/ai/recommendations", apiStatusParam],
+    queryFn: async () => {
+      const response = await fetch(`/api/ai/recommendations?status=${apiStatusParam}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch recommendations");
+      return response.json();
+    },
   });
   
-  // Refresh mutation
+  // Refresh mutation - triggers decision engine recalculation and persistence
   const refreshMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/ai/insights?refresh=true", {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to refresh");
-      return response.json();
+      return response.json() as Promise<InsightsResponse>;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Invalidate all recommendation queries (different status filters)
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/insights"] });
       toast({
-        title: "Recommendations Refreshed",
-        description: "AI has recalculated all inventory recommendations",
+        title: "Recommendations Updated",
+        description: `AI recalculated recommendations. ${data.summary.persisted ?? 0} actionable items saved.`,
       });
     },
     onError: (error: any) => {
@@ -574,16 +622,36 @@ function InsightsTab() {
     },
   });
   
-  // Filter recommendations
-  const filteredRecommendations = (insights?.recommendations || []).filter(rec => {
+  // Status update mutation
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      return await apiRequest("PATCH", `/api/ai/recommendations/${id}`, { status });
+    },
+    onSuccess: () => {
+      // Invalidate all recommendation queries to update counts across all filters
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Update Failed",
+        description: error.message || "Failed to update recommendation status",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Filter recommendations based on status and risk
+  const filteredRecommendations = (recsData?.recommendations || []).filter(rec => {
+    // Status filter: "active" = NEW + ACCEPTED, or specific status
+    if (statusFilter === "active" && rec.status === "DISMISSED") return false;
+    if (statusFilter !== "active" && statusFilter !== "all" && rec.status !== statusFilter) return false;
     if (riskFilter !== "all" && rec.riskLevel !== riskFilter) return false;
-    if (actionFilter !== "all" && rec.recommendedAction !== actionFilter) return false;
+    if (typeFilter !== "all" && rec.recommendationType !== typeFilter) return false;
     return true;
   });
   
   const getRiskBadgeVariant = (risk: string): "destructive" | "secondary" | "outline" | "default" => {
     switch (risk) {
-      case "NEED_ORDER": return "default"; // Uses primary color - distinct from HIGH's destructive
       case "HIGH": return "destructive";
       case "MEDIUM": return "secondary";
       case "LOW": return "outline";
@@ -591,33 +659,38 @@ function InsightsTab() {
     }
   };
   
-  const getRiskBadgeClassName = (risk: string): string => {
-    switch (risk) {
-      case "NEED_ORDER": return "bg-red-600 dark:bg-red-700 text-white animate-pulse"; // Pulsing urgency - no manual hover
-      case "HIGH": return ""; // Default destructive styling
-      case "MEDIUM": return "";
-      case "LOW": return "";
+  const getStatusBadgeVariant = (status: string): "default" | "secondary" | "outline" => {
+    switch (status) {
+      case "NEW": return "default";
+      case "ACCEPTED": return "secondary";
+      case "DISMISSED": return "outline";
+      default: return "outline";
+    }
+  };
+  
+  const getTypeBadgeColor = (type: string): string => {
+    switch (type) {
+      case "REORDER": return "text-red-600 dark:text-red-400";
+      case "ADS_SPIKE": return "text-purple-600 dark:text-purple-400";
+      case "CHECK_VARIANCE": return "text-yellow-600 dark:text-yellow-400";
+      case "HIGH_RETURNS": return "text-orange-600 dark:text-orange-400";
+      case "MONITOR": return "text-blue-600 dark:text-blue-400";
       default: return "";
     }
   };
   
-  const getRiskBadgeText = (risk: string) => {
-    switch (risk) {
-      case "NEED_ORDER": return "Order Now";
-      case "HIGH": return "High Risk";
-      case "MEDIUM": return "Medium";
-      case "LOW": return "Low";
-      case "UNKNOWN": return "Unknown";
-      default: return risk;
-    }
+  const formatStockGap = (gap: number | null): string => {
+    if (gap === null) return "-";
+    const sign = gap >= 0 ? "+" : "";
+    return `${sign}${gap.toFixed(0)}%`;
   };
   
-  const getActionBadgeVariant = (action: string) => {
-    switch (action) {
-      case "ORDER": return "default";
-      case "MONITOR": return "secondary";
-      default: return "outline";
-    }
+  const getStockGapColor = (gap: number | null): string => {
+    if (gap === null) return "";
+    if (gap < -50) return "text-destructive font-bold";
+    if (gap < -20) return "text-red-500";
+    if (gap < 0) return "text-orange-500";
+    return "text-green-600";
   };
   
   if (isLoading) {
@@ -641,33 +714,51 @@ function InsightsTab() {
     );
   }
   
+  const summary = recsData?.summary || { total: 0, new: 0, accepted: 0, dismissed: 0, highRisk: 0, actionRequired: 0 };
+  
   return (
     <div className="space-y-4">
       {/* Ad Demand Signals */}
       <AdDemandSignals variant="ai-agent" />
       
-      {/* Summary Cards - V1: Now includes NEED_ORDER as separate critical category */}
+      {/* Summary Cards - Status-based counts */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-2xl font-bold" data-testid="text-total-skus">{insights?.summary.total || 0}</p>
-              <p className="text-sm text-muted-foreground">Total SKUs</p>
+              <p className="text-2xl font-bold" data-testid="text-total-recs">{summary.total}</p>
+              <p className="text-sm text-muted-foreground">Total Active</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-primary">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-primary" data-testid="text-new-recs">{summary.new}</p>
+              <p className="text-sm text-muted-foreground">New</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-green-600" data-testid="text-accepted-recs">{summary.accepted}</p>
+              <p className="text-sm text-muted-foreground">Accepted</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-muted-foreground" data-testid="text-dismissed-recs">{summary.dismissed}</p>
+              <p className="text-sm text-muted-foreground">Dismissed</p>
             </div>
           </CardContent>
         </Card>
         <Card className="border-destructive">
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-2xl font-bold text-destructive" data-testid="text-need-order">{insights?.summary.needOrder || 0}</p>
-              <p className="text-sm text-muted-foreground">Need Order</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-red-500" data-testid="text-high-risk">{insights?.summary.high || 0}</p>
+              <p className="text-2xl font-bold text-destructive" data-testid="text-high-risk-recs">{summary.highRisk}</p>
               <p className="text-sm text-muted-foreground">High Risk</p>
             </div>
           </CardContent>
@@ -675,68 +766,64 @@ function InsightsTab() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-2xl font-bold text-orange-500" data-testid="text-medium-risk">{insights?.summary.medium || 0}</p>
-              <p className="text-sm text-muted-foreground">Medium Risk</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-green-600" data-testid="text-low-risk">{insights?.summary.low || 0}</p>
-              <p className="text-sm text-muted-foreground">Low Risk</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-primary" data-testid="text-action-required">{insights?.summary.actionRequired || 0}</p>
-              <p className="text-sm text-muted-foreground">Action Required</p>
+              <p className="text-2xl font-bold text-orange-500" data-testid="text-action-required">{summary.actionRequired}</p>
+              <p className="text-sm text-muted-foreground">Needs Action</p>
             </div>
           </CardContent>
         </Card>
       </div>
       
-      {/* Recommendations Table */}
+      {/* Recommendations Table with horizontal scroll and sticky action column */}
       <Card>
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <CardTitle>SKU Recommendations</CardTitle>
               <CardDescription>
-                AI-generated inventory recommendations based on sales velocity, stock levels, and risk factors
-                {insights?.computedAt && (
+                Actionable inventory recommendations. Accept or dismiss to track decisions.
+                {recsData?.fetchedAt && (
                   <span className="block text-xs mt-1">
-                    Last computed: {new Date(insights.computedAt).toLocaleString()}
+                    Data as of: {new Date(recsData.fetchedAt).toLocaleString()}
                   </span>
                 )}
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-28" data-testid="select-status-filter">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="NEW">New</SelectItem>
+                  <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                  <SelectItem value="DISMISSED">Dismissed</SelectItem>
+                </SelectContent>
+              </Select>
               <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-36" data-testid="select-risk-filter">
+                <SelectTrigger className="w-28" data-testid="select-risk-filter">
                   <Filter className="h-4 w-4 mr-2" />
                   <SelectValue placeholder="Risk" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Risks</SelectItem>
-                  <SelectItem value="NEED_ORDER">Need Order</SelectItem>
-                  <SelectItem value="HIGH">High Risk</SelectItem>
+                  <SelectItem value="HIGH">High</SelectItem>
                   <SelectItem value="MEDIUM">Medium</SelectItem>
                   <SelectItem value="LOW">Low</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={actionFilter} onValueChange={setActionFilter}>
-                <SelectTrigger className="w-32" data-testid="select-action-filter">
-                  <Filter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Action" />
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-36" data-testid="select-type-filter">
+                  <SelectValue placeholder="Type" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Actions</SelectItem>
-                  <SelectItem value="ORDER">Order</SelectItem>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="REORDER">Reorder</SelectItem>
+                  <SelectItem value="ADS_SPIKE">Ads Spike</SelectItem>
+                  <SelectItem value="CHECK_VARIANCE">Variance</SelectItem>
+                  <SelectItem value="HIGH_RETURNS">Returns</SelectItem>
                   <SelectItem value="MONITOR">Monitor</SelectItem>
-                  <SelectItem value="OK">OK</SelectItem>
                 </SelectContent>
               </Select>
               <Button
@@ -744,7 +831,7 @@ function InsightsTab() {
                 size="sm"
                 onClick={() => refreshMutation.mutate()}
                 disabled={refreshMutation.isPending || isFetching}
-                data-testid="button-refresh-insights"
+                data-testid="button-refresh-recommendations"
               >
                 <RefreshCw className={`mr-2 h-4 w-4 ${refreshMutation.isPending || isFetching ? "animate-spin" : ""}`} />
                 Refresh
@@ -752,95 +839,177 @@ function InsightsTab() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <ScrollArea className="h-[500px]">
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="whitespace-nowrap">SKU</TableHead>
+                  <TableHead className="whitespace-nowrap sticky left-0 bg-background z-10">SKU</TableHead>
                   <TableHead className="whitespace-nowrap">Product</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">On Hand</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Velocity</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Days Left</TableHead>
+                  <TableHead className="whitespace-nowrap">Type</TableHead>
                   <TableHead className="whitespace-nowrap">Risk</TableHead>
-                  <TableHead className="whitespace-nowrap">Action</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Rec. Qty</TableHead>
-                  <TableHead className="whitespace-nowrap text-center">Why</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Days Left</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Avail</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Gap%</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">On PO</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Rec Qty</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Velocity</TableHead>
+                  <TableHead className="whitespace-nowrap">Status</TableHead>
+                  <TableHead className="whitespace-nowrap sticky right-0 bg-background z-10 text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredRecommendations.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8 whitespace-nowrap">
-                      {insights?.recommendations.length === 0 
-                        ? "No inventory data available. Add items to see recommendations."
+                    <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
+                      {recsData?.recommendations.length === 0 
+                        ? "No actionable recommendations. Click Refresh to generate new recommendations."
                         : "No items match the selected filters."
                       }
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredRecommendations.map((rec) => (
-                    <TableRow key={rec.itemId} data-testid={`row-recommendation-${rec.itemId}`}>
-                      <TableCell className="font-mono text-sm whitespace-nowrap">{rec.sku}</TableCell>
-                      <TableCell className="whitespace-nowrap max-w-[200px] truncate" title={rec.productName}>
+                    <TableRow 
+                      key={rec.id} 
+                      data-testid={`row-recommendation-${rec.id}`}
+                      className={rec.status === "DISMISSED" ? "opacity-50" : ""}
+                    >
+                      <TableCell className="font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
+                        {rec.sku}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap max-w-[180px] truncate" title={rec.productName}>
                         {rec.productName}
                       </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{rec.metrics?.onHand ?? 0}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        {(rec.metrics?.dailySalesVelocity ?? 0).toFixed(1)}/day
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        {Math.floor(rec.metrics?.projectedDaysUntilStockout ?? 0)}
+                      <TableCell className="whitespace-nowrap">
+                        <span className={`text-sm font-medium ${getTypeBadgeColor(rec.recommendationType)}`}>
+                          {rec.recommendationType.replace("_", " ")}
+                        </span>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <Badge 
                           variant={getRiskBadgeVariant(rec.riskLevel)} 
-                          className={getRiskBadgeClassName(rec.riskLevel)}
-                          data-testid={`badge-risk-${rec.itemId}`}
+                          data-testid={`badge-risk-${rec.id}`}
                         >
-                          {getRiskBadgeText(rec.riskLevel)}
+                          {rec.riskLevel}
                         </Badge>
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <Badge variant={getActionBadgeVariant(rec.recommendedAction)} data-testid={`badge-action-${rec.itemId}`}>
-                          {rec.recommendedAction}
-                        </Badge>
+                      <TableCell className="text-right whitespace-nowrap">
+                        {rec.daysUntilStockout ?? "-"}
+                      </TableCell>
+                      <TableCell className={`text-right whitespace-nowrap ${(rec.availableForSale ?? 0) < 0 ? "text-destructive font-bold" : ""}`}>
+                        {rec.availableForSale ?? "-"}
+                      </TableCell>
+                      <TableCell className={`text-right whitespace-nowrap ${getStockGapColor(rec.stockGapPercent)}`}>
+                        {formatStockGap(rec.stockGapPercent)}
+                      </TableCell>
+                      <TableCell className="text-right whitespace-nowrap">
+                        {rec.qtyOnPo ?? 0}
                       </TableCell>
                       <TableCell className="text-right font-medium whitespace-nowrap">
-                        {rec.recommendedQty > 0 ? rec.recommendedQty : "-"}
+                        {rec.recommendedQty ?? "-"}
                       </TableCell>
-                      <TableCell className="text-center whitespace-nowrap">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => setSelectedItem(rec)}
-                              data-testid={`button-why-${rec.itemId}`}
-                            >
-                              <HelpCircle className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>View explanation</TooltipContent>
-                        </Tooltip>
+                      <TableCell className="text-right whitespace-nowrap text-sm">
+                        {rec.adjustedVelocity?.toFixed(1) ?? "-"}/d
+                        {rec.adMultiplier && rec.adMultiplier > 1 && (
+                          <span className="text-purple-500 ml-1" title={`Ad boost: ${rec.adMultiplier.toFixed(1)}x`}>
+                            <Zap className="inline h-3 w-3" />
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge 
+                          variant={getStatusBadgeVariant(rec.status)}
+                          data-testid={`badge-status-${rec.id}`}
+                        >
+                          {rec.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap sticky right-0 bg-background z-10">
+                        <div className="flex items-center justify-center gap-1">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => setSelectedItem(rec)}
+                                data-testid={`button-details-${rec.id}`}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>View details</TooltipContent>
+                          </Tooltip>
+                          {rec.status === "NEW" && (
+                            <>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-green-600"
+                                    onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "ACCEPTED" })}
+                                    disabled={updateStatusMutation.isPending}
+                                    data-testid={`button-accept-${rec.id}`}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Accept recommendation</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground"
+                                    onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "DISMISSED" })}
+                                    disabled={updateStatusMutation.isPending}
+                                    data-testid={`button-dismiss-${rec.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Dismiss recommendation</TooltipContent>
+                              </Tooltip>
+                            </>
+                          )}
+                          {rec.status !== "NEW" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "NEW" })}
+                                  disabled={updateStatusMutation.isPending}
+                                  data-testid={`button-reset-${rec.id}`}
+                                >
+                                  <RotateCcw className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Reset to New</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
                 )}
               </TableBody>
             </Table>
-          </ScrollArea>
+          </div>
         </CardContent>
       </Card>
       
-      {/* Why Modal */}
+      {/* Details Modal */}
       <Dialog open={!!selectedItem} onOpenChange={(open) => !open && setSelectedItem(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Brain className="h-5 w-5" />
-              AI Recommendation Explanation
+              Recommendation Details
             </DialogTitle>
             <DialogDescription>
               {selectedItem?.productName} ({selectedItem?.sku})
@@ -849,100 +1018,123 @@ function InsightsTab() {
           {selectedItem && (
             <div className="space-y-4">
               <div className="flex items-center gap-2 flex-wrap">
-                <Badge 
-                  variant={getRiskBadgeVariant(selectedItem.riskLevel)}
-                  className={getRiskBadgeClassName(selectedItem.riskLevel)}
-                >
-                  {getRiskBadgeText(selectedItem.riskLevel)}
+                <Badge variant={getRiskBadgeVariant(selectedItem.riskLevel)}>
+                  {selectedItem.riskLevel} Risk
                 </Badge>
-                <Badge variant={getActionBadgeVariant(selectedItem.recommendedAction)}>
-                  {selectedItem.recommendedAction}
+                <Badge variant={getStatusBadgeVariant(selectedItem.status)}>
+                  {selectedItem.status}
                 </Badge>
-                {selectedItem.recommendedQty > 0 && (
+                <span className={`text-sm font-medium ${getTypeBadgeColor(selectedItem.recommendationType)}`}>
+                  {selectedItem.recommendationType.replace("_", " ")}
+                </span>
+                {selectedItem.recommendedQty && selectedItem.recommendedQty > 0 && (
                   <Badge variant="outline">
                     Order {selectedItem.recommendedQty} units
                   </Badge>
                 )}
-                {selectedItem.primaryChannel && (
-                  <Badge variant="secondary">
-                    {selectedItem.primaryChannel}
-                  </Badge>
-                )}
               </div>
               
-              <div className="p-4 bg-muted rounded-lg">
-                <p className="text-sm" data-testid="text-explanation">{selectedItem.explanation}</p>
-              </div>
+              {selectedItem.reasonSummary && (
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-sm" data-testid="text-reason-summary">{selectedItem.reasonSummary}</p>
+                </div>
+              )}
               
-              {/* V1: Enhanced metrics grid with availableForSale and Extensiv data */}
+              {/* Metrics grid */}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground">Available for Sale</p>
-                  <p className={`font-medium ${(selectedItem.metrics?.availableForSale ?? 0) < 0 ? "text-destructive" : ""}`}>
-                    {selectedItem.metrics?.availableForSale ?? 0} units
+                  <p className={`font-medium ${(selectedItem.availableForSale ?? 0) < 0 ? "text-destructive" : ""}`}>
+                    {selectedItem.availableForSale ?? 0} units
                   </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Extensiv On Hand</p>
-                  <p className="font-medium">{selectedItem.metrics?.extensivOnHand ?? 0} units</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Extensiv Variance</p>
-                  <p className={`font-medium ${Math.abs(selectedItem.metrics?.extensivVariance ?? 0) > 0 ? "text-yellow-600" : ""}`}>
-                    {selectedItem.metrics?.extensivVariance ?? 0} ({(selectedItem.metrics?.extensivVariancePercent ?? 0).toFixed(0)}%)
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Daily Velocity</p>
-                  <p className="font-medium">{(selectedItem.metrics?.dailySalesVelocity ?? 0).toFixed(2)} units/day</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Days Until Stockout</p>
-                  <p className="font-medium">{Math.floor(selectedItem.metrics?.projectedDaysUntilStockout ?? 0)} days</p>
+                  <p className="font-medium">{selectedItem.daysUntilStockout ?? "N/A"} days</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Effective Lead Time</p>
-                  <p className="font-medium">{selectedItem.metrics?.effectiveLeadTime ?? 7} days</p>
+                  <p className="text-muted-foreground">Stock Gap</p>
+                  <p className={`font-medium ${getStockGapColor(selectedItem.stockGapPercent)}`}>
+                    {formatStockGap(selectedItem.stockGapPercent)}
+                  </p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Reorder Point</p>
-                  <p className="font-medium">{selectedItem.metrics?.reorderPoint ?? 0} units</p>
+                  <p className="text-muted-foreground">Qty on Open POs</p>
+                  <p className="font-medium">{selectedItem.qtyOnPo ?? 0} units</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Return Rate</p>
-                  <p className="font-medium">{((selectedItem.metrics?.returnRate ?? 0) * 100).toFixed(1)}%</p>
+                  <p className="text-muted-foreground">Base Velocity</p>
+                  <p className="font-medium">{selectedItem.baseVelocity?.toFixed(2) ?? "N/A"}/day</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Backorder Count</p>
-                  <p className="font-medium">{selectedItem.metrics?.backorderCount ?? 0}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Inbound PO</p>
-                  <p className="font-medium">{selectedItem.metrics?.inboundPO ?? 0} units</p>
+                  <p className="text-muted-foreground">Adjusted Velocity</p>
+                  <p className="font-medium">
+                    {selectedItem.adjustedVelocity?.toFixed(2) ?? "N/A"}/day
+                    {selectedItem.adMultiplier && selectedItem.adMultiplier > 1 && (
+                      <span className="text-purple-500 ml-1">
+                        ({selectedItem.adMultiplier.toFixed(1)}x ads)
+                      </span>
+                    )}
+                  </p>
                 </div>
               </div>
               
-              {/* V1: Risk indicators */}
-              <div className="flex flex-wrap gap-2">
-                {(selectedItem.metrics?.supplierScore ?? 100) < 80 && (
-                  <Badge variant="outline" className="text-xs text-orange-600">
-                    Supplier Score: {selectedItem.metrics?.supplierScore ?? 0}/100
-                  </Badge>
+              {/* Source signals */}
+              {selectedItem.sourceSignals && Object.keys(selectedItem.sourceSignals).length > 0 && (
+                <div className="border-t pt-4">
+                  <p className="text-sm font-medium mb-2">Source Signals</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(selectedItem.sourceSignals).map(([key, value]) => (
+                      <Badge key={key} variant="outline" className="text-xs">
+                        {key}: {typeof value === "number" ? value.toFixed(2) : String(value)}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Action buttons */}
+              <div className="flex items-center justify-end gap-2 pt-4 border-t">
+                {selectedItem.status === "NEW" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        updateStatusMutation.mutate({ id: selectedItem.id, status: "DISMISSED" });
+                        setSelectedItem(null);
+                      }}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-dismiss"
+                    >
+                      <XCircle className="mr-2 h-4 w-4" />
+                      Dismiss
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        updateStatusMutation.mutate({ id: selectedItem.id, status: "ACCEPTED" });
+                        setSelectedItem(null);
+                      }}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-accept"
+                    >
+                      <CheckCircle className="mr-2 h-4 w-4" />
+                      Accept
+                    </Button>
+                  </>
                 )}
-                {(selectedItem.metrics?.returnRate ?? 0) > 0.1 && (
-                  <Badge variant="outline" className="text-xs text-yellow-600">
-                    High Return Rate
-                  </Badge>
-                )}
-                {Math.abs(selectedItem.metrics?.extensivVariance ?? 0) > 10 && (
-                  <Badge variant="outline" className="text-xs text-yellow-600">
-                    Extensiv Variance Alert
-                  </Badge>
-                )}
-                {(selectedItem.metrics?.availableForSale ?? 0) < 0 && (
-                  <Badge variant="destructive" className="text-xs">
-                    Negative Stock
-                  </Badge>
+                {selectedItem.status !== "NEW" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      updateStatusMutation.mutate({ id: selectedItem.id, status: "NEW" });
+                      setSelectedItem(null);
+                    }}
+                    disabled={updateStatusMutation.isPending}
+                    data-testid="button-modal-reset"
+                  >
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Reset to New
+                  </Button>
                 )}
               </div>
             </div>

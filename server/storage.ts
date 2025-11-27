@@ -203,7 +203,11 @@ export interface IStorage {
   getAllAIRecommendations(): Promise<AIRecommendation[]>;
   getAIRecommendation(id: string): Promise<AIRecommendation | undefined>;
   getAIRecommendationsByItem(itemId: string): Promise<AIRecommendation[]>;
-  getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined>;
+  getAIRecommendationsByStatus(status: string): Promise<AIRecommendation[]>;
+  getActiveAIRecommendations(): Promise<AIRecommendation[]>; // Get NEW/ACCEPTED only
+  upsertAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation>;
+  updateAIRecommendationStatus(id: string, status: string): Promise<AIRecommendation | undefined>;
+  clearStaleRecommendations(itemId: string): Promise<void>; // Clear old NEW recommendations for an item
   createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation>;
   updateAIRecommendation(id: string, recommendation: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined>;
 
@@ -1424,28 +1428,77 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined> {
-    const recommendations = Array.from(this.aiRecommendations.values())
-      .filter(r => r.itemId === itemId && (location === undefined || r.location === location))
+  async getAIRecommendationsByStatus(status: string): Promise<AIRecommendation[]> {
+    return Array.from(this.aiRecommendations.values())
+      .filter(r => r.status === status)
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    return recommendations[0];
+  }
+
+  async getActiveAIRecommendations(): Promise<AIRecommendation[]> {
+    return Array.from(this.aiRecommendations.values())
+      .filter(r => r.status === 'NEW' || r.status === 'ACCEPTED')
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async upsertAIRecommendation(insertRecommendation: InsertAIRecommendation): Promise<AIRecommendation> {
+    // Find existing recommendation for same item and type
+    const existing = Array.from(this.aiRecommendations.values())
+      .find(r => r.itemId === insertRecommendation.itemId && 
+                 r.recommendationType === insertRecommendation.recommendationType &&
+                 r.status === 'NEW');
+    
+    if (existing) {
+      const updated: AIRecommendation = {
+        ...existing,
+        ...insertRecommendation,
+        updatedAt: new Date(),
+      };
+      this.aiRecommendations.set(existing.id, updated);
+      return updated;
+    }
+    
+    return this.createAIRecommendation(insertRecommendation);
+  }
+
+  async updateAIRecommendationStatus(id: string, status: string): Promise<AIRecommendation | undefined> {
+    const existing = this.aiRecommendations.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, status, updatedAt: new Date() };
+    this.aiRecommendations.set(id, updated);
+    return updated;
+  }
+
+  async clearStaleRecommendations(itemId: string): Promise<void> {
+    const toDelete = Array.from(this.aiRecommendations.entries())
+      .filter(([_, r]) => r.itemId === itemId && r.status === 'NEW');
+    for (const [id] of toDelete) {
+      this.aiRecommendations.delete(id);
+    }
   }
 
   async createAIRecommendation(insertRecommendation: InsertAIRecommendation): Promise<AIRecommendation> {
     const id = randomUUID();
+    const now = new Date();
     const recommendation: AIRecommendation = {
       id,
-      type: insertRecommendation.type,
+      sku: insertRecommendation.sku,
       itemId: insertRecommendation.itemId,
-      location: insertRecommendation.location ?? null,
-      recommendedQty: insertRecommendation.recommendedQty,
-      recommendedAction: insertRecommendation.recommendedAction,
-      horizonDays: insertRecommendation.horizonDays ?? null,
-      contextSnapshot: insertRecommendation.contextSnapshot ?? null,
-      llmResponseTimeMs: insertRecommendation.llmResponseTimeMs ?? null,
-      outcomeStatus: insertRecommendation.outcomeStatus ?? null,
-      outcomeDetails: insertRecommendation.outcomeDetails ?? null,
-      createdAt: new Date(),
+      productName: insertRecommendation.productName,
+      recommendationType: insertRecommendation.recommendationType,
+      riskLevel: insertRecommendation.riskLevel,
+      daysUntilStockout: insertRecommendation.daysUntilStockout ?? null,
+      availableForSale: insertRecommendation.availableForSale ?? 0,
+      recommendedQty: insertRecommendation.recommendedQty ?? 0,
+      stockGapPercent: insertRecommendation.stockGapPercent ?? null,
+      qtyOnPo: insertRecommendation.qtyOnPo ?? 0,
+      status: insertRecommendation.status ?? 'NEW',
+      reasonSummary: insertRecommendation.reasonSummary ?? null,
+      sourceSignals: insertRecommendation.sourceSignals ?? null,
+      adMultiplier: insertRecommendation.adMultiplier ?? 1.0,
+      baseVelocity: insertRecommendation.baseVelocity ?? null,
+      adjustedVelocity: insertRecommendation.adjustedVelocity ?? null,
+      createdAt: now,
+      updatedAt: now,
     };
     this.aiRecommendations.set(id, recommendation);
     return recommendation;
@@ -1454,7 +1507,7 @@ export class MemStorage implements IStorage {
   async updateAIRecommendation(id: string, update: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined> {
     const existing = this.aiRecommendations.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...update };
+    const updated = { ...existing, ...update, updatedAt: new Date() };
     this.aiRecommendations.set(id, updated);
     return updated;
   }
@@ -3117,37 +3170,90 @@ export class PostgresStorage implements IStorage {
     return results;
   }
 
-  async getLatestAIRecommendationForItem(itemId: string, location?: string | null): Promise<AIRecommendation | undefined> {
-    let whereClause = eq(schema.aiRecommendations.itemId, itemId);
-    
-    if (location !== undefined) {
-      // Use isNull for null locations, eq for non-null string locations
-      if (location === null) {
-        whereClause = and(whereClause, isNull(schema.aiRecommendations.location))!;
-      } else {
-        whereClause = and(whereClause, eq(schema.aiRecommendations.location, location))!;
-      }
-    }
-    
+  async getAIRecommendationsByStatus(status: string): Promise<AIRecommendation[]> {
     const results = await this.db
       .select()
       .from(schema.aiRecommendations)
-      .where(whereClause)
-      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`)
+      .where(eq(schema.aiRecommendations.status, status))
+      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`);
+    return results;
+  }
+
+  async getActiveAIRecommendations(): Promise<AIRecommendation[]> {
+    const results = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .where(
+        drizzleSql`${schema.aiRecommendations.status} IN ('NEW', 'ACCEPTED')`
+      )
+      .orderBy(drizzleSql`${schema.aiRecommendations.createdAt} DESC`);
+    return results;
+  }
+
+  async upsertAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation> {
+    // First try to find an existing NEW recommendation for this item and type
+    const existing = await this.db
+      .select()
+      .from(schema.aiRecommendations)
+      .where(
+        and(
+          eq(schema.aiRecommendations.itemId, recommendation.itemId),
+          eq(schema.aiRecommendations.recommendationType, recommendation.recommendationType),
+          eq(schema.aiRecommendations.status, 'NEW')
+        )
+      )
       .limit(1);
     
+    if (existing[0]) {
+      // Update the existing recommendation
+      const results = await this.db
+        .update(schema.aiRecommendations)
+        .set({ ...recommendation, updatedAt: new Date() })
+        .where(eq(schema.aiRecommendations.id, existing[0].id))
+        .returning();
+      return results[0];
+    }
+    
+    // Create a new recommendation
+    return this.createAIRecommendation(recommendation);
+  }
+
+  async updateAIRecommendationStatus(id: string, status: string): Promise<AIRecommendation | undefined> {
+    const results = await this.db
+      .update(schema.aiRecommendations)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(schema.aiRecommendations.id, id))
+      .returning();
     return results[0];
   }
 
+  async clearStaleRecommendations(itemId: string): Promise<void> {
+    await this.db
+      .delete(schema.aiRecommendations)
+      .where(
+        and(
+          eq(schema.aiRecommendations.itemId, itemId),
+          eq(schema.aiRecommendations.status, 'NEW')
+        )
+      );
+  }
+
   async createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation> {
-    const results = await this.db.insert(schema.aiRecommendations).values(recommendation).returning();
+    const results = await this.db.insert(schema.aiRecommendations).values({
+      ...recommendation,
+      status: recommendation.status ?? 'NEW',
+      availableForSale: recommendation.availableForSale ?? 0,
+      recommendedQty: recommendation.recommendedQty ?? 0,
+      qtyOnPo: recommendation.qtyOnPo ?? 0,
+      adMultiplier: recommendation.adMultiplier ?? 1.0,
+    }).returning();
     return results[0];
   }
 
   async updateAIRecommendation(id: string, update: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined> {
     const results = await this.db
       .update(schema.aiRecommendations)
-      .set(update)
+      .set({ ...update, updatedAt: new Date() })
       .where(eq(schema.aiRecommendations.id, id))
       .returning();
     return results[0];

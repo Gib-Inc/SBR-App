@@ -469,34 +469,46 @@ export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransacti
 export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
 
 // ============================================================================
-// AI RECOMMENDATIONS (LLM-Generated Reorder Suggestions)
+// AI RECOMMENDATIONS (Decision Engine Inventory Recommendations)
 // ============================================================================
 
 export const aiRecommendations = pgTable("ai_recommendations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  type: text("type").notNull(), // 'FORECAST_REORDER', 'PO_SUGGESTION'
+  sku: text("sku").notNull(),
   itemId: varchar("item_id").notNull().references(() => items.id),
-  location: text("location"), // 'PIVOT', 'HILDALE', null for global
-  recommendedQty: integer("recommended_qty").notNull(),
-  recommendedAction: text("recommended_action").notNull(), // 'ORDER', 'MONITOR', 'HOLD'
-  horizonDays: integer("horizon_days"), // Forecast horizon in days
-  contextSnapshot: jsonb("context_snapshot"), // Current stock, open POs, forecast, etc.
-  llmResponseTimeMs: integer("llm_response_time_ms"), // LLM API response time
-  outcomeStatus: text("outcome_status"), // 'ACCURATE', 'UNDER_ORDERED', 'OVER_ORDERED', null if not evaluated
-  outcomeDetails: jsonb("outcome_details"), // {orderedQty, receivedQty, recommendedQty, daysCoveredAfterReceipt}
+  productName: text("product_name").notNull(),
+  recommendationType: text("recommendation_type").notNull(), // 'REORDER', 'HOLD', 'CHECK_VARIANCE', 'INVESTIGATE_ADS', 'MONITOR'
+  riskLevel: text("risk_level").notNull(), // 'HIGH', 'MEDIUM', 'LOW'
+  daysUntilStockout: integer("days_until_stockout"),
+  availableForSale: integer("available_for_sale").notNull().default(0),
+  recommendedQty: integer("recommended_qty").notNull().default(0),
+  stockGapPercent: real("stock_gap_percent"), // Percent difference from target coverage
+  qtyOnPo: integer("qty_on_po").notNull().default(0), // Total open PO qty for this SKU
+  status: text("status").notNull().default("NEW"), // 'NEW', 'ACCEPTED', 'DISMISSED'
+  reasonSummary: text("reason_summary"), // Short explanation
+  sourceSignals: jsonb("source_signals"), // {velocity, ads, quickbooks, extensiv, shopify, amazon, returns}
+  adMultiplier: real("ad_multiplier").default(1.0), // Ad demand multiplier
+  baseVelocity: real("base_velocity"), // Raw sales velocity before ad adjustment
+  adjustedVelocity: real("adjusted_velocity"), // Velocity after ad multiplier
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
   itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
   createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),
-  typeIdx: index("ai_recommendations_type_idx").on(table.type),
+  statusIdx: index("ai_recommendations_status_idx").on(table.status),
+  skuIdx: index("ai_recommendations_sku_idx").on(table.sku),
 }));
 
 export const insertAIRecommendationSchema = createInsertSchema(aiRecommendations).omit({ 
   id: true, 
-  createdAt: true 
+  createdAt: true,
+  updatedAt: true 
 });
 export type InsertAIRecommendation = z.infer<typeof insertAIRecommendationSchema>;
 export type AIRecommendation = typeof aiRecommendations.$inferSelect;
+
+export const updateAIRecommendationSchema = insertAIRecommendationSchema.partial();
+export type UpdateAIRecommendation = z.infer<typeof updateAIRecommendationSchema>;
 
 // ============================================================================
 // UPDATE SCHEMAS (Partial validation for PATCH endpoints)

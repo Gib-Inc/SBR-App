@@ -1,0 +1,135 @@
+I want you to rebuild the AI Agent → Insights → SKU Recommendations section so it becomes the single, clean surface for all AI inventory recommendations (not every SKU), with proper statuses and a data table UI consistent with the rest of the app.
+
+Here is what I want you to do:
+
+Change what “SKU Recommendations” shows
+
+SKU Recommendations should now show ONLY SKUs where the decision engine has a meaningful recommendation, not the full catalog.
+
+Use the existing InventoryDecisionEngine outputs (reorder / hold / check variance / etc.) and persist them into a dedicated recommendations store if needed.
+
+If there is already any recommendation table/model for SKU recommendations, align it with this spec; if not, create a small ai_recommendations table with at least:
+
+id
+
+sku, itemId, productName
+
+recommendationType (REORDER, HOLD, CHECK_VARIANCE, etc.)
+
+riskLevel (HIGH, MEDIUM, LOW)
+
+daysUntilStockout
+
+availableForSale
+
+recommendedQty (numeric)
+
+stockGapPercent (see below)
+
+qtyOnPo (total open PO qty for this SKU)
+
+status (NEW, ACCEPTED, DISMISSED)
+
+reasonSummary (short explanation)
+
+sourceSignals (JSON with key inputs used: velocity, ads, QuickBooks, Extensiv, etc.)
+
+createdAt, updatedAt
+
+When the engine runs, it should upsert these rows and only create entries for SKUs where it thinks an action is needed.
+
+Statuses and behavior (New / Accepted / Dismissed)
+
+Every recommendation starts as status = NEW when first produced.
+
+In the SKU Recommendations table, add a Status column showing NEW, ACCEPTED, or DISMISSED.
+
+Add simple actions per row:
+
+“Mark Accepted” → sets status to ACCEPTED.
+
+“Dismiss” → sets status to DISMISSED.
+
+Do NOT actually create POs or external actions from these buttons yet; they are just human-in-the-loop review for V1.
+
+When status changes, update the record and write an AI Log entry describing the action (who did what, for which SKU, and what the recommendation was).
+
+Columns and calculations to show
+Rebuild the SKU Recommendations table so it looks and behaves like the other data tables in the app, and include at least these columns:
+
+Status (NEW / ACCEPTED / DISMISSED)
+
+SKU
+
+Product Name
+
+Risk Level (High/Medium/Low from the decision engine)
+
+Available for Sale (the new availableForSale value we added)
+
+Days Until Stockout (calculated by the engine)
+
+Suggested Action (e.g. Reorder, Hold, Check Variance, Investigate Ads Spike, etc.)
+
+Recommended Qty (units the engine says to order)
+
+% Off Target (a numeric “gap” field):
+
+Define this as the percent difference between current availableForSale coverage vs the target coverage the engine is aiming for.
+
+Example: if target is 30 days of cover and we only have 15, show -50%; if we have 45, show +50%.
+
+Store this as stockGapPercent in the recommendation model.
+
+Qty on POs (sum of all open PO line quantities for this SKU, across all POs that are not fully received).
+
+Ad Impact (show a simple numeric multiplier like 1.00, 1.15, 1.40 or an icon + number from the ad demand logic you implemented; this comes from the adMultiplier).
+
+Source Signals (short text or badges summarizing which data sources influenced this: Shopify, Amazon, Extensiv, QuickBooks, Meta, Google Ads, Returns, etc.).
+
+Make sure the columns are sortable and filterable at least by Status and Risk Level so I can quickly see “NEW + HIGH RISK” items.
+
+Table layout and scrolling behavior
+
+Visually, I want the SKU Recommendations section to match the rest of the app’s tables:
+
+A clear section heading (“SKU Recommendations”) and any filters/summary cards above the table.
+
+The data table itself should live inside a card/container below that heading, like other pages (e.g. BOM, Barcodes, Suppliers).
+
+The table region must be scrollable without breaking the overall page:
+
+The page itself should NOT become horizontally scrollable.
+
+Put the table inside a container with a fixed max height and width.
+
+Enable both vertical and horizontal scrolling INSIDE that container so I can see all columns and rows without the entire page shifting.
+
+Keep the rightmost Action/Status icons visible if possible (sticky right column) while horizontally scrolling the other columns.
+
+Apply the same styling/components you use for the other big data tables (Sales Orders, Returns, Suppliers, etc.) so it feels consistent.
+
+Wiring to existing triggers and logs
+
+Wherever the engine currently generates recommendations (Dashboard “generate forecast”, AI Agent refresh, etc.), ensure it:
+
+Runs the InventoryDecisionEngine.
+
+Writes/updates ai_recommendations records for SKUs that need actions.
+
+Clears or supersedes stale NEW entries for the same SKU so the table doesn’t fill with outdated rows.
+
+When a recommendation is ACCEPTED or DISMISSED in the UI:
+
+Update the status field.
+
+Log it in AI Logs with a clear message like:
+“User ACCEPTED recommendation: REORDER 120 units of SKU ROLLER-XL (High risk, 3 days until stockout, -60% off target).”
+
+Cleanup of old behavior
+
+Remove or disable any logic that was causing SKU Recommendations to list every SKU in the catalog. It should now be exclusively driven by the recommendation records described above.
+
+Ensure any existing Insights cards or summary widgets that show counts of “At Risk” items are reading from this recommendation set (for example: counting NEW recommendations with HIGH risk) so the numbers line up between the cards and the table.
+
+In summary: rebuild the AI Agent → Insights → SKU Recommendations so it is the single, authoritative list of AI inventory recommendations with status (NEW/ACCEPTED/DISMISSED), clear columns (including % off target and Qty on POs), and a contained, scrollable data table UI that matches the rest of the app.

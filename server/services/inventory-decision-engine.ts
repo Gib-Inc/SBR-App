@@ -20,7 +20,7 @@
 
 import { IStorage } from "../storage";
 import { AuditLogger } from "./audit-logger";
-import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest, QuickbooksSalesSnapshot, AdMetricsDaily } from "@shared/schema";
+import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest, QuickbooksSalesSnapshot, AdMetricsDaily, InsertAIRecommendation } from "@shared/schema";
 
 // Types for the decision engine
 // Note: These match the frontend expectations
@@ -1043,5 +1043,175 @@ export class InventoryDecisionEngine {
     }
 
     return { logged, anomalies };
+  }
+
+  /**
+   * Persist actionable recommendations to the database
+   * Only saves recommendations where action is needed (ORDER, MONITOR) or risk is elevated
+   * Clears stale NEW recommendations and upserts fresh ones
+   */
+  async persistRecommendations(
+    recommendations: SkuRecommendation[],
+    rules: DecisionEngineResult["rulesApplied"]
+  ): Promise<{ persisted: number; cleared: number }> {
+    let persisted = 0;
+    let cleared = 0;
+
+    // Get open PO quantities by item
+    const poQtyByItem = await this.getOpenPoQtyByItem();
+
+    for (const rec of recommendations) {
+      // Only persist recommendations that need action
+      const needsAction = 
+        rec.recommendedAction === "ORDER" || 
+        rec.riskLevel === "NEED_ORDER" ||
+        rec.riskLevel === "HIGH" ||
+        rec.riskLevel === "MEDIUM" ||
+        (rec.recommendedAction === "MONITOR" && Math.abs(rec.metrics.extensivVariancePercent) > 10);
+
+      if (!needsAction) {
+        // Clear any stale NEW recommendations for this item if it no longer needs action
+        await this.storage.clearStaleRecommendations(rec.itemId);
+        cleared++;
+        continue;
+      }
+
+      // Calculate stock gap percent
+      // Target coverage = lead time + safety stock days
+      const targetCoverDays = rec.metrics.effectiveLeadTime + rules.safetyStockDays;
+      const targetStock = rec.metrics.dailySalesVelocity * targetCoverDays;
+      const currentStock = rec.metrics.availableForSale + rec.metrics.inboundPO;
+      
+      // Stock gap: negative = under target, positive = over target
+      let stockGapPercent: number | null = null;
+      if (targetStock > 0) {
+        stockGapPercent = ((currentStock - targetStock) / targetStock) * 100;
+      }
+
+      // Get qty on open POs for this item
+      const qtyOnPo = poQtyByItem.get(rec.itemId) ?? 0;
+
+      // Map risk level to recommendation type
+      const recommendationType = this.mapToRecommendationType(rec);
+
+      // Build source signals object
+      const sourceSignals = this.buildSourceSignals(rec);
+
+      // Prepare the recommendation record
+      const recData: InsertAIRecommendation = {
+        sku: rec.sku,
+        itemId: rec.itemId,
+        productName: rec.productName,
+        recommendationType,
+        riskLevel: rec.riskLevel === "NEED_ORDER" ? "HIGH" : rec.riskLevel, // Map NEED_ORDER to HIGH for storage
+        daysUntilStockout: Math.round(rec.metrics.projectedDaysUntilStockout),
+        availableForSale: Math.round(rec.metrics.availableForSale),
+        recommendedQty: rec.recommendedQty,
+        stockGapPercent: stockGapPercent !== null ? Math.round(stockGapPercent * 10) / 10 : null,
+        qtyOnPo,
+        status: "NEW",
+        reasonSummary: rec.explanation,
+        sourceSignals,
+        adMultiplier: rec.metrics.adDemandMultiplier ?? 1.0,
+        baseVelocity: rec.metrics.dailySalesVelocity / (rec.metrics.adDemandMultiplier ?? 1),
+        adjustedVelocity: rec.metrics.dailySalesVelocity,
+      };
+
+      // Upsert the recommendation
+      await this.storage.upsertAIRecommendation(recData);
+      persisted++;
+    }
+
+    return { persisted, cleared };
+  }
+
+  /**
+   * Get sum of open PO quantities by item
+   */
+  private async getOpenPoQtyByItem(): Promise<Map<string, number>> {
+    const poQtyMap = new Map<string, number>();
+    const purchaseOrders = await this.storage.getAllPurchaseOrders();
+    
+    for (const po of purchaseOrders) {
+      // Only count open POs (not fully received)
+      if (po.status === 'RECEIVED' || po.status === 'CANCELLED') continue;
+      
+      const lines = await this.storage.getPurchaseOrderLinesByPOId(po.id);
+      for (const line of lines) {
+        const remaining = (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0);
+        if (remaining > 0) {
+          const current = poQtyMap.get(line.itemId) ?? 0;
+          poQtyMap.set(line.itemId, current + remaining);
+        }
+      }
+    }
+    
+    return poQtyMap;
+  }
+
+  /**
+   * Map recommendation to a type string
+   */
+  private mapToRecommendationType(rec: SkuRecommendation): string {
+    // Check for variance issue first
+    if (Math.abs(rec.metrics.extensivVariancePercent) > 20) {
+      return "CHECK_VARIANCE";
+    }
+    
+    // Check for high return rate
+    if (rec.metrics.returnRate > 0.15) {
+      return "HIGH_RETURNS";
+    }
+
+    // Check for ad-driven demand spike
+    if (rec.metrics.adDemandMultiplier && rec.metrics.adDemandMultiplier > 1.2) {
+      return "ADS_SPIKE";
+    }
+
+    // Standard recommendations based on action
+    if (rec.recommendedAction === "ORDER" || rec.riskLevel === "NEED_ORDER") {
+      return "REORDER";
+    }
+    
+    if (rec.recommendedAction === "MONITOR") {
+      return "MONITOR";
+    }
+    
+    return "HOLD";
+  }
+
+  /**
+   * Build source signals object for transparency
+   */
+  private buildSourceSignals(rec: SkuRecommendation): Record<string, unknown> {
+    const signals: Record<string, unknown> = {
+      velocity: rec.metrics.dailySalesVelocity,
+      daysUntilStockout: rec.metrics.projectedDaysUntilStockout,
+      extensivVariance: rec.metrics.extensivVariance,
+    };
+
+    if (rec.primaryChannel) {
+      signals.primaryChannel = rec.primaryChannel;
+    }
+
+    if (rec.metrics.adDemandMultiplier && rec.metrics.adDemandMultiplier !== 1) {
+      signals.adMultiplier = rec.metrics.adDemandMultiplier;
+      signals.adRecentSpend = rec.metrics.adRecentSpend;
+      signals.adPriorSpend = rec.metrics.adPriorSpend;
+    }
+
+    if (rec.metrics.returnRate > 0) {
+      signals.returnRate = rec.metrics.returnRate;
+    }
+
+    if (rec.metrics.supplierScore < 90) {
+      signals.supplierScore = rec.metrics.supplierScore;
+    }
+
+    if (rec.metrics.backorderCount > 0) {
+      signals.backorderCount = rec.metrics.backorderCount;
+    }
+
+    return signals;
   }
 }

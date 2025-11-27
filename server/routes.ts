@@ -357,14 +357,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const result = await decisionEngine.computeRecommendations(userId, forceRefresh);
       
-      // V1: Log recommendations to AI Logs when refreshing
+      // V1: Log recommendations and persist to DB when refreshing
       let logResult = { logged: 0, anomalies: [] as any[] };
+      let persistResult = { persisted: 0, cleared: 0 };
       if (forceRefresh) {
         logResult = await decisionEngine.logRecommendationsToAudit(
           result.recommendations,
           result.rulesApplied
         );
-        console.log(`[AI Insights] Logged ${logResult.logged} events, detected ${logResult.anomalies.length} anomalies`);
+        
+        // Persist actionable recommendations to the database
+        persistResult = await decisionEngine.persistRecommendations(
+          result.recommendations,
+          result.rulesApplied
+        );
+        
+        console.log(`[AI Insights] Logged ${logResult.logged} events, detected ${logResult.anomalies.length} anomalies, persisted ${persistResult.persisted} recommendations`);
       }
       
       // V1: Only include anomalyCount in summary when refresh=true (otherwise it's meaningless)
@@ -380,6 +388,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (forceRefresh) {
         summary.anomalyCount = logResult.anomalies.length;
+        summary.persisted = persistResult.persisted;
       }
       
       res.json({
@@ -391,6 +400,97 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       console.error("[AI Insights] Error computing recommendations:", error);
       res.status(500).json({ error: error.message || "Failed to compute recommendations" });
+    }
+  });
+
+  // GET /api/ai/recommendations - Get persisted actionable recommendations from DB
+  app.get("/api/ai/recommendations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const statusFilter = req.query.status as string | undefined;
+      
+      let recommendations;
+      if (!statusFilter || statusFilter === "active") {
+        // Default or "active": get only active recommendations (NEW + ACCEPTED)
+        recommendations = await storage.getActiveAIRecommendations();
+      } else if (statusFilter === "all") {
+        // "all": get all recommendations regardless of status
+        recommendations = await storage.getAllAIRecommendations();
+      } else {
+        // Specific status: NEW, ACCEPTED, DISMISSED
+        recommendations = await storage.getAIRecommendationsByStatus(statusFilter);
+      }
+      
+      // Calculate summary counts
+      const allRecs = await storage.getAllAIRecommendations();
+      const summary = {
+        total: allRecs.length,
+        new: allRecs.filter(r => r.status === "NEW").length,
+        accepted: allRecs.filter(r => r.status === "ACCEPTED").length,
+        dismissed: allRecs.filter(r => r.status === "DISMISSED").length,
+        highRisk: allRecs.filter(r => r.riskLevel === "HIGH" && r.status !== "DISMISSED").length,
+        actionRequired: allRecs.filter(r => 
+          (r.recommendationType === "REORDER" || r.recommendationType === "ADS_SPIKE") && 
+          r.status === "NEW"
+        ).length,
+      };
+      
+      res.json({
+        recommendations,
+        summary,
+        fetchedAt: new Date(),
+      });
+    } catch (error: any) {
+      console.error("[AI Recommendations] Error fetching recommendations:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch recommendations" });
+    }
+  });
+
+  // PATCH /api/ai/recommendations/:id - Update recommendation status
+  app.patch("/api/ai/recommendations/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      
+      if (!status || !["NEW", "ACCEPTED", "DISMISSED"].includes(status)) {
+        return res.status(400).json({ error: "Invalid status. Must be NEW, ACCEPTED, or DISMISSED" });
+      }
+      
+      const existing = await storage.getAIRecommendation(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Recommendation not found" });
+      }
+      
+      // Update the status
+      const updated = await storage.updateAIRecommendationStatus(id, status);
+      
+      // Log the status change to AI Logs
+      const actionVerb = status === "ACCEPTED" ? "ACCEPTED" : status === "DISMISSED" ? "DISMISSED" : "reset to NEW";
+      await AuditLogger.logEvent({
+        source: "USER",
+        eventType: "AI_DECISION",
+        entityType: "ITEM",
+        entityId: existing.itemId,
+        entityLabel: existing.sku,
+        status: "INFO",
+        description: `User ${actionVerb} recommendation: ${existing.recommendationType} ${existing.recommendedQty} units of SKU ${existing.sku} (${existing.riskLevel} risk, ${existing.daysUntilStockout} days until stockout, ${existing.stockGapPercent?.toFixed(0) ?? 0}% off target)`,
+        details: {
+          recommendationId: id,
+          sku: existing.sku,
+          productName: existing.productName,
+          recommendationType: existing.recommendationType,
+          recommendedQty: existing.recommendedQty,
+          riskLevel: existing.riskLevel,
+          daysUntilStockout: existing.daysUntilStockout,
+          stockGapPercent: existing.stockGapPercent,
+          previousStatus: existing.status,
+          newStatus: status,
+        },
+      });
+      
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[AI Recommendations] Error updating recommendation:", error);
+      res.status(500).json({ error: error.message || "Failed to update recommendation" });
     }
   });
 

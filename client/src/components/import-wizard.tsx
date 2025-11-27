@@ -570,7 +570,7 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
             <CardHeader>
               <CardTitle>
                 {results.success 
-                  ? `Congratulations! You've successfully imported ${file?.name || 'your file'}`
+                  ? <>Congratulations! You've successfully imported <span className="font-normal italic">{file?.name || 'your file'}</span></>
                   : "Import Complete"
                 }
               </CardTitle>

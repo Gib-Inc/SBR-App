@@ -649,6 +649,7 @@ function RulesTab() {
   const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
   const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
   const [enableForecasting, setEnableForecasting] = useState(false);
+  const [enableVisionCapture, setEnableVisionCapture] = useState(false);
   
   // Sync form with fetched rules
   useEffect(() => {
@@ -663,6 +664,7 @@ function RulesTab() {
       setEnableOrderRecommendations(settingsData.enableLlmOrderRecommendations || false);
       setEnableSupplierRanking(settingsData.enableLlmSupplierRanking || false);
       setEnableForecasting(settingsData.enableLlmForecasting || false);
+      setEnableVisionCapture(settingsData.enableVisionCapture || false);
     }
   }, [settingsData]);
   
@@ -691,7 +693,7 @@ function RulesTab() {
   
   // Save mutation for LLM features
   const saveFeaturesMutation = useMutation({
-    mutationFn: async (updates: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean }) => {
+    mutationFn: async (updates: { enableLlmOrderRecommendations?: boolean; enableLlmSupplierRanking?: boolean; enableLlmForecasting?: boolean; enableVisionCapture?: boolean }) => {
       return await apiRequest("PATCH", "/api/settings", updates);
     },
     onSuccess: () => {
@@ -714,16 +716,18 @@ function RulesTab() {
     saveMutation.mutate(formValues);
   };
   
-  const handleFeatureToggle = (feature: 'orderRecommendations' | 'supplierRanking' | 'forecasting', value: boolean) => {
+  const handleFeatureToggle = (feature: 'orderRecommendations' | 'supplierRanking' | 'forecasting' | 'visionCapture', value: boolean) => {
     if (feature === 'orderRecommendations') setEnableOrderRecommendations(value);
     if (feature === 'supplierRanking') setEnableSupplierRanking(value);
     if (feature === 'forecasting') setEnableForecasting(value);
+    if (feature === 'visionCapture') setEnableVisionCapture(value);
     
-    const updates = {
-      enableLlmOrderRecommendations: feature === 'orderRecommendations' ? value : enableOrderRecommendations,
-      enableLlmSupplierRanking: feature === 'supplierRanking' ? value : enableSupplierRanking,
-      enableLlmForecasting: feature === 'forecasting' ? value : enableForecasting,
-    };
+    const updates: Record<string, boolean> = {};
+    if (feature === 'orderRecommendations') updates.enableLlmOrderRecommendations = value;
+    else if (feature === 'supplierRanking') updates.enableLlmSupplierRanking = value;
+    else if (feature === 'forecasting') updates.enableLlmForecasting = value;
+    else if (feature === 'visionCapture') updates.enableVisionCapture = value;
+    
     saveFeaturesMutation.mutate(updates);
   };
   
@@ -1017,6 +1021,20 @@ function RulesTab() {
                 onCheckedChange={(checked) => handleFeatureToggle('forecasting', checked)}
                 disabled={saveFeaturesMutation.isPending}
                 data-testid="switch-forecasting"
+              />
+            </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="enable-vision-capture">Vision Capture</Label>
+                <p className="text-sm text-muted-foreground">Use camera to identify and add inventory items with AI vision</p>
+              </div>
+              <Switch
+                id="enable-vision-capture"
+                checked={enableVisionCapture}
+                onCheckedChange={(checked) => handleFeatureToggle('visionCapture', checked)}
+                disabled={saveFeaturesMutation.isPending}
+                data-testid="switch-vision-capture"
               />
             </div>
           </div>

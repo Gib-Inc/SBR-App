@@ -901,11 +901,14 @@ function RulesTab() {
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="enable-supplier-ranking">Supplier Ranking</Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="enable-supplier-ranking" className="text-muted-foreground">Supplier Ranking</Label>
+                    <Badge variant="secondary" className="text-xs">V2</Badge>
+                  </div>
                   <Switch
                     id="enable-supplier-ranking"
-                    checked={enableSupplierRanking}
-                    onCheckedChange={setEnableSupplierRanking}
+                    checked={false}
+                    disabled
                     data-testid="switch-supplier-ranking"
                   />
                 </div>

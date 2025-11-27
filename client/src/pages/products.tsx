@@ -1357,14 +1357,27 @@ export default function BOM() {
           <h1 className="text-2xl font-semibold">BOM</h1>
           <p className="text-sm text-muted-foreground">Manage finished products and stock inventory</p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => setIsImportDialogOpen(true)}
-          data-testid="button-import-products"
-        >
-          <Download className="mr-2 h-4 w-4" />
-          Import
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsImportDialogOpen(true)}
+            data-testid="button-import-products"
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Import
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setScanMode("FINISHED");
+              setIsScanModalOpen(true);
+            }}
+            data-testid="button-scan-inventory"
+          >
+            <Scan className="mr-2 h-4 w-4" />
+            Scan
+          </Button>
+        </div>
       </div>
 
       {/* Search Bar */}

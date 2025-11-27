@@ -1,5 +1,6 @@
 import type { IStorage } from "../storage";
 import type { Item, SalesOrderLine } from "@shared/schema";
+import { AuditLogger } from "./audit-logger";
 
 export interface BackorderFulfillmentResult {
   success: boolean;
@@ -114,6 +115,32 @@ export class BackorderService {
           qtyAllocated: qtyToAllocate,
           newBackorderQty,
         });
+
+        // Log BACKORDER_FULFILLED event
+        try {
+          await AuditLogger.logEvent({
+            source: 'SYSTEM',
+            eventType: 'BACKORDER_FULFILLED',
+            entityType: 'SALES_ORDER',
+            entityId: line.salesOrderId,
+            entityLabel: item.sku,
+            status: 'INFO',
+            description: `Backorder fulfilled: allocated ${qtyToAllocate} units of ${item.sku} to order ${line.salesOrderId}`,
+            details: {
+              itemId: item.id,
+              sku: item.sku,
+              itemName: item.name,
+              salesOrderLineId: line.id,
+              salesOrderId: line.salesOrderId,
+              qtyAllocated: qtyToAllocate,
+              previousBackorderQty: backorderQty,
+              newBackorderQty,
+              remainingStock: remainingStock - qtyToAllocate,
+            },
+          });
+        } catch (logError) {
+          console.warn('[BackorderService] Failed to log backorder fulfillment:', logError);
+        }
 
         remainingStock -= qtyToAllocate;
         totalAllocated += qtyToAllocate;

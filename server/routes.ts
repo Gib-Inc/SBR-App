@@ -55,6 +55,7 @@ import {
 } from "@shared/schema";
 import { createReturnLabelService } from "./return-label-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
+import { InventoryMovement } from "./services/inventory-movement";
 
 const SALT_ROUNDS = 10;
 
@@ -4569,6 +4570,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const allLines = await storage.getPurchaseOrderLinesByPOId(id);
       const updatedLineIds: string[] = [];
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(req.session.userId!);
 
       // Process each line receipt
       for (const receipt of lineReceipts) {
@@ -4591,21 +4594,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
         updatedLineIds.push(line.id);
 
-        // Create RECEIVE transaction
+        // Use InventoryMovement for stock update and audit logging
         const item = await storage.getItem(line.itemId);
         if (item) {
-          await transactionService.applyTransaction({
+          const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+          
+          // Apply inventory movement (updates stock and logs)
+          await inventoryMovement.apply({
+            eventType: "PURCHASE_ORDER_RECEIVED",
+            itemId: line.itemId,
+            quantity: qtyToReceive,
+            location: location as any,
+            source: "USER",
+            poId: id,
+            userId: req.session.userId,
+            userName: user?.email,
+            notes: `Received from PO ${po.poNumber}`,
+          });
+
+          // Create RECEIVE transaction for legacy compatibility
+          await storage.createInventoryTransaction({
             itemId: line.itemId,
             itemType: item.type === 'finished_product' ? 'FINISHED' : 'RAW',
             type: 'RECEIVE',
-            location: 'HILDALE', // Default to HILDALE for PO receipts
+            location: location as any,
             quantity: qtyToReceive,
             notes: `Received from PO ${po.poNumber}`,
-            createdBy: req.session.userId || 'system',
+            createdBy: req.session.userId?.toString() || 'system',
           });
-
-          // Mark item for forecast refresh
-          await storage.updateItem(line.itemId, { forecastDirty: true });
         }
       }
 
@@ -4656,6 +4672,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(req.session.userId!);
       
       // Create RECEIVE transactions for any remaining unreceived quantities
       for (const line of lines) {
@@ -4663,18 +4681,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (remaining > 0) {
           const item = await storage.getItem(line.itemId);
           if (item) {
-            await transactionService.applyTransaction({
+            const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+            
+            // Apply inventory movement (updates stock and logs)
+            await inventoryMovement.apply({
+              eventType: "PURCHASE_ORDER_RECEIVED",
+              itemId: line.itemId,
+              quantity: remaining,
+              location: location as any,
+              source: "USER",
+              poId: id,
+              userId: req.session.userId,
+              userName: user?.email,
+              notes: `Auto-confirmed receipt from PO ${po.poNumber}`,
+            });
+
+            // Create RECEIVE transaction for legacy compatibility
+            await storage.createInventoryTransaction({
               itemId: line.itemId,
               itemType: item.type === 'finished_product' ? 'FINISHED' : 'RAW',
               type: 'RECEIVE',
-              location: 'HILDALE', // Default location
+              location: location as any,
               quantity: remaining,
               notes: `Auto-confirmed receipt from PO ${po.poNumber}`,
-              createdBy: req.session.userId || 'system',
+              createdBy: req.session.userId?.toString() || 'system',
             });
-
-            // Mark item for forecast refresh
-            await storage.updateItem(line.itemId, { forecastDirty: true });
           }
 
           // Update line received quantity
@@ -5430,8 +5461,10 @@ Generate only the email body text, no subject line.`;
         }
       }
 
-      // Process each received item using TransactionService (same path as PO receipts)
+      // Process each received item using InventoryMovement for audit logging
       const restockedItemIds: string[] = [];
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(userId);
       
       for (const receivedItem of receivedItems) {
         const returnItem = returnItems.find(ri => ri.id === receivedItem.returnItemId);
@@ -5444,27 +5477,41 @@ Generate only the email body text, no subject line.`;
           notes: receivedItem.notes || null,
         });
 
-        // If disposition is RESTOCK, update inventory via TransactionService
+        // If disposition is RESTOCK, update inventory via InventoryMovement
         if (receivedItem.disposition === 'RESTOCK' && receivedItem.qtyReceived > 0) {
           const item = await storage.getItem(returnItem.inventoryItemId);
           if (!item) continue;
 
-          // Use TransactionService for consistent inventory updates
+          // Use InventoryMovement for consistent inventory updates and audit logging
           const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
           const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
           
-          const result = await transactionService.applyTransaction({
+          // Apply inventory movement (updates stock and logs)
+          const result = await inventoryMovement.apply({
+            eventType: "RETURN_RECEIVED",
             itemId: item.id,
-            itemType,
-            type: 'RECEIVE',
-            location,
             quantity: receivedItem.qtyReceived,
+            location: location as any,
+            source: "USER",
+            returnId: id,
+            userId,
+            userName: user?.email,
             notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
-            createdBy: userId,
           });
 
           if (result.success) {
             restockedItemIds.push(item.id);
+            
+            // Create RECEIVE transaction for legacy compatibility
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              itemType,
+              type: 'RECEIVE',
+              location,
+              quantity: receivedItem.qtyReceived,
+              notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
+              createdBy: userId.toString(),
+            });
             
             // Update Extensiv warehouse inventory if configured
             const extensivApiKey = process.env.EXTENSIV_API_KEY;
@@ -5883,6 +5930,23 @@ Generate only the email body text, no subject line.`;
         await storage.refreshProductForecastContext(productId);
       }
 
+      // Log SALES_ORDER_CREATED events for each line
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(req.session.userId!);
+      for (const line of createdLines) {
+        await inventoryMovement.apply({
+          eventType: "SALES_ORDER_CREATED",
+          itemId: line.productId,
+          quantity: line.qtyOrdered,
+          source: "USER",
+          orderId: createdOrder.id,
+          salesOrderLineId: line.id,
+          userId: req.session.userId,
+          userName: user?.email,
+          notes: `Order ${createdOrder.externalOrderId || createdOrder.id}: ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,
+        });
+      }
+
       res.status(201).json({
         ...createdOrder,
         lines: createdLines,
@@ -5974,8 +6038,9 @@ Generate only the email body text, no subject line.`;
       }
 
       const affectedProductIds = new Set<string>();
-      const transactionService = new TransactionService(storage);
+      const inventoryMovement = new InventoryMovement(storage);
       const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
 
       // Process each line being shipped
       for (const line of linesToShip) {
@@ -5991,19 +6056,11 @@ Generate only the email body text, no subject line.`;
         }
 
         // Determine which warehouse to ship from (prioritize Pivot, then Hildale)
-        let location: 'Pivot' | 'Hildale';
+        let location: 'PIVOT' | 'HILDALE';
         if ((product.pivotQty ?? 0) >= shipQty) {
-          location = 'Pivot';
-          // Update product stock - decrease pivotQty
-          await storage.updateItem(product.id, {
-            pivotQty: (product.pivotQty ?? 0) - shipQty,
-          });
+          location = 'PIVOT';
         } else if ((product.hildaleQty ?? 0) >= shipQty) {
-          location = 'Hildale';
-          // Update product stock - decrease hildaleQty
-          await storage.updateItem(product.id, {
-            hildaleQty: (product.hildaleQty ?? 0) - shipQty,
-          });
+          location = 'HILDALE';
         } else {
           // Not enough stock in either location
           return res.status(400).json({ 
@@ -6011,15 +6068,33 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Create SHIP transaction
+        // Use InventoryMovement helper to update stock and log the movement
+        const result = await inventoryMovement.apply({
+          eventType: "SALES_ORDER_FULFILLED",
+          itemId: product.id,
+          quantity: shipQty,
+          location,
+          source: "USER",
+          orderId: order.id,
+          salesOrderLineId: line.id,
+          userId,
+          userName: user?.email,
+          notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
+        });
+
+        if (!result.success) {
+          return res.status(400).json({ error: result.error });
+        }
+
+        // Create SHIP transaction for legacy compatibility
         await storage.createInventoryTransaction({
           itemId: product.id,
           itemType: 'FINISHED',
           type: 'SHIP',
-          quantity: -shipQty,
+          quantity: shipQty,
           location,
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
-          createdBy: userId,
+          createdBy: userId.toString(),
         });
 
         // Update line: qtyShipped += shipQty, qtyFulfilled = qtyShipped, qtyAllocated = 0, recalculate backorderQty
@@ -6133,6 +6208,8 @@ Generate only the email body text, no subject line.`;
       }
 
       const affectedProductIds = new Set<string>();
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(req.session.userId!);
 
       // Update each line: set qtyAllocated = 0, backorderQty = 0
       for (const line of lines) {
@@ -6141,6 +6218,19 @@ Generate only the email body text, no subject line.`;
           backorderQty: 0,
         });
         affectedProductIds.add(line.productId);
+
+        // Log SALES_ORDER_CANCELLED event
+        await inventoryMovement.apply({
+          eventType: "SALES_ORDER_CANCELLED",
+          itemId: line.productId,
+          quantity: line.qtyOrdered,
+          source: "USER",
+          orderId: id,
+          salesOrderLineId: line.id,
+          userId: req.session.userId,
+          userName: user?.email,
+          notes: `Order ${order.externalOrderId || order.id} cancelled: released ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,
+        });
       }
 
       // Update order status

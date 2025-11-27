@@ -47,6 +47,10 @@ export const items = pgTable("items", {
   barcodeSource: text("barcode_source"), // 'AUTO_GENERATED', 'IMPORTED', 'MANUAL'
   externalSystem: text("external_system"), // 'shopify', 'amazon', 'csv_generic', etc.
   externalId: text("external_id"), // External system's ID/handle/ASIN
+  // Sales channel and marketplace fields
+  salesChannels: text("sales_channels").array(), // Array of channels: 'amazon', 'shopify', 'internal'
+  amazonAsin: text("amazon_asin"), // Amazon ASIN for marketplace-linked products
+  updatedAt: timestamp("updated_at").defaultNow(), // Last modification timestamp
   // AI Forecast tracking fields
   forecastDirty: boolean("forecast_dirty").notNull().default(true), // Indicates forecast needs refresh
   lastForecastAt: timestamp("last_forecast_at"), // Last time AI forecast was updated

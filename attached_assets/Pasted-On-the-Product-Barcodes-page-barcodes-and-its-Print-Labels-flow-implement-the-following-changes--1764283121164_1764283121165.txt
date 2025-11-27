@@ -1,0 +1,202 @@
+On the Product Barcodes page (/barcodes) and its Print Labels flow, implement the following changes and cleanups in one cohesive update. Reuse existing components and patterns; do not remove working functionality.
+
+==================================================
+1) TOP TOOLBAR BUTTONS
+==================================================
+- In the Product Barcodes toolbar (Import / Export / Print Labels / Create Barcode):
+  - Rename the “Print Labels” button to “Print”.
+  - Move the blue “Create Barcode” button to the far right of the toolbar and change its label text to “Create”.
+- “Print” must still open the Print Labels modal for the currently visible/filtered items.
+
+==================================================
+2) FILTERS + SEARCH LAYOUT
+==================================================
+- Redesign the filters so they fit on a single horizontal row:
+  - Left-to-right order: “For sale” (was “Product Kind”), “Usage”, “Source”, “Sort by”.
+  - Each remains a select/dropdown with consistent height and spacing.
+- Move the search input (“Search by name, SKU, or barcode value…”) BELOW this filter row, full width.
+- Maintain responsive behavior:
+  - On narrow screens, filters can wrap to multiple rows but the search bar should still sit beneath them.
+
+==================================================
+3) “FOR SALE / FOR USE” MAPPING
+==================================================
+- Replace the “Product Kind” label in the UI with “For sale” (filter) and “Role” (table column).
+- Filter changes:
+  - Label: “For sale”.
+  - Options:
+    - “All”
+    - “For sale”
+    - “For use”
+- Mapping:
+  - Finished / sellable products → “For sale”.
+  - Raw materials / components / supplies → “For use”.
+- In the table:
+  - Rename the “Product Kind” column to “Role”.
+  - Show pill badges:
+    - “FOR SALE” (primary/blue style) for finished products.
+    - “FOR USE” (neutral/gray) for raw items/components.
+
+==================================================
+4) TABLE COLUMNS (INCLUDING CHANNEL + LAST UPDATED)
+==================================================
+Current example columns: Barcode Name, Name, SKU, Barcode Value, Product Kind, Format, Usage, Stock, Actions.
+
+Update as follows:
+- Remove the “Stock” column entirely from this table.
+- Rename “Product Kind” column → “Role” and display “FOR SALE / FOR USE” badges (as above).
+- Add a new “Channel” column:
+  - Values driven from a `channel` enum/array on each barcode: "amazon", "shopify", "internal" (and potentially combinations).
+  - Display small badges or icons in this column:
+    - Amazon badge/icon when channel includes Amazon.
+    - Shopify badge/icon when channel includes Shopify.
+    - “Internal” badge for internal-only use.
+- Add a “Last updated” column:
+  - Show the last modification time for the barcode record (short, human-readable date/time).
+  - Sortable by this column.
+- Keep Barcode Value, Format, Usage, Name, SKU, and Actions columns.
+- The existing row-level “Quick Print” action (printer icon) in Actions must remain:
+  - Update it so that clicking it opens the Print Labels modal pre-selected with only that item, using the new modal layout described below.
+
+==================================================
+5) AMAZON UPC LINKAGE FOR FINISHED PRODUCTS
+==================================================
+- For barcodes where Role = “For sale” AND Channel includes Amazon:
+  - Treat `barcodeValue` as the actual GS1/UPC/EAN code used in Amazon Seller Central.
+- Data model additions (or equivalent):
+  - `channel`: enum or string[] including "amazon", "shopify", "internal".
+  - `amazonAsin` (or `amazonListingId`): string | null.
+- Validation rules on create/update:
+  - If Role is “For sale” and channel includes "amazon":
+    - `barcodeValue` must be numeric and have a valid UPC/EAN length (e.g. 12–14 digits; follow whatever rule you standardize on).
+    - If invalid, reject the change and return a clear validation error to the UI.
+- In the “Channel” column:
+  - When channel includes Amazon and Role = For sale, show the Amazon icon/badge so users can visually verify the linkage.
+- Leave SP-API/ASIN synchronization for later; just persist these fields and enforce validation now.
+
+==================================================
+6) PRINT LABELS MODAL – GENERAL LAYOUT
+==================================================
+- The Print Labels modal should be a single clean window (no tabs).
+- Header:
+  - Title: “Print Labels” with font size one step larger than before (use the app’s H2 or equivalent).
+  - Subtitle: “Select items and configure label format for printing”.
+  - Top-right: printer status badge (see section 9) with updated behavior.
+- Remove the “Select Items / Preview” tab bar entirely.
+- New layout sections inside the modal, in order:
+  1) Label Format + Preview/Print actions row.
+  2) Selected summary (items and labels count).
+  3) Search + Available Items with Qty.
+  4) Label Preview carousel.
+
+==================================================
+7) LABEL FORMAT FIELD – VISUAL REDESIGN
+==================================================
+- Replace the current label format dropdown with card-style options:
+
+  - Use a segmented-card group, for example:
+    - Card A: “4x6 Thermal Label”
+      - Subtext: “Single label per page, ideal for thermal printers”.
+    - Card B, C, etc. (other formats if defined in the system).
+
+- Each card:
+  - Displays size (e.g. “4 × 6 in”).
+  - Shows usage hint (e.g. “Thermal”).
+  - Has a clear selected state (border/filled background).
+- Internally, these still map to existing label format identifiers; do not change the underlying IDs expected by the print logic.
+- On the right side of this section (same row when space allows, wrapping on small screens) keep:
+  - A “Preview” button.
+  - A “Print” button.
+- The “Preview” button scrolls/focuses the preview carousel section.
+
+==================================================
+8) SELECTED ITEMS + PREVIEW CAROUSEL (NO TABS)
+==================================================
+- Keep the “Available Items” list:
+  - Checkbox per item to include it in this print job.
+  - Qty numeric input per selected item.
+- Above the list, show a small summary line:
+  - Example: “3 items, 7 labels”.
+- Below the list, add a “Label Preview” section:
+  - Title: “Label Preview”.
+  - Subtext line showing selected format and label count (e.g. “4x6 Thermal Label – 7 labels”).
+  - Use the existing label rendering component to show a **carousel**:
+    - One preview card per distinct selected item.
+    - Left/right controls or scroll buttons to move between items.
+    - When a user clicks/hover-selects an item in the list, sync the carousel to that item’s preview.
+- Bottom of the modal:
+  - Keep a primary “Print Labels” button with text like “Print X Labels”.
+  - Ensure this button triggers the same print behavior as the toolbar “Print” button, using the currently selected items and quantities.
+
+==================================================
+9) PRINTER STATUS BADGE – REALISTIC BEHAVIOR
+==================================================
+- Replace “Printer: Ready” behavior with a more honest capability check.
+
+State model:
+- Badge can be in one of three states:
+  - Neutral: “Printer: Not verified”.
+  - Available (green): “Printer: Available”.
+  - Error (red): “Printer: Error”.
+
+Logic:
+- On modal open:
+  - If `window.print` exists:
+    - Set badge to “Printer: Available”.
+  - If `window.print` is missing or throws when probed:
+    - Set badge to “Printer: Error”.
+- Tooltip on the badge:
+  - Clarify that browsers cannot verify actual physical printers; this only indicates whether the browser supports printing.
+- When the user clicks “Print”:
+  - Attempt to print via `window.print()` on the label sheet.
+  - If `print()` throws synchronously:
+    - Show a toast error and set badge to “Printer: Error”.
+  - Do not claim “Ready” at any point.
+
+==================================================
+10) LABEL CONTENT AND PRINT CSS
+==================================================
+- Ensure label rendering is suitable for real physical labels:
+  - Each label includes:
+    - Barcode (SVG/canvas) generated from `barcodeValue`.
+    - Product name as primary text.
+    - SKU or short identifier as secondary text.
+  - Maintain high contrast and appropriate size for 4x6 thermal labels.
+- Update/confirm @media print CSS:
+  - Set correct page size for 4x6 labels (`@page { size: 4in 6in; margin: 0; }` or equivalent).
+  - Center content on the page; avoid clipping.
+- “Preview” button should ensure the preview area is fully rendered and scrolled into view before the print call.
+
+==================================================
+11) IMPORT FLOW – FIX ERRORS
+==================================================
+FRONTEND
+- Import dialog:
+  - Explicitly state that CSV is the supported format.
+  - Show expected columns for barcode CSV, e.g.:
+    - name, sku, barcodeValue, role (forSale/forUse), format, usage, channel, (optional) amazonAsin.
+  - Accept only `.csv` via file input (`accept=".csv"`).
+- If a non-CSV file is selected, show a clear error and do not call the backend.
+
+BACKEND
+- In the barcode import endpoint:
+  - Handle blank lines, BOM headers, and extra columns robustly.
+  - Validate required fields:
+    - name, sku, barcodeValue, role/forSaleForUse, format, usage.
+    - If role = For sale and channel includes Amazon, enforce the UPC validation from section 5.
+  - On error:
+    - Return structured messages indicating which rows failed and why.
+  - On success:
+    - Return counts of created and updated records.
+- Frontend should display:
+  - A success summary (e.g. “Imported 23 barcodes, 2 rows failed”).
+  - Error details for failed rows in a readable list.
+
+==================================================
+12) TEXT SIZE / VISUAL POLISH
+==================================================
+- In the Print Labels modal header:
+  - Increase the “Print Labels” title font size by one design token above the current size (consistent with other primary modal titles).
+- Ensure padding, spacing, and button alignment in the modal match the rest of the app (same border radius, gap between header/sections, aligned action buttons).
+
+Apply all of these changes to the Product Barcodes page and Print Labels modal together so the UX, data model, and print flows are fully consistent with this specification.

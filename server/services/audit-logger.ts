@@ -1,7 +1,7 @@
 import { storage } from "../storage";
 import type { InsertAuditLog, AuditLog } from "@shared/schema";
 
-export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'SYSTEM' | 'USER';
+export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'SYSTEM' | 'USER';
 export type AuditStatus = 'INFO' | 'WARNING' | 'ERROR';
 export type AuditEventType = 
   | 'PO_CREATED'
@@ -58,7 +58,12 @@ export type AuditEventType =
   | 'BACKORDER_FULFILLED'
   | 'BIN_CREATED'
   | 'BIN_UPDATED'
-  | 'BIN_DELETED';
+  | 'BIN_DELETED'
+  | 'SUPPLIER_DISCOVERY_STARTED'
+  | 'SUPPLIER_DISCOVERY_COMPLETED'
+  | 'SUPPLIER_DISCOVERY_FAILED'
+  | 'SUPPLIER_OUTREACH_GENERATED'
+  | 'SUPPLIER_OUTREACH_SENT';
 
 export type AuditEntityType = 
   | 'PURCHASE_ORDER'
@@ -66,6 +71,7 @@ export type AuditEntityType =
   | 'RETURN'
   | 'ITEM'
   | 'SUPPLIER'
+  | 'SUPPLIER_LEAD'
   | 'INTEGRATION'
   | 'BARCODE'
   | 'BOM'

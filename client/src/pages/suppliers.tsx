@@ -30,11 +30,16 @@ import {
   Mail,
   Receipt,
   RefreshCw,
+  Loader2,
+  ExternalLink,
+  UserPlus,
+  Globe,
+  Phone,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CreatePOSheet } from "@/components/create-po-sheet";
-import type { PurchaseOrder, Supplier, Item, PurchaseOrderLine } from "@shared/schema";
+import type { PurchaseOrder, Supplier, Item, PurchaseOrderLine, SupplierLead } from "@shared/schema";
 
 interface POSummary {
   total: number;
@@ -52,6 +57,21 @@ interface EnrichedPO extends PurchaseOrder {
   lines?: PurchaseOrderLine[];
 }
 
+interface PhantomAgent {
+  id: string;
+  name: string;
+  status: string;
+  lastEndStatus?: string;
+}
+
+interface DiscoveryJobState {
+  isRunning: boolean;
+  containerId?: string;
+  agentId?: string;
+  keywords?: string;
+  location?: string;
+}
+
 export default function Suppliers() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
@@ -66,6 +86,13 @@ export default function Suppliers() {
   const [disputeReason, setDisputeReason] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [showCreatePOSheet, setShowCreatePOSheet] = useState(false);
+  
+  // Discovery state
+  const [discoveryKeywords, setDiscoveryKeywords] = useState("");
+  const [discoveryLocation, setDiscoveryLocation] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const [discoveryJob, setDiscoveryJob] = useState<DiscoveryJobState>({ isRunning: false });
+  const [leadSearchQuery, setLeadSearchQuery] = useState("");
 
   const { data: poSummary } = useQuery<POSummary>({
     queryKey: ['/api/purchase-orders/summary'],
@@ -112,6 +139,125 @@ export default function Suppliers() {
     queryKey: ['/api/purchase-orders', showOpenDisputeDialog || showResolveDisputeDialog],
     enabled: !!(showOpenDisputeDialog || showResolveDisputeDialog),
   });
+
+  // PhantomBuster discovery queries
+  const { data: phantomAgents, isLoading: isLoadingAgents } = useQuery<{ success: boolean; agents: PhantomAgent[]; message: string }>({
+    queryKey: ['/api/suppliers/discovery/phantombuster/agents'],
+    enabled: activeTab === 'discovery',
+  });
+
+  const { data: supplierLeads = [], isLoading: isLoadingLeads, refetch: refetchLeads } = useQuery<SupplierLead[]>({
+    queryKey: ['/api/supplier-leads'],
+    enabled: activeTab === 'discovery',
+  });
+
+  // Run discovery mutation
+  const runDiscoveryMutation = useMutation({
+    mutationFn: async (params: { agentId: string; keywords: string; location?: string }) => {
+      const res = await apiRequest('POST', '/api/suppliers/discovery/phantombuster/run', params);
+      return res.json() as Promise<{ success: boolean; containerId?: string; message: string }>;
+    },
+    onSuccess: async (data: { success: boolean; containerId?: string; message: string }) => {
+      if (data.success && data.containerId) {
+        setDiscoveryJob({
+          isRunning: true,
+          containerId: data.containerId,
+          agentId: selectedAgentId,
+          keywords: discoveryKeywords,
+          location: discoveryLocation,
+        });
+        toast({
+          title: "Discovery Started",
+          description: "Searching for suppliers... This may take 30-60 seconds.",
+        });
+        // Poll for results
+        setTimeout(() => pollResults(data.containerId!), 5000);
+      } else {
+        toast({
+          title: "Discovery Failed",
+          description: data.message,
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Discovery Error",
+        description: error.message || "Failed to start discovery",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Poll for results
+  const pollResults = async (containerId: string) => {
+    try {
+      const res = await apiRequest('POST', '/api/suppliers/discovery/phantombuster/results', {
+        agentId: discoveryJob.agentId || selectedAgentId,
+        containerId,
+        keywords: discoveryJob.keywords || discoveryKeywords,
+        location: discoveryJob.location || discoveryLocation,
+      });
+      const result = await res.json() as { success: boolean; leadsFound?: number; leadsSaved?: number; message: string };
+
+      if (result.success) {
+        setDiscoveryJob({ isRunning: false });
+        toast({
+          title: "Discovery Complete",
+          description: result.message,
+        });
+        refetchLeads();
+        queryClient.invalidateQueries({ queryKey: ['/api/supplier-leads'] });
+      } else {
+        // Still running, poll again
+        if (discoveryJob.isRunning) {
+          setTimeout(() => pollResults(containerId), 5000);
+        }
+      }
+    } catch (error: any) {
+      setDiscoveryJob({ isRunning: false });
+      toast({
+        title: "Polling Error",
+        description: error.message || "Failed to get results",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Convert lead to supplier mutation
+  const convertLeadMutation = useMutation({
+    mutationFn: async (leadId: string) => {
+      const res = await apiRequest('POST', `/api/supplier-leads/${leadId}/convert`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Lead Converted",
+        description: "Successfully created new supplier from lead",
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/supplier-leads'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/suppliers'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Conversion Failed",
+        description: error.message || "Failed to convert lead",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Filter supplier leads
+  const filteredLeads = useMemo(() => {
+    if (!leadSearchQuery) return supplierLeads;
+    const query = leadSearchQuery.toLowerCase();
+    return supplierLeads.filter(lead =>
+      lead.name.toLowerCase().includes(query) ||
+      lead.companyName?.toLowerCase().includes(query) ||
+      lead.contactEmail?.toLowerCase().includes(query) ||
+      lead.location?.toLowerCase().includes(query)
+    );
+  }, [supplierLeads, leadSearchQuery]);
 
   // Filter purchase orders
   const filteredPOs = useMemo(() => {
@@ -705,40 +851,224 @@ export default function Suppliers() {
         </TabsContent>
 
         <TabsContent value="discovery" className="w-full max-w-full min-w-0 space-y-4">
+          {/* Discovery Form */}
           <Card>
-            <CardContent className="pt-6">
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
-                  <TrendingUp className="h-10 w-10 text-muted-foreground" />
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Search className="h-5 w-5" />
+                Run Supplier Discovery
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!phantomAgents?.success || phantomAgents.agents.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <AlertCircle className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground mb-2">PhantomBuster not configured</p>
+                  <p className="text-sm text-muted-foreground">
+                    Configure your PhantomBuster API key in Settings → AI Agent → Data Sources
+                  </p>
                 </div>
-                <Badge variant="secondary" className="mb-4" data-testid="badge-coming-v2">Coming in V2</Badge>
-                <h3 className="text-xl font-semibold mb-3">Supplier Discovery & Creation</h3>
-                <p className="text-muted-foreground max-w-lg mb-6">
-                  In V1, supplier management is limited to Purchase Orders & existing suppliers. 
-                  Advanced discovery features will be available in a future release.
-                </p>
-                <div className="text-left max-w-md space-y-2 text-sm text-muted-foreground">
-                  <p className="font-medium text-foreground mb-3">Planned V2 capabilities:</p>
-                  <ul className="space-y-2">
-                    <li className="flex items-start gap-2">
-                      <Search className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                      <span>AI-powered supplier discovery based on your inventory needs</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <Building2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                      <span>Automated lead generation and supplier qualification</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <Mail className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                      <span>Outreach automation via email and SMS campaigns</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <TrendingUp className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                      <span>Supplier scoring and performance benchmarking</span>
-                    </li>
-                  </ul>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="discovery-agent">PhantomBuster Agent</Label>
+                    <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
+                      <SelectTrigger data-testid="select-agent">
+                        <SelectValue placeholder="Select agent..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {phantomAgents.agents.map((agent) => (
+                          <SelectItem key={agent.id} value={agent.id}>
+                            {agent.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="discovery-keywords">Search Keywords</Label>
+                    <Input
+                      id="discovery-keywords"
+                      placeholder="e.g., plastic injection molding"
+                      value={discoveryKeywords}
+                      onChange={(e) => setDiscoveryKeywords(e.target.value)}
+                      data-testid="input-keywords"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="discovery-location">Location (optional)</Label>
+                    <Input
+                      id="discovery-location"
+                      placeholder="e.g., Shenzhen, China"
+                      value={discoveryLocation}
+                      onChange={(e) => setDiscoveryLocation(e.target.value)}
+                      data-testid="input-location"
+                    />
+                  </div>
+                  <div className="space-y-2 flex items-end">
+                    <Button
+                      onClick={() => runDiscoveryMutation.mutate({
+                        agentId: selectedAgentId,
+                        keywords: discoveryKeywords,
+                        location: discoveryLocation || undefined,
+                      })}
+                      disabled={!selectedAgentId || !discoveryKeywords || discoveryJob.isRunning || runDiscoveryMutation.isPending}
+                      className="w-full"
+                      data-testid="button-run-discovery"
+                    >
+                      {discoveryJob.isRunning || runDiscoveryMutation.isPending ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Searching...
+                        </>
+                      ) : (
+                        <>
+                          <Search className="h-4 w-4 mr-2" />
+                          Run Discovery
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Leads Table */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Building2 className="h-5 w-5" />
+                  Supplier Leads
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search leads..."
+                      value={leadSearchQuery}
+                      onChange={(e) => setLeadSearchQuery(e.target.value)}
+                      className="pl-9 w-64"
+                      data-testid="input-search-leads"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => refetchLeads()}
+                    data-testid="button-refresh-leads"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
                 </div>
               </div>
+            </CardHeader>
+            <CardContent>
+              {isLoadingLeads ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : filteredLeads.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <Building2 className="h-12 w-12 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">No supplier leads yet</p>
+                  <p className="text-sm text-muted-foreground">
+                    Run a discovery search to find potential suppliers
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-muted/50">
+                      <tr className="border-b">
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Name</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Company</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Contact</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Location</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Source</th>
+                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Status</th>
+                        <th className="text-center p-2 text-xs font-medium whitespace-nowrap">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredLeads.map((lead) => (
+                        <tr key={lead.id} className="border-b hover:bg-muted/25" data-testid={`row-lead-${lead.id}`}>
+                          <td className="p-2 text-sm whitespace-nowrap">{lead.name}</td>
+                          <td className="p-2 text-sm whitespace-nowrap">{lead.companyName || '-'}</td>
+                          <td className="p-2 text-sm whitespace-nowrap">
+                            <div className="flex flex-col gap-1">
+                              {lead.contactEmail && (
+                                <div className="flex items-center gap-1 text-xs">
+                                  <Mail className="h-3 w-3" />
+                                  <a href={`mailto:${lead.contactEmail}`} className="text-primary hover:underline">
+                                    {lead.contactEmail}
+                                  </a>
+                                </div>
+                              )}
+                              {lead.contactPhone && (
+                                <div className="flex items-center gap-1 text-xs">
+                                  <Phone className="h-3 w-3" />
+                                  <span>{lead.contactPhone}</span>
+                                </div>
+                              )}
+                              {!lead.contactEmail && !lead.contactPhone && '-'}
+                            </div>
+                          </td>
+                          <td className="p-2 text-sm whitespace-nowrap">{lead.location || '-'}</td>
+                          <td className="p-2">
+                            <Badge variant="outline" className="text-xs">
+                              {lead.source?.replace('PHANTOMBUSTER_', '') || 'MANUAL'}
+                            </Badge>
+                          </td>
+                          <td className="p-2">
+                            <Badge
+                              variant={
+                                lead.status === 'CONVERTED' ? 'default' :
+                                lead.status === 'CONTACTED' ? 'secondary' :
+                                lead.status === 'REJECTED' ? 'destructive' :
+                                'outline'
+                              }
+                              className="text-xs"
+                            >
+                              {lead.status}
+                            </Badge>
+                          </td>
+                          <td className="p-2">
+                            <div className="flex items-center justify-center gap-1">
+                              {lead.websiteUrl && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => window.open(lead.websiteUrl!, '_blank')}
+                                  title="Visit website"
+                                  data-testid={`button-visit-${lead.id}`}
+                                >
+                                  <Globe className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {lead.status !== 'CONVERTED' && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7"
+                                  onClick={() => convertLeadMutation.mutate(lead.id)}
+                                  disabled={convertLeadMutation.isPending}
+                                  title="Convert to supplier"
+                                  data-testid={`button-convert-${lead.id}`}
+                                >
+                                  <UserPlus className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

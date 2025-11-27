@@ -220,7 +220,9 @@ export interface IStorage {
   getAllSupplierLeads(): Promise<SupplierLead[]>;
   getSupplierLead(id: string): Promise<SupplierLead | undefined>;
   getSupplierLeadsByStatus(status: string): Promise<SupplierLead[]>;
+  getSupplierLeadsByPhantomRunId(phantomRunId: string): Promise<SupplierLead[]>;
   createSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead>;
+  upsertSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead>;
   updateSupplierLead(id: string, lead: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined>;
   deleteSupplierLead(id: string): Promise<boolean>;
 
@@ -1522,6 +1524,11 @@ export class MemStorage implements IStorage {
       .filter(lead => lead.status === status);
   }
 
+  async getSupplierLeadsByPhantomRunId(phantomRunId: string): Promise<SupplierLead[]> {
+    return Array.from(this.supplierLeads.values())
+      .filter(lead => lead.phantomRunId === phantomRunId);
+  }
+
   async createSupplierLead(insertLead: InsertSupplierLead): Promise<SupplierLead> {
     const id = randomUUID();
     const lead: SupplierLead = {
@@ -1541,6 +1548,30 @@ export class MemStorage implements IStorage {
     };
     this.supplierLeads.set(id, lead);
     return lead;
+  }
+
+  async upsertSupplierLead(insertLead: InsertSupplierLead): Promise<SupplierLead> {
+    // Find existing lead by email or website URL for deduplication
+    const existing = Array.from(this.supplierLeads.values()).find(lead => {
+      if (insertLead.contactEmail && lead.contactEmail === insertLead.contactEmail) return true;
+      if (insertLead.websiteUrl && lead.websiteUrl === insertLead.websiteUrl) return true;
+      return false;
+    });
+
+    if (existing) {
+      // Update existing lead with new data
+      const updated = {
+        ...existing,
+        ...insertLead,
+        id: existing.id, // Preserve original ID
+        createdAt: existing.createdAt, // Preserve creation date
+      };
+      this.supplierLeads.set(existing.id, updated);
+      return updated;
+    }
+
+    // Create new lead if no duplicate found
+    return this.createSupplierLead(insertLead);
   }
 
   async updateSupplierLead(id: string, updates: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined> {
@@ -2973,9 +3004,42 @@ export class PostgresStorage implements IStorage {
     return await this.db.select().from(schema.supplierLeads).where(eq(schema.supplierLeads.status, status));
   }
 
+  async getSupplierLeadsByPhantomRunId(phantomRunId: string): Promise<SupplierLead[]> {
+    return await this.db.select().from(schema.supplierLeads).where(eq(schema.supplierLeads.phantomRunId, phantomRunId));
+  }
+
   async createSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead> {
     const results = await this.db.insert(schema.supplierLeads).values(lead).returning();
     return results[0];
+  }
+
+  async upsertSupplierLead(lead: InsertSupplierLead): Promise<SupplierLead> {
+    // Find existing lead by email or website URL for deduplication
+    let existing: SupplierLead | undefined = undefined;
+
+    if (lead.contactEmail) {
+      const results = await this.db.select().from(schema.supplierLeads)
+        .where(eq(schema.supplierLeads.contactEmail, lead.contactEmail));
+      existing = results[0];
+    }
+
+    if (!existing && lead.websiteUrl) {
+      const results = await this.db.select().from(schema.supplierLeads)
+        .where(eq(schema.supplierLeads.websiteUrl, lead.websiteUrl));
+      existing = results[0];
+    }
+
+    if (existing) {
+      // Update existing lead with new data
+      const updated = await this.db.update(schema.supplierLeads)
+        .set(lead)
+        .where(eq(schema.supplierLeads.id, existing.id))
+        .returning();
+      return updated[0];
+    }
+
+    // Create new lead if no duplicate found
+    return this.createSupplierLead(lead);
   }
 
   async updateSupplierLead(id: string, updates: Partial<InsertSupplierLead>): Promise<SupplierLead | undefined> {

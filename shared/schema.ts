@@ -212,20 +212,35 @@ export type PurchaseOrderLine = typeof purchaseOrderLines.$inferSelect;
 export const supplierLeads = pgTable("supplier_leads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  companyName: text("company_name"),
   websiteUrl: text("website_url"),
   contactEmail: text("contact_email"),
   contactPhone: text("contact_phone"),
-  source: text("source").notNull().default('MANUAL'), // PHANTOMBUSTER, MANUAL, IMPORT, etc.
+  location: text("location"),
+  source: text("source").notNull().default('MANUAL'), // PHANTOMBUSTER_LINKEDIN, PHANTOMBUSTER_GOOGLE, MANUAL, IMPORT, etc.
   category: text("category"),
+  tags: text("tags").array(), // For search keywords, materials, etc.
   notes: text("notes"),
   status: text("status").notNull().default('NEW'), // NEW, RESEARCHING, CONTACTED, QUALIFIED, REJECTED, CONVERTED
+  // PhantomBuster tracking
+  phantomRunId: text("phantom_run_id"),
+  rawData: jsonb("raw_data"), // Original PhantomBuster response for debugging
+  // LLM-generated outreach
+  outreachEmailSubject: text("outreach_email_subject"),
+  outreachEmailBody: text("outreach_email_body"),
+  outreachSmsBody: text("outreach_sms_body"),
+  outreachGeneratedAt: timestamp("outreach_generated_at"),
+  outreachSentAt: timestamp("outreach_sent_at"),
+  outreachSentVia: text("outreach_sent_via"), // EMAIL, SMS
+  ghlContactId: text("ghl_contact_id"),
   lastContactedAt: timestamp("last_contacted_at"),
-  aiOutreachDraft: text("ai_outreach_draft"),
+  aiOutreachDraft: text("ai_outreach_draft"), // Legacy field
   convertedSupplierId: varchar("converted_supplier_id").references(() => suppliers.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 }, (table) => ({
   statusIdx: index("supplier_leads_status_idx").on(table.status),
   sourceIdx: index("supplier_leads_source_idx").on(table.source),
+  phantomRunIdx: index("supplier_leads_phantom_run_idx").on(table.phantomRunId),
 }));
 
 export const insertSupplierLeadSchema = createInsertSchema(supplierLeads).omit({ id: true, createdAt: true });

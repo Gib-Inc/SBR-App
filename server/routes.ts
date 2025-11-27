@@ -5309,16 +5309,170 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  app.post("/api/supplier-leads/import-phantombuster", requireAuth, async (req: Request, res: Response) => {
+  // PhantomBuster Supplier Discovery Routes
+  // GET - Get available phantoms/agents
+  app.get("/api/suppliers/discovery/phantombuster/agents", requireAuth, async (req: Request, res: Response) => {
     try {
-      res.status(501).json({ 
-        error: "PhantomBuster integration not implemented yet",
-        note: "This endpoint is a placeholder for PhantomBuster web scraping integration. Implementation must comply with PhantomBuster Terms of Service and target website robots.txt/terms."
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      const apiKey = settings?.phantombusterApiKey;
+
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "PhantomBuster API key not configured" 
+        });
+      }
+
+      const client = new PhantomBusterClient(apiKey);
+      const result = await client.getAgents();
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SupplierDiscovery] Error fetching agents:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to fetch agents" 
+      });
+    }
+  });
+
+  // POST - Launch a supplier discovery job
+  app.post("/api/suppliers/discovery/phantombuster/run", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { agentId, keywords, location, tags, notes } = req.body;
+
+      if (!agentId || !keywords) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "agentId and keywords are required" 
+        });
+      }
+
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      const apiKey = settings?.phantombusterApiKey;
+
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "PhantomBuster API key not configured" 
+        });
+      }
+
+      const client = new PhantomBusterClient(apiKey);
+      
+      // Launch the discovery job
+      const launchResult = await client.launchDiscoveryJob(agentId, {
+        keywords,
+        location,
+        tags,
+        notes,
+      });
+
+      if (!launchResult.success || !launchResult.containerId) {
+        return res.status(400).json(launchResult);
+      }
+
+      // Return immediately with containerId for polling
+      res.json({
+        success: true,
+        containerId: launchResult.containerId,
+        message: "Discovery job started. Poll for results using the containerId.",
       });
     } catch (error: any) {
-      console.error("[SupplierLead] Error importing from PhantomBuster:", error);
-      res.status(500).json({ error: "Failed to import from PhantomBuster" });
+      console.error("[SupplierDiscovery] Error launching discovery:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to launch discovery job" 
+      });
     }
+  });
+
+  // POST - Poll for discovery results and save leads
+  app.post("/api/suppliers/discovery/phantombuster/results", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { agentId, containerId, keywords, location, tags, notes } = req.body;
+
+      if (!agentId || !containerId) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "agentId and containerId are required" 
+        });
+      }
+
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      const apiKey = settings?.phantombusterApiKey;
+
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "PhantomBuster API key not configured" 
+        });
+      }
+
+      const client = new PhantomBusterClient(apiKey);
+      
+      // Poll for results
+      const pollResult = await client.pollDiscoveryResults(agentId, containerId, {
+        keywords: keywords || '',
+        location,
+        tags,
+        notes,
+      });
+
+      if (!pollResult.success) {
+        return res.status(400).json(pollResult);
+      }
+
+      // Save leads to database with deduplication
+      const savedLeads = [];
+      for (const lead of pollResult.leads) {
+        try {
+          const savedLead = await storage.upsertSupplierLead({
+            name: lead.name,
+            companyName: lead.companyName,
+            websiteUrl: lead.websiteUrl,
+            contactEmail: lead.contactEmail,
+            contactPhone: lead.contactPhone,
+            location: lead.location,
+            source: lead.source,
+            status: 'NEW',
+            category: tags?.join(', '),
+            notes: notes,
+            rawData: lead.rawData,
+            phantomRunId: containerId,
+          });
+          savedLeads.push(savedLead);
+        } catch (err: any) {
+          console.warn("[SupplierDiscovery] Error saving lead:", lead.name, err.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        leadsFound: pollResult.leads.length,
+        leadsSaved: savedLeads.length,
+        leads: savedLeads,
+        message: `Found ${pollResult.leads.length} leads, saved ${savedLeads.length} (deduplicated)`,
+      });
+    } catch (error: any) {
+      console.error("[SupplierDiscovery] Error polling results:", error);
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "Failed to poll discovery results" 
+      });
+    }
+  });
+
+  // Legacy endpoint - redirect to new pattern
+  app.post("/api/supplier-leads/import-phantombuster", requireAuth, async (req: Request, res: Response) => {
+    res.status(301).json({ 
+      error: "This endpoint has been replaced",
+      redirect: "POST /api/suppliers/discovery/phantombuster/run",
+      note: "Use the new discovery endpoints for PhantomBuster integration."
+    });
   });
 
   // ============================================================================

@@ -78,6 +78,24 @@ Preferred communication style: Simple, everyday language.
 *   **Table Standardization**: All data tables across the application use `whitespace-nowrap` on headers and cells to enforce single-line row heights, preventing text wrapping and maintaining consistent, scannable layouts.
 *   **LLM-Powered PO Creation**: Create PO flow via Suppliers page with 3-step wizard (select supplier → choose items sorted by criticality → review & send). LLM generates professional PO messages (email subject/body and SMS) with fallback templates. GoHighLevel integration sends PO via SMS or email to suppliers with automatic contact creation.
 
+### V1 Integration Architecture Rules
+
+**System of Record Principles:**
+1.  **Inventory App is System of Record for Quantities**: currentStock (raw materials), hildaleQty, pivotQty, availableForSaleQty are managed locally. All changes MUST go through InventoryMovement helper for audit trail.
+2.  **Shopify + Amazon are Order Sources Only**: We import orders → SalesOrders table + InventoryMovement(SALES_ORDER_CREATED). We do NOT push inventory quantities back to channels (stay compliant, no fake stock levels).
+3.  **Extensiv/Pivot is Read-Only**: We pull inventory snapshots for 3PL reconciliation. Store Extensiv quantities in `extensivOnHandSnapshot` for variance display. EXTENSIV_SYNC updates pivotQty and adjusts availableForSaleQty by delta.
+4.  **QuickBooks is Financial-Only** (future): Store mapping IDs for products/customers if needed. We do NOT create SalesOrders or inventory movements from QuickBooks to prevent double-counting orders that came from Shopify/Amazon.
+5.  **GoHighLevel is Messaging-Only**: Used for PO contact creation + email/SMS sending. Does NOT drive inventory quantities.
+
+**Idempotency Guarantees:**
+*   Unique constraint on (channel, externalOrderId) prevents duplicate order imports
+*   Shopify/Amazon syncs use getSalesOrdersByExternalId lookup before creating new orders
+
+**Extensiv Variance Tracking:**
+*   `extensivOnHandSnapshot`: Last synced Extensiv quantity (read-only, for variance comparison)
+*   `extensivLastSyncAt`: Timestamp of last Extensiv sync for this item
+*   UI displays variance (Extensiv OnHand vs availableForSaleQty) in Products table with color coding
+
 ## External Dependencies
 
 *   **UI Libraries**: Radix UI, shadcn/ui, Lucide React, Tailwind CSS.

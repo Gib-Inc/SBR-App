@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -36,6 +36,9 @@ export const items = pgTable("items", {
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
+  // V1: Extensiv read-only snapshot for reconciliation/variance display
+  extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)
+  extensivLastSyncAt: timestamp("extensiv_last_sync_at"), // When this item was last synced from Extensiv
   // Enhanced barcode and product tracking fields
   productKind: text("product_kind"), // 'FINISHED' or 'RAW'
   barcodeValue: text("barcode_value"),
@@ -806,6 +809,10 @@ export const salesOrders = pgTable("sales_orders", {
   statusIdx: index("sales_orders_status_idx").on(table.status),
   orderDateIdx: index("sales_orders_order_date_idx").on(table.orderDate),
   externalOrderIdIdx: index("sales_orders_external_order_id_idx").on(table.externalOrderId),
+  // V1: Unique constraint for idempotent order imports - prevents duplicate Shopify/Amazon orders
+  channelExternalOrderUniqueIdx: uniqueIndex("sales_orders_channel_external_order_unique_idx")
+    .on(table.channel, table.externalOrderId)
+    .where(sql`external_order_id IS NOT NULL`), // Only enforce uniqueness when externalOrderId exists
 }));
 
 export const insertSalesOrderSchema = createInsertSchema(salesOrders).omit({ 

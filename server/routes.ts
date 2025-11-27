@@ -1808,8 +1808,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
-  // INTEGRATIONS (Stubs)
+  // INTEGRATIONS
   // ============================================================================
+  //
+  // V1 SYSTEM OF RECORD RULES:
+  // ==========================
+  // 1. INVENTORY APP is the system of record for inventory quantities:
+  //    - currentStock (raw materials), hildaleQty, pivotQty, availableForSaleQty
+  //    - All quantity changes MUST go through InventoryMovement helper for audit trail
+  //
+  // 2. SHOPIFY + AMAZON are ORDER SOURCES ONLY in V1:
+  //    - We import orders → SalesOrders table + InventoryMovement(SALES_ORDER_CREATED)
+  //    - We do NOT push inventory quantities back to channels (no fake stock levels)
+  //    - Stay compliant with channel policies
+  //
+  // 3. EXTENSIV/PIVOT is READ-ONLY in V1:
+  //    - We pull inventory snapshots for 3PL reconciliation
+  //    - Store Extensiv quantities in extensivOnHandSnapshot for variance display
+  //    - EXTENSIV_SYNC updates pivotQty and adjusts availableForSaleQty by delta
+  //    - We do NOT let Extensiv overwrite our main inventory fields automatically
+  //
+  // 4. QUICKBOOKS is FINANCIAL-ONLY in V1:
+  //    - Store mapping IDs for products/customers if needed
+  //    - We do NOT create SalesOrders or inventory movements from QuickBooks
+  //    - This prevents double-counting orders that came from Shopify/Amazon
+  //
+  // 5. GOHIGHLEVEL is MESSAGING-ONLY in V1:
+  //    - Used for PO contact creation + email/SMS sending
+  //    - Does NOT drive inventory quantities
+  //
+  // IDEMPOTENCY: (channel, externalOrderId) is unique - no duplicate order imports
+  // ==========================
   
   // Get integration health status
   app.get("/api/integrations/health", requireAuth, async (req: Request, res: Response) => {
@@ -1941,6 +1970,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
 
+          // V1: Store Extensiv snapshot for variance display (read-only reconciliation)
+          await storage.updateItem(item.id, {
+            extensivOnHandSnapshot: extensivItem.quantity,
+            extensivLastSyncAt: new Date(),
+          });
+          
           // Use EXTENSIV_SYNC event to update both pivotQty and availableForSaleQty
           const result = await inventoryMovement.apply({
             eventType: "EXTENSIV_SYNC",
@@ -2148,7 +2183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
-                await storage.createSalesOrderLine({
+                const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
@@ -2157,6 +2192,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   qtyShipped: 0,
                   backorderQty,
                   unitPrice: lineItem.unitPrice,
+                });
+
+                // V1: Apply InventoryMovement to decrement availableForSaleQty for Pivot-fulfilled orders
+                // This ensures real-time sell-through visibility before Extensiv reflects the shipment
+                const inventoryMovement = new InventoryMovement(storage);
+                await inventoryMovement.apply({
+                  eventType: "SALES_ORDER_CREATED",
+                  itemId: product.id,
+                  quantity: lineItem.qtyOrdered,
+                  location: "PIVOT",
+                  source: "SYSTEM",
+                  orderId: salesOrder.id,
+                  salesOrderLineId: createdLine.id,
+                  channel: "SHOPIFY",
+                  notes: `Shopify order ${orderData.externalOrderId}: ${lineItem.qtyOrdered} ${lineItem.sku} allocated`,
                 });
               } catch (lineError: any) {
                 errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);
@@ -2400,7 +2450,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 const qtyAllocated = Math.min(lineItem.qtyOrdered, product.pivotQty || 0);
                 const backorderQty = lineItem.qtyOrdered - qtyAllocated;
 
-                await storage.createSalesOrderLine({
+                const createdLine = await storage.createSalesOrderLine({
                   salesOrderId: salesOrder.id,
                   productId: product.id,
                   sku: lineItem.sku,
@@ -2409,6 +2459,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   qtyShipped: 0,
                   backorderQty,
                   unitPrice: lineItem.unitPrice,
+                });
+
+                // V1: Apply InventoryMovement to decrement availableForSaleQty for Pivot-fulfilled orders
+                // This ensures real-time sell-through visibility before Extensiv reflects the shipment
+                const inventoryMovement = new InventoryMovement(storage);
+                await inventoryMovement.apply({
+                  eventType: "SALES_ORDER_CREATED",
+                  itemId: product.id,
+                  quantity: lineItem.qtyOrdered,
+                  location: "PIVOT",
+                  source: "SYSTEM",
+                  orderId: salesOrder.id,
+                  salesOrderLineId: createdLine.id,
+                  channel: "AMAZON",
+                  notes: `Amazon order ${orderData.externalOrderId}: ${lineItem.qtyOrdered} ${lineItem.sku} allocated`,
                 });
               } catch (lineError: any) {
                 errors.push(`${lineItem.sku} in order ${orderData.externalOrderId}: ${lineError.message}`);

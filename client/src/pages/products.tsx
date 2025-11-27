@@ -399,6 +399,33 @@ function ItemTableRow({
         </td>
       )}
 
+      {/* Extensiv Variance Column (only for finished products) - Shows difference between Extensiv snapshot and our tracking */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle whitespace-nowrap text-right" data-testid={`text-extensiv-variance-${item.id}`}>
+          {(() => {
+            const extensivQty = item.extensivOnHandSnapshot ?? 0;
+            const ourQty = item.availableForSaleQty ?? 0;
+            const variance = extensivQty - ourQty;
+            
+            if (extensivQty === 0 && !item.extensivLastSyncAt) {
+              return <span className="text-muted-foreground text-sm">—</span>;
+            }
+            
+            return (
+              <span className={
+                variance > 0 
+                  ? "text-green-600 dark:text-green-400 font-medium" 
+                  : variance < 0 
+                    ? "text-red-600 dark:text-red-400 font-medium" 
+                    : ""
+              } title={`Extensiv: ${extensivQty}, Ours: ${ourQty}`}>
+                {variance > 0 ? `+${variance}` : variance}
+              </span>
+            );
+          })()}
+        </td>
+      )}
+
       {/* Backorders Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
@@ -1408,6 +1435,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Available for Sale</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Extensiv Δ</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorders</th>
                   <th className="p-3 text-center text-sm font-medium whitespace-nowrap">BOM</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>

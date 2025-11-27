@@ -111,9 +111,31 @@ export class ImportService {
           case "dailyUsage":
             item[schemaField] = parseFloat(value) || 0;
             break;
+          case "productKind":
+            // Normalize productKind values - handle both type values and productKind values
+            const normalizedValue = String(value).trim().toLowerCase();
+            if (normalizedValue === "finished" || normalizedValue === "finished_product") {
+              item.productKind = "FINISHED";
+            } else if (normalizedValue === "raw" || normalizedValue === "component") {
+              item.productKind = "RAW";
+            } else {
+              // Keep the original value for validation to catch invalid values
+              item.productKind = String(value).trim().toUpperCase();
+            }
+            break;
           default:
             (item as any)[schemaField] = String(value).trim();
         }
+      }
+    }
+
+    // If productKind is still not set but type is, derive productKind from type
+    if (!item.productKind && item.type) {
+      const typeValue = String(item.type).toLowerCase();
+      if (typeValue === "finished_product" || typeValue === "finished") {
+        item.productKind = "FINISHED";
+      } else if (typeValue === "component" || typeValue === "raw") {
+        item.productKind = "RAW";
       }
     }
 

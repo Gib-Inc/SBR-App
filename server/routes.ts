@@ -4672,10 +4672,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const items = await storage.getAllItems();
       
-      // Prepare CSV data
-      const csvHeader = "ID,Name,SKU,Product Kind,Barcode Value,Barcode Format,Barcode Usage,Barcode Source,External System,External ID,Type,Current Stock,Min Stock\n";
+      // Helper to escape CSV values
+      const escapeCSV = (val: string | null | undefined) => {
+        if (val === null || val === undefined) return '';
+        const str = String(val);
+        if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+          return `"${str.replace(/"/g, '""')}"`;
+        }
+        return str;
+      };
+      
+      // Derive productKind from type if not set
+      const getProductKind = (item: any) => {
+        if (item.productKind) return item.productKind;
+        if (item.type === 'finished_product') return 'FINISHED';
+        if (item.type === 'component') return 'RAW';
+        return '';
+      };
+      
+      // Prepare CSV data with proper productKind values
+      const csvHeader = "Name,SKU,Product Kind,Barcode Value,Barcode Format,Barcode Usage,Current Stock,Min Stock\n";
       const csvRows = items.map(item => 
-        `${item.id},${item.name},${item.sku},${item.productKind || ''},${item.barcodeValue || ''},${item.barcodeFormat || ''},${item.barcodeUsage || ''},${item.barcodeSource || ''},${item.externalSystem || ''},${item.externalId || ''},${item.type},${item.currentStock},${item.minStock}`
+        [
+          escapeCSV(item.name),
+          escapeCSV(item.sku),
+          escapeCSV(getProductKind(item)),
+          escapeCSV(item.barcodeValue),
+          escapeCSV(item.barcodeFormat),
+          escapeCSV(item.barcodeUsage),
+          item.currentStock ?? 0,
+          item.minStock ?? 0
+        ].join(',')
       ).join('\n');
       
       res.setHeader('Content-Type', 'text/csv');

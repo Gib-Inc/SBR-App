@@ -1,7 +1,7 @@
 import { storage } from "../storage";
 import type { InsertAuditLog, AuditLog } from "@shared/schema";
 
-export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'SYSTEM' | 'USER';
+export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'META_ADS' | 'GOOGLE_ADS' | 'SYSTEM' | 'USER';
 export type AuditStatus = 'INFO' | 'WARNING' | 'ERROR';
 export type AuditEventType = 
   | 'PO_CREATED'
@@ -63,7 +63,13 @@ export type AuditEventType =
   | 'SUPPLIER_DISCOVERY_COMPLETED'
   | 'SUPPLIER_DISCOVERY_FAILED'
   | 'SUPPLIER_OUTREACH_GENERATED'
-  | 'SUPPLIER_OUTREACH_SENT';
+  | 'SUPPLIER_OUTREACH_SENT'
+  | 'AD_PLATFORM_CONNECTED'
+  | 'AD_PLATFORM_DISCONNECTED'
+  | 'AD_SYNC_STARTED'
+  | 'AD_SYNC_COMPLETED'
+  | 'AD_SYNC_FAILED'
+  | 'AD_DEMAND_MULTIPLIER_APPLIED';
 
 export type AuditEntityType = 
   | 'PURCHASE_ORDER'
@@ -78,7 +84,8 @@ export type AuditEntityType =
   | 'SETTINGS'
   | 'USER'
   | 'BIN'
-  | 'BACKORDER';
+  | 'BACKORDER'
+  | 'AD_PLATFORM';
 
 export interface LogEventParams {
   source: AuditSource;
@@ -396,6 +403,171 @@ class AuditLoggerService {
         integrationName: params.integrationName,
         error: params.error,
         ...params.context,
+      },
+    });
+  }
+
+  // ============================================================================
+  // AD PLATFORM EVENTS (Meta Ads, Google Ads)
+  // ============================================================================
+
+  async logAdPlatformConnected(params: {
+    platform: 'META' | 'GOOGLE';
+    accountId: string;
+    accountName?: string;
+    userId?: string;
+  }): Promise<AuditLog> {
+    const source: AuditSource = params.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+    const platformName = params.platform === 'META' ? 'Meta Ads' : 'Google Ads';
+    return this.logEvent({
+      source,
+      eventType: 'AD_PLATFORM_CONNECTED',
+      entityType: 'AD_PLATFORM',
+      entityId: params.accountId,
+      entityLabel: params.accountName || params.accountId,
+      performedByUserId: params.userId,
+      status: 'INFO',
+      description: `${platformName} account connected: ${params.accountName || params.accountId}`,
+      details: {
+        platform: params.platform,
+        accountId: params.accountId,
+        accountName: params.accountName,
+      },
+    });
+  }
+
+  async logAdPlatformDisconnected(params: {
+    platform: 'META' | 'GOOGLE';
+    accountId: string;
+    accountName?: string;
+    userId?: string;
+  }): Promise<AuditLog> {
+    const source: AuditSource = params.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+    const platformName = params.platform === 'META' ? 'Meta Ads' : 'Google Ads';
+    return this.logEvent({
+      source,
+      eventType: 'AD_PLATFORM_DISCONNECTED',
+      entityType: 'AD_PLATFORM',
+      entityId: params.accountId,
+      entityLabel: params.accountName || params.accountId,
+      performedByUserId: params.userId,
+      status: 'INFO',
+      description: `${platformName} account disconnected: ${params.accountName || params.accountId}`,
+      details: {
+        platform: params.platform,
+        accountId: params.accountId,
+        accountName: params.accountName,
+      },
+    });
+  }
+
+  async logAdSyncStarted(params: {
+    platform: 'META' | 'GOOGLE';
+    accountId: string;
+    accountName?: string;
+    daysToSync?: number;
+  }): Promise<AuditLog> {
+    const source: AuditSource = params.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+    const platformName = params.platform === 'META' ? 'Meta Ads' : 'Google Ads';
+    return this.logEvent({
+      source,
+      eventType: 'AD_SYNC_STARTED',
+      entityType: 'AD_PLATFORM',
+      entityId: params.accountId,
+      entityLabel: params.accountName || params.accountId,
+      status: 'INFO',
+      description: `${platformName} sync started for ${params.accountName || params.accountId}`,
+      details: {
+        platform: params.platform,
+        accountId: params.accountId,
+        accountName: params.accountName,
+        daysToSync: params.daysToSync,
+      },
+    });
+  }
+
+  async logAdSyncCompleted(params: {
+    platform: 'META' | 'GOOGLE';
+    accountId: string;
+    accountName?: string;
+    skusProcessed: number;
+    metricsUpserted: number;
+    daysProcessed: number;
+  }): Promise<AuditLog> {
+    const source: AuditSource = params.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+    const platformName = params.platform === 'META' ? 'Meta Ads' : 'Google Ads';
+    return this.logEvent({
+      source,
+      eventType: 'AD_SYNC_COMPLETED',
+      entityType: 'AD_PLATFORM',
+      entityId: params.accountId,
+      entityLabel: params.accountName || params.accountId,
+      status: 'INFO',
+      description: `${platformName} sync completed: ${params.skusProcessed} SKUs, ${params.metricsUpserted} daily metrics`,
+      details: {
+        platform: params.platform,
+        accountId: params.accountId,
+        accountName: params.accountName,
+        skusProcessed: params.skusProcessed,
+        metricsUpserted: params.metricsUpserted,
+        daysProcessed: params.daysProcessed,
+      },
+    });
+  }
+
+  async logAdSyncFailed(params: {
+    platform: 'META' | 'GOOGLE';
+    accountId: string;
+    accountName?: string;
+    error: string;
+    context?: Record<string, unknown>;
+  }): Promise<AuditLog> {
+    const source: AuditSource = params.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+    const platformName = params.platform === 'META' ? 'Meta Ads' : 'Google Ads';
+    return this.logEvent({
+      source,
+      eventType: 'AD_SYNC_FAILED',
+      entityType: 'AD_PLATFORM',
+      entityId: params.accountId,
+      entityLabel: params.accountName || params.accountId,
+      status: 'ERROR',
+      description: `${platformName} sync failed: ${params.error}`,
+      details: {
+        platform: params.platform,
+        accountId: params.accountId,
+        accountName: params.accountName,
+        error: params.error,
+        ...params.context,
+      },
+    });
+  }
+
+  async logAdDemandMultiplierApplied(params: {
+    sku: string;
+    productName: string;
+    baseVelocity: number;
+    adMultiplier: number;
+    adjustedVelocity: number;
+    recentSpend: number;
+    priorSpend: number;
+    platform?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'AD_DEMAND_MULTIPLIER_APPLIED',
+      entityType: 'ITEM',
+      entityLabel: params.sku,
+      status: 'INFO',
+      description: `Ad demand multiplier ${params.adMultiplier.toFixed(2)}x applied to ${params.sku}: velocity ${params.baseVelocity.toFixed(2)} → ${params.adjustedVelocity.toFixed(2)}`,
+      details: {
+        sku: params.sku,
+        productName: params.productName,
+        baseVelocity: params.baseVelocity,
+        adMultiplier: params.adMultiplier,
+        adjustedVelocity: params.adjustedVelocity,
+        recentSpend: params.recentSpend,
+        priorSpend: params.priorSpend,
+        platform: params.platform,
       },
     });
   }

@@ -75,11 +75,17 @@ import {
   type InsertQuickbooksItemMapping,
   type QuickbooksBill,
   type InsertQuickbooksBill,
+  type AdPlatformConfig,
+  type InsertAdPlatformConfig,
+  type AdSkuMapping,
+  type InsertAdSkuMapping,
+  type AdMetricsDaily,
+  type InsertAdMetricsDaily,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, gt, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, gt, gte, lte, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -349,6 +355,27 @@ export interface IStorage {
   getQuickbooksBillByPurchaseOrderId(purchaseOrderId: string): Promise<QuickbooksBill | null>;
   createQuickbooksBill(bill: InsertQuickbooksBill): Promise<QuickbooksBill>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
+
+  // Ad Platform Configs (Meta, Google Ads)
+  getAdPlatformConfig(userId: string, platform: string): Promise<AdPlatformConfig | undefined>;
+  getAllAdPlatformConfigs(userId: string): Promise<AdPlatformConfig[]>;
+  createAdPlatformConfig(config: InsertAdPlatformConfig): Promise<AdPlatformConfig>;
+  updateAdPlatformConfig(id: string, config: Partial<InsertAdPlatformConfig>): Promise<AdPlatformConfig | undefined>;
+  deleteAdPlatformConfig(id: string): Promise<boolean>;
+
+  // Ad SKU Mappings
+  getAllAdSkuMappings(): Promise<AdSkuMapping[]>;
+  getAdSkuMappingsBySku(sku: string): Promise<AdSkuMapping[]>;
+  getAdSkuMappingsByPlatform(platform: string): Promise<AdSkuMapping[]>;
+  createAdSkuMapping(mapping: InsertAdSkuMapping): Promise<AdSkuMapping>;
+  updateAdSkuMapping(id: string, mapping: Partial<InsertAdSkuMapping>): Promise<AdSkuMapping | undefined>;
+  deleteAdSkuMapping(id: string): Promise<boolean>;
+
+  // Ad Metrics Daily
+  getAdMetricsBySkuDays(sku: string, days: number): Promise<AdMetricsDaily[]>;
+  getAdMetricsByPlatformDateRange(platform: string, startDate: Date, endDate: Date): Promise<AdMetricsDaily[]>;
+  getAdMetricsBySkuAndDateRange(sku: string, startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
+  upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily>;
 }
 
 export class MemStorage implements IStorage {
@@ -380,6 +407,9 @@ export class MemStorage implements IStorage {
   private salesOrderLines: Map<string, SalesOrderLine>;
   private backorderSnapshots: Map<string, BackorderSnapshot>;
   private auditLogs: Map<string, AuditLog>;
+  private adPlatformConfigs: Map<string, AdPlatformConfig>;
+  private adSkuMappings: Map<string, AdSkuMapping>;
+  private adMetricsDaily: Map<string, AdMetricsDaily>;
 
   constructor() {
     this.users = new Map();
@@ -410,6 +440,9 @@ export class MemStorage implements IStorage {
     this.salesOrderLines = new Map();
     this.backorderSnapshots = new Map();
     this.auditLogs = new Map();
+    this.adPlatformConfigs = new Map();
+    this.adSkuMappings = new Map();
+    this.adMetricsDaily = new Map();
     this.seedData();
   }
 
@@ -2214,6 +2247,159 @@ export class MemStorage implements IStorage {
   async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
     return null;
   }
+
+  // Ad Platform Configs
+  async getAdPlatformConfig(userId: string, platform: string): Promise<AdPlatformConfig | undefined> {
+    return Array.from(this.adPlatformConfigs.values())
+      .find(c => c.userId === userId && c.platform === platform);
+  }
+
+  async getAllAdPlatformConfigs(userId: string): Promise<AdPlatformConfig[]> {
+    return Array.from(this.adPlatformConfigs.values())
+      .filter(c => c.userId === userId);
+  }
+
+  async createAdPlatformConfig(config: InsertAdPlatformConfig): Promise<AdPlatformConfig> {
+    const id = randomUUID();
+    const now = new Date();
+    const newConfig: AdPlatformConfig = {
+      id,
+      ...config,
+      accountId: config.accountId ?? null,
+      accountName: config.accountName ?? null,
+      accessToken: config.accessToken ?? null,
+      refreshToken: config.refreshToken ?? null,
+      accessTokenExpiresAt: config.accessTokenExpiresAt ?? null,
+      isConnected: config.isConnected ?? false,
+      lastSyncAt: config.lastSyncAt ?? null,
+      lastSyncStatus: config.lastSyncStatus ?? null,
+      lastSyncMessage: config.lastSyncMessage ?? null,
+      config: config.config ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.adPlatformConfigs.set(id, newConfig);
+    return newConfig;
+  }
+
+  async updateAdPlatformConfig(id: string, updates: Partial<InsertAdPlatformConfig>): Promise<AdPlatformConfig | undefined> {
+    const existing = this.adPlatformConfigs.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date() };
+    this.adPlatformConfigs.set(id, updated);
+    return updated;
+  }
+
+  async deleteAdPlatformConfig(id: string): Promise<boolean> {
+    return this.adPlatformConfigs.delete(id);
+  }
+
+  // Ad SKU Mappings
+  async getAllAdSkuMappings(): Promise<AdSkuMapping[]> {
+    return Array.from(this.adSkuMappings.values());
+  }
+
+  async getAdSkuMappingsBySku(sku: string): Promise<AdSkuMapping[]> {
+    return Array.from(this.adSkuMappings.values())
+      .filter(m => m.sku === sku);
+  }
+
+  async getAdSkuMappingsByPlatform(platform: string): Promise<AdSkuMapping[]> {
+    return Array.from(this.adSkuMappings.values())
+      .filter(m => m.platform === platform);
+  }
+
+  async createAdSkuMapping(mapping: InsertAdSkuMapping): Promise<AdSkuMapping> {
+    const id = randomUUID();
+    const newMapping: AdSkuMapping = {
+      id,
+      ...mapping,
+      adEntityName: mapping.adEntityName ?? null,
+      itemId: mapping.itemId ?? null,
+      isActive: mapping.isActive ?? true,
+      createdAt: new Date(),
+    };
+    this.adSkuMappings.set(id, newMapping);
+    return newMapping;
+  }
+
+  async updateAdSkuMapping(id: string, updates: Partial<InsertAdSkuMapping>): Promise<AdSkuMapping | undefined> {
+    const existing = this.adSkuMappings.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates };
+    this.adSkuMappings.set(id, updated);
+    return updated;
+  }
+
+  async deleteAdSkuMapping(id: string): Promise<boolean> {
+    return this.adSkuMappings.delete(id);
+  }
+
+  // Ad Metrics Daily
+  async getAdMetricsBySkuDays(sku: string, days: number): Promise<AdMetricsDaily[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return Array.from(this.adMetricsDaily.values())
+      .filter(m => m.sku === sku && m.date >= cutoffStr)
+      .sort((a, b) => b.date.localeCompare(a.date)); // Most recent first
+  }
+
+  async getAdMetricsByPlatformDateRange(platform: string, startDate: Date, endDate: Date): Promise<AdMetricsDaily[]> {
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+    
+    return Array.from(this.adMetricsDaily.values())
+      .filter(m => m.platform === platform && m.date >= startStr && m.date <= endStr)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  async getAdMetricsBySkuAndDateRange(sku: string, startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
+    return Array.from(this.adMetricsDaily.values())
+      .filter(m => m.sku === sku && m.date >= startDate && m.date <= endDate)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  async upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily> {
+    // Find existing by platform + sku + date
+    const existing = Array.from(this.adMetricsDaily.values())
+      .find(m => m.platform === metrics.platform && m.sku === metrics.sku && m.date === metrics.date);
+    
+    if (existing) {
+      const updated: AdMetricsDaily = {
+        ...existing,
+        impressions: metrics.impressions ?? existing.impressions,
+        clicks: metrics.clicks ?? existing.clicks,
+        spend: metrics.spend ?? existing.spend,
+        conversions: metrics.conversions ?? existing.conversions,
+        revenue: metrics.revenue ?? existing.revenue,
+        currency: metrics.currency ?? existing.currency,
+        updatedAt: new Date(),
+      };
+      this.adMetricsDaily.set(existing.id, updated);
+      return updated;
+    }
+
+    const id = randomUUID();
+    const now = new Date();
+    const newMetrics: AdMetricsDaily = {
+      id,
+      platform: metrics.platform,
+      sku: metrics.sku,
+      date: metrics.date,
+      impressions: metrics.impressions ?? 0,
+      clicks: metrics.clicks ?? 0,
+      spend: metrics.spend ?? 0,
+      conversions: metrics.conversions ?? null,
+      revenue: metrics.revenue ?? null,
+      currency: metrics.currency ?? 'USD',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.adMetricsDaily.set(id, newMetrics);
+    return newMetrics;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -3817,6 +4003,158 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.quickbooksBills.id, id))
       .returning();
     return result[0] || null;
+  }
+
+  // Ad Platform Configs
+  async getAdPlatformConfig(userId: string, platform: string): Promise<AdPlatformConfig | undefined> {
+    const results = await this.db.select().from(schema.adPlatformConfigs)
+      .where(and(
+        eq(schema.adPlatformConfigs.userId, userId),
+        eq(schema.adPlatformConfigs.platform, platform)
+      ));
+    return results[0];
+  }
+
+  async getAllAdPlatformConfigs(userId: string): Promise<AdPlatformConfig[]> {
+    return await this.db.select().from(schema.adPlatformConfigs)
+      .where(eq(schema.adPlatformConfigs.userId, userId));
+  }
+
+  async createAdPlatformConfig(config: InsertAdPlatformConfig): Promise<AdPlatformConfig> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.adPlatformConfigs).values({
+      ...config,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateAdPlatformConfig(id: string, updates: Partial<InsertAdPlatformConfig>): Promise<AdPlatformConfig | undefined> {
+    const results = await this.db.update(schema.adPlatformConfigs)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.adPlatformConfigs.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteAdPlatformConfig(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.adPlatformConfigs)
+      .where(eq(schema.adPlatformConfigs.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  // Ad SKU Mappings
+  async getAllAdSkuMappings(): Promise<AdSkuMapping[]> {
+    return await this.db.select().from(schema.adSkuMappings);
+  }
+
+  async getAdSkuMappingsBySku(sku: string): Promise<AdSkuMapping[]> {
+    return await this.db.select().from(schema.adSkuMappings)
+      .where(eq(schema.adSkuMappings.sku, sku));
+  }
+
+  async getAdSkuMappingsByPlatform(platform: string): Promise<AdSkuMapping[]> {
+    return await this.db.select().from(schema.adSkuMappings)
+      .where(eq(schema.adSkuMappings.platform, platform));
+  }
+
+  async createAdSkuMapping(mapping: InsertAdSkuMapping): Promise<AdSkuMapping> {
+    const id = randomUUID();
+    const result = await this.db.insert(schema.adSkuMappings).values({
+      ...mapping,
+      id,
+      createdAt: new Date(),
+    }).returning();
+    return result[0];
+  }
+
+  async updateAdSkuMapping(id: string, updates: Partial<InsertAdSkuMapping>): Promise<AdSkuMapping | undefined> {
+    const results = await this.db.update(schema.adSkuMappings)
+      .set(updates)
+      .where(eq(schema.adSkuMappings.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteAdSkuMapping(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.adSkuMappings)
+      .where(eq(schema.adSkuMappings.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  // Ad Metrics Daily
+  async getAdMetricsBySkuDays(sku: string, days: number): Promise<AdMetricsDaily[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return await this.db.select().from(schema.adMetricsDaily)
+      .where(and(
+        eq(schema.adMetricsDaily.sku, sku),
+        gt(schema.adMetricsDaily.date, cutoffStr)
+      ));
+  }
+
+  async getAdMetricsByPlatformDateRange(platform: string, startDate: Date, endDate: Date): Promise<AdMetricsDaily[]> {
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+    
+    return await this.db.select().from(schema.adMetricsDaily)
+      .where(and(
+        eq(schema.adMetricsDaily.platform, platform),
+        gt(schema.adMetricsDaily.date, startStr)
+      ));
+  }
+
+  async getAdMetricsBySkuAndDateRange(sku: string, startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
+    return await this.db.select().from(schema.adMetricsDaily)
+      .where(and(
+        eq(schema.adMetricsDaily.sku, sku),
+        gte(schema.adMetricsDaily.date, startDate),
+        lte(schema.adMetricsDaily.date, endDate)
+      ));
+  }
+
+  async upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    // Try to find existing
+    const existing = await this.db.select().from(schema.adMetricsDaily)
+      .where(and(
+        eq(schema.adMetricsDaily.platform, metrics.platform),
+        eq(schema.adMetricsDaily.sku, metrics.sku),
+        eq(schema.adMetricsDaily.date, metrics.date)
+      ));
+    
+    if (existing.length > 0) {
+      const result = await this.db.update(schema.adMetricsDaily)
+        .set({
+          impressions: metrics.impressions ?? existing[0].impressions,
+          clicks: metrics.clicks ?? existing[0].clicks,
+          spend: metrics.spend ?? existing[0].spend,
+          conversions: metrics.conversions ?? existing[0].conversions,
+          revenue: metrics.revenue ?? existing[0].revenue,
+          currency: metrics.currency ?? existing[0].currency,
+          updatedAt: now,
+        })
+        .where(eq(schema.adMetricsDaily.id, existing[0].id))
+        .returning();
+      return result[0];
+    }
+    
+    const result = await this.db.insert(schema.adMetricsDaily).values({
+      ...metrics,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
   }
 }
 

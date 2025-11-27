@@ -3157,6 +3157,393 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // AD PLATFORMS (Meta Ads, Google Ads)
+  // ============================================================================
+  
+  // Import ad platform services
+  const { metaAdsClient } = await import("./services/meta-ads-client");
+  const { googleAdsClient } = await import("./services/google-ads-client");
+  const { adMetricsSyncService } = await import("./services/ad-metrics-sync");
+
+  // Meta Ads - Get Auth URL
+  app.get("/api/ads/meta/auth-url", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!metaAdsClient.isConfigured()) {
+        return res.status(400).json({ 
+          error: "Meta Ads not configured. Set META_APP_ID and META_APP_SECRET environment variables." 
+        });
+      }
+
+      const state = crypto.randomBytes(16).toString('hex');
+      req.session.oauthState = state;
+      
+      const authUrl = metaAdsClient.getAuthUrl(state);
+      res.json({ authUrl });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to generate auth URL" });
+    }
+  });
+
+  // Meta Ads - OAuth Callback
+  app.get("/api/ads/meta/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, state } = req.query;
+      const userId = req.session.userId;
+      
+      if (!userId) {
+        return res.redirect("/settings?error=not_authenticated");
+      }
+      
+      if (!code || typeof code !== 'string') {
+        return res.redirect("/settings?error=no_auth_code");
+      }
+      
+      // Verify state if stored
+      if (req.session.oauthState && state !== req.session.oauthState) {
+        return res.redirect("/settings?error=invalid_state");
+      }
+      
+      // Exchange code for token
+      const tokenResponse = await metaAdsClient.exchangeCodeForToken(code);
+      
+      // Get long-lived token
+      const longLivedToken = await metaAdsClient.getLongLivedToken(tokenResponse.access_token);
+      
+      // Set token and get accounts
+      metaAdsClient.setAccessToken(longLivedToken.access_token);
+      const accounts = await metaAdsClient.listAdAccounts();
+      
+      if (accounts.length === 0) {
+        return res.redirect("/settings?error=no_ad_accounts");
+      }
+      
+      // Use first account (or could show selection UI)
+      const account = accounts[0];
+      
+      // Store in database
+      let config = await storage.getAdPlatformConfig(userId, 'META');
+      
+      if (config) {
+        await storage.updateAdPlatformConfig(config.id, {
+          accountId: account.id,
+          accountName: account.name,
+          accessToken: longLivedToken.access_token,
+          accessTokenExpiresAt: longLivedToken.expires_in 
+            ? new Date(Date.now() + longLivedToken.expires_in * 1000) 
+            : null,
+          isConnected: true,
+        });
+      } else {
+        await storage.createAdPlatformConfig({
+          userId,
+          platform: 'META',
+          accountId: account.id,
+          accountName: account.name,
+          accessToken: longLivedToken.access_token,
+          accessTokenExpiresAt: longLivedToken.expires_in 
+            ? new Date(Date.now() + longLivedToken.expires_in * 1000) 
+            : null,
+          isConnected: true,
+        });
+      }
+
+      // Log connection
+      await AuditLogger.logAdPlatformConnected({
+        platform: 'META',
+        accountId: account.id,
+        accountName: account.name,
+        userId,
+      });
+
+      res.redirect("/settings?meta_connected=true");
+    } catch (error: any) {
+      console.error("[Meta Ads] OAuth callback error:", error);
+      res.redirect(`/settings?error=${encodeURIComponent(error.message || 'oauth_failed')}`);
+    }
+  });
+
+  // Meta Ads - Disconnect
+  app.post("/api/ads/meta/disconnect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'META');
+      
+      if (config) {
+        await storage.updateAdPlatformConfig(config.id, {
+          isConnected: false,
+          accessToken: null,
+          refreshToken: null,
+        });
+
+        await AuditLogger.logAdPlatformDisconnected({
+          platform: 'META',
+          accountId: config.accountId || 'unknown',
+          accountName: config.accountName || undefined,
+          userId,
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to disconnect" });
+    }
+  });
+
+  // Meta Ads - Test Connection
+  app.post("/api/ads/meta/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'META');
+      
+      if (!config?.accessToken) {
+        return res.status(400).json({ success: false, message: "Meta Ads not connected" });
+      }
+
+      metaAdsClient.setAccessToken(config.accessToken);
+      const result = await metaAdsClient.testConnection();
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Google Ads - Get Auth URL
+  app.get("/api/ads/google/auth-url", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!googleAdsClient.isConfigured()) {
+        return res.status(400).json({ 
+          error: "Google Ads not configured. Set GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET environment variables." 
+        });
+      }
+
+      const state = crypto.randomBytes(16).toString('hex');
+      req.session.oauthState = state;
+      
+      const authUrl = googleAdsClient.getAuthUrl(state);
+      res.json({ authUrl });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to generate auth URL" });
+    }
+  });
+
+  // Google Ads - OAuth Callback
+  app.get("/api/ads/google/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, state } = req.query;
+      const userId = req.session.userId;
+      
+      if (!userId) {
+        return res.redirect("/settings?error=not_authenticated");
+      }
+      
+      if (!code || typeof code !== 'string') {
+        return res.redirect("/settings?error=no_auth_code");
+      }
+      
+      // Verify state if stored
+      if (req.session.oauthState && state !== req.session.oauthState) {
+        return res.redirect("/settings?error=invalid_state");
+      }
+      
+      // Exchange code for token
+      const tokenResponse = await googleAdsClient.exchangeCodeForToken(code);
+      
+      // Set tokens and get customers
+      googleAdsClient.setAccessToken(tokenResponse.access_token);
+      if (tokenResponse.refresh_token) {
+        googleAdsClient.setRefreshToken(tokenResponse.refresh_token);
+      }
+      
+      const customers = await googleAdsClient.listAccessibleCustomers();
+      
+      if (customers.length === 0) {
+        return res.redirect("/settings?error=no_ad_accounts");
+      }
+      
+      // Use first customer (or could show selection UI)
+      const customer = customers[0];
+      
+      // Store in database
+      let config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
+      
+      if (config) {
+        await storage.updateAdPlatformConfig(config.id, {
+          accountId: customer.customerId,
+          accountName: customer.descriptiveName,
+          accessToken: tokenResponse.access_token,
+          refreshToken: tokenResponse.refresh_token,
+          accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
+          isConnected: true,
+        });
+      } else {
+        await storage.createAdPlatformConfig({
+          userId,
+          platform: 'GOOGLE',
+          accountId: customer.customerId,
+          accountName: customer.descriptiveName,
+          accessToken: tokenResponse.access_token,
+          refreshToken: tokenResponse.refresh_token,
+          accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
+          isConnected: true,
+        });
+      }
+
+      // Log connection
+      await AuditLogger.logAdPlatformConnected({
+        platform: 'GOOGLE',
+        accountId: customer.customerId,
+        accountName: customer.descriptiveName,
+        userId,
+      });
+
+      res.redirect("/settings?google_connected=true");
+    } catch (error: any) {
+      console.error("[Google Ads] OAuth callback error:", error);
+      res.redirect(`/settings?error=${encodeURIComponent(error.message || 'oauth_failed')}`);
+    }
+  });
+
+  // Google Ads - Disconnect
+  app.post("/api/ads/google/disconnect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
+      
+      if (config) {
+        await storage.updateAdPlatformConfig(config.id, {
+          isConnected: false,
+          accessToken: null,
+          refreshToken: null,
+        });
+
+        await AuditLogger.logAdPlatformDisconnected({
+          platform: 'GOOGLE',
+          accountId: config.accountId || 'unknown',
+          accountName: config.accountName || undefined,
+          userId,
+        });
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to disconnect" });
+    }
+  });
+
+  // Google Ads - Test Connection
+  app.post("/api/ads/google/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
+      
+      if (!config?.accessToken) {
+        return res.status(400).json({ success: false, message: "Google Ads not connected" });
+      }
+
+      googleAdsClient.setAccessToken(config.accessToken);
+      if (config.refreshToken) {
+        googleAdsClient.setRefreshToken(config.refreshToken);
+      }
+      
+      const result = await googleAdsClient.testConnection();
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Ad Metrics - Sync All
+  app.post("/api/ads/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { daysToSync = 7 } = req.body;
+      
+      const results = await adMetricsSyncService.syncAllForUser(userId, daysToSync);
+      
+      res.json({
+        success: results.every(r => r.success),
+        results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Ad Metrics - Get Sync Status
+  app.get("/api/ads/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const status = await adMetricsSyncService.getSyncStatus(userId);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Ad SKU Mappings - List
+  app.get("/api/ads/sku-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { platform } = req.query;
+      const mappings = platform 
+        ? await storage.getAdSkuMappingsByPlatform(platform as string)
+        : await storage.getAdSkuMappingsByPlatform('META').then(async m => 
+            [...m, ...await storage.getAdSkuMappingsByPlatform('GOOGLE')]
+          );
+      res.json(mappings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Ad SKU Mappings - Create
+  app.post("/api/ads/sku-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const mapping = await storage.createAdSkuMapping(req.body);
+      res.status(201).json(mapping);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Ad SKU Mappings - Delete
+  app.delete("/api/ads/sku-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteAdSkuMapping(req.params.id);
+      if (success) {
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: "Mapping not found" });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Ad Metrics - Get Recent Metrics for SKU
+  app.get("/api/ads/metrics/:sku", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sku } = req.params;
+      const { days = 30 } = req.query;
+      
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - Number(days));
+      
+      const metrics = await storage.getAdMetricsBySkuAndDateRange(
+        sku, 
+        startDate.toISOString().split('T')[0], 
+        endDate.toISOString().split('T')[0]
+      );
+      
+      res.json(metrics);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
   // LLM
   // ============================================================================
   

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex, date } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1028,3 +1028,76 @@ export const quickbooksBills = pgTable("quickbooks_bills", {
 export const insertQuickbooksBillSchema = createInsertSchema(quickbooksBills).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertQuickbooksBill = z.infer<typeof insertQuickbooksBillSchema>;
 export type QuickbooksBill = typeof quickbooksBills.$inferSelect;
+
+// ============================================================================
+// AD PLATFORM INTEGRATIONS (Meta Ads, Google Ads)
+// ============================================================================
+
+// OAuth tokens and connection state for ad platforms
+export const adPlatformConfigs = pgTable("ad_platform_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  platform: text("platform").notNull(), // 'META', 'GOOGLE'
+  accountId: text("account_id"), // Meta Ad Account ID or Google Ads Customer ID
+  accountName: text("account_name"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  accessTokenExpiresAt: timestamp("access_token_expires_at"),
+  isConnected: boolean("is_connected").notNull().default(false),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncStatus: text("last_sync_status"), // SUCCESS, FAILED
+  lastSyncMessage: text("last_sync_message"),
+  config: jsonb("config"), // Platform-specific (e.g., selected campaigns to track)
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userPlatformIdx: uniqueIndex("ad_platform_user_platform_idx").on(table.userId, table.platform),
+}));
+
+export const insertAdPlatformConfigSchema = createInsertSchema(adPlatformConfigs).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertAdPlatformConfig = z.infer<typeof insertAdPlatformConfigSchema>;
+export type AdPlatformConfig = typeof adPlatformConfigs.$inferSelect;
+
+// Maps ad entities (campaigns/ad sets/ad groups) to SKUs
+export const adSkuMappings = pgTable("ad_sku_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  platform: text("platform").notNull(), // 'META', 'GOOGLE'
+  adEntityType: text("ad_entity_type").notNull(), // 'CAMPAIGN', 'ADSET', 'ADGROUP', 'AD'
+  adEntityId: text("ad_entity_id").notNull(), // External ID from ad platform
+  adEntityName: text("ad_entity_name"),
+  sku: text("sku").notNull(), // Maps to items.sku
+  itemId: varchar("item_id").references(() => items.id), // Optional direct reference
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  platformEntityIdx: uniqueIndex("ad_sku_platform_entity_idx").on(table.platform, table.adEntityId, table.sku),
+  skuIdx: index("ad_sku_sku_idx").on(table.sku),
+}));
+
+export const insertAdSkuMappingSchema = createInsertSchema(adSkuMappings).omit({ id: true, createdAt: true });
+export type InsertAdSkuMapping = z.infer<typeof insertAdSkuMappingSchema>;
+export type AdSkuMapping = typeof adSkuMappings.$inferSelect;
+
+// Daily aggregated ad metrics per SKU (for inventory demand forecasting)
+export const adMetricsDaily = pgTable("ad_metrics_daily", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  platform: text("platform").notNull(), // 'META', 'GOOGLE'
+  sku: text("sku").notNull(),
+  date: date("date").notNull(), // YYYY-MM-DD
+  impressions: integer("impressions").notNull().default(0),
+  clicks: integer("clicks").notNull().default(0),
+  spend: real("spend").notNull().default(0), // In account currency
+  conversions: integer("conversions").default(0), // Purchase events if available
+  revenue: real("revenue").default(0), // Attributed revenue if available
+  currency: text("currency").default('USD'),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  platformSkuDateIdx: uniqueIndex("ad_metrics_platform_sku_date_idx").on(table.platform, table.sku, table.date),
+  dateIdx: index("ad_metrics_date_idx").on(table.date),
+  skuIdx: index("ad_metrics_sku_idx").on(table.sku),
+}));
+
+export const insertAdMetricsDailySchema = createInsertSchema(adMetricsDaily).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertAdMetricsDaily = z.infer<typeof insertAdMetricsDailySchema>;
+export type AdMetricsDaily = typeof adMetricsDaily.$inferSelect;

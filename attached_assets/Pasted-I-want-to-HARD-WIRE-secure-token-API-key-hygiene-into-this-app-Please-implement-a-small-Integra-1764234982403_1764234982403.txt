@@ -1,0 +1,71 @@
+I want to HARD-WIRE secure token / API key hygiene into this app.
+
+Please implement a small “Integration Health & Key Rotation” layer that:
+- Monitors all external integrations with expiring tokens (QuickBooks, Meta Ads, Google Ads, PhantomBuster, any others that have accessToken/accessTokenExpiresAt or equivalent).
+- Creates alerts when keys are close to expiry or repeatedly failing.
+- Sends me prompts via GoHighLevel to “ROTATE API KEYS”.
+- Logs everything in AI Logs for audit.
+
+Concrete requirements:
+
+1) DATA MODEL & SETTINGS
+- Reuse the existing ad_platform_configs and QuickBooks (and any similar) config tables.
+- Ensure each integration config has:
+  • accessTokenExpiresAt (timestamp) where supported by the provider.  
+  • lastTokenCheckAt, lastTokenCheckStatus (SUCCESS/FAILED/EXPIRED_SOON) fields so we can audit checks.  
+- In Settings or an appropriate config table, add fields for:
+  • alertAdminEmail  
+  • alertAdminPhone  
+  (This is where the rotation prompts will be sent via GHL.)
+- Do NOT log or expose raw access tokens in logs or UI; only metadata (provider, accountName, expiry date, status).
+
+2) INTEGRATION HEALTH CHECKER
+- Implement a centralized IntegrationHealthService (or similar) that:
+  • Runs on a scheduled cadence (e.g., nightly cron / background job hook; use whatever recurring mechanism the app currently uses).  
+  • For each provider config (QuickBooks, Meta Ads, Google Ads, PhantomBuster, etc.):
+      – Reads accessTokenExpiresAt (if present).  
+      – Computes daysUntilExpiry.  
+      – Classifies status:
+          OK          → daysUntilExpiry >= 14 and last request was successful  
+          WARNING     → 7 <= daysUntilExpiry < 14  
+          CRITICAL    → 0 <= daysUntilExpiry < 7 or already expired  
+      – Updates lastTokenCheckAt + lastTokenCheckStatus accordingly.
+  • For providers that don’t expose expiry, fall back to a “max age” rule (e.g., if token older than 90 days or repeated auth errors, mark WARNING/CRITICAL).
+
+3) AI LOGS / AUDIT
+- Wire IntegrationHealthService into AuditLogger:
+  • For each run, log a SYSTEM event with source = PROVIDER_NAME (e.g., QUICKBOOKS, META_ADS, GOOGLE_ADS, PHANTOMBUSTER) and type = INTEGRATION_HEALTH_CHECK.  
+  • For any WARNING or CRITICAL status, log an additional AI_DECISION or ALERT event with a human-readable message like:
+    “QuickBooks access token for account X expires in 5 days – rotation recommended.”
+- Ensure these appear clearly in the existing AI Logs tab so I can see the history of health checks and key status.
+
+4) GHL ALERTS: “ROTATE API KEYS”
+- Using the existing GoHighLevelClient, implement a small helper that sends rotation prompts when status is WARNING or CRITICAL:
+  • Determine recipient from Settings.alertAdminEmail / alertAdminPhone.  
+  • For each provider in WARNING/CRITICAL, create either:
+      – A GHL task with subject “ROTATE API KEYS – <Provider>” and a short description summarizing which account is affected and days until expiry.
+      – AND/OR send an email/SMS to the admin with the same message.
+- Make sure we don’t spam:
+  • If an alert for a specific provider + account has already been sent within the last 24 hours, skip creating another one.  
+  • You can track this via a simple “lastAlertSentAt” field per integration config or store a small alert entry in the DB.
+- Log these alerts via AuditLogger with source = GHL and type = INTEGRATION_ROTATION_ALERT so they are visible in AI Logs.
+
+5) UI TOUCHPOINTS
+- In the AI Agent → Data Sources tab, for each integration card (QuickBooks, Meta Ads, Google Ads, PhantomBuster, etc.):
+  • Show a small “health” indicator (OK / WARNING / CRITICAL) based on lastTokenCheckStatus.  
+  • Display a short tooltip or text like “Token expires in X days – rotation needed” for WARNING/CRITICAL.
+- If feasible, add a “Check Health Now” button that triggers IntegrationHealthService once for the current user and refreshes the status.
+
+6) SCOPE / COMPLIANCE
+- Keep this V1 focused ONLY on:
+  • Token expiry / age checks.  
+  • Simple GHL alerts and logging.  
+  • Minimal UI indicators.
+- Do NOT build any complex policy engine or automatic rotation; the app’s job is to detect risk and tell me to rotate, not to rotate keys itself.
+- Ensure no access tokens or secrets are written to logs, AI recommendations, or front-end components. Only redacted/aggregated metadata (provider, account name, daysUntilExpiry, status).
+
+After implementing, please:
+- Summarize which tables/fields you added or changed.  
+- Show me an example of:
+  • A config with an expiry 3 days away → how it appears in AI Logs, Data Sources UI, and the GHL “ROTATE API KEYS” alert.  
+  • How to configure alertAdminEmail / alertAdminPhone so I actually receive these prompts in my GHL location.

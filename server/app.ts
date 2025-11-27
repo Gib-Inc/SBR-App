@@ -23,6 +23,7 @@ const sessionPool = new Pool({
 declare module "express-session" {
   interface SessionData {
     userId?: string;
+    oauthState?: string;
   }
 }
 

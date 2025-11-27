@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, Send } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -1146,7 +1146,8 @@ function InsightsTab() {
                     <tr 
                       key={rec.id} 
                       data-testid={`row-recommendation-${rec.id}`}
-                      className={`h-11 border-b hover-elevate ${rec.status === "DISMISSED" ? "opacity-50" : ""}`}
+                      className={`h-11 border-b hover-elevate cursor-pointer ${rec.status === "DISMISSED" ? "opacity-50" : ""}`}
+                      onClick={() => setSelectedItem(rec)}
                     >
                       <td className="px-3 align-middle font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
                         {rec.sku}
@@ -1200,20 +1201,6 @@ function InsightsTab() {
                       </td>
                       <td className="px-3 align-middle whitespace-nowrap sticky right-0 bg-background z-10">
                         <div className="flex items-center justify-center gap-1">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => setSelectedItem(rec)}
-                                data-testid={`button-details-${rec.id}`}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>View details</TooltipContent>
-                          </Tooltip>
                           {rec.status === "NEW" && rec.recommendationType !== "OK" && (
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -1221,7 +1208,7 @@ function InsightsTab() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8 text-primary"
-                                  onClick={() => handleCreatePO(rec)}
+                                  onClick={(e) => { e.stopPropagation(); handleCreatePO(rec); }}
                                   data-testid={`button-create-po-${rec.id}`}
                                 >
                                   <Send className="h-4 w-4" />
@@ -1238,7 +1225,7 @@ function InsightsTab() {
                                     variant="ghost"
                                     size="icon"
                                     className="h-8 w-8 text-green-600"
-                                    onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "ACCEPTED" })}
+                                    onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "ACCEPTED" }); }}
                                     disabled={updateStatusMutation.isPending}
                                     data-testid={`button-accept-${rec.id}`}
                                   >
@@ -1253,7 +1240,7 @@ function InsightsTab() {
                                     variant="ghost"
                                     size="icon"
                                     className="h-8 w-8 text-muted-foreground"
-                                    onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "DISMISSED" })}
+                                    onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "DISMISSED" }); }}
                                     disabled={updateStatusMutation.isPending}
                                     data-testid={`button-dismiss-${rec.id}`}
                                   >
@@ -1271,7 +1258,7 @@ function InsightsTab() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8"
-                                  onClick={() => updateStatusMutation.mutate({ id: rec.id, status: "NEW" })}
+                                  onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "NEW" }); }}
                                   disabled={updateStatusMutation.isPending}
                                   data-testid={`button-reset-${rec.id}`}
                                 >
@@ -2121,13 +2108,17 @@ function LogsTab() {
                   <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Source</th>
                   <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
                   <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Description</th>
-                  <th className="h-11 px-4 text-center font-medium text-muted-foreground whitespace-nowrap w-[60px]">Details</th>
                 </tr>
               </thead>
               <tbody>
                 {logsData?.logs && logsData.logs.length > 0 ? (
                   logsData.logs.map((log) => (
-                    <tr key={log.id} className="h-11 border-b hover-elevate" data-testid={`row-log-${log.id}`}>
+                    <tr 
+                      key={log.id} 
+                      className="h-11 border-b hover-elevate cursor-pointer" 
+                      data-testid={`row-log-${log.id}`}
+                      onClick={() => setSelectedLog(log)}
+                    >
                       <td className="px-4 text-muted-foreground whitespace-nowrap">
                         {formatDate(log.createdAt)}
                       </td>
@@ -2161,26 +2152,11 @@ function LogsTab() {
                       <td className="px-4 max-w-[300px] truncate">
                         {log.description || "-"}
                       </td>
-                      <td className="px-4 text-center">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              onClick={() => setSelectedLog(log)}
-                              data-testid={`button-view-log-${log.id}`}
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>View details</TooltipContent>
-                        </Tooltip>
-                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="h-32 text-center">
+                    <td colSpan={6} className="h-32 text-center">
                       <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
                         <FileText className="h-8 w-8" />
                         <p className="font-medium">No logs found</p>

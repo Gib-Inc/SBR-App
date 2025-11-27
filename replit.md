@@ -24,11 +24,12 @@ Preferred communication style: Simple, everyday language.
 *   **Authentication**: Session-based with `connect-pg-simple`, `bcrypt` for password hashing.
 *   **API**: RESTful endpoints under `/api/*`.
 *   **Core Services**: 
-    *   LLMService (pluggable AI for forecasting)
+    *   LLMService (pluggable AI for forecasting, PO message generation)
     *   BarcodeService (generation)
     *   ShopifyClient (order sync via Admin API)
     *   AmazonClient (order sync via SP-API with OAuth)
     *   ExtensivClient (inventory sync via API)
+    *   GoHighLevelClient (CRM integration, SMS/email to suppliers)
     *   Storage Layer (abstracted data access)
 *   **Production**: Static assets served via Express.
 
@@ -56,6 +57,7 @@ Preferred communication style: Simple, everyday language.
 *   **Responsive Layout**: Implemented `min-w-0` on flex containers and explicit width constraints to ensure proper adaptation and prevent horizontal scrolling issues.
 *   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
 *   **Table Standardization**: All data tables across the application use `whitespace-nowrap` on headers and cells to enforce single-line row heights, preventing text wrapping and maintaining consistent, scannable layouts.
+*   **LLM-Powered PO Creation**: Create PO flow via Suppliers page with 3-step wizard (select supplier → choose items sorted by criticality → review & send). LLM generates professional PO messages (email subject/body and SMS) with fallback templates. GoHighLevel integration sends PO via SMS or email to suppliers with automatic contact creation.
 
 ## External Dependencies
 

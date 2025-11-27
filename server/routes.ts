@@ -6011,9 +6011,43 @@ Generate only the email body text, no subject line.`;
     try {
       const { id } = req.params;
 
-      // Get lines to know which products to refresh
+      // Get order to check channel for availableForSaleQty restoration
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Get lines to restore inventory and refresh products
       const lines = await storage.getSalesOrderLines(id);
       const affectedProductIds = new Set(lines.map((line: SalesOrderLine) => line.productId));
+
+      // Restore availableForSaleQty for Pivot-fulfilled orders (Shopify/Amazon)
+      // This mirrors the cancel logic to ensure stock is restored when orders are deleted
+      const isPivotOrder = order.channel === 'SHOPIFY' || order.channel === 'AMAZON';
+      if (isPivotOrder) {
+        const inventoryMovement = new InventoryMovement(storage);
+        const user = await storage.getUser(req.session.userId!);
+
+        for (const line of lines) {
+          // Only restore if order hasn't been fulfilled/shipped yet
+          const unfulfilledQty = line.qtyOrdered - (line.qtyFulfilled ?? 0);
+          if (unfulfilledQty > 0) {
+            await inventoryMovement.apply({
+              eventType: "SALES_ORDER_CANCELLED",
+              itemId: line.productId,
+              quantity: unfulfilledQty,
+              location: "PIVOT",
+              source: "USER",
+              orderId: id,
+              salesOrderLineId: line.id,
+              channel: order.channel,
+              userId: req.session.userId,
+              userName: user?.email,
+              notes: `Order ${order.externalOrderId || order.id} deleted: restored ${unfulfilledQty} to availableForSaleQty`,
+            });
+          }
+        }
+      }
 
       // Delete order (cascade will delete lines)
       const success = await storage.deleteSalesOrder(id);

@@ -1,0 +1,40 @@
+I want you to audit and correct the availableForSaleQty logic so it matches this exact behavior and stays consistent with everything we’ve already built:
+
+Extensiv/Pivot sync is the baseline
+
+When the Extensiv/Pivot sync runs and updates pivotQty for a finished product, availableForSaleQty must also be updated from that new baseline.
+
+The default behavior should be:
+availableForSaleQty = pivotQty immediately after a successful Pivot sync (plus/minus any local deltas you intentionally apply from live orders/returns, see next points).
+
+Make sure this update is idempotent and doesn’t double-apply adjustments if the sync runs multiple times.
+
+New e-commerce sales immediately reduce Available for Sale
+
+When a new Shopify or Amazon order is created and it is fulfilled from Pivot, availableForSaleQty should decrease by the ordered/allocated quantity.
+
+This decrement must happen at the order creation/allocation step (not again at SHIP), so that “available for sale” reflects real-time sell-through.
+
+Do not modify pivotQty from sales; only availableForSaleQty is adjusted.
+
+Reversal events restore Available for Sale
+
+If a Shopify/Amazon order is cancelled before shipment, increase availableForSaleQty by the same quantity you previously deducted.
+
+If a Shopify/Amazon order that was fulfilled from Pivot is returned, treat it as:
+
+Physical stock goes back to Hildale (update hildaleQty as we already discussed), and
+
+availableForSaleQty increases by the returned quantity so it again reflects true sellable stock.
+
+No double-counting or hidden deductions
+
+Ensure we only adjust availableForSaleQty on: Pivot sync, Shopify/Amazon order create, cancel, and return. SHIP should not change availableForSaleQty for Pivot orders (only log the movement).
+
+Remove any stray or duplicate adjustments to availableForSaleQty in other places so the logic is centralized and predictable (preferably through the InventoryMovement helper you already created).
+
+After implementing this, please:
+
+Show me in your summary which functions and event handlers now own availableForSaleQty updates,
+
+And confirm via a simple test scenario (Pivot sync → Shopify sale → cancel/return) that the numbers behave exactly as described above.

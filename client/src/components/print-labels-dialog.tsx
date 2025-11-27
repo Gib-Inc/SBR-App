@@ -910,8 +910,8 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
                 />
               </div>
 
-              <Card className="flex-1 min-h-0">
-                <CardContent className="p-0 h-full">
+              <Card className="flex-1 min-h-0 overflow-hidden">
+                <CardContent className="p-0 h-full overflow-hidden">
                   <ScrollArea className="h-[220px]">
                     {allItems.length === 0 ? (
                       <div className="flex flex-col items-center justify-center p-8 text-muted-foreground">
@@ -1063,7 +1063,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
 
         {/* Footer Actions */}
         <div className="flex justify-between gap-2 pt-4 border-t flex-shrink-0">
-          <Button variant="outline" onClick={handleClose} data-testid="button-cancel-print">
+          <Button variant="secondary" onClick={handleClose} data-testid="button-cancel-print">
             Cancel
           </Button>
           <Button

@@ -1,0 +1,70 @@
+I’ve reviewed your “Meta Ads & Google Ads Integration Architecture Plan (V1)” and I want you to IMPLEMENT a lean version of that plan now, with tight scope focused only on inventory decisions.
+
+Please do the following, in this order, and keep everything inside this scope:
+
+1) SCHEMA + STORAGE
+- Add the three new tables you proposed into the main schema and migrations:
+  • ad_platform_configs  
+  • ad_sku_mappings  
+  • ad_metrics_daily
+- Make sure they follow the exact column definitions and indexes you outlined.
+- Add storage methods for:
+  • Saving/updating platform configs per user (connect state, tokens, last sync, config JSON).  
+  • CRUD for ad_sku_mappings (map ad entities to SKUs).  
+  • Upsert daily metrics per SKU into ad_metrics_daily (platform + sku + date unique).
+- Re-use the existing QuickbooksSalesSnapshots pattern (daily/monthly aggregates) wherever possible, so the code stays consistent.
+
+2) CLIENTS + SYNC SERVICES
+- Implement MetaAdsClient and GoogleAdsClient as you described, but ONLY for the endpoints/metrics needed to feed ad_metrics_daily:
+  • Meta: /me/adaccounts, insights for campaigns/adsets, plus purchase/revenue metrics where available.
+  • Google Ads: CustomerService.ListAccessibleCustomers + GoogleAdsService.SearchStream with a GAQL query for SKU-level shopping performance.
+- Implement AdMetricsSync service:
+  • For each connected ad platform, pull the last N days (e.g., 30) of data.  
+  • Aggregate by (platform, sku, date) and upsert into ad_metrics_daily.  
+  • Respect rate limits using batching if needed.  
+  • Record success/failure in the AuditLogger.
+
+3) AUDIT LOGGING
+- Extend AuditLogger with sources 'META_ADS' and 'GOOGLE_ADS'.
+- Log at least these events:
+  • INTEGRATION_CONNECTED / INTEGRATION_DISCONNECTED for each platform.  
+  • INTEGRATION_SYNC_STARTED, INTEGRATION_SYNC_COMPLETED, INTEGRATION_SYNC_FAILED for ad sync runs.  
+  • Any major errors while fetching or parsing ad data.
+- Make sure these appear in the existing AI Logs tab with clear source labels, so I can see when ad syncs are happening.
+
+4) DECISION ENGINE INTEGRATION
+- Wire ad_metrics_daily into InventoryDecisionEngine:
+  • Add a storage helper to fetch recent ad metrics for a SKU (e.g., last 14 days).  
+  • Implement computeAdDemandMultiplier(sku, adDemandImpact) exactly like you outlined:
+    – Use spend over the last 14 days, compare recent week vs prior week.  
+    – Increase velocity when spend is growing, with a cap (e.g., 50% boost) scaled by Settings.aiAdDemandImpact.  
+    – Apply a small baseline boost if there is active but flat spend.  
+    – No ads → multiplier 1.0.
+- In computeRecommendations(), multiply the existing base velocity by this multiplier:
+  adjustedVelocity = baseVelocity * adMultiplier
+- Make sure Settings.aiAdDemandImpact is actually read and used here (defaults still to 0.2).
+
+5) UI TOUCHPOINTS (MINIMAL)
+- AI Agent → Data Sources tab:
+  • Add “Meta Ads” and “Google Ads” cards alongside the other integrations.  
+  • Each card should show connect status, last sync time, last sync result, and a manual “Sync Now” button that triggers AdMetricsSync for that platform.  
+- OPTIONAL / LIGHTWEIGHT mapping UI:
+  • Provide a simple way (table or dialog) to map ad entities to SKUs using ad_sku_mappings.  
+  • This can be very basic in V1; focus on functionality, not a full marketing UI.
+
+6) STRICTLY OUT OF SCOPE (DO NOT BUILD IN V1)
+- No full marketing dashboards, ROAS charts, or campaign management UI.  
+- No user-level/PII reporting, attribution funnels, or bidding/budget automation.  
+- No ad creative management or A/B testing UI.  
+- No extra pages beyond:
+  • the existing AI Agent Data Sources cards  
+  • minimal mapping UI if required for SKU linking.
+- Stay focused: the ONLY goal is to improve inventory recommendations via aiAdDemandImpact and the ad metrics tables.
+
+7) VALIDATION
+- After implementation:
+  • Show me how to connect a sandbox Meta/Google account, run a sync, and view the new ad_metrics_daily data.  
+  • Demonstrate, via logs or a sample SKU, that computeRecommendations() is actually using the ad multiplier (e.g., show base velocity vs adjusted velocity for a SKU with active ads).  
+  • Confirm that all ad-related events appear in AI Logs with the correct source and type.
+
+Please proceed with this V1 implementation exactly within this scope and then report back with what you changed and how to test it.

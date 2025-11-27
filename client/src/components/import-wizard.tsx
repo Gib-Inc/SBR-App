@@ -227,7 +227,7 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Import Items</DialogTitle>
+          <DialogTitle>Barcode Import</DialogTitle>
         </DialogHeader>
 
         {/* Step Indicator */}

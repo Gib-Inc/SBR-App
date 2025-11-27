@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Plus, Search, Download, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2 } from "lucide-react";
+import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CameraCaptureModal } from "@/components/camera-capture-modal";
@@ -792,16 +792,16 @@ export default function Barcodes() {
             onClick={() => setIsImportWizardOpen(true)}
             data-testid="button-import-items"
           >
-            <Download className="mr-2 h-4 w-4 rotate-180" />
-            Import Items
+            <Download className="mr-2 h-4 w-4" />
+            Import
           </Button>
           <Button 
             variant="outline" 
             onClick={handleExport}
             data-testid="button-export-barcodes"
           >
-            <Download className="mr-2 h-4 w-4" />
-            Export CSV
+            <Upload className="mr-2 h-4 w-4" />
+            Export
           </Button>
           <Button 
             variant="outline" 

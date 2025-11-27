@@ -605,7 +605,7 @@ export default function SalesOrders() {
                     Import
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Import orders from CSV</TooltipContent>
+                <TooltipContent>Import sales orders from CSV</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -616,10 +616,10 @@ export default function SalesOrders() {
                     data-testid="button-export-csv"
                   >
                     <Upload className="h-4 w-4 mr-2" />
-                    Export CSV
+                    Export
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Export {filteredOrders.length} orders to CSV</TooltipContent>
+                <TooltipContent>Export orders to CSV</TooltipContent>
               </Tooltip>
               <Select value={channelFilter} onValueChange={setChannelFilter}>
                 <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">

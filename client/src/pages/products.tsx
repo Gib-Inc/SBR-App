@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -1362,8 +1362,8 @@ export default function BOM() {
           onClick={() => setIsImportDialogOpen(true)}
           data-testid="button-import-products"
         >
-          <Upload className="mr-2 h-4 w-4" />
-          Import Products
+          <Download className="mr-2 h-4 w-4" />
+          Import
         </Button>
       </div>
 

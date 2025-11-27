@@ -157,7 +157,7 @@ export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogPr
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Import Products</DialogTitle>
+          <DialogTitle>Product Import</DialogTitle>
           <DialogDescription>
             Upload a CSV or XLSX file to bulk import products into your inventory
           </DialogDescription>

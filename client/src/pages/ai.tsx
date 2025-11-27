@@ -999,91 +999,91 @@ function InsightsTab() {
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap sticky left-0 bg-background z-10">SKU</TableHead>
-                  <TableHead className="whitespace-nowrap">Product</TableHead>
-                  <TableHead className="whitespace-nowrap">Type</TableHead>
-                  <TableHead className="whitespace-nowrap">Risk</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Days Left</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Avail</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Gap%</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">On PO</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Rec Qty</TableHead>
-                  <TableHead className="whitespace-nowrap text-right">Velocity</TableHead>
-                  <TableHead className="whitespace-nowrap">Status</TableHead>
-                  <TableHead className="whitespace-nowrap sticky right-0 bg-background z-10 text-center">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50">
+                <tr className="h-11 border-b">
+                  <th className="px-3 text-left font-medium whitespace-nowrap sticky left-0 bg-muted/50 z-10">SKU</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Product</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Type</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Risk</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Days Left</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Avail</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Gap%</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">On PO</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Rec Qty</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Velocity</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Status</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap sticky right-0 bg-muted/50 z-10">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
                 {filteredRecommendations.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
+                  <tr>
+                    <td colSpan={12} className="text-center text-muted-foreground py-8">
                       {recsData?.recommendations.length === 0 
                         ? "No actionable recommendations. Click Refresh to generate new recommendations."
                         : "No items match the selected filters."
                       }
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ) : (
                   filteredRecommendations.map((rec) => (
-                    <TableRow 
+                    <tr 
                       key={rec.id} 
                       data-testid={`row-recommendation-${rec.id}`}
-                      className={rec.status === "DISMISSED" ? "opacity-50" : ""}
+                      className={`h-11 border-b hover-elevate ${rec.status === "DISMISSED" ? "opacity-50" : ""}`}
                     >
-                      <TableCell className="font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
+                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
                         {rec.sku}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap max-w-[180px] truncate" title={rec.productName}>
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap max-w-[180px] truncate" title={rec.productName}>
                         {rec.productName}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap">
                         <span className={`text-sm font-medium ${getTypeBadgeColor(rec.recommendationType ?? "MONITOR")}`}>
                           {(rec.recommendationType ?? "MONITOR").replace("_", " ")}
                         </span>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap">
                         <Badge 
                           variant={getRiskBadgeVariant(rec.riskLevel)} 
                           data-testid={`badge-risk-${rec.id}`}
                         >
                           {rec.riskLevel}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap">
                         {rec.daysUntilStockout ?? "-"}
-                      </TableCell>
-                      <TableCell className={`text-right whitespace-nowrap ${(rec.availableForSale ?? 0) < 0 ? "text-destructive font-bold" : ""}`}>
+                      </td>
+                      <td className={`px-3 align-middle text-right whitespace-nowrap ${(rec.availableForSale ?? 0) < 0 ? "text-destructive font-bold" : ""}`}>
                         {rec.availableForSale ?? "-"}
-                      </TableCell>
-                      <TableCell className={`text-right whitespace-nowrap ${getStockGapColor(rec.stockGapPercent)}`}>
+                      </td>
+                      <td className={`px-3 align-middle text-right whitespace-nowrap ${getStockGapColor(rec.stockGapPercent)}`}>
                         {formatStockGap(rec.stockGapPercent)}
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap">
                         {rec.qtyOnPo ?? 0}
-                      </TableCell>
-                      <TableCell className="text-right font-medium whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle text-right font-medium whitespace-nowrap">
                         {rec.recommendedQty ?? "-"}
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap text-sm">
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap text-sm">
                         {rec.adjustedVelocity?.toFixed(1) ?? "-"}/d
                         {rec.adMultiplier && rec.adMultiplier > 1 && (
                           <span className="text-purple-500 ml-1" title={`Ad boost: ${rec.adMultiplier.toFixed(1)}x`}>
                             <Zap className="inline h-3 w-3" />
                           </span>
                         )}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap">
                         <Badge 
                           variant={getStatusBadgeVariant(rec.status)}
                           data-testid={`badge-status-${rec.id}`}
                         >
                           {rec.status}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap sticky right-0 bg-background z-10">
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap sticky right-0 bg-background z-10">
                         <div className="flex items-center justify-center gap-1">
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1167,12 +1167,12 @@ function InsightsTab() {
                             </Tooltip>
                           )}
                         </div>
-                      </TableCell>
-                    </TableRow>
+                      </td>
+                    </tr>
                   ))
                 )}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
         </CardContent>
       </Card>

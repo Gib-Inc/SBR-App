@@ -59,14 +59,14 @@ Preferred communication style: Simple, everyday language.
     *   Sales Order Cancelled: Increments `availableForSaleQty`
     *   Sales Order Shipped (Hildale): Decrements `hildaleQty`; (Pivot): No change to projection (already decremented at create)
     *   PO Received: Increments both `pivotQty` and `availableForSaleQty`
-    *   Returns: Always go to HILDALE - increments `hildaleQty` AND `availableForSaleQty`
-    *   Extensiv Sync: Sets `pivotQty` from Extensiv and adjusts `availableForSaleQty` by the delta
+    *   Returns: Always go to HILDALE ONLY - increments `hildaleQty` only (NOT `availableForSaleQty`). Returned items are buffer stock until transferred to Pivot.
+    *   Extensiv Sync: READ-ONLY - sets `pivotQty` from Extensiv and adjusts `availableForSaleQty` by the delta. NO write-back to Extensiv.
 *   **InventoryMovement Helper**: Centralized service (`server/services/inventory-movement.ts`) for all order-related inventory changes with audit logging. Used by Sales Orders, Returns, PO receipts, and Extensiv sync.
 *   **availableForSaleQty Ownership**: Only the following events modify availableForSaleQty (all via InventoryMovement.apply()):
     *   `EXTENSIV_SYNC`: Sets baseline by adjusting availableForSaleQty by (newPivotQty - oldPivotQty)
     *   `SALES_ORDER_CREATED`: Decrements for Pivot-fulfilled orders (Shopify/Amazon)
     *   `SALES_ORDER_CANCELLED`: Increments for Pivot-fulfilled orders (restores stock)
-    *   `RETURN_RECEIVED`: Increments (returned stock becomes sellable again)
+    *   `RETURN_RECEIVED`: NO CHANGE - returns go to Hildale only (NOT availableForSale until transferred)
     *   `PURCHASE_ORDER_RECEIVED`: Increments (new stock from PO)
     *   `SALES_ORDER_SHIPPED`: NO CHANGE for Pivot orders (already decremented at create), only affects hildaleQty for Hildale orders
 *   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.

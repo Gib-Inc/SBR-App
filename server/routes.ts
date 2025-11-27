@@ -6507,27 +6507,11 @@ Generate only the email body text, no subject line.`;
               createdBy: userId.toString(),
             });
             
-            // Update Extensiv warehouse inventory if configured
-            const extensivApiKey = process.env.EXTENSIV_API_KEY;
-            if (extensivApiKey) {
-              try {
-                const { ExtensivClient } = await import('./services/extensiv-client');
-                const extensivClient = new ExtensivClient(extensivApiKey);
-                
-                const warehouseCode = returnRequest.warehouseLocationCode || 'DEFAULT_WAREHOUSE';
-                
-                await extensivClient.adjustInventory(
-                  warehouseCode,
-                  item.sku,
-                  receivedItem.qtyReceived,
-                  `Return received: ${returnRequest.externalOrderId || returnRequest.id}`
-                );
-                
-                console.log(`[Returns] Updated Extensiv inventory for SKU ${item.sku} at ${warehouseCode}: +${receivedItem.qtyReceived}`);
-              } catch (extensivError: any) {
-                console.error(`[Returns] Failed to update Extensiv for SKU ${item.sku}:`, extensivError.message);
-              }
-            }
+            // NOTE: Extensiv is READ-ONLY. Returns go to HILDALE only.
+            // When units are ready to sell, they must be transferred from Hildale → Pivot
+            // via the existing transfer/scan workflows. Extensiv will pick up the change
+            // on the next sync cycle.
+            console.log(`[Returns] Restocked ${receivedItem.qtyReceived} ${item.sku} to HILDALE (Extensiv is READ-ONLY)`);
           } else {
             console.error(`[Returns] Failed to restock item ${item.sku}: ${result.error}`);
           }

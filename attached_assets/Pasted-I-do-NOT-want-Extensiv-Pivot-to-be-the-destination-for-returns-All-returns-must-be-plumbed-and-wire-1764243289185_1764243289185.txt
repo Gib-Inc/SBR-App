@@ -1,0 +1,70 @@
+I do NOT want Extensiv/Pivot to be the destination for returns. All returns must be plumbed and wired to go back into HILDALE only. Extensiv must go back to being READ-ONLY again.
+
+Please make the following changes to the returns + integration wiring:
+
+1) Reset the contract for Extensiv / Pivot
+- Extensiv / Pivot is READ-ONLY.
+- It is ONLY used to:
+  • Pull current 3PL inventory.
+  • Update pivotQty and any variance snapshots.
+- Extensiv MUST NOT receive write-backs for returns or any other stock movements.
+- That means:
+  • Remove/disable any calls to Extensiv.adjustInventory or similar write methods being used in returns processing (e.g., the call you referenced around routes.ts line 6519).
+  • After this change, returns must not call Extensiv at all.
+
+2) Returns must always go to Hildale
+- The return engine’s RECEIVED state should behave as follows:
+  • When a return is marked RECEIVED, create an inventory movement with:
+      – direction: "IN"
+      – location: "HILDALE" (use whatever enum/constant you already use for the manufacturing site)
+      – type: RETURN_RECEIVED (or equivalent return transaction type).
+  • Do NOT increase pivotQty directly when a return is received.
+  • Do NOT call Extensiv.adjustInventory when a return is received.
+- Conceptually:
+  • All returns come “home” to Hildale for inspection/refurb/decision.
+  • If and when a returned unit is approved to go back to the 3PL, that should happen via the existing Hildale → Pivot transfer/scan workflows, NOT by a direct return into Extensiv.
+
+3) Available-for-sale vs Hildale buffer
+- Keep the logic we already established:
+  • Pivot is the primary “available for sale” source.
+  • Hildale is a manufacturing/buffer location (faster than suppliers, but not instantly sellable).
+- When a return is RECEIVED at Hildale:
+  • Increase Hildale qty for that SKU.
+  • Do NOT automatically increase availableForSale. The item must first be moved/scanned into Pivot using the existing movement/transfer flows before it’s counted as truly available for sale.
+- Ensure the InventoryDecisionEngine:
+  • Sees Hildale returns as additional buffer stock in Hildale.
+  • Continues to treat Pivot as the “ready to ship” location when computing availableForSale and risk, exactly as you’ve already wired it.
+
+4) Clean up the current returns → Extensiv behavior
+- Anywhere in the code that currently:
+  • On return RECEIVED, calls Extensiv to adjust inventory, or
+  • Treats returns as going straight back into Pivot/Extensiv,
+  must be refactored to:
+  • Only create the internal RETURN_RECEIVED transaction at Hildale.
+  • Leave Extensiv untouched.
+- If there is any variance view that compares internal Pivot vs Extensiv:
+  • That variance should be based on:
+      – Internal pivotQty (from our internal movements and PO receipts to Pivot)
+      – Extensiv’s READ-ONLY snapshot
+  • Returns to Hildale should not secretly adjust Extensiv’s numbers.
+
+5) Logs and audit
+- Update AI Logs / Audit so that return movements clearly show:
+  • source: "RETURNS"
+  • type: "INVENTORY_MOVEMENT"
+  • location: "HILDALE"
+  • metadata: { sku, qty, direction: "IN", location: "HILDALE", eventType: "RETURN_RECEIVED", returnId }
+- Remove any references in logs that suggest returns are updating Extensiv or Pivot directly.
+
+6) Confirmation
+- After making these changes, verify with a test SKU:
+  • Create a sale (inventory moves OUT of Pivot).
+  • Create and complete a return:
+      – When RECEIVED, stock moves IN to Hildale only.
+      – Extensiv is not called or modified.
+      – Hildale qty increases, Pivot qty does not.
+  • If I later transfer units from Hildale to Pivot using the existing transfer/scan flow, THEN Pivot qty increases and availableForSale updates.
+- Summarize what you changed:
+  • Where Extensiv write-backs for returns existed and how you removed them.
+  • How the return RECEIVED logic now routes everything to Hildale.
+  • How this shows up in the inventory transaction table and AI Logs.

@@ -29,13 +29,21 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  *   - For Hildale orders: no movement (nothing was decremented)
  * 
  * RETURN_RECEIVED:
- *   - Returns ALWAYS go to HILDALE for finished products
- *   - Increments hildaleQty AND availableForSaleQty
+ *   - Returns ALWAYS go to HILDALE only (not Pivot, not availableForSale)
+ *   - Increments hildaleQty ONLY - NOT availableForSaleQty
+ *   - Returned items are buffer stock until explicitly transferred to Pivot
  *   - Only on RESTOCK disposition, not SCRAP/INSPECT
+ *   - Extensiv is READ-ONLY - no write-back for returns
  * 
  * PURCHASE_ORDER_RECEIVED:
  *   - Increments pivotQty AND availableForSaleQty for finished products
  *   - Increments currentStock for components
+ * 
+ * EXTENSIV_SYNC:
+ *   - READ-ONLY sync from Extensiv/3PL warehouse
+ *   - Updates pivotQty to match Extensiv snapshot
+ *   - Adjusts availableForSaleQty by delta (newPivotQty - oldPivotQty)
+ *   - NO write-back to Extensiv ever
  * 
  * IDEMPOTENCY:
  * - Unique constraint on (channel, externalOrderId) prevents duplicate imports
@@ -146,10 +154,13 @@ export class InventoryMovement {
           break;
 
         case "RETURN_RECEIVED":
+          // Returns ALWAYS go to HILDALE only - NOT available for sale until transferred to Pivot
+          // This enforces Extensiv as READ-ONLY and requires explicit Hildale → Pivot transfer
           quantityDelta = params.quantity;
           if (isFinished) {
+            // Only increment hildaleQty - NOT availableForSaleQty
+            // Item must be transferred to Pivot via scan/transfer workflow to become sellable
             updates.hildaleQty = beforeState.hildaleQty + params.quantity;
-            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }

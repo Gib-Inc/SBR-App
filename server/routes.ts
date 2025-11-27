@@ -473,6 +473,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         pageSize = '50',
         source,
         eventType,
+        entityType,
         status,
         dateFrom,
         dateTo,
@@ -488,6 +489,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         offset: number;
         source?: string;
         eventType?: string;
+        entityType?: string;
         status?: string;
         dateFrom?: Date;
         dateTo?: Date;
@@ -502,6 +504,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (eventType && typeof eventType === 'string') {
         options.eventType = eventType;
+      }
+      if (entityType && typeof entityType === 'string') {
+        options.entityType = entityType;
       }
       if (status && typeof status === 'string') {
         options.status = status;

@@ -883,10 +883,12 @@ interface AuditLogEntry {
 
 interface LogsResponse {
   logs: AuditLogEntry[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  pagination: {
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  };
 }
 
 function LogsTab() {
@@ -900,20 +902,23 @@ function LogsTab() {
   
   const pageSize = 25;
   
-  // Build query params
-  const queryParams = new URLSearchParams();
-  queryParams.set("page", page.toString());
-  queryParams.set("pageSize", pageSize.toString());
-  if (eventTypeFilter !== "all") queryParams.set("eventType", eventTypeFilter);
-  if (entityTypeFilter !== "all") queryParams.set("entityType", entityTypeFilter);
-  if (sourceFilter !== "all") queryParams.set("source", sourceFilter);
-  if (statusFilter !== "all") queryParams.set("status", statusFilter);
-  if (searchQuery) queryParams.set("search", searchQuery);
+  // Build query params - must be inside the component to use state values
+  const buildQueryParams = () => {
+    const params = new URLSearchParams();
+    params.set("page", page.toString());
+    params.set("pageSize", pageSize.toString());
+    if (eventTypeFilter !== "all") params.set("eventType", eventTypeFilter);
+    if (entityTypeFilter !== "all") params.set("entityType", entityTypeFilter);
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (searchQuery) params.set("search", searchQuery);
+    return params.toString();
+  };
   
   const { data: logsData, isLoading, refetch, isFetching } = useQuery<LogsResponse>({
     queryKey: ["/api/ai/logs", page, eventTypeFilter, entityTypeFilter, sourceFilter, statusFilter, searchQuery],
     queryFn: async () => {
-      const response = await fetch(`/api/ai/logs?${queryParams.toString()}`, {
+      const response = await fetch(`/api/ai/logs?${buildQueryParams()}`, {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to fetch logs");
@@ -1181,10 +1186,10 @@ function LogsTab() {
           </div>
           
           {/* Pagination */}
-          {logsData && logsData.totalPages > 1 && (
+          {logsData?.pagination && logsData.pagination.totalPages > 1 && (
             <div className="flex items-center justify-between px-2">
               <p className="text-sm text-muted-foreground">
-                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, logsData.total)} of {logsData.total} logs
+                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, logsData.pagination.total)} of {logsData.pagination.total} logs
               </p>
               <div className="flex items-center gap-2">
                 <Button
@@ -1198,13 +1203,13 @@ function LogsTab() {
                   Previous
                 </Button>
                 <span className="text-sm text-muted-foreground px-2">
-                  Page {page} of {logsData.totalPages}
+                  Page {page} of {logsData.pagination.totalPages}
                 </span>
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => setPage(p => Math.min(logsData.totalPages, p + 1))}
-                  disabled={page >= logsData.totalPages}
+                  onClick={() => setPage(p => Math.min(logsData.pagination.totalPages, p + 1))}
+                  disabled={page >= logsData.pagination.totalPages}
                   data-testid="button-next-page"
                 >
                   Next

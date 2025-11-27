@@ -63,6 +63,8 @@ import {
   type InsertSalesOrderLine,
   type BackorderSnapshot,
   type InsertBackorderSnapshot,
+  type AuditLog,
+  type InsertAuditLog,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -287,6 +289,11 @@ export interface IStorage {
   upsertBackorderSnapshot(snapshot: InsertBackorderSnapshot): Promise<BackorderSnapshot>;
   refreshBackorderSnapshot(productId: string): Promise<BackorderSnapshot>;
   refreshAllBackorderSnapshots(): Promise<void>;
+
+  // Audit Logs
+  createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]>;
+  getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -317,6 +324,7 @@ export class MemStorage implements IStorage {
   private salesOrders: Map<string, SalesOrder>;
   private salesOrderLines: Map<string, SalesOrderLine>;
   private backorderSnapshots: Map<string, BackorderSnapshot>;
+  private auditLogs: Map<string, AuditLog>;
 
   constructor() {
     this.users = new Map();
@@ -346,6 +354,7 @@ export class MemStorage implements IStorage {
     this.salesOrders = new Map();
     this.salesOrderLines = new Map();
     this.backorderSnapshots = new Map();
+    this.auditLogs = new Map();
     this.seedData();
   }
 
@@ -1938,6 +1947,50 @@ export class MemStorage implements IStorage {
       await this.refreshBackorderSnapshot(product.id);
     }
   }
+
+  // Audit Logs
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    const id = randomUUID();
+    const auditLog: AuditLog = {
+      id,
+      timestamp: new Date(),
+      actorType: log.actorType,
+      actorId: log.actorId ?? null,
+      eventType: log.eventType,
+      entityType: log.entityType ?? null,
+      entityId: log.entityId ?? null,
+      purchaseOrderId: log.purchaseOrderId ?? null,
+      supplierId: log.supplierId ?? null,
+      success: log.success ?? true,
+      errorMessage: log.errorMessage ?? null,
+      details: log.details ?? null,
+    };
+    this.auditLogs.set(id, auditLog);
+    return auditLog;
+  }
+
+  async getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]> {
+    let logs = Array.from(this.auditLogs.values());
+    
+    if (options?.eventType) {
+      logs = logs.filter(log => log.eventType === options.eventType);
+    }
+    if (options?.entityType) {
+      logs = logs.filter(log => log.entityType === options.entityType);
+    }
+    
+    logs.sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0));
+    
+    const offset = options?.offset ?? 0;
+    const limit = options?.limit ?? 100;
+    return logs.slice(offset, offset + limit);
+  }
+
+  async getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]> {
+    return Array.from(this.auditLogs.values())
+      .filter(log => log.purchaseOrderId === purchaseOrderId)
+      .sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0));
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -3251,6 +3304,39 @@ export class PostgresStorage implements IStorage {
     for (const product of products) {
       await this.refreshBackorderSnapshot(product.id);
     }
+  }
+
+  // Audit Logs
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    const results = await this.db.insert(schema.auditLogs).values(log).returning();
+    return results[0];
+  }
+
+  async getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]> {
+    let query = this.db.select().from(schema.auditLogs);
+    
+    const conditions = [];
+    if (options?.eventType) {
+      conditions.push(eq(schema.auditLogs.eventType, options.eventType));
+    }
+    if (options?.entityType) {
+      conditions.push(eq(schema.auditLogs.entityType, options.entityType));
+    }
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as typeof query;
+    }
+    
+    return await query
+      .orderBy(drizzleSql`${schema.auditLogs.timestamp} DESC`)
+      .limit(options?.limit ?? 100)
+      .offset(options?.offset ?? 0);
+  }
+
+  async getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]> {
+    return await this.db.select().from(schema.auditLogs)
+      .where(eq(schema.auditLogs.purchaseOrderId, purchaseOrderId))
+      .orderBy(drizzleSql`${schema.auditLogs.timestamp} DESC`);
   }
 }
 

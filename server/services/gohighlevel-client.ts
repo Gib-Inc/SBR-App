@@ -341,4 +341,42 @@ export class GoHighLevelClient {
     // For now, just test the connection as a sync placeholder
     return await this.testConnection();
   }
+
+  // ============================================================================
+  // V2 WEBHOOK PATH (FUTURE IMPLEMENTATION)
+  // ============================================================================
+  // 
+  // V2 will add an alternative sending method via GHL Inbound Webhook:
+  //
+  // 1. Configuration:
+  //    - Add gohighlevelInboundWebhookUrl to Settings (already exists, unused)
+  //    - Add sendViaWebhook toggle to PO send options
+  //
+  // 2. Webhook-Based PO Send:
+  //    async sendPOViaWebhook(webhookUrl: string, payload: {
+  //      poNumber: string;
+  //      supplierName: string;
+  //      supplierEmail?: string;
+  //      supplierPhone?: string;
+  //      items: Array<{ sku: string; name: string; qty: number; unitPrice?: number }>;
+  //      subject: string;
+  //      emailBody: string;
+  //      smsMessage: string;
+  //      sendChannel: 'EMAIL' | 'SMS' | 'BOTH';
+  //    }): Promise<{ success: boolean; webhookResponseId?: string; error?: string }> {
+  //      // POST to webhook URL
+  //      // GHL workflow handles contact creation and message sending
+  //      // Return webhook response for tracking
+  //    }
+  //
+  // 3. Benefits of V2 Webhook Path:
+  //    - GHL workflows can add custom logic (delays, sequences, A/B testing)
+  //    - Easier to modify message templates without code changes
+  //    - Better integration with GHL's marketing automation
+  //
+  // 4. Keep Direct API as fallback:
+  //    - If webhook fails or times out, fall back to sendEmail/sendSMS
+  //    - Direct API remains available for simple, immediate sends
+  //
+  // ============================================================================
 }

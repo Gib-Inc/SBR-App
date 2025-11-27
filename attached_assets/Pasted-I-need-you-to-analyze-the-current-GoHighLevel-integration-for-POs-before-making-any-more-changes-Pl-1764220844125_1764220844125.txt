@@ -1,0 +1,75 @@
+I need you to analyze the current GoHighLevel integration for POs before making any more changes. Please do an audit and summarize what already exists; don’t overbuild anything yet.
+
+Find all GHL-related code
+
+Inspect server/services/gohighlevel-client.ts, any other gohighlevel-*.ts files, and any routes or services that call into them.
+
+Look for:
+
+Methods for creating / updating contacts.
+
+Methods for sending Email or SMS.
+
+Any code that posts to a GHL inbound webhook URL.
+
+Any related env vars (e.g. GHL API key, location ID, webhook URL).
+
+Tell me which pattern we currently use for sending POs
+
+Are we currently set up to:
+
+(A) POST a PO payload to a single GHL inbound webhook, expecting a workflow inside GHL to send the Email/SMS, or
+
+(B) Call GHL’s REST API directly to create/update contacts and send messages, or
+
+(C) A partial / mixed state (some client functions exist but aren’t wired end-to-end)?
+
+Be explicit: which functions are implemented, which are stubs, and where they are called from in the PO flow.
+
+Estimate work for each option (high level, no code yet)
+
+Option 1 (Webhook-based):
+
+What’s still needed so the app can:
+
+Find or create a contact in GHL (by email/phone) OR at least include the right identifiers in the webhook payload.
+
+Send one PO JSON payload to a configurable inbound webhook URL whenever a PO is created/sent.
+
+Roughly how many small tasks/files would this touch?
+
+Option 2 (Direct API-based):
+
+What’s still needed so the app can:
+
+Find or create a contact in GHL.
+
+Send both Email and SMS directly via GHL’s API, using the Subject + Message Body from the Create PO screen.
+
+Roughly how many small tasks/files would this touch?
+
+Respect MVP + budget
+
+For now, do not fully implement either option.
+
+Instead, give me:
+
+A short written summary of the current state.
+
+A recommendation: given what’s already built, which option (Webhook vs Direct API) is cheaper/faster to complete for V1 while still allowing us to swap to full API later.
+
+If useful, you may introduce a very small abstraction like a GhlMessagingService interface and show how both options would plug into it, but don’t build both implementations yet.
+
+Output format
+
+Respond in plain language inside the Replit task with:
+
+“Current state” (bullet list)
+
+“Effort to finish Webhook path” (bullets)
+
+“Effort to finish Direct API path” (bullets)
+
+“My recommendation for V1 given budget”
+
+Do not add or change any UI in this step. This task is only an integration audit + recommendation so I can choose the final wiring strategy.

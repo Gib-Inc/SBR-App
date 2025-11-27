@@ -3623,17 +3623,84 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      // Update PO status
+      // Update PO status and persist GHL send results for audit/tracking
+      const sendTimestamp = new Date();
       if (ghlResult.success) {
         await storage.updatePurchaseOrder(purchaseOrder.id, {
           status: 'SENT',
-          sentAt: new Date(),
+          sentAt: sendTimestamp,
+          // GHL Send tracking fields (V1 Direct API)
+          lastSendChannel: sentMethod,
+          lastSendStatus: 'SUCCESS',
+          lastSendTimestamp: sendTimestamp,
+          lastSendMessageId: ghlResult.messageId || null,
+          lastSendError: null, // Clear any previous error
+        });
+
+        // Write audit log for successful send
+        await storage.createAuditLog({
+          actorType: 'USER',
+          actorId: req.session.userId,
+          eventType: sentMethod === 'EMAIL' ? 'PO_SENT_GHL_EMAIL' : 'PO_SENT_GHL_SMS',
+          entityType: 'PURCHASE_ORDER',
+          entityId: purchaseOrder.id,
+          purchaseOrderId: purchaseOrder.id,
+          supplierId: finalSupplierId,
+          success: true,
+          details: {
+            poNumber: poNumber,
+            supplierName: supplier.name,
+            channel: sentMethod,
+            messageId: ghlResult.messageId,
+            subject: sentMethod === 'EMAIL' ? poContent.subject : undefined,
+            recipientEmail: sentMethod === 'EMAIL' ? contactEmail : undefined,
+            recipientPhone: sentMethod === 'SMS' ? contactPhone : undefined,
+          },
         });
       } else {
         await storage.updatePurchaseOrder(purchaseOrder.id, {
           status: 'APPROVAL_PENDING',
+          // GHL Send tracking fields - record the failed attempt
+          lastSendChannel: sentMethod || null,
+          lastSendStatus: 'FAILED',
+          lastSendTimestamp: sendTimestamp,
+          lastSendMessageId: null,
+          lastSendError: ghlResult.error || 'Unknown error sending via GHL',
+        });
+
+        // Write audit log for failed send
+        await storage.createAuditLog({
+          actorType: 'USER',
+          actorId: req.session.userId,
+          eventType: 'PO_SEND_FAILED',
+          entityType: 'PURCHASE_ORDER',
+          entityId: purchaseOrder.id,
+          purchaseOrderId: purchaseOrder.id,
+          supplierId: finalSupplierId,
+          success: false,
+          errorMessage: ghlResult.error || 'Unknown error sending via GHL',
+          details: {
+            poNumber: poNumber,
+            supplierName: supplier.name,
+            attemptedChannel: sentMethod || sendVia,
+            error: ghlResult.error,
+            recipientEmail: contactEmail,
+            recipientPhone: contactPhone,
+          },
         });
       }
+
+      // ============================================================================
+      // V2 WEBHOOK PATH (FUTURE)
+      // ============================================================================
+      // When V2 webhook integration is implemented:
+      // 1. Check settings for gohighlevelInboundWebhookUrl
+      // 2. If webhook URL is configured and user prefers webhook:
+      //    - POST the PO payload to the webhook URL
+      //    - GHL workflow handles contact creation and message sending
+      //    - Store webhook response ID for tracking
+      // 3. Fall back to direct API if webhook fails or not configured
+      // ============================================================================
 
       const updatedPO = await storage.getPurchaseOrder(purchaseOrder.id);
       const lines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);

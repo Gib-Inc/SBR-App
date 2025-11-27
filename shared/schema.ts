@@ -164,6 +164,12 @@ export const purchaseOrders = pgTable("purchase_orders", {
   refundAmount: real("refund_amount").default(0),
   notes: text("notes"),
   ghlRepName: text("ghl_rep_name"), // GoHighLevel rep who issued the PO
+  // GHL Send tracking fields (V1 Direct API)
+  lastSendChannel: text("last_send_channel"), // EMAIL, SMS
+  lastSendStatus: text("last_send_status"), // SUCCESS, FAILED
+  lastSendTimestamp: timestamp("last_send_timestamp"),
+  lastSendMessageId: text("last_send_message_id"), // GHL message ID for audit/tracking
+  lastSendError: text("last_send_error"), // Error message if send failed
 });
 
 export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true });
@@ -848,3 +854,34 @@ export const insertBackorderSnapshotSchema = createInsertSchema(backorderSnapsho
 });
 export type InsertBackorderSnapshot = z.infer<typeof insertBackorderSnapshotSchema>;
 export type BackorderSnapshot = typeof backorderSnapshots.$inferSelect;
+
+// ============================================================================
+// AUDIT LOGS (System Event Tracking for AI Agent Logs Tab)
+// ============================================================================
+
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  timestamp: timestamp("timestamp").notNull().default(sql`now()`),
+  actorType: text("actor_type").notNull(), // 'SYSTEM' | 'USER'
+  actorId: varchar("actor_id"), // User ID if actorType is USER
+  eventType: text("event_type").notNull(), // e.g., PO_SENT_GHL_EMAIL, PO_SENT_GHL_SMS, PO_SEND_FAILED, etc.
+  entityType: text("entity_type"), // 'PURCHASE_ORDER' | 'SALES_ORDER' | 'ITEM' | 'SUPPLIER' | etc.
+  entityId: varchar("entity_id"), // ID of the related entity
+  purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  supplierId: varchar("supplier_id").references(() => suppliers.id, { onDelete: 'set null' }),
+  success: boolean("success").notNull().default(true),
+  errorMessage: text("error_message"),
+  details: jsonb("details"), // Additional context as JSON (e.g., GHL response, message content, etc.)
+}, (table) => ({
+  timestampIdx: index("audit_logs_timestamp_idx").on(table.timestamp),
+  eventTypeIdx: index("audit_logs_event_type_idx").on(table.eventType),
+  entityTypeIdx: index("audit_logs_entity_type_idx").on(table.entityType),
+  purchaseOrderIdIdx: index("audit_logs_purchase_order_id_idx").on(table.purchaseOrderId),
+}));
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ 
+  id: true,
+  timestamp: true 
+});
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+export type AuditLog = typeof auditLogs.$inferSelect;

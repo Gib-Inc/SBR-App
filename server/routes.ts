@@ -790,6 +790,169 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // AI SYSTEM RECOMMENDATIONS (Weekly LLM Review)
+  // ============================================================================
+  
+  // GET /api/ai/system-recommendations - List AI system recommendations with filters
+  app.get("/api/ai/system-recommendations", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { status, category, severity, limit: limitParam } = req.query;
+      
+      const options: {
+        status?: string;
+        category?: string;
+        severity?: string;
+        limit?: number;
+      } = {};
+      
+      if (status && typeof status === 'string') {
+        options.status = status;
+      }
+      if (category && typeof category === 'string') {
+        options.category = category;
+      }
+      if (severity && typeof severity === 'string') {
+        options.severity = severity;
+      }
+      if (limitParam && typeof limitParam === 'string') {
+        const parsed = parseInt(limitParam);
+        if (!isNaN(parsed) && parsed > 0) {
+          options.limit = Math.min(parsed, 100); // Cap at 100
+        }
+      }
+      
+      const recommendations = await storage.getAISystemRecommendations(options);
+      
+      // Calculate summary counts
+      const allRecs = await storage.getAISystemRecommendations({});
+      const summary = {
+        total: allRecs.length,
+        new: allRecs.filter(r => r.status === "NEW").length,
+        accepted: allRecs.filter(r => r.status === "ACCEPTED").length,
+        dismissed: allRecs.filter(r => r.status === "DISMISSED").length,
+        bySeverity: {
+          critical: allRecs.filter(r => r.severity === "CRITICAL" && r.status !== "DISMISSED").length,
+          high: allRecs.filter(r => r.severity === "HIGH" && r.status !== "DISMISSED").length,
+          medium: allRecs.filter(r => r.severity === "MEDIUM" && r.status !== "DISMISSED").length,
+          low: allRecs.filter(r => r.severity === "LOW" && r.status !== "DISMISSED").length,
+        },
+        byCategory: {
+          integration: allRecs.filter(r => r.category === "INTEGRATION" && r.status !== "DISMISSED").length,
+          performance: allRecs.filter(r => r.category === "PERFORMANCE" && r.status !== "DISMISSED").length,
+          data_quality: allRecs.filter(r => r.category === "DATA_QUALITY" && r.status !== "DISMISSED").length,
+          security: allRecs.filter(r => r.category === "SECURITY" && r.status !== "DISMISSED").length,
+          configuration: allRecs.filter(r => r.category === "CONFIGURATION" && r.status !== "DISMISSED").length,
+          other: allRecs.filter(r => r.category === "OTHER" && r.status !== "DISMISSED").length,
+        },
+      };
+      
+      res.json({
+        recommendations,
+        summary,
+        fetchedAt: new Date(),
+      });
+    } catch (error: any) {
+      console.error("[AI System Recommendations] Error fetching recommendations:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch system recommendations" });
+    }
+  });
+  
+  // POST /api/ai/system-recommendations/run-review - Manually trigger AI System Review
+  app.post("/api/ai/system-recommendations/run-review", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { periodDays } = req.body;
+      const userId = req.session.userId;
+      
+      // Import the trigger function
+      const { triggerAISystemReview } = await import('./scheduler-service');
+      
+      // Calculate period dates
+      const periodEnd = new Date();
+      const periodStart = new Date();
+      periodStart.setDate(periodStart.getDate() - (periodDays || 7)); // Default 7 days
+      
+      const result = await triggerAISystemReview({
+        periodStart,
+        periodEnd,
+        userId,
+      });
+      
+      if (result.success) {
+        res.json({
+          success: true,
+          message: `AI System Review completed. Analyzed ${result.logsAnalyzed} logs and generated ${result.recommendationsGenerated} recommendations.`,
+          logsAnalyzed: result.logsAnalyzed,
+          recommendationsGenerated: result.recommendationsGenerated,
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: result.error || "Review completed with errors",
+          logsAnalyzed: result.logsAnalyzed,
+          recommendationsGenerated: result.recommendationsGenerated,
+        });
+      }
+    } catch (error: any) {
+      console.error("[AI System Review] Error triggering manual review:", error);
+      res.status(500).json({ error: error.message || "Failed to run AI System Review" });
+    }
+  });
+  
+  // PATCH /api/ai/system-recommendations/:id - Update recommendation status
+  app.patch("/api/ai/system-recommendations/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status, notes } = req.body;
+      
+      // Validate status
+      const validStatuses = ['NEW', 'ACCEPTED', 'DISMISSED', 'IMPLEMENTED'];
+      if (status && !validStatuses.includes(status)) {
+        return res.status(400).json({ 
+          error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        });
+      }
+      
+      const updates: { status?: string; notes?: string } = {};
+      if (status) updates.status = status;
+      if (notes !== undefined) updates.notes = notes;
+      
+      const recommendation = await storage.updateAISystemRecommendation(id, updates);
+      
+      if (!recommendation) {
+        return res.status(404).json({ error: "Recommendation not found" });
+      }
+      
+      // Log the status change
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.log({
+          eventType: 'AI_SYSTEM_RECOMMENDATION_STATUS_CHANGED',
+          source: 'AI_SYSTEM',
+          message: `Recommendation ${id} status changed to ${status}`,
+          entityType: 'ai_system_recommendation',
+          entityId: id,
+          status: 'success',
+          metadata: {
+            recommendationId: id,
+            oldStatus: recommendation.status,
+            newStatus: status,
+            title: recommendation.title,
+            userId: req.session.userId,
+            userName: user?.email,
+          },
+        });
+      } catch (logError) {
+        console.warn('[AI System Recommendations] Failed to log status change:', logError);
+      }
+      
+      res.json(recommendation);
+    } catch (error: any) {
+      console.error("[AI System Recommendations] Error updating recommendation:", error);
+      res.status(500).json({ error: error.message || "Failed to update recommendation" });
+    }
+  });
+
+  // ============================================================================
   // INTEGRATION HEALTH & KEY ROTATION
   // ============================================================================
   

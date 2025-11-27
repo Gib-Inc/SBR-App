@@ -153,9 +153,9 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
   const [saveFormatName, setSaveFormatName] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
-  // Label groups
+  // Label groups (multi-select with checkboxes)
   const [labelGroupsOpen, setLabelGroupsOpen] = useState(false);
-  const [selectedLabelGroup, setSelectedLabelGroup] = useState<string>("");
+  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
 
   // Fetch saved formats
   const { data: savedFormats = [] } = useQuery<LabelFormat[]>({
@@ -355,9 +355,23 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     }
   };
 
-  // Apply label group selection
-  const applyLabelGroup = (groupType: string) => {
-    if (!items || items.length === 0) return;
+  // Toggle a label group checkbox
+  const toggleLabelGroup = (groupType: string, checked: boolean) => {
+    const newGroups = new Set(selectedGroups);
+    if (checked) {
+      newGroups.add(groupType);
+    } else {
+      newGroups.delete(groupType);
+    }
+    setSelectedGroups(newGroups);
+  };
+
+  // Apply selected label groups
+  const applyLabelGroups = () => {
+    if (!items || items.length === 0 || selectedGroups.size === 0) {
+      toast({ title: "No groups selected", description: "Please select at least one group.", variant: "default" });
+      return;
+    }
 
     const newSelectedItems = new Map<string, SelectedItem>();
     const riskThresholdHigh = aiRules?.riskThresholdHighDays ?? 7;
@@ -369,11 +383,11 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
       purchaseOrders
         .filter((po: any) => ['approved', 'sent'].includes(po.status))
         .forEach((po: any) => {
-          if (po.lineItems) {
-            po.lineItems.forEach((line: any) => {
-              if (line.itemId) incomingPOItemIds.add(line.itemId);
-            });
-          }
+          // Check for lines array (API returns it as 'lines')
+          const lines = po.lines || po.lineItems || [];
+          lines.forEach((line: any) => {
+            if (line.itemId) incomingPOItemIds.add(line.itemId);
+          });
         });
     }
 
@@ -383,16 +397,15 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         ? Math.floor(item.currentStock / item.dailyUsage) 
         : 999;
 
-      switch (groupType) {
-        case "incoming":
-          shouldSelect = incomingPOItemIds.has(item.id);
-          break;
-        case "critical":
-          shouldSelect = daysOfCover <= riskThresholdHigh;
-          break;
-        case "medium":
-          shouldSelect = daysOfCover > riskThresholdHigh && daysOfCover <= riskThresholdMedium;
-          break;
+      // Check each selected group
+      if (selectedGroups.has("incoming") && incomingPOItemIds.has(item.id)) {
+        shouldSelect = true;
+      }
+      if (selectedGroups.has("critical") && daysOfCover <= riskThresholdHigh) {
+        shouldSelect = true;
+      }
+      if (selectedGroups.has("medium") && daysOfCover > riskThresholdHigh && daysOfCover <= riskThresholdMedium) {
+        shouldSelect = true;
       }
 
       if (shouldSelect) {
@@ -409,22 +422,28 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
 
     setSelectedItems(newSelectedItems);
     setLabelGroupsOpen(false);
-    setSelectedLabelGroup("");
     setValidationError(null);
 
     const count = newSelectedItems.size;
+    const groupNames = Array.from(selectedGroups).map(g => 
+      g === 'incoming' ? 'Incoming POs' : g === 'critical' ? 'Critical Stock' : 'Medium Stock'
+    ).join(', ');
+
     if (count === 0) {
       toast({ 
         title: "No items found", 
-        description: `No items match the "${groupType}" criteria.`,
+        description: `No items match the selected criteria.`,
         variant: "default" 
       });
     } else {
       toast({ 
         title: `${count} item${count !== 1 ? 's' : ''} selected`, 
-        description: `Applied "${groupType === 'incoming' ? 'Incoming POs' : groupType === 'critical' ? 'Critical Stock' : 'Medium Stock'}" group.` 
+        description: `Applied: ${groupNames}` 
       });
     }
+    
+    // Reset selected groups after applying
+    setSelectedGroups(new Set());
   };
 
   // Build format config from current inputs
@@ -991,28 +1010,73 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
                         Label Groups
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-64 p-3" align="end">
-                      <div className="space-y-3">
-                        <Label className="text-sm font-medium">Select a group to print</Label>
-                        <Select 
-                          value={selectedLabelGroup} 
-                          onValueChange={(value) => {
-                            setSelectedLabelGroup(value);
-                            applyLabelGroup(value);
-                          }}
+                    <PopoverContent className="w-72 p-4" align="end">
+                      <div className="space-y-4">
+                        <div>
+                          <Label className="text-sm font-medium">Select groups to print</Label>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Choose one or more groups
+                          </p>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex items-start gap-3">
+                            <Checkbox 
+                              id="group-incoming"
+                              checked={selectedGroups.has("incoming")}
+                              onCheckedChange={(checked) => toggleLabelGroup("incoming", checked as boolean)}
+                              data-testid="checkbox-group-incoming"
+                            />
+                            <div className="grid gap-0.5">
+                              <label htmlFor="group-incoming" className="text-sm font-medium cursor-pointer">
+                                Incoming POs
+                              </label>
+                              <p className="text-xs text-muted-foreground">
+                                Items on approved/sent purchase orders
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <Checkbox 
+                              id="group-critical"
+                              checked={selectedGroups.has("critical")}
+                              onCheckedChange={(checked) => toggleLabelGroup("critical", checked as boolean)}
+                              data-testid="checkbox-group-critical"
+                            />
+                            <div className="grid gap-0.5">
+                              <label htmlFor="group-critical" className="text-sm font-medium cursor-pointer">
+                                Critical Stock
+                              </label>
+                              <p className="text-xs text-muted-foreground">
+                                Items at critical urgency levels
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <Checkbox 
+                              id="group-medium"
+                              checked={selectedGroups.has("medium")}
+                              onCheckedChange={(checked) => toggleLabelGroup("medium", checked as boolean)}
+                              data-testid="checkbox-group-medium"
+                            />
+                            <div className="grid gap-0.5">
+                              <label htmlFor="group-medium" className="text-sm font-medium cursor-pointer">
+                                Medium Stock
+                              </label>
+                              <p className="text-xs text-muted-foreground">
+                                Items at medium urgency levels
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <Button 
+                          className="w-full" 
+                          size="sm"
+                          onClick={applyLabelGroups}
+                          disabled={selectedGroups.size === 0}
+                          data-testid="button-apply-groups"
                         >
-                          <SelectTrigger data-testid="select-label-group">
-                            <SelectValue placeholder="Choose a group..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="incoming">Incoming POs</SelectItem>
-                            <SelectItem value="critical">Critical Stock</SelectItem>
-                            <SelectItem value="medium">Medium Stock</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          Selects items matching the chosen criteria
-                        </p>
+                          Apply Selection
+                        </Button>
                       </div>
                     </PopoverContent>
                   </Popover>

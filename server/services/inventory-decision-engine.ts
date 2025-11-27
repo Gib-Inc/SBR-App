@@ -20,7 +20,7 @@
 
 import { IStorage } from "../storage";
 import { AuditLogger } from "./audit-logger";
-import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest } from "@shared/schema";
+import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest, QuickbooksSalesSnapshot } from "@shared/schema";
 
 // Types for the decision engine
 // Note: These match the frontend expectations
@@ -183,6 +183,59 @@ export class InventoryDecisionEngine {
 
     const velocity = lookbackDays > 0 ? totalFulfilled / lookbackDays : 0;
     return { velocity, primaryChannel };
+  }
+
+  /**
+   * Build a map of SKU -> average daily velocity from QuickBooks sales snapshots
+   * Uses recent months (last 6 months) to compute average daily sales
+   * This provides historical reference when local sales data is insufficient
+   */
+  private buildQuickBooksVelocityMap(
+    snapshots: QuickbooksSalesSnapshot[]
+  ): Map<string, number> {
+    const velocityMap = new Map<string, number>();
+    
+    if (!snapshots || snapshots.length === 0) {
+      return velocityMap;
+    }
+
+    // Group by SKU
+    const skuSnapshots = new Map<string, QuickbooksSalesSnapshot[]>();
+    for (const snapshot of snapshots) {
+      const existing = skuSnapshots.get(snapshot.sku) || [];
+      existing.push(snapshot);
+      skuSnapshots.set(snapshot.sku, existing);
+    }
+
+    // Calculate average daily velocity for each SKU (using last 6 months of data)
+    const now = new Date();
+    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+
+    for (const [sku, skuData] of Array.from(skuSnapshots.entries())) {
+      // Filter to recent snapshots
+      const recentSnapshots = skuData.filter((s: QuickbooksSalesSnapshot) => {
+        const snapshotDate = new Date(s.year, s.month - 1, 1);
+        return snapshotDate >= sixMonthsAgo;
+      });
+
+      if (recentSnapshots.length === 0) {
+        continue;
+      }
+
+      // Calculate total quantity and days covered
+      let totalQty = 0;
+      for (const snapshot of recentSnapshots) {
+        totalQty += Number(snapshot.totalQty) || 0;
+      }
+
+      // Estimate days covered (30 days per month * number of months)
+      const daysCovered = recentSnapshots.length * 30;
+      const dailyVelocity = daysCovered > 0 ? totalQty / daysCovered : 0;
+
+      velocityMap.set(sku, dailyVelocity);
+    }
+
+    return velocityMap;
   }
 
   /**
@@ -434,20 +487,25 @@ export class InventoryDecisionEngine {
       }
     }
 
-    // Fetch all required data
+    // Fetch all required data (including QuickBooks historical sales if available)
     const [
       items,
       settings,
       purchaseOrders,
       salesOrders,
       returnRequests,
+      qbSalesSnapshots,
     ] = await Promise.all([
       this.storage.getAllItems(),
       this.storage.getSettings(userId),
       this.storage.getAllPurchaseOrders(),
       this.storage.getAllSalesOrders(),
       this.storage.getAllReturnRequests(),
+      this.storage.getAllQuickbooksSalesSnapshots(),
     ]);
+
+    // Build QuickBooks sales velocity map (avg monthly sales / 30 = daily velocity)
+    const qbVelocityMap = this.buildQuickBooksVelocityMap(qbSalesSnapshots);
 
     // Build line item maps
     const poLines = new Map<string, { itemId: string; qtyOrdered: number; qtyReceived: number }[]>();
@@ -514,13 +572,26 @@ export class InventoryDecisionEngine {
         ? (extensivVariance / extensivOnHand) * 100 
         : 0;
 
-      // Compute sales velocity
-      const { velocity, primaryChannel } = this.computeSalesVelocity(
+      // Compute sales velocity from local sales orders
+      const { velocity: localVelocity, primaryChannel } = this.computeSalesVelocity(
         item.sku,
         salesOrders,
         salesOrderLines,
         rules.velocityLookbackDays
       );
+
+      // Use QuickBooks historical velocity as fallback when local history is insufficient
+      // This helps new products or products with sparse local sales data
+      const qbVelocity = qbVelocityMap.get(item.sku) || 0;
+      let velocity = localVelocity;
+      let usedQbFallback = false;
+      
+      // If local velocity is 0 but QuickBooks has historical data, use QB as estimate
+      // Apply a 0.8 multiplier to be conservative (historical data may be outdated)
+      if (localVelocity === 0 && qbVelocity > 0) {
+        velocity = qbVelocity * 0.8;
+        usedQbFallback = true;
+      }
 
       // Compute supplier metrics (for inbound POs and reliability)
       const supplierMetrics = this.computeSupplierMetrics(
@@ -549,7 +620,8 @@ export class InventoryDecisionEngine {
         : (availableStock > 0 ? 999 : 0);
 
       // Check if we have enough history
-      const hasEnoughHistory = velocity > 0 || salesOrders.length > 5;
+      // Consider QuickBooks fallback data as valid history
+      const hasEnoughHistory = velocity > 0 || usedQbFallback || salesOrders.length > 5;
 
       // Determine risk level (now includes extensiv variance as risk factor)
       const riskLevel = this.determineRiskLevel(

@@ -908,3 +908,108 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
 });
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;
+
+// ============================================================================
+// QUICKBOOKS ONLINE INTEGRATION (V1: Read-Only Sales + PO→Bill)
+// ============================================================================
+
+// QuickBooks OAuth tokens and connection state
+export const quickbooksAuth = pgTable("quickbooks_auth", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  realmId: text("realm_id").notNull(), // QuickBooks company ID
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token").notNull(),
+  accessTokenExpiresAt: timestamp("access_token_expires_at").notNull(),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at").notNull(),
+  companyName: text("company_name"), // Cached company name for display
+  isConnected: boolean("is_connected").notNull().default(true),
+  lastSalesSyncAt: timestamp("last_sales_sync_at"),
+  lastSalesSyncStatus: text("last_sales_sync_status"), // SUCCESS, FAILED
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: index("quickbooks_auth_user_id_idx").on(table.userId),
+  realmIdIdx: uniqueIndex("quickbooks_auth_realm_id_idx").on(table.realmId),
+}));
+
+export const insertQuickbooksAuthSchema = createInsertSchema(quickbooksAuth).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQuickbooksAuth = z.infer<typeof insertQuickbooksAuthSchema>;
+export type QuickbooksAuth = typeof quickbooksAuth.$inferSelect;
+
+// Aggregated sales snapshots from QuickBooks (for AI trend forecasting)
+// V1: Read-only historical data - we do NOT modify QuickBooks sales
+export const quickbooksSalesSnapshots = pgTable("quickbooks_sales_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sku: text("sku").notNull(),
+  productName: text("product_name"),
+  year: integer("year").notNull(),
+  month: integer("month").notNull(), // 1-12
+  totalQty: integer("total_qty").notNull().default(0),
+  totalRevenue: real("total_revenue").notNull().default(0),
+  source: text("source").notNull().default('quickbooks'), // Always 'quickbooks' for V1
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  skuYearMonthIdx: uniqueIndex("qb_sales_snapshots_sku_year_month_idx").on(table.sku, table.year, table.month),
+  yearMonthIdx: index("qb_sales_snapshots_year_month_idx").on(table.year, table.month),
+}));
+
+export const insertQuickbooksSalesSnapshotSchema = createInsertSchema(quickbooksSalesSnapshots).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQuickbooksSalesSnapshot = z.infer<typeof insertQuickbooksSalesSnapshotSchema>;
+export type QuickbooksSalesSnapshot = typeof quickbooksSalesSnapshots.$inferSelect;
+
+// Supplier ↔ QuickBooks Vendor mapping
+export const quickbooksVendorMappings = pgTable("quickbooks_vendor_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  quickbooksVendorId: text("quickbooks_vendor_id").notNull(),
+  quickbooksVendorName: text("quickbooks_vendor_name"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  supplierIdIdx: uniqueIndex("qb_vendor_mappings_supplier_id_idx").on(table.supplierId),
+  qbVendorIdIdx: index("qb_vendor_mappings_qb_vendor_id_idx").on(table.quickbooksVendorId),
+}));
+
+export const insertQuickbooksVendorMappingSchema = createInsertSchema(quickbooksVendorMappings).omit({ id: true, createdAt: true });
+export type InsertQuickbooksVendorMapping = z.infer<typeof insertQuickbooksVendorMappingSchema>;
+export type QuickbooksVendorMapping = typeof quickbooksVendorMappings.$inferSelect;
+
+// SKU ↔ QuickBooks Item mapping
+export const quickbooksItemMappings = pgTable("quickbooks_item_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  sku: text("sku").notNull(),
+  quickbooksItemId: text("quickbooks_item_id").notNull(),
+  quickbooksItemName: text("quickbooks_item_name"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: uniqueIndex("qb_item_mappings_item_id_idx").on(table.itemId),
+  skuIdx: index("qb_item_mappings_sku_idx").on(table.sku),
+  qbItemIdIdx: index("qb_item_mappings_qb_item_id_idx").on(table.quickbooksItemId),
+}));
+
+export const insertQuickbooksItemMappingSchema = createInsertSchema(quickbooksItemMappings).omit({ id: true, createdAt: true });
+export type InsertQuickbooksItemMapping = z.infer<typeof insertQuickbooksItemMappingSchema>;
+export type QuickbooksItemMapping = typeof quickbooksItemMappings.$inferSelect;
+
+// QuickBooks Bills created from our Purchase Orders
+export const quickbooksBills = pgTable("quickbooks_bills", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  purchaseOrderId: varchar("purchase_order_id").notNull().references(() => purchaseOrders.id),
+  quickbooksBillId: text("quickbooks_bill_id").notNull(),
+  quickbooksBillNumber: text("quickbooks_bill_number"),
+  status: text("status").notNull().default('CREATED'), // CREATED, SYNCED, PAID, ERROR
+  totalAmount: real("total_amount"),
+  dueDate: timestamp("due_date"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  purchaseOrderIdIdx: uniqueIndex("qb_bills_purchase_order_id_idx").on(table.purchaseOrderId),
+  qbBillIdIdx: index("qb_bills_qb_bill_id_idx").on(table.quickbooksBillId),
+}));
+
+export const insertQuickbooksBillSchema = createInsertSchema(quickbooksBills).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQuickbooksBill = z.infer<typeof insertQuickbooksBillSchema>;
+export type QuickbooksBill = typeof quickbooksBills.$inferSelect;

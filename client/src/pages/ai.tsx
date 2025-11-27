@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -1414,8 +1414,76 @@ export default function AIAgent() {
     retry: false,
   });
 
+  // Fetch QuickBooks status (uses OAuth, not API key)
+  const { data: quickbooksStatus, refetch: refetchQbStatus } = useQuery<{
+    configured: boolean;
+    isConnected: boolean;
+    companyName?: string;
+    lastSalesSyncAt?: string;
+    lastSalesSyncStatus?: string;
+  }>({
+    queryKey: ["/api/quickbooks/status"],
+    retry: false,
+  });
+
+  const handleQuickBooksConnect = async () => {
+    try {
+      const response = await apiRequest("GET", "/api/quickbooks/auth-url");
+      if (response.authUrl) {
+        window.open(response.authUrl, "_blank", "width=600,height=700");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Connection Error",
+        description: error.message || "Failed to initiate QuickBooks connection",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleQuickBooksSync = async () => {
+    setSyncingSource("quickbooks");
+    try {
+      const result = await apiRequest("POST", "/api/quickbooks/sync-sales", { years: 3 });
+      refetchQbStatus();
+      toast({
+        title: "Sync Complete",
+        description: result.message || "QuickBooks sales history synchronized",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync QuickBooks data",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  const handleQuickBooksDisconnect = async () => {
+    try {
+      await apiRequest("POST", "/api/quickbooks/disconnect");
+      refetchQbStatus();
+      toast({
+        title: "Disconnected",
+        description: "QuickBooks has been disconnected",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to disconnect QuickBooks",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleSync = async (source: string) => {
-    if (source === "quickbooks" || source === "stripe") {
+    if (source === "quickbooks") {
+      handleQuickBooksSync();
+      return;
+    }
+    if (source === "stripe") {
       toast({
         title: "Coming Soon",
         description: `${source} integration is not yet implemented`,
@@ -1501,6 +1569,19 @@ export default function AIAgent() {
       status: getConfigStatus(phantomConfig),
       hasConfigDialog: true,
     },
+    {
+      id: "quickbooks",
+      integrationType: "QUICKBOOKS" as const,
+      name: "QuickBooks Online",
+      description: "Financial data & PO-to-Bill sync",
+      icon: Receipt,
+      configured: quickbooksStatus?.isConnected ?? false,
+      status: quickbooksStatus?.isConnected ? "connected" : "not_configured",
+      hasConfigDialog: false,
+      isOAuth: true,
+      companyName: quickbooksStatus?.companyName,
+      lastSyncAt: quickbooksStatus?.lastSalesSyncAt,
+    },
   ];
 
   return (
@@ -1561,50 +1642,96 @@ export default function AIAgent() {
                           </div>
                         </div>
                         <div className="flex flex-col gap-2">
-                          <Badge
-                            variant={
-                              !source.configured
-                                ? "outline"
-                                : source.status === "success" || source.status === "connected"
-                                ? "default"
-                                : source.status === "failed" || source.status === "error"
-                                ? "destructive"
-                                : "secondary"
-                            }
-                            data-testid={`status-${source.id}`}
-                          >
-                            {!source.configured
-                              ? "Not Configured"
-                              : source.status === "success" || source.status === "connected"
-                                ? "Connected"
-                                : source.status === "failed" || source.status === "error"
-                                ? "Failed"
-                                : "Pending Test"}
-                          </Badge>
-                          <div className="flex gap-2">
-                            {source.hasConfigDialog && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => setOpenIntegration(source.integrationType)}
-                                data-testid={`button-configure-${source.id}`}
-                              >
-                                <Settings2 className="mr-2 h-4 w-4" />
-                                Configure
-                              </Button>
-                            )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleSync(source.id)}
-                              disabled={!source.configured || syncingSource === source.id}
-                              data-testid={`button-sync-${source.id}`}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge
+                              variant={
+                                !source.configured
+                                  ? "outline"
+                                  : source.status === "success" || source.status === "connected"
+                                  ? "default"
+                                  : source.status === "failed" || source.status === "error"
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                              data-testid={`status-${source.id}`}
                             >
-                              <RefreshCw
-                                className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                              />
-                              {syncingSource === source.id ? "Syncing..." : "Sync"}
-                            </Button>
+                              {!source.configured
+                                ? "Not Configured"
+                                : source.status === "success" || source.status === "connected"
+                                  ? "Connected"
+                                  : source.status === "failed" || source.status === "error"
+                                  ? "Failed"
+                                  : "Pending Test"}
+                            </Badge>
+                            {source.id === "quickbooks" && (source as any).companyName && (
+                              <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                {(source as any).companyName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-2 flex-wrap">
+                            {source.id === "quickbooks" ? (
+                              source.configured ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleSync(source.id)}
+                                    disabled={syncingSource === source.id}
+                                    data-testid={`button-sync-${source.id}`}
+                                  >
+                                    <RefreshCw
+                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                                    />
+                                    {syncingSource === source.id ? "Syncing..." : "Sync Sales"}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={handleQuickBooksDisconnect}
+                                    data-testid="button-disconnect-quickbooks"
+                                  >
+                                    <LogOut className="mr-2 h-4 w-4" />
+                                    Disconnect
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  onClick={handleQuickBooksConnect}
+                                  data-testid="button-connect-quickbooks"
+                                >
+                                  <ExternalLink className="mr-2 h-4 w-4" />
+                                  Connect QuickBooks
+                                </Button>
+                              )
+                            ) : (
+                              <>
+                                {source.hasConfigDialog && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setOpenIntegration(source.integrationType)}
+                                    data-testid={`button-configure-${source.id}`}
+                                  >
+                                    <Settings2 className="mr-2 h-4 w-4" />
+                                    Configure
+                                  </Button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleSync(source.id)}
+                                  disabled={!source.configured || syncingSource === source.id}
+                                  data-testid={`button-sync-${source.id}`}
+                                >
+                                  <RefreshCw
+                                    className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                                  />
+                                  {syncingSource === source.id ? "Syncing..." : "Sync"}
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>

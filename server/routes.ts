@@ -6580,6 +6580,324 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ========== QuickBooks Online Integration Routes ==========
+  // V1 Scope: Read-only historical sales sync + PO→Bill creation
+  
+  // Import QuickBooks client dynamically to avoid circular deps
+  const { QuickBooksClient, isQuickBooksConfigured } = await import('./services/quickbooks-client');
+
+  // GET /api/quickbooks/status - Get connection status
+  app.get("/api/quickbooks/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!isQuickBooksConfigured()) {
+        return res.json({ 
+          configured: false, 
+          isConnected: false,
+          message: 'QuickBooks credentials not configured'
+        });
+      }
+
+      const userId = req.user?.id || 'system';
+      const client = new QuickBooksClient(storage, userId);
+      const status = await client.getConnectionStatus();
+      
+      res.json({ 
+        configured: true, 
+        ...status 
+      });
+    } catch (error: any) {
+      console.error("[QuickBooks] Error getting status:", error);
+      res.status(500).json({ error: error.message || "Failed to get QuickBooks status" });
+    }
+  });
+
+  // POST /api/quickbooks/test-connection - Test connection
+  app.post("/api/quickbooks/test-connection", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!isQuickBooksConfigured()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'QuickBooks credentials not configured. Add QUICKBOOKS_CLIENT_ID and QUICKBOOKS_CLIENT_SECRET.'
+        });
+      }
+
+      const userId = req.user?.id || 'system';
+      const client = new QuickBooksClient(storage, userId);
+      const result = await client.testConnection();
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Test connection error:", error);
+      res.status(500).json({ success: false, message: error.message || "Connection test failed" });
+    }
+  });
+
+  // POST /api/quickbooks/sync-sales - Sync historical sales data
+  app.post("/api/quickbooks/sync-sales", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!isQuickBooksConfigured()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'QuickBooks not configured'
+        });
+      }
+
+      const userId = req.user?.id || 'system';
+      const { years = 3 } = req.body;
+      
+      const client = new QuickBooksClient(storage, userId);
+      const result = await client.syncSalesSnapshots(years);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Sync sales error:", error);
+      res.status(500).json({ success: false, message: error.message || "Sales sync failed" });
+    }
+  });
+
+  // GET /api/quickbooks/sales-snapshots - Get all sales snapshots for analysis
+  app.get("/api/quickbooks/sales-snapshots", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const snapshots = await storage.getAllQuickbooksSalesSnapshots();
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[QuickBooks] Error fetching snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch snapshots" });
+    }
+  });
+
+  // GET /api/quickbooks/sales-snapshots/:sku - Get snapshots for a specific SKU
+  app.get("/api/quickbooks/sales-snapshots/:sku", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sku } = req.params;
+      const snapshots = await storage.getQuickbooksSalesSnapshotsBySku(sku);
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[QuickBooks] Error fetching SKU snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch snapshots" });
+    }
+  });
+
+  // POST /api/purchase-orders/:id/create-bill - Create QuickBooks Bill from PO
+  app.post("/api/purchase-orders/:id/create-bill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!isQuickBooksConfigured()) {
+        return res.status(400).json({ 
+          success: false, 
+          error: 'QuickBooks not configured'
+        });
+      }
+
+      const { id } = req.params;
+      const userId = req.user?.id || 'system';
+      
+      // Get PO with lines
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ success: false, error: 'Purchase order not found' });
+      }
+      
+      const poLines = await storage.getPurchaseOrderLinesByPOId(id);
+      if (!poLines.length) {
+        return res.status(400).json({ success: false, error: 'Purchase order has no line items' });
+      }
+      
+      // Get supplier
+      const supplier = await storage.getSupplier(po.supplierId);
+      if (!supplier) {
+        return res.status(400).json({ success: false, error: 'Supplier not found' });
+      }
+      
+      // Build items map
+      const itemIds = poLines.map(line => line.itemId);
+      const allItems = await storage.getAllItems();
+      const itemsMap = new Map<string, typeof allItems[0]>();
+      allItems.filter(i => itemIds.includes(i.id)).forEach(i => itemsMap.set(i.id, i));
+      
+      // Create bill
+      const client = new QuickBooksClient(storage, userId);
+      const result = await client.createBillFromPurchaseOrder(po, poLines, supplier, itemsMap);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Create bill error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to create bill" });
+    }
+  });
+
+  // GET /api/purchase-orders/:id/bill-status - Get QuickBooks Bill status for PO
+  app.get("/api/purchase-orders/:id/bill-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const bill = await storage.getQuickbooksBillByPurchaseOrderId(id);
+      
+      if (!bill) {
+        return res.json({ hasBill: false });
+      }
+      
+      res.json({
+        hasBill: true,
+        billId: bill.quickbooksBillId,
+        billNumber: bill.quickbooksBillNumber,
+        status: bill.status,
+        totalAmount: bill.totalAmount,
+        createdAt: bill.createdAt,
+      });
+    } catch (error: any) {
+      console.error("[QuickBooks] Get bill status error:", error);
+      res.status(500).json({ error: error.message || "Failed to get bill status" });
+    }
+  });
+
+  // OAuth callback route - handle QuickBooks OAuth redirect
+  app.get("/api/quickbooks/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, realmId, state } = req.query;
+      
+      if (!code || !realmId) {
+        return res.status(400).send('Missing required OAuth parameters');
+      }
+
+      const clientId = process.env.QUICKBOOKS_CLIENT_ID;
+      const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).send('QuickBooks credentials not configured');
+      }
+
+      // Exchange code for tokens
+      const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code as string,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('[QuickBooks] Token exchange failed:', errorText);
+        return res.status(400).send('Failed to exchange OAuth code for tokens');
+      }
+
+      const tokens = await tokenResponse.json() as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        x_refresh_token_expires_in: number;
+      };
+
+      // Get company info
+      let companyName = 'Unknown Company';
+      try {
+        const companyResponse = await fetch(
+          `https://quickbooks.api.intuit.com/v3/company/${realmId}/companyinfo/${realmId}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${tokens.access_token}`,
+              'Accept': 'application/json',
+            },
+          }
+        );
+        if (companyResponse.ok) {
+          const companyData = await companyResponse.json() as { CompanyInfo?: { CompanyName?: string } };
+          companyName = companyData.CompanyInfo?.CompanyName || companyName;
+        }
+      } catch (e) {
+        console.error('[QuickBooks] Failed to fetch company info:', e);
+      }
+
+      // Parse user ID from state (format: userId or just use 'system')
+      const userId = (state as string) || 'system';
+      const now = new Date();
+      const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
+      const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
+
+      // Check if auth record exists
+      const existingAuth = await storage.getQuickbooksAuth(userId);
+      
+      if (existingAuth) {
+        await storage.updateQuickbooksAuth(existingAuth.id, {
+          realmId: realmId as string,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          accessTokenExpiresAt,
+          refreshTokenExpiresAt,
+          companyName,
+          isConnected: true,
+        });
+      } else {
+        await storage.createQuickbooksAuth({
+          userId,
+          realmId: realmId as string,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          accessTokenExpiresAt,
+          refreshTokenExpiresAt,
+          companyName,
+          isConnected: true,
+        });
+      }
+
+      // Redirect to settings page with success
+      res.redirect('/settings?quickbooks=connected');
+    } catch (error: any) {
+      console.error('[QuickBooks] OAuth callback error:', error);
+      res.redirect('/settings?quickbooks=error');
+    }
+  });
+
+  // GET /api/quickbooks/auth-url - Get OAuth authorization URL
+  app.get("/api/quickbooks/auth-url", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const clientId = process.env.QUICKBOOKS_CLIENT_ID;
+      if (!clientId) {
+        return res.status(400).json({ error: 'QuickBooks client ID not configured' });
+      }
+
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || 
+        `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+      
+      const scope = 'com.intuit.quickbooks.accounting';
+      const state = req.user?.id || 'system';
+      
+      const authUrl = `https://appcenter.intuit.com/connect/oauth2?` +
+        `client_id=${clientId}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+        `response_type=code&` +
+        `scope=${encodeURIComponent(scope)}&` +
+        `state=${state}`;
+
+      res.json({ authUrl });
+    } catch (error: any) {
+      console.error('[QuickBooks] Auth URL error:', error);
+      res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
+    }
+  });
+
+  // POST /api/quickbooks/disconnect - Disconnect QuickBooks
+  app.post("/api/quickbooks/disconnect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id || 'system';
+      const auth = await storage.getQuickbooksAuth(userId);
+      
+      if (auth) {
+        await storage.updateQuickbooksAuth(auth.id, { isConnected: false });
+      }
+      
+      res.json({ success: true, message: 'QuickBooks disconnected' });
+    } catch (error: any) {
+      console.error('[QuickBooks] Disconnect error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to disconnect' });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

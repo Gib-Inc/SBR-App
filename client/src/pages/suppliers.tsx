@@ -28,6 +28,8 @@ import {
   Flag,
   PackageCheck,
   Mail,
+  Receipt,
+  RefreshCw,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -83,6 +85,19 @@ export default function Suppliers() {
 
   const { data: selectedPOData } = useQuery<PurchaseOrder & { lines: PurchaseOrderLine[] }>({
     queryKey: ['/api/purchase-orders', selectedPO],
+    enabled: !!selectedPO,
+  });
+
+  // Query QuickBooks bill for selected PO
+  const { data: selectedPOBill } = useQuery<{
+    hasBill: boolean;
+    billId?: string;
+    billNumber?: string;
+    status?: string;
+    totalAmount?: number;
+    createdAt?: string;
+  }>({
+    queryKey: ['/api/purchase-orders', selectedPO, 'bill-status'],
     enabled: !!selectedPO,
   });
 
@@ -328,6 +343,28 @@ export default function Suppliers() {
     onError: (error: Error) => {
       toast({
         title: "Failed to confirm receipt",
+        description: error.message,
+        variant: "destructive"
+      });
+    },
+  });
+
+  const createBillMutation = useMutation({
+    mutationFn: async (poId: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/create-bill`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to create QuickBooks bill");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders', selectedPO, 'bill-status'] });
+      toast({ title: "QuickBooks bill created successfully" });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to create bill",
         description: error.message,
         variant: "destructive"
       });
@@ -832,6 +869,63 @@ export default function Suppliers() {
                   <p className="mt-1 text-sm whitespace-pre-wrap">{selectedPOData.notes}</p>
                 </div>
               )}
+
+              {/* QuickBooks Bill Status */}
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-sm font-medium flex items-center gap-2">
+                      <Receipt className="h-4 w-4" />
+                      QuickBooks Bill
+                    </Label>
+                  </div>
+                  {selectedPOBill?.hasBill ? (
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-sm font-medium">
+                          Bill #{selectedPOBill.billNumber || selectedPOBill.billId}
+                        </p>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Badge variant={
+                            selectedPOBill.status === 'PAID' ? 'default' : 
+                            selectedPOBill.status === 'ERROR' ? 'destructive' : 'secondary'
+                          }>
+                            {selectedPOBill.status}
+                          </Badge>
+                          {selectedPOBill.totalAmount && (
+                            <span>${selectedPOBill.totalAmount.toFixed(2)}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => createBillMutation.mutate(selectedPOData.id)}
+                      disabled={createBillMutation.isPending || !['RECEIVED', 'CLOSED'].includes(selectedPOData.status)}
+                      data-testid="button-create-qb-bill"
+                    >
+                      {createBillMutation.isPending ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create Bill in QB
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+                {!['RECEIVED', 'CLOSED'].includes(selectedPOData.status) && !selectedPOBill?.hasBill && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    PO must be Received or Closed to create a bill
+                  </p>
+                )}
+              </div>
 
               {/* Actions */}
               <DialogFooter className="gap-2">

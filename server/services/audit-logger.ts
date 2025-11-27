@@ -1,7 +1,7 @@
 import { storage } from "../storage";
 import type { InsertAuditLog, AuditLog } from "@shared/schema";
 
-export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'SYSTEM' | 'USER';
+export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'SYSTEM' | 'USER';
 export type AuditStatus = 'INFO' | 'WARNING' | 'ERROR';
 export type AuditEventType = 
   | 'PO_CREATED'

@@ -1,0 +1,70 @@
+I want a lean V1 PhantomBuster integration focused ONLY on supplier discovery and AI-drafted outreach messages. Keep scope tight and reuse our existing patterns (AI Agent Data Sources, Supplier Leads / Discovery & Creation tab, GoHighLevel client, LLM service, AuditLogger). Do NOT build generic automation for everything PhantomBuster can do; just the flows below.
+
+GOAL
+
+Use PhantomBuster to discover potential suppliers, store them as Supplier Leads, and have the LLM draft outreach messages that I can then send via GHL email/SMS from our app.
+
+HIGH-LEVEL REQUIREMENTS
+
+1) PhantomBuster as a Data Source
+- In AI Agent → Data Sources, wire up the existing PhantomBuster tile:
+  - “Configure” opens settings where I can:
+    - Enter PhantomBuster API key (stored in env var, e.g. PHANTOMBUSTER_API_KEY).
+    - Configure one or more “supplier discovery” phantoms (e.g. agentId(s), default search params, etc.).
+  - “Sync” will manually launch a supplier discovery run using the configured phantom and update Supplier Leads.
+- Create a `server/services/phantombuster-client.ts` that encapsulates:
+  - `testConnection()`
+  - `launchDiscoveryJob(params)` – starts the configured phantom for supplier discovery.
+  - `pollDiscoveryResults(jobId)` – fetches results and normalizes them.
+  - All HTTP calls to PhantomBuster + any result parsing.
+- All PhantomBuster usage must be logged through the centralized AuditLogger / AI Logs (source="phantombuster", type="discovery_run", status, counts, errors).
+
+2) Supplier Leads (Suppliers → Discovery & Creation tab)
+- Reuse the existing “Discovery & Creation” tab on the Suppliers page; do NOT add a new page.
+- On this tab:
+  - Add a “Run Supplier Discovery” button that opens a simple form:
+    - Search keywords (e.g. product category, material, etc.).
+    - Optional location / country.
+    - Optional tags / notes.
+  - Submitting this form should:
+    - Call a backend route (e.g. POST `/api/suppliers/discovery/phantombuster`) that:
+      1) Validates that PhantomBuster is configured.
+      2) Calls `launchDiscoveryJob` with the search parameters.
+      3) Polls for results (or uses a short polling/async pattern) and normalizes into an internal structure.
+      4) Upserts results into the existing SupplierLead schema (extend minimally if needed with:
+         - source (e.g. "phantombuster-linkedin", "phantombuster-google"),
+         - phantomRunId,
+         - rawData/json field for debugging).
+- New leads should show up in the Supplier Leads table with basic fields: supplier name, company, website, email, phone, location, tags, source, createdAt.
+
+3) LLM-Drafted Outreach Messages
+- For each new SupplierLead created via PhantomBuster:
+  - Use our existing LLM service (`server/services/llm.ts`) to generate an initial outreach email (and optional SMS text).
+  - Add fields to SupplierLead (or a related table) such as:
+    - outreachEmailSubject
+    - outreachEmailBody
+    - outreachSmsBody (optional)
+  - The prompt to the LLM should include:
+    - Our business context (Sticker Bud Roller / inventory system), product type, and what we’re seeking (supplier for X).
+    - The supplier’s name/company, website, and any notes/tags from the search.
+- In the Suppliers → Discovery & Creation UI:
+  - Show a preview of the outreach email for each lead (subject + first line).
+  - Add actions:
+    - “Regenerate Outreach” – calls the LLM again and overwrites the outreach fields.
+    - “Send via GHL” – uses our existing GoHighLevel client to:
+      - createOrFindContact (using supplier email/phone),
+      - sendEmail() with the outreach subject/body, OR sendSMS() using outreachSmsBody.
+- All outreach generation and send actions must log AI Log entries:
+  - source="llm" / "gohighlevel", type="supplier_outreach_generated" or "supplier_outreach_sent", with lead id and status.
+
+4) Safety, Scope, and UX Constraints
+- V1 is MANUAL only: no scheduled or automatic PhantomBuster runs. Supplier discovery is triggered only by the “Run Supplier Discovery” button.
+- Assume I will configure the actual PhantomBuster agents (LinkedIn, Google, etc.) and acceptable target sites in the PhantomBuster dashboard; our app only passes parameters and fetches results.
+- Do NOT attempt to scrape or store sensitive personal information beyond what is needed for B2B supplier contact (company name, public contact info, website, etc.).
+- If PhantomBuster is not configured, the Supplier Discovery button should show a clear error or a “Connect PhantomBuster in AI Agent → Data Sources” message instead of crashing.
+- Keep this implementation small and production-ready:
+  - No new pages, just extending AI Agent → Data Sources, Suppliers → Discovery & Creation, and AI Logs.
+  - Minimal schema additions.
+  - Clear error handling and logging for all PhantomBuster calls.
+
+Please implement this V1 PhantomBuster supplier discovery + AI outreach flow end-to-end using the patterns already used for GoHighLevel and QuickBooks, keeping everything consistent with our existing architecture.

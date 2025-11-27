@@ -65,6 +65,16 @@ import {
   type InsertBackorderSnapshot,
   type AuditLog,
   type InsertAuditLog,
+  type QuickbooksAuth,
+  type InsertQuickbooksAuth,
+  type QuickbooksSalesSnapshot,
+  type InsertQuickbooksSalesSnapshot,
+  type QuickbooksVendorMapping,
+  type InsertQuickbooksVendorMapping,
+  type QuickbooksItemMapping,
+  type InsertQuickbooksItemMapping,
+  type QuickbooksBill,
+  type InsertQuickbooksBill,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -314,6 +324,29 @@ export interface IStorage {
     dateTo?: Date;
     search?: string;
   }): Promise<number>;
+
+  // QuickBooks Auth
+  getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null>;
+  createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth>;
+  updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null>;
+
+  // QuickBooks Sales Snapshots
+  getQuickbooksSalesSnapshotsBySku(sku: string): Promise<QuickbooksSalesSnapshot[]>;
+  getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]>;
+  upsertQuickbooksSalesSnapshot(snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }>;
+
+  // QuickBooks Vendor Mappings
+  getQuickbooksVendorMapping(supplierId: string): Promise<QuickbooksVendorMapping | null>;
+  createQuickbooksVendorMapping(mapping: InsertQuickbooksVendorMapping): Promise<QuickbooksVendorMapping>;
+
+  // QuickBooks Item Mappings
+  getQuickbooksItemMapping(itemId: string): Promise<QuickbooksItemMapping | null>;
+  createQuickbooksItemMapping(mapping: InsertQuickbooksItemMapping): Promise<QuickbooksItemMapping>;
+
+  // QuickBooks Bills
+  getQuickbooksBillByPurchaseOrderId(purchaseOrderId: string): Promise<QuickbooksBill | null>;
+  createQuickbooksBill(bill: InsertQuickbooksBill): Promise<QuickbooksBill>;
+  updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 }
 
 export class MemStorage implements IStorage {
@@ -2093,6 +2126,63 @@ export class MemStorage implements IStorage {
     
     return logs.length;
   }
+
+  // QuickBooks Auth (not supported in MemStorage - returns null/throws)
+  async getQuickbooksAuth(_userId: string): Promise<QuickbooksAuth | null> {
+    return null;
+  }
+
+  async createQuickbooksAuth(_auth: InsertQuickbooksAuth): Promise<QuickbooksAuth> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  async updateQuickbooksAuth(_id: string, _auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null> {
+    return null;
+  }
+
+  // QuickBooks Sales Snapshots (not supported in MemStorage)
+  async getQuickbooksSalesSnapshotsBySku(_sku: string): Promise<QuickbooksSalesSnapshot[]> {
+    return [];
+  }
+
+  async getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]> {
+    return [];
+  }
+
+  async upsertQuickbooksSalesSnapshot(_snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  // QuickBooks Vendor Mappings (not supported in MemStorage)
+  async getQuickbooksVendorMapping(_supplierId: string): Promise<QuickbooksVendorMapping | null> {
+    return null;
+  }
+
+  async createQuickbooksVendorMapping(_mapping: InsertQuickbooksVendorMapping): Promise<QuickbooksVendorMapping> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  // QuickBooks Item Mappings (not supported in MemStorage)
+  async getQuickbooksItemMapping(_itemId: string): Promise<QuickbooksItemMapping | null> {
+    return null;
+  }
+
+  async createQuickbooksItemMapping(_mapping: InsertQuickbooksItemMapping): Promise<QuickbooksItemMapping> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  // QuickBooks Bills (not supported in MemStorage)
+  async getQuickbooksBillByPurchaseOrderId(_purchaseOrderId: string): Promise<QuickbooksBill | null> {
+    return null;
+  }
+
+  async createQuickbooksBill(_bill: InsertQuickbooksBill): Promise<QuickbooksBill> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
+    return null;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -3535,6 +3625,134 @@ export class PostgresStorage implements IStorage {
     
     const result = await query;
     return Number(result[0]?.count ?? 0);
+  }
+
+  // QuickBooks Auth
+  async getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null> {
+    const results = await this.db.select().from(schema.quickbooksAuth)
+      .where(eq(schema.quickbooksAuth.userId, userId));
+    return results[0] || null;
+  }
+
+  async createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.quickbooksAuth).values({
+      ...auth,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null> {
+    const result = await this.db.update(schema.quickbooksAuth)
+      .set({ ...auth, updatedAt: new Date() })
+      .where(eq(schema.quickbooksAuth.id, id))
+      .returning();
+    return result[0] || null;
+  }
+
+  // QuickBooks Sales Snapshots
+  async getQuickbooksSalesSnapshotsBySku(sku: string): Promise<QuickbooksSalesSnapshot[]> {
+    return await this.db.select().from(schema.quickbooksSalesSnapshots)
+      .where(eq(schema.quickbooksSalesSnapshots.sku, sku));
+  }
+
+  async getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]> {
+    return await this.db.select().from(schema.quickbooksSalesSnapshots);
+  }
+
+  async upsertQuickbooksSalesSnapshot(snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }> {
+    const existing = await this.db.select().from(schema.quickbooksSalesSnapshots)
+      .where(and(
+        eq(schema.quickbooksSalesSnapshots.sku, snapshot.sku),
+        eq(schema.quickbooksSalesSnapshots.year, snapshot.year),
+        eq(schema.quickbooksSalesSnapshots.month, snapshot.month)
+      ));
+
+    if (existing[0]) {
+      const updated = await this.db.update(schema.quickbooksSalesSnapshots)
+        .set({
+          ...snapshot,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.quickbooksSalesSnapshots.id, existing[0].id))
+        .returning();
+      return { snapshot: updated[0], isNew: false };
+    } else {
+      const id = randomUUID();
+      const now = new Date();
+      const inserted = await this.db.insert(schema.quickbooksSalesSnapshots).values({
+        ...snapshot,
+        id,
+        createdAt: now,
+        updatedAt: now,
+      }).returning();
+      return { snapshot: inserted[0], isNew: true };
+    }
+  }
+
+  // QuickBooks Vendor Mappings
+  async getQuickbooksVendorMapping(supplierId: string): Promise<QuickbooksVendorMapping | null> {
+    const results = await this.db.select().from(schema.quickbooksVendorMappings)
+      .where(eq(schema.quickbooksVendorMappings.supplierId, supplierId));
+    return results[0] || null;
+  }
+
+  async createQuickbooksVendorMapping(mapping: InsertQuickbooksVendorMapping): Promise<QuickbooksVendorMapping> {
+    const id = randomUUID();
+    const result = await this.db.insert(schema.quickbooksVendorMappings).values({
+      ...mapping,
+      id,
+      createdAt: new Date(),
+    }).returning();
+    return result[0];
+  }
+
+  // QuickBooks Item Mappings
+  async getQuickbooksItemMapping(itemId: string): Promise<QuickbooksItemMapping | null> {
+    const results = await this.db.select().from(schema.quickbooksItemMappings)
+      .where(eq(schema.quickbooksItemMappings.itemId, itemId));
+    return results[0] || null;
+  }
+
+  async createQuickbooksItemMapping(mapping: InsertQuickbooksItemMapping): Promise<QuickbooksItemMapping> {
+    const id = randomUUID();
+    const result = await this.db.insert(schema.quickbooksItemMappings).values({
+      ...mapping,
+      id,
+      createdAt: new Date(),
+    }).returning();
+    return result[0];
+  }
+
+  // QuickBooks Bills
+  async getQuickbooksBillByPurchaseOrderId(purchaseOrderId: string): Promise<QuickbooksBill | null> {
+    const results = await this.db.select().from(schema.quickbooksBills)
+      .where(eq(schema.quickbooksBills.purchaseOrderId, purchaseOrderId));
+    return results[0] || null;
+  }
+
+  async createQuickbooksBill(bill: InsertQuickbooksBill): Promise<QuickbooksBill> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.quickbooksBills).values({
+      ...bill,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
+    const result = await this.db.update(schema.quickbooksBills)
+      .set({ ...bill, updatedAt: new Date() })
+      .where(eq(schema.quickbooksBills.id, id))
+      .returning();
+    return result[0] || null;
   }
 }
 

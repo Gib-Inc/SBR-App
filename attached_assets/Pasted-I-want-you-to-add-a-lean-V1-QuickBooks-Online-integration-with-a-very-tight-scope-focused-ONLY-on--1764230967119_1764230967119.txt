@@ -1,0 +1,46 @@
+I want you to add a lean V1 QuickBooks Online integration with a very tight scope, focused ONLY on:
+
+1) Read-only historical sales sync for annual trend forecasting  
+2) Creating Bills in QuickBooks from our Purchase Orders
+
+Do NOT create or modify any QuickBooks SALES documents (no Invoices, SalesReceipts, Payments) from this app. Assume Shopify/Amazon or other channels already push sales into QuickBooks, and QuickBooks is the single source of truth for revenue history. Everything must be safe, idempotent, and fully logged to the existing AI Logs system.
+
+Implementation requirements:
+
+- Support QuickBooks Online only for V1.  
+- Add QuickBooks config to our existing settings + AI Agent → Data Sources screen (similar to other connectors): connection status and a “Sync Sales” button. Use env vars for client credentials / realmId and store refreshed access tokens securely (DB or config table).  
+- Add minimal DB structures:
+  - Table for QuickBooks auth/state (tokens, realmId, lastSync timestamps).
+  - Table for aggregated sales history, e.g. `quickbooks_sales_snapshots` with fields like: id, sku, productName, year, month, totalQty, totalRevenue, source='quickbooks', createdAt/updatedAt.
+  - Mapping tables so we can link our entities to QuickBooks: Supplier ↔ QuickBooks Vendor, SKU ↔ QuickBooks Item.
+  - On Purchase Orders, fields to track QuickBooks Bill linkage: quickbooksBillId, quickbooksBillStatus, quickbooksBillCreatedAt.
+
+- Create a QuickBooks client service (e.g. `server/services/quickbooks-client.ts`) similar to our GoHighLevel client, responsible for ALL QuickBooks API calls and token refresh. Implement at least:
+  - `testConnection()`
+  - `fetchSalesHistory(startDate, endDate)` → returns normalized line-level sales data (sku, name, qty, amount, date) from QuickBooks (Invoices/SalesReceipts etc.) READ-ONLY
+  - `syncSalesSnapshots(sinceYears: number)` → aggregates history by SKU + year + month into `quickbooks_sales_snapshots` in an idempotent way
+  - `createBillFromPurchaseOrder(po)` → creates a QuickBooks Bill from our PO and returns bill id + status
+
+- Historical sales sync:
+  - Add API route (e.g. `POST /api/integrations/quickbooks/sync-sales`) used by the Data Source “Sync Sales” button.
+  - For V1, pull the last 3–5 years of sales (or a reasonable limit) and upsert into `quickbooks_sales_snapshots`.
+  - Integrate these snapshots into our existing AI forecasting / risk calculations: use them as long-term historical signals (avg monthly sales per SKU, trends), but do NOT alter any accounting balances.
+  - Every sync must write an AI Log entry: source=quickbooks, type=sales_sync, status=success|error, with any error details.
+
+- PO → QuickBooks Bill flow:
+  - When a PO is successfully created/sent in our app, optionally create a QuickBooks Bill automatically (controlled by a config flag; if QuickBooks isn’t configured, skip cleanly).
+  - Mapping rules inside `createBillFromPurchaseOrder(po)`:
+    - Vendor: resolve Supplier ↔ QuickBooks Vendor mapping; if none exists, create a Vendor in QuickBooks from supplier info, then persist the mapping.
+    - Line items: try to map SKU ↔ QuickBooks Item; if missing, use a generic “Inventory Purchase” item and include SKU/description in the line description.
+    - Amounts: qty * unitCost from the PO line, with minimal safe handling of tax/currency.
+    - Dates: use PO date as Bill date and PO expected receipt/due date as Bill due date if present.
+  - On success: store quickbooksBillId + quickbooksBillStatus on the PO, and add AI Log entry (source=quickbooks, type=bill_created).
+  - On failure: keep the PO itself valid but log an AI Log entry (type=bill_create_error) and expose a non-blocking status in the PO detail (e.g. “QuickBooks Bill: Error – see logs”).
+
+- Safety and scope control:
+  - NO QuickBooks inventory write-back in V1. We do not change QuickBooks stock quantities, and we do not create/modify sales docs.
+  - All QuickBooks actions (testConnection, syncSales, createBill) must be logged in AI Logs with enough context to debug.
+  - If QuickBooks is not configured, the new features should simply show “Connect QuickBooks to enable this” instead of throwing errors.
+  - Keep the implementation lean and aligned with current architecture: reuse existing patterns, no new standalone pages, just extend AI Agent Data Sources and PO detail views.
+
+Out of scope for V1 (leave stubs at most): advanced scheduling, templating/scheduling inside QuickBooks, and any bidirectional reconciliation logic. Focus on making this small, robust, and production-ready for trend forecasting + PO→Bill only.

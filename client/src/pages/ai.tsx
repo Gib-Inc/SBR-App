@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink, Send } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -927,12 +927,12 @@ function InsightsTab() {
         </Card>
       </div>
       
-      {/* Recommendations Table with horizontal scroll and sticky action column */}
+      {/* AI Recommendations Header */}
       <Card>
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <CardTitle>SKU Recommendations</CardTitle>
+              <CardTitle>AI Recommendations</CardTitle>
               <CardDescription>
                 Actionable inventory recommendations. Accept or dismiss to track decisions.
                 {recsData?.fetchedAt && (
@@ -993,6 +993,10 @@ function InsightsTab() {
             </div>
           </div>
         </CardHeader>
+      </Card>
+      
+      {/* AI Recommendations Table - separate from header card */}
+      <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>

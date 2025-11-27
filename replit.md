@@ -115,3 +115,30 @@ Preferred communication style: Simple, everyday language.
 *   **LLM Providers**: OpenAI (ChatGPT), Anthropic (Claude), Grok, Custom Endpoint support.
 *   **Database Provider**: Neon (Serverless PostgreSQL).
 *   **Hardware Support**: USB/Bluetooth barcode scanners (HID keyboard mode).
+
+## V1 Release Status (November 2025)
+
+### Fully Functional Features
+
+1.  **SKU & BOM Management**: Create products, components, and Bill of Materials with full CRUD operations
+2.  **Extensiv 3PL Sync**: READ-ONLY inventory sync updates pivotQty and adjusts availableForSaleQty
+3.  **Shopify Order Import**: Orders sync to SalesOrders with InventoryMovement(SALES_ORDER_CREATED) decrementing availableForSaleQty
+4.  **Amazon Order Import**: SP-API integration with OAuth, same flow as Shopify
+5.  **PO Creation + GHL Sending**: 3-step wizard with LLM-generated messages, GoHighLevel SMS/email delivery with contact creation
+6.  **Returns Processing**: RETURN_RECEIVED increments hildaleQty only (Extensiv is READ-ONLY)
+7.  **QuickBooks Sales History**: OAuth 2.0 sync of historical sales (Invoice + SalesReceipt), monthly snapshots for AI velocity calculations
+8.  **AI System Reviewer**: Weekly LLM-powered log analysis with actionable suggestions (INTEGRATION_ISSUE, INVENTORY_PATTERN, etc.)
+9.  **Integration Health Monitoring**: OAuth token expiry tracking, consecutive failure detection, GHL alerts
+10. **Barcode Management**: Generation, printing, CSV export, scanner integration
+
+### Deferred to V2
+
+1.  **Supplier Discovery (PhantomBuster)**: UI labeled "Coming in V2" - LinkedIn/Google scraping via phantoms
+2.  **Google/Meta/TikTok Ads Data Sync**: OAuth flows exist, but actual spend/conversion data ingestion is stubbed
+3.  **Scheduled Automation**: All syncs are manual-trigger in V1; cron-based scheduling is V2
+
+### Known Dev-Mode Behaviors
+
+*   **LLM Stubs**: When LLM API keys are not configured, system uses fallback template responses (expected for dev)
+*   **Return Label STUB Provider**: When SHIPPO_API_KEY is not set, uses stub provider for label generation (expected for dev)
+*   **PostCSS Warning**: Known Tailwind CSS issue, does not affect functionality

@@ -44,7 +44,7 @@ interface InventoryState {
   onHand: number;
   hildaleQty: number;
   pivotQty: number;
-  pivotProjectionQty: number;
+  availableForSaleQty: number;
   currentStock: number;
 }
 
@@ -54,14 +54,14 @@ export class InventoryMovement {
   private getInventoryState(item: Item): InventoryState {
     const hildaleQty = item.hildaleQty ?? 0;
     const pivotQty = item.pivotQty ?? 0;
-    const pivotProjectionQty = item.pivotProjectionQty ?? 0;
+    const availableForSaleQty = item.availableForSaleQty ?? 0;
     const currentStock = item.currentStock ?? 0;
     
     const onHand = item.type === "finished_product"
-      ? hildaleQty + pivotProjectionQty
+      ? hildaleQty + availableForSaleQty
       : currentStock;
     
-    return { onHand, hildaleQty, pivotQty, pivotProjectionQty, currentStock };
+    return { onHand, hildaleQty, pivotQty, availableForSaleQty, currentStock };
   }
 
   async apply(params: InventoryMovementParams): Promise<InventoryMovementResult> {
@@ -87,7 +87,7 @@ export class InventoryMovement {
       let updates: {
         hildaleQty?: number;
         pivotQty?: number;
-        pivotProjectionQty?: number;
+        availableForSaleQty?: number;
         currentStock?: number;
         forecastDirty?: boolean;
       } = {};
@@ -98,7 +98,7 @@ export class InventoryMovement {
           quantityDelta = params.quantity;
           if (isFinished) {
             updates.pivotQty = beforeState.pivotQty + params.quantity;
-            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
+            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
@@ -108,7 +108,7 @@ export class InventoryMovement {
           quantityDelta = params.quantity;
           if (isFinished) {
             updates.hildaleQty = beforeState.hildaleQty + params.quantity;
-            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
+            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
@@ -117,7 +117,7 @@ export class InventoryMovement {
         case "SALES_ORDER_CREATED":
           if (isFinished && isPivotFulfilled) {
             quantityDelta = -params.quantity;
-            updates.pivotProjectionQty = beforeState.pivotProjectionQty - params.quantity;
+            updates.availableForSaleQty = beforeState.availableForSaleQty - params.quantity;
           }
           break;
 
@@ -162,7 +162,7 @@ export class InventoryMovement {
         case "SALES_ORDER_CANCELLED":
           if (isFinished && isPivotFulfilled) {
             quantityDelta = params.quantity;
-            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
+            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           }
           break;
 
@@ -172,7 +172,7 @@ export class InventoryMovement {
             if (location === "HILDALE") {
               updates.hildaleQty = beforeState.hildaleQty + params.quantity;
             } else {
-              updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
+              updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
             }
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
@@ -193,7 +193,7 @@ export class InventoryMovement {
             const delta = newPivotQty - oldPivotQty;
             
             updates.pivotQty = newPivotQty;
-            updates.pivotProjectionQty = beforeState.pivotProjectionQty + delta;
+            updates.availableForSaleQty = beforeState.availableForSaleQty + delta;
             quantityDelta = delta;
           }
           break;
@@ -301,14 +301,14 @@ export class InventoryMovement {
             onHand: beforeState.onHand,
             hildaleQty: beforeState.hildaleQty,
             pivotQty: beforeState.pivotQty,
-            pivotProjectionQty: beforeState.pivotProjectionQty,
+            availableForSaleQty: beforeState.availableForSaleQty,
             currentStock: beforeState.currentStock,
           },
           after: {
             onHand: afterState.onHand,
             hildaleQty: afterState.hildaleQty,
             pivotQty: afterState.pivotQty,
-            pivotProjectionQty: afterState.pivotProjectionQty,
+            availableForSaleQty: afterState.availableForSaleQty,
             currentStock: afterState.currentStock,
           },
           orderId: params.orderId,

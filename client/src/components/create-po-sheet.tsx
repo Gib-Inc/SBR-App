@@ -316,9 +316,18 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
 
           {selectedSupplierId && (
             <div className="space-y-4 p-4 border rounded-md bg-muted/30">
-              <p className="text-sm text-muted-foreground">
-                Override contact info for this PO (optional):
-              </p>
+              {!selectedSupplier?.email && !selectedSupplier?.phone ? (
+                <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="h-4 w-4" />
+                  <p className="text-sm font-medium">
+                    This supplier has no contact info. Please enter email or phone:
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Override contact info for this PO (optional):
+                </p>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="override-email">Email</Label>
                 <Input
@@ -326,7 +335,7 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
                   type="email"
                   value={supplierEmail}
                   onChange={(e) => setSupplierEmail(e.target.value)}
-                  placeholder={selectedSupplier?.email || "No email on file"}
+                  placeholder={selectedSupplier?.email || "Enter email address"}
                   data-testid="input-override-email"
                 />
               </div>
@@ -337,7 +346,7 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
                   type="tel"
                   value={supplierPhone}
                   onChange={(e) => setSupplierPhone(e.target.value)}
-                  placeholder={selectedSupplier?.phone || "No phone on file"}
+                  placeholder={selectedSupplier?.phone || "Enter phone number"}
                   data-testid="input-override-phone"
                 />
               </div>

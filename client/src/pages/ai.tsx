@@ -882,8 +882,8 @@ function InsightsTab() {
                         {rec.productName}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <span className={`text-sm font-medium ${getTypeBadgeColor(rec.recommendationType)}`}>
-                          {rec.recommendationType.replace("_", " ")}
+                        <span className={`text-sm font-medium ${getTypeBadgeColor(rec.recommendationType ?? "MONITOR")}`}>
+                          {(rec.recommendationType ?? "MONITOR").replace("_", " ")}
                         </span>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
@@ -1024,8 +1024,8 @@ function InsightsTab() {
                 <Badge variant={getStatusBadgeVariant(selectedItem.status)}>
                   {selectedItem.status}
                 </Badge>
-                <span className={`text-sm font-medium ${getTypeBadgeColor(selectedItem.recommendationType)}`}>
-                  {selectedItem.recommendationType.replace("_", " ")}
+                <span className={`text-sm font-medium ${getTypeBadgeColor(selectedItem.recommendationType ?? "MONITOR")}`}>
+                  {(selectedItem.recommendationType ?? "MONITOR").replace("_", " ")}
                 </span>
                 {selectedItem.recommendedQty && selectedItem.recommendedQty > 0 && (
                   <Badge variant="outline">

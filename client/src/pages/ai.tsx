@@ -224,14 +224,10 @@ function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
 
 function LLMConfigTab({ settingsData }: { settingsData: any }) {
   const { toast } = useToast();
-  const [provider, setProvider] = useState<string>("");
-  const [model, setModel] = useState<string>("");
   const [promptTemplate, setPromptTemplate] = useState<string>(DEFAULT_PROMPT_TEMPLATE);
 
   useEffect(() => {
     if (settingsData) {
-      setProvider(settingsData.llmProvider || "");
-      setModel(settingsData.llmModel || "");
       setPromptTemplate(settingsData.llmPromptTemplate || DEFAULT_PROMPT_TEMPLATE);
     }
   }, [settingsData]);
@@ -239,8 +235,6 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
   const saveMutation = useMutation({
     mutationFn: async () => {
       return await apiRequest("PATCH", "/api/settings", {
-        llmProvider: provider || null,
-        llmModel: model || null,
         llmPromptTemplate: promptTemplate || null,
       });
     },
@@ -248,84 +242,97 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       toast({
         title: "Configuration Saved",
-        description: "LLM settings have been updated successfully",
+        description: "Prompt template has been updated successfully",
       });
     },
     onError: (error: any) => {
       toast({
         title: "Save Failed",
-        description: error.message || "Failed to save LLM configuration",
+        description: error.message || "Failed to save configuration",
         variant: "destructive",
       });
     },
   });
 
-  const handleProviderChange = (newProvider: string) => {
-    setProvider(newProvider);
-    if (newProvider !== "custom" && !MODEL_OPTIONS[newProvider]?.some(m => m.value === model)) {
-      setModel("");
-    }
-  };
+  const providerLabel = settingsData?.llmProvider === "chatgpt" ? "OpenAI (ChatGPT)" :
+    settingsData?.llmProvider === "claude" ? "Anthropic (Claude)" :
+    settingsData?.llmProvider === "grok" ? "X.AI (Grok)" :
+    settingsData?.llmProvider === "custom" ? "Custom Endpoint" : "Not configured";
+  
+  const modelLabel = MODEL_OPTIONS[settingsData?.llmProvider]?.find(
+    m => m.value === settingsData?.llmModel
+  )?.label || settingsData?.llmModel || "Not selected";
 
-  const availableModels = provider && provider !== "custom" ? MODEL_OPTIONS[provider] || [] : [];
+  const hasProvider = !!settingsData?.llmProvider;
+  const hasApiKey = !!settingsData?.llmApiKey;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>LLM Configuration</CardTitle>
-        <CardDescription>
-          Select your AI provider and customize prompt templates (API keys managed in Settings)
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="llm-provider">AI Provider</Label>
-            <Select value={provider} onValueChange={handleProviderChange}>
-              <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
-                <SelectValue placeholder="Select AI provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="chatgpt">OpenAI (ChatGPT)</SelectItem>
-                <SelectItem value="claude">Anthropic (Claude)</SelectItem>
-                <SelectItem value="grok">X.AI (Grok)</SelectItem>
-                <SelectItem value="custom">Custom Endpoint</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Configure API keys in Settings → LLM Configuration
-            </p>
+    <div className="space-y-4">
+      {/* Active Provider Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-5 w-5" />
+            Active LLM Provider
+          </CardTitle>
+          <CardDescription>
+            Manage provider, model, and API keys in Settings → LLM Configuration
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-1">
+              <Label className="text-muted-foreground text-xs">Provider</Label>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{providerLabel}</span>
+                {hasProvider && hasApiKey && (
+                  <Badge variant="outline" className="text-xs">
+                    <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
+                    Connected
+                  </Badge>
+                )}
+                {hasProvider && !hasApiKey && (
+                  <Badge variant="outline" className="text-xs text-amber-600">
+                    <AlertTriangle className="mr-1 h-3 w-3" />
+                    No API Key
+                  </Badge>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-muted-foreground text-xs">Model</Label>
+              <span className="font-medium">{modelLabel}</span>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-muted-foreground text-xs">Temperature / Max Tokens</Label>
+              <span className="font-medium">
+                {(settingsData?.llmTemperature ?? 0.7).toFixed(1)} / {settingsData?.llmMaxTokens ?? 2048}
+              </span>
+            </div>
           </div>
+          
+          <div className="pt-2">
+            <Button variant="outline" size="sm" asChild data-testid="link-llm-settings">
+              <a href="/settings?tab=llm">
+                <Settings2 className="mr-2 h-4 w-4" />
+                Configure LLM Settings
+              </a>
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-          {provider && provider !== "custom" && (
-            <div className="space-y-2">
-              <Label htmlFor="model-selection">Model</Label>
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger id="model-selection" data-testid="select-model">
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableModels.map((modelOption) => (
-                    <SelectItem key={modelOption.value} value={modelOption.value}>
-                      {modelOption.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {provider === "custom" && (
-            <div className="space-y-2">
-              <Label>Custom Endpoint</Label>
-              <p className="text-sm text-muted-foreground">
-                Configure your custom endpoint URL in Settings → LLM Configuration
-              </p>
-            </div>
-          )}
-
+      {/* Prompt Template */}
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Prompt Template</CardTitle>
+          <CardDescription>
+            Customize the prompt template used for reorder recommendations
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="prompt-template">Reorder Recommendation Prompt Template</Label>
+            <Label htmlFor="prompt-template">Reorder Recommendation Prompt</Label>
             <Textarea
               id="prompt-template"
               rows={8}
@@ -334,19 +341,21 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
               onChange={(e) => setPromptTemplate(e.target.value)}
               data-testid="textarea-prompt-template"
             />
+            <p className="text-xs text-muted-foreground">
+              This template is used when generating AI-powered reorder recommendations. Use placeholders like {'{item_name}'}, {'{current_stock}'}, {'{daily_usage}'}.
+            </p>
           </div>
 
           <Button
             onClick={() => saveMutation.mutate()}
-            disabled={!provider || saveMutation.isPending}
-            data-testid="button-save-llm-config"
+            disabled={saveMutation.isPending}
+            data-testid="button-save-prompt-template"
           >
-            <Settings2 className="mr-2 h-4 w-4" />
-            {saveMutation.isPending ? "Saving..." : "Save Configuration"}
+            {saveMutation.isPending ? "Saving..." : "Save Prompt Template"}
           </Button>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 

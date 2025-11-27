@@ -7141,6 +7141,35 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Get item IDs from pending returns (for label printing)
+  // GET /api/returns/pending-item-ids
+  // Returns: { itemIds: string[] } - unique inventory item IDs from pending returns
+  app.get("/api/returns/pending-item-ids", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const returnRequests = await storage.getAllReturnRequests();
+      
+      // Filter to only pending returns (OPEN, LABEL_CREATED, IN_TRANSIT)
+      const pendingStatuses = ['OPEN', 'LABEL_CREATED', 'IN_TRANSIT'];
+      const pendingReturns = returnRequests.filter(r => pendingStatuses.includes(r.status));
+      
+      // Collect all unique item IDs from pending returns
+      const itemIds = new Set<string>();
+      for (const ret of pendingReturns) {
+        const items = await storage.getReturnItemsByRequestId(ret.id);
+        items.forEach((item: any) => {
+          if (item.inventoryItemId) {
+            itemIds.add(item.inventoryItemId);
+          }
+        });
+      }
+      
+      res.json({ itemIds: Array.from(itemIds) });
+    } catch (error: any) {
+      console.error("[Returns] Error fetching pending item IDs:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch pending return item IDs" });
+    }
+  });
+
   // Create return from GHL (authenticated via shared secret)
   // POST /api/returns/create-from-ghl
   // Headers: X-GHL-Secret: <shared secret>

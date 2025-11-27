@@ -180,6 +180,12 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     enabled: isOpen,
   });
 
+  // Fetch pending return item IDs
+  const { data: pendingReturnData } = useQuery<{ itemIds: string[] }>({
+    queryKey: ["/api/returns/pending-item-ids"],
+    enabled: isOpen,
+  });
+
   // Save format mutation
   const saveFormatMutation = useMutation({
     mutationFn: async (formatData: any) => {
@@ -391,6 +397,9 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         });
     }
 
+    // Get item IDs from pending returns
+    const pendingReturnItemIds = new Set<string>(pendingReturnData?.itemIds || []);
+
     items.forEach((item: any) => {
       let shouldSelect = false;
       const daysOfCover = item.dailyUsage > 0 
@@ -405,6 +414,9 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         shouldSelect = true;
       }
       if (selectedGroups.has("medium") && daysOfCover > riskThresholdHigh && daysOfCover <= riskThresholdMedium) {
+        shouldSelect = true;
+      }
+      if (selectedGroups.has("returns") && pendingReturnItemIds.has(item.id)) {
         shouldSelect = true;
       }
 
@@ -425,9 +437,13 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     setValidationError(null);
 
     const count = newSelectedItems.size;
-    const groupNames = Array.from(selectedGroups).map(g => 
-      g === 'incoming' ? 'Incoming POs' : g === 'critical' ? 'Critical Stock' : 'Medium Stock'
-    ).join(', ');
+    const groupNameMap: Record<string, string> = {
+      'incoming': 'Incoming POs',
+      'critical': 'Critical Stock',
+      'medium': 'Medium Stock',
+      'returns': 'Returns'
+    };
+    const groupNames = Array.from(selectedGroups).map(g => groupNameMap[g] || g).join(', ');
 
     if (count === 0) {
       toast({ 
@@ -1064,6 +1080,22 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
                               </label>
                               <p className="text-xs text-muted-foreground">
                                 Items at medium urgency levels
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <Checkbox 
+                              id="group-returns"
+                              checked={selectedGroups.has("returns")}
+                              onCheckedChange={(checked) => toggleLabelGroup("returns", checked as boolean)}
+                              data-testid="checkbox-group-returns"
+                            />
+                            <div className="grid gap-0.5">
+                              <label htmlFor="group-returns" className="text-sm font-medium cursor-pointer">
+                                Returns
+                              </label>
+                              <p className="text-xs text-muted-foreground">
+                                Items from pending return requests
                               </p>
                             </div>
                           </div>

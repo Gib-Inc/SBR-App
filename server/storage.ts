@@ -81,6 +81,8 @@ import {
   type InsertAdSkuMapping,
   type AdMetricsDaily,
   type InsertAdMetricsDaily,
+  type AiSystemRecommendation,
+  type InsertAiSystemRecommendation,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -336,6 +338,25 @@ export interface IStorage {
     dateTo?: Date;
     search?: string;
   }): Promise<number>;
+
+  // AI System Recommendations (Weekly LLM-generated improvement suggestions)
+  createAiSystemRecommendation(recommendation: InsertAiSystemRecommendation): Promise<AiSystemRecommendation>;
+  getAiSystemRecommendations(options?: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    severity?: string;
+    category?: string;
+  }): Promise<{ recommendations: AiSystemRecommendation[]; total: number }>;
+  getAiSystemRecommendation(id: string): Promise<AiSystemRecommendation | undefined>;
+  updateAiSystemRecommendation(id: string, data: Partial<{
+    status: string;
+    acknowledgedAt: Date;
+    acknowledgedByUserId: string;
+    dismissedAt: Date;
+    dismissedByUserId: string;
+  }>): Promise<AiSystemRecommendation | undefined>;
+  countAiSystemRecommendationsByStatus(status: string): Promise<number>;
 
   // QuickBooks Auth
   getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null>;
@@ -2250,6 +2271,90 @@ export class MemStorage implements IStorage {
     return logs.length;
   }
 
+  // AI System Recommendations (in-memory storage)
+  private aiSystemRecommendations: Map<string, AiSystemRecommendation> = new Map();
+
+  async createAiSystemRecommendation(recommendation: InsertAiSystemRecommendation): Promise<AiSystemRecommendation> {
+    const id = randomUUID();
+    const now = new Date();
+    const rec: AiSystemRecommendation = {
+      id,
+      createdAt: now,
+      severity: recommendation.severity ?? 'MEDIUM',
+      category: recommendation.category ?? 'OTHER',
+      title: recommendation.title,
+      description: recommendation.description,
+      suggestedChange: recommendation.suggestedChange ?? null,
+      status: recommendation.status ?? 'NEW',
+      relatedLogIds: recommendation.relatedLogIds ?? null,
+      reviewPeriodStart: recommendation.reviewPeriodStart ?? null,
+      reviewPeriodEnd: recommendation.reviewPeriodEnd ?? null,
+      acknowledgedAt: null,
+      acknowledgedByUserId: null,
+      dismissedAt: null,
+      dismissedByUserId: null,
+      updatedAt: now,
+    };
+    this.aiSystemRecommendations.set(id, rec);
+    return rec;
+  }
+
+  async getAiSystemRecommendations(options?: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    severity?: string;
+    category?: string;
+  }): Promise<{ recommendations: AiSystemRecommendation[]; total: number }> {
+    let recommendations = Array.from(this.aiSystemRecommendations.values());
+    
+    if (options?.status) {
+      recommendations = recommendations.filter(r => r.status === options.status);
+    }
+    if (options?.severity) {
+      recommendations = recommendations.filter(r => r.severity === options.severity);
+    }
+    if (options?.category) {
+      recommendations = recommendations.filter(r => r.category === options.category);
+    }
+    
+    const total = recommendations.length;
+    recommendations.sort((a, b) => (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0));
+    
+    const offset = options?.offset ?? 0;
+    const limit = options?.limit ?? 50;
+    return { recommendations: recommendations.slice(offset, offset + limit), total };
+  }
+
+  async getAiSystemRecommendation(id: string): Promise<AiSystemRecommendation | undefined> {
+    return this.aiSystemRecommendations.get(id);
+  }
+
+  async updateAiSystemRecommendation(id: string, data: Partial<{
+    status: string;
+    acknowledgedAt: Date;
+    acknowledgedByUserId: string;
+    dismissedAt: Date;
+    dismissedByUserId: string;
+  }>): Promise<AiSystemRecommendation | undefined> {
+    const existing = this.aiSystemRecommendations.get(id);
+    if (!existing) return undefined;
+    
+    const updated: AiSystemRecommendation = {
+      ...existing,
+      ...data,
+      updatedAt: new Date(),
+    };
+    this.aiSystemRecommendations.set(id, updated);
+    return updated;
+  }
+
+  async countAiSystemRecommendationsByStatus(status: string): Promise<number> {
+    return Array.from(this.aiSystemRecommendations.values())
+      .filter(r => r.status === status)
+      .length;
+  }
+
   // QuickBooks Auth (not supported in MemStorage - returns null/throws)
   async getQuickbooksAuth(_userId: string): Promise<QuickbooksAuth | null> {
     return null;
@@ -4010,6 +4115,88 @@ export class PostgresStorage implements IStorage {
     }
     
     const result = await query;
+    return Number(result[0]?.count ?? 0);
+  }
+
+  // AI System Recommendations
+  async createAiSystemRecommendation(recommendation: InsertAiSystemRecommendation): Promise<AiSystemRecommendation> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.aiSystemRecommendations).values({
+      ...recommendation,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async getAiSystemRecommendations(options?: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    severity?: string;
+    category?: string;
+  }): Promise<{ recommendations: AiSystemRecommendation[]; total: number }> {
+    const conditions = [];
+    
+    if (options?.status) {
+      conditions.push(eq(schema.aiSystemRecommendations.status, options.status));
+    }
+    if (options?.severity) {
+      conditions.push(eq(schema.aiSystemRecommendations.severity, options.severity));
+    }
+    if (options?.category) {
+      conditions.push(eq(schema.aiSystemRecommendations.category, options.category));
+    }
+    
+    let countQuery = this.db.select({ count: drizzleSql<number>`count(*)` }).from(schema.aiSystemRecommendations);
+    let query = this.db.select().from(schema.aiSystemRecommendations);
+    
+    if (conditions.length > 0) {
+      const whereClause = and(...conditions);
+      countQuery = countQuery.where(whereClause) as typeof countQuery;
+      query = query.where(whereClause) as typeof query;
+    }
+    
+    const [countResult, recommendations] = await Promise.all([
+      countQuery,
+      query
+        .orderBy(drizzleSql`${schema.aiSystemRecommendations.createdAt} DESC`)
+        .limit(options?.limit ?? 50)
+        .offset(options?.offset ?? 0)
+    ]);
+    
+    return { recommendations, total: Number(countResult[0]?.count ?? 0) };
+  }
+
+  async getAiSystemRecommendation(id: string): Promise<AiSystemRecommendation | undefined> {
+    const results = await this.db.select().from(schema.aiSystemRecommendations)
+      .where(eq(schema.aiSystemRecommendations.id, id));
+    return results[0];
+  }
+
+  async updateAiSystemRecommendation(id: string, data: Partial<{
+    status: string;
+    acknowledgedAt: Date;
+    acknowledgedByUserId: string;
+    dismissedAt: Date;
+    dismissedByUserId: string;
+  }>): Promise<AiSystemRecommendation | undefined> {
+    const result = await this.db.update(schema.aiSystemRecommendations)
+      .set({
+        ...data,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.aiSystemRecommendations.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async countAiSystemRecommendationsByStatus(status: string): Promise<number> {
+    const result = await this.db.select({ count: drizzleSql<number>`count(*)` })
+      .from(schema.aiSystemRecommendations)
+      .where(eq(schema.aiSystemRecommendations.status, status));
     return Number(result[0]?.count ?? 0);
   }
 

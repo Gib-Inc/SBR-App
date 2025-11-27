@@ -1,0 +1,71 @@
+I want you to implement a V1 “AI System Reviewer” that uses the existing AI Logs + Insights + LLMConfig, and also harden the System Logs so every error is captured properly. Please treat this as one cohesive feature, not separate tasks.
+
+GOALS
+- Ensure ALL system / integration / LLM errors are consistently recorded in AI Agent → Logs → System Logs so they can be reviewed later.
+- Once per week (using the existing batched LLM pattern), have the LLM read recent System Logs + Insights (SKU Recommendations etc.) and generate improvement suggestions.
+- Surface those suggestions in a small, scrollable widget on the main Dashboard only (no new standalone pages).
+
+PART 1 – HARDEN SYSTEM LOGS (ERROR COVERAGE)
+1. Review the current AuditLogger + System Logs implementation and:
+   - Confirm which events are already logged (user login, item created, imports, integrations, etc.).
+   - Add / fix logging so that **every** error path writes to System Logs, including:
+     - External integrations: Extensiv, Shopify, Amazon Seller Central, GoHighLevel, QuickBooks, PhantomBuster, Meta Ads, Google Ads.
+     - Internal services: inventory-decision-engine, inventory movement, returns processing, PO creation/sending, barcode scans, sync jobs.
+     - LLM / AI failures: timeouts, provider errors, invalid prompts, parsing errors.
+   - For each error log entry, ensure fields are populated and consistent with the existing System Logs table:
+     - `timestamp`
+     - `event` (e.g., INTEGRATION_SYNC, RETURN_RECEIVED, LLM_EVAL, etc.)
+     - `entity` (ITEM, ORDER, PO, SETTINGS, SYSTEM, etc.)
+     - `source` (SHOPIFY, AMAZON, EXTENSIV, GHL, QUICKBOOKS, META_ADS, GOOGLE_ADS, PHANTOMBUSTER, SYSTEM, USER)
+     - `status` (INFO, WARNING, ERROR) – errors must clearly be `ERROR`
+     - `description` (short human-readable summary)
+     - `details` (JSON or text with key IDs, payload, error message)
+2. Fix any places where logs have bad/“Invalid Date” timestamps.
+3. Make sure AI Agent → Logs → “System Logs” data table:
+   - Uses the same table style as the other data tables (header separate from the scrollable table, table scrollable in both directions, contained in its section).
+   - Can filter by Status=ERROR so it’s easy to see all failures.
+4. Update AuditLogger / logging helpers so new event types and sources are centralized (no ad-hoc logging scattered around).
+
+PART 2 – WEEKLY LLM SYSTEM REVIEW
+1. Implement a weekly batched job (following our existing batched LLM pattern and LLMConfig) that:
+   - Pulls the last 7 days of entries from System Logs (especially `status = ERROR` or `WARNING`) plus relevant AI Agent → Insights data (SKU Recommendations, decisions taken, accepted/dismissed recommendations).
+   - Summarizes:
+     - Repeated errors per integration / service (e.g., Shopify sync failing, Amazon rate limits, QuickBooks auth issues).
+     - Suspicious patterns (e.g., frequent stockouts on specific SKUs, constant override of AI recommendations, misconfigured rules).
+     - Opportunities for improvement in workflows or configuration (e.g., “Extensiv sync regularly lags 24h”, “GHL messages frequently fail due to missing supplier contact”, etc.).
+2. Store the LLM’s output in a **new lightweight table** dedicated to system-level suggestions, something like `ai_system_recommendations`:
+   - `id`
+   - `createdAt`
+   - `severity` (LOW, MEDIUM, HIGH)
+   - `category` (INTEGRATION, INVENTORY_RULES, DATA_QUALITY, LLM_CONFIG, UI/UX, OTHER)
+   - `title` (short summary line)
+   - `description` (1–3 sentence explanation)
+   - `suggestedChange` (specific action we should take in the app / configuration)
+   - `status` (NEW, ACKNOWLEDGED, DISMISSED)
+   - Optional: `relatedLogIds` or a JSON blob with key log references.
+3. Make sure the weekly job is idempotent and safe:
+   - It should **never** auto-change configuration or rules; it only writes recommendations.
+   - Log its own run in System Logs (source = SYSTEM, event = AI_REVIEW_RUN, status = SUCCESS/ERROR).
+
+PART 3 – DASHBOARD WIDGET FOR SYSTEM IMPROVEMENTS
+1. On the main Dashboard page, add a new card/widget called something like “AI System Improvement Suggestions”:
+   - Small, contained card using the same styling system as other Dashboard widgets.
+   - Shows a count of **open** suggestions (status = NEW).
+   - Below, a scrollable mini-table (inside the card) listing the most recent 5–10 NEW suggestions:
+     - Columns: Created At, Severity, Category, Title, Status.
+   - Clicking a row can either:
+     - Open a simple modal with the full `description` + `suggestedChange`, OR
+     - Navigate to a dedicated area in AI Agent → Insights where the full table of system suggestions lives (reuse the existing Insights tab, do **not** create a brand new top-level page).
+2. In the AI Agent → Insights tab:
+   - Add a section/table for “System-Level Suggestions” that displays the `ai_system_recommendations` table with standard table UX:
+     - Header separate from the table.
+     - Scrollable horizontally/vertically, contained in its section.
+     - Filters for Severity and Status (NEW / ACKNOWLEDGED / DISMISSED).
+   - Add simple actions:
+     - Mark suggestion as ACKNOWLEDGED.
+     - Mark suggestion as DISMISSED (no destructive delete, just status change).
+
+CONSTRAINTS / REMINDERS
+- Do **not** expand scope beyond this: no complex new dashboards, no campaign optimization, no automatic rule re-writing. This is strictly logging + weekly review + recommendation surfacing.
+- Reuse existing components and patterns (AuditLogger, batched LLM jobs, Insights layout, table styles).
+- Keep implementation V1 and production-ready: robust logging, safe error handling, and no breaking changes to the existing inventory or decision engine behavior.

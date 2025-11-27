@@ -1132,3 +1132,71 @@ export const adMetricsDaily = pgTable("ad_metrics_daily", {
 export const insertAdMetricsDailySchema = createInsertSchema(adMetricsDaily).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertAdMetricsDaily = z.infer<typeof insertAdMetricsDailySchema>;
 export type AdMetricsDaily = typeof adMetricsDaily.$inferSelect;
+
+// ============================================================================
+// AI SYSTEM RECOMMENDATIONS (Weekly LLM-Generated System Improvement Suggestions)
+// ============================================================================
+
+// Severity levels for system recommendations
+export const SystemRecommendationSeverity = {
+  LOW: "LOW",
+  MEDIUM: "MEDIUM", 
+  HIGH: "HIGH",
+  CRITICAL: "CRITICAL",
+} as const;
+export type SystemRecommendationSeverity = typeof SystemRecommendationSeverity[keyof typeof SystemRecommendationSeverity];
+
+// Categories for system recommendations
+export const SystemRecommendationCategory = {
+  INTEGRATION: "INTEGRATION",
+  INVENTORY_RULES: "INVENTORY_RULES",
+  DATA_QUALITY: "DATA_QUALITY",
+  LLM_CONFIG: "LLM_CONFIG",
+  OPERATIONS: "OPERATIONS",
+  OTHER: "OTHER",
+} as const;
+export type SystemRecommendationCategory = typeof SystemRecommendationCategory[keyof typeof SystemRecommendationCategory];
+
+// Status for system recommendations
+export const SystemRecommendationStatus = {
+  NEW: "NEW",
+  ACKNOWLEDGED: "ACKNOWLEDGED",
+  DISMISSED: "DISMISSED",
+} as const;
+export type SystemRecommendationStatus = typeof SystemRecommendationStatus[keyof typeof SystemRecommendationStatus];
+
+export const aiSystemRecommendations = pgTable("ai_system_recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  severity: text("severity").notNull().default("MEDIUM"), // LOW, MEDIUM, HIGH, CRITICAL
+  category: text("category").notNull().default("OTHER"), // INTEGRATION, INVENTORY_RULES, DATA_QUALITY, LLM_CONFIG, OPERATIONS, OTHER
+  title: text("title").notNull(), // Short summary line
+  description: text("description").notNull(), // 1-3 sentence explanation
+  suggestedChange: text("suggested_change"), // Specific action to take
+  status: text("status").notNull().default("NEW"), // NEW, ACKNOWLEDGED, DISMISSED
+  relatedLogIds: text("related_log_ids").array(), // Array of audit log IDs for reference
+  reviewPeriodStart: timestamp("review_period_start"), // Start of the analyzed period
+  reviewPeriodEnd: timestamp("review_period_end"), // End of the analyzed period
+  acknowledgedAt: timestamp("acknowledged_at"), // When status changed to ACKNOWLEDGED
+  acknowledgedByUserId: varchar("acknowledged_by_user_id").references(() => users.id, { onDelete: 'set null' }),
+  dismissedAt: timestamp("dismissed_at"), // When status changed to DISMISSED
+  dismissedByUserId: varchar("dismissed_by_user_id").references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  statusIdx: index("ai_system_recommendations_status_idx").on(table.status),
+  createdAtIdx: index("ai_system_recommendations_created_at_idx").on(table.createdAt),
+  severityIdx: index("ai_system_recommendations_severity_idx").on(table.severity),
+  categoryIdx: index("ai_system_recommendations_category_idx").on(table.category),
+}));
+
+export const insertAiSystemRecommendationSchema = createInsertSchema(aiSystemRecommendations).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true,
+  acknowledgedAt: true,
+  acknowledgedByUserId: true,
+  dismissedAt: true,
+  dismissedByUserId: true,
+});
+export type InsertAiSystemRecommendation = z.infer<typeof insertAiSystemRecommendationSchema>;
+export type AiSystemRecommendation = typeof aiSystemRecommendations.$inferSelect;

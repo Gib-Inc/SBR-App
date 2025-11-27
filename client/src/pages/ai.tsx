@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink, Send } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -2636,138 +2636,59 @@ export default function AIAgent() {
                             )}
                           </div>
                           <div className="flex gap-2 flex-wrap">
-                            {source.id === "quickbooks" ? (
-                              source.configured ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleSync(source.id)}
-                                    disabled={syncingSource === source.id}
-                                    data-testid={`button-sync-${source.id}`}
-                                  >
-                                    <RefreshCw
-                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                                    />
-                                    {syncingSource === source.id ? "Syncing..." : "Sync Sales"}
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={handleQuickBooksDisconnect}
-                                    data-testid="button-disconnect-quickbooks"
-                                  >
-                                    <LogOut className="mr-2 h-4 w-4" />
-                                    Disconnect
-                                  </Button>
-                                </>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  onClick={handleQuickBooksConnect}
-                                  data-testid="button-connect-quickbooks"
-                                >
-                                  <ExternalLink className="mr-2 h-4 w-4" />
-                                  Connect QuickBooks
-                                </Button>
-                              )
-                            ) : source.id === "meta-ads" ? (
-                              source.configured ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={handleMetaAdsSync}
-                                    disabled={syncingSource === source.id}
-                                    data-testid="button-sync-meta-ads"
-                                  >
-                                    <RefreshCw
-                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                                    />
-                                    {syncingSource === source.id ? "Syncing..." : "Sync"}
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={handleMetaAdsDisconnect}
-                                    data-testid="button-disconnect-meta-ads"
-                                  >
-                                    <LogOut className="mr-2 h-4 w-4" />
-                                    Disconnect
-                                  </Button>
-                                </>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  onClick={handleMetaAdsConnect}
-                                  data-testid="button-connect-meta-ads"
-                                >
-                                  <ExternalLink className="mr-2 h-4 w-4" />
-                                  Connect Meta Ads
-                                </Button>
-                              )
-                            ) : source.id === "google-ads" ? (
-                              source.configured ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={handleGoogleAdsSync}
-                                    disabled={syncingSource === source.id}
-                                    data-testid="button-sync-google-ads"
-                                  >
-                                    <RefreshCw
-                                      className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                                    />
-                                    {syncingSource === source.id ? "Syncing..." : "Sync"}
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={handleGoogleAdsDisconnect}
-                                    data-testid="button-disconnect-google-ads"
-                                  >
-                                    <LogOut className="mr-2 h-4 w-4" />
-                                    Disconnect
-                                  </Button>
-                                </>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  onClick={handleGoogleAdsConnect}
-                                  data-testid="button-connect-google-ads"
-                                >
-                                  <ExternalLink className="mr-2 h-4 w-4" />
-                                  Connect Google Ads
-                                </Button>
-                              )
-                            ) : (
-                              <>
-                                {source.hasConfigDialog && source.integrationType !== "QUICKBOOKS" && source.integrationType !== "META_ADS" && source.integrationType !== "GOOGLE_ADS" && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER")}
-                                    data-testid={`button-configure-${source.id}`}
-                                  >
-                                    <Settings2 className="mr-2 h-4 w-4" />
-                                    Configure
-                                  </Button>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleSync(source.id)}
-                                  disabled={!source.configured || syncingSource === source.id}
-                                  data-testid={`button-sync-${source.id}`}
-                                >
-                                  <RefreshCw
-                                    className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                                  />
-                                  {syncingSource === source.id ? "Syncing..." : "Sync"}
-                                </Button>
-                              </>
-                            )}
+                            <Button
+                              size="sm"
+                              variant="default"
+                              onClick={() => {
+                                if (source.id === "quickbooks") {
+                                  if (!source.configured) {
+                                    handleQuickBooksConnect();
+                                  } else {
+                                    handleQuickBooksDisconnect();
+                                  }
+                                } else if (source.id === "meta-ads") {
+                                  if (!source.configured) {
+                                    handleMetaAdsConnect();
+                                  } else {
+                                    handleMetaAdsDisconnect();
+                                  }
+                                } else if (source.id === "google-ads") {
+                                  if (!source.configured) {
+                                    handleGoogleAdsConnect();
+                                  } else {
+                                    handleGoogleAdsDisconnect();
+                                  }
+                                } else {
+                                  setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER");
+                                }
+                              }}
+                              data-testid={`button-configure-${source.id}`}
+                            >
+                              <Settings2 className="mr-2 h-4 w-4" />
+                              Configure
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => {
+                                if (source.id === "quickbooks") {
+                                  handleQuickBooksSync();
+                                } else if (source.id === "meta-ads") {
+                                  handleMetaAdsSync();
+                                } else if (source.id === "google-ads") {
+                                  handleGoogleAdsSync();
+                                } else {
+                                  handleSync(source.id);
+                                }
+                              }}
+                              disabled={!source.configured || syncingSource === source.id}
+                              data-testid={`button-sync-${source.id}`}
+                            >
+                              <RefreshCw
+                                className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                              />
+                              {syncingSource === source.id ? "Syncing..." : "Sync"}
+                            </Button>
                           </div>
                         </div>
                       </div>

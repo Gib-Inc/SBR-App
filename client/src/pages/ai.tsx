@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -246,6 +246,12 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
   const [model, setModel] = useState<string>("");
   const [temperature, setTemperature] = useState<number>(0.7);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
+  
+  // AI Prompt Generator modal state
+  const [promptGeneratorOpen, setPromptGeneratorOpen] = useState(false);
+  const [promptGeneratorInput, setPromptGeneratorInput] = useState("");
+  const [generatedPrompt, setGeneratedPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const hasApiKey = !!settingsData?.llmApiKey;
 
@@ -315,6 +321,51 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
       });
     },
   });
+
+  const generatePromptTemplate = async () => {
+    if (!promptGeneratorInput.trim()) {
+      toast({
+        title: "Input Required",
+        description: "Please describe what you want the AI to accomplish",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+    setGeneratedPrompt("");
+    try {
+      const metaPrompt = `You are an expert at writing prompts for inventory management AI systems. Based on the user's desired outcome, create an optimized prompt template for generating reorder recommendations. The prompt must use these placeholders: {item_name}, {item_sku}, {current_stock}, {current_date}, {sales_data}, {lead_time_days}, {seasonal_pattern}, {daily_usage}. User's desired outcome: ${promptGeneratorInput}`;
+      
+      const data = await apiRequest("POST", "/api/llm/ask", {
+        prompt: metaPrompt,
+      }) as { answer?: string };
+      
+      if (data?.answer) {
+        setGeneratedPrompt(data.answer);
+      } else {
+        throw new Error("No response from AI");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Generation Failed",
+        description: error.message || "Failed to generate prompt template",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleUsePrompt = () => {
+    setPromptTemplate(generatedPrompt);
+    setPromptGeneratorOpen(false);
+    setPromptGeneratorInput("");
+    setGeneratedPrompt("");
+    toast({
+      title: "Prompt template updated successfully",
+    });
+  };
 
   const availableModels = MODEL_OPTIONS[provider] || [];
 
@@ -446,6 +497,16 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <Button
+            variant="outline"
+            onClick={() => setPromptGeneratorOpen(true)}
+            className="w-full md:w-auto"
+            data-testid="button-ai-prompt-generator"
+          >
+            <Sparkles className="h-4 w-4 mr-2" />
+            AI Prompt Generator
+          </Button>
+          
           <div className="space-y-2">
             <Label htmlFor="prompt-template">Reorder Recommendation Prompt</Label>
             <Textarea
@@ -470,6 +531,90 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
           </Button>
         </CardContent>
       </Card>
+
+      {/* AI Prompt Generator Modal */}
+      <Dialog open={promptGeneratorOpen} onOpenChange={setPromptGeneratorOpen}>
+        <DialogContent className="sm:max-w-[600px] p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5" />
+              AI Prompt Generator
+            </DialogTitle>
+            <DialogDescription>
+              Describe your inventory management goals and priorities, and AI will create an optimized prompt template for you
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="prompt-generator-input">Describe what you want the AI to accomplish</Label>
+              <Textarea
+                id="prompt-generator-input"
+                rows={5}
+                placeholder="Example: Focus on fast-moving items and seasonal trends, prioritize suppliers with shorter lead times"
+                value={promptGeneratorInput}
+                onChange={(e) => setPromptGeneratorInput(e.target.value)}
+                data-testid="textarea-prompt-generator-input"
+              />
+            </div>
+
+            <Button
+              onClick={generatePromptTemplate}
+              disabled={isGenerating || !promptGeneratorInput.trim()}
+              className="w-full"
+              data-testid="button-generate-prompt"
+            >
+              {isGenerating ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  Generate Prompt
+                </>
+              )}
+            </Button>
+
+            {generatedPrompt && (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Generated Prompt Preview</Label>
+                  <Textarea
+                    rows={8}
+                    value={generatedPrompt}
+                    readOnly
+                    className="bg-muted"
+                    data-testid="textarea-generated-prompt-preview"
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={generatePromptTemplate}
+                    disabled={isGenerating}
+                    className="flex-1"
+                    data-testid="button-regenerate-prompt"
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Regenerate
+                  </Button>
+                  <Button
+                    onClick={handleUsePrompt}
+                    className="flex-1"
+                    data-testid="button-use-this-prompt"
+                  >
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Use This Prompt
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

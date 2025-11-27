@@ -349,6 +349,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
 
   // GET /api/ai/insights - Get all SKU recommendations from the decision engine
+  // V1 AI Decision Layer: When refresh=true, logs recommendations and anomalies to AI Logs
   app.get("/api/ai/insights", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -356,18 +357,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const result = await decisionEngine.computeRecommendations(userId, forceRefresh);
       
+      // V1: Log recommendations to AI Logs when refreshing
+      let logResult = { logged: 0, anomalies: [] as any[] };
+      if (forceRefresh) {
+        logResult = await decisionEngine.logRecommendationsToAudit(
+          result.recommendations,
+          result.rulesApplied
+        );
+        console.log(`[AI Insights] Logged ${logResult.logged} events, detected ${logResult.anomalies.length} anomalies`);
+      }
+      
+      // V1: Only include anomalyCount in summary when refresh=true (otherwise it's meaningless)
+      const summary: Record<string, number> = {
+        total: result.recommendations.length,
+        needOrder: result.recommendations.filter(r => r.riskLevel === "NEED_ORDER").length,
+        high: result.recommendations.filter(r => r.riskLevel === "HIGH").length,
+        medium: result.recommendations.filter(r => r.riskLevel === "MEDIUM").length,
+        low: result.recommendations.filter(r => r.riskLevel === "LOW").length,
+        unknown: result.recommendations.filter(r => r.riskLevel === "UNKNOWN").length,
+        actionRequired: result.recommendations.filter(r => r.recommendedAction === "ORDER").length,
+      };
+      
+      if (forceRefresh) {
+        summary.anomalyCount = logResult.anomalies.length;
+      }
+      
       res.json({
         recommendations: result.recommendations,
         computedAt: result.computedAt,
         rulesApplied: result.rulesApplied,
-        summary: {
-          total: result.recommendations.length,
-          high: result.recommendations.filter(r => r.riskLevel === "HIGH").length,
-          medium: result.recommendations.filter(r => r.riskLevel === "MEDIUM").length,
-          low: result.recommendations.filter(r => r.riskLevel === "LOW").length,
-          unknown: result.recommendations.filter(r => r.riskLevel === "UNKNOWN").length,
-          actionRequired: result.recommendations.filter(r => r.recommendedAction === "ORDER").length,
-        },
+        summary,
       });
     } catch (error: any) {
       console.error("[AI Insights] Error computing recommendations:", error);

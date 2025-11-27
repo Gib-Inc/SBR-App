@@ -1,0 +1,65 @@
+Now I want you to implement the first production-ready AI decision layer for inventory, wired into the existing UI and AI Logs. Do NOT add new pages. Reuse the current AI Agent → Insights layout (risk summary cards + SKU Recommendations table) and the AI Logs tab you already created.
+
+Goals:
+1. Turn the current data (AvailableForSale, sales history, lead times, Extensiv variance) into concrete SKU-level recommendations.
+2. Make the logic transparent and auditable via AI Logs.
+3. Keep the implementation lean and safe for V1 (no experimental models or huge refactors).
+
+Data & fields to use:
+- Finished products table on the BOM page:
+  - `availableForSale` (the new column we added that mirrors Pivot but decrements on Shopify/Amazon sales only)
+  - `pivotQty` (raw 3PL quantity from Extensiv)
+  - `extensivVariance` (difference between Pivot vs AvailableForSale, already added)
+  - any existing cost/MOQ/lead time fields from Suppliers / POs that you can reliably use
+- Order and sales history:
+  - Use existing Shopify/Amazon order data that now feeds inventory.
+  - Compute at least a 30-day sales velocity per finished SKU (fallback to 7-day or default if not enough data).
+
+AI / rules engine behavior:
+1. Create a dedicated service module (for example `server/services/inventoryRules.ts` or similar) that:
+   - For every finished product SKU:
+     - Calculates daily sales velocity (use 30-day window where possible).
+     - Calculates **days of cover** = `availableForSale / dailyVelocity` (handle division by zero safely).
+     - Uses supplier lead time (or a reasonable default if missing) to decide risk and reorder need.
+   - Classify each SKU into buckets:
+     - `Need Order` (at or below lead-time coverage, or already negative).
+     - `High Risk` (coverage just above lead time but under a safe buffer).
+     - `Medium Risk` and `Low Risk` for healthier coverage ranges.
+   - Propose a **recommended reorder quantity** per SKU that brings stock back to a reasonable target (for example, lead time + safety buffer in days × dailyVelocity). Keep the formula explicit in code so it’s easy to adjust later.
+   - Factor in `extensivVariance` as a risk multiplier: if variance is high (big mismatch between pivotQty and availableForSale), increase risk level or reduce recommendation confidence.
+
+2. Wire into existing UI:
+   - Make the **Dashboard “Generate Forecast” / AI-Powered Recommendations** button (or AI Agent → Insights “Refresh” button) call this new rules service.
+   - Populate the existing **SKU Recommendations** table with:
+     - SKU, product name
+     - AvailableForSale
+     - dailyVelocity
+     - daysOfCover
+     - risk bucket
+     - recommended reorder quantity
+     - short “reason” text (e.g. “7d cover < 14d lead time; high demand on Shopify”).
+   - Ensure the “Top 5 At-Risk Items” widget and the High/Medium/Low/Need Order counters use the same risk classification from this rules service (single source of truth; no duplicate logic).
+
+3. AI Logs integration:
+   - Every time recommendations are generated, log a structured event into the AI Logs system you built, one entry per SKU:
+     - timestamp, SKU, risk level, previous vs new recommended quantity, and the textual explanation.
+   - Also log any integration-level anomalies:
+     - large `extensivVariance` for a SKU,
+     - negative AvailableForSale,
+     - missing lead time defaults.
+   - Make sure logs can be filtered in the AI Logs tab by action type (e.g. `RECOMMENDATION_GENERATED`, `ANOMALY_EXTENSIV_VARIANCE`, etc).
+
+4. Safety and performance:
+   - Keep all calculations deterministic rules for now (no external LLM calls in the core math). It’s fine to use the LLM only to generate the short human-readable “reason” field if you want, but the underlying quantities must be rule-based and testable.
+   - Add unit-level tests or at least a few hard-coded scenarios for:
+     - zero or very low sales velocity,
+     - negative AvailableForSale,
+     - huge Extensiv variance,
+     - missing supplier lead time.
+   - Ensure no double-counting or extra stock movements are introduced; this rules engine must be read-only on stock levels and only write to “recommendations” + logs.
+
+Once done, summarize:
+- Where the rules service lives.
+- How to trigger it from the UI (which button / endpoint).
+- Which DB tables or models were added/modified for SKU recommendations.
+- How to view the new entries in the AI Logs tab.

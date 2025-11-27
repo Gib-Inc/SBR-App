@@ -65,12 +65,17 @@ interface SKURecommendation {
   itemId: string;
   sku: string;
   productName: string;
-  riskLevel: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+  riskLevel: "NEED_ORDER" | "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
   recommendedAction: "ORDER" | "MONITOR" | "OK";
   recommendedQty: number;
   explanation: string;
+  primaryChannel?: string;
   metrics: {
     onHand: number;
+    availableForSale: number;
+    extensivOnHand: number;
+    extensivVariance: number;
+    extensivVariancePercent: number;
     dailySalesVelocity: number;
     projectedDaysUntilStockout: number;
     reorderPoint: number;
@@ -78,6 +83,8 @@ interface SKURecommendation {
     supplierLeadTimeDays: number;
     effectiveLeadTime: number;
     supplierScore: number;
+    backorderCount: number;
+    inboundPO: number;
   };
 }
 
@@ -87,11 +94,13 @@ interface InsightsResponse {
   rulesApplied: AIRules;
   summary: {
     total: number;
+    needOrder: number;
     high: number;
     medium: number;
     low: number;
     unknown: number;
     actionRequired: number;
+    anomalyCount?: number;
   };
 }
 
@@ -571,12 +580,34 @@ function InsightsTab() {
     return true;
   });
   
-  const getRiskBadgeVariant = (risk: string) => {
+  const getRiskBadgeVariant = (risk: string): "destructive" | "secondary" | "outline" | "default" => {
     switch (risk) {
+      case "NEED_ORDER": return "default"; // Uses primary color - distinct from HIGH's destructive
       case "HIGH": return "destructive";
       case "MEDIUM": return "secondary";
       case "LOW": return "outline";
       default: return "outline";
+    }
+  };
+  
+  const getRiskBadgeClassName = (risk: string): string => {
+    switch (risk) {
+      case "NEED_ORDER": return "bg-red-600 dark:bg-red-700 text-white animate-pulse"; // Pulsing urgency - no manual hover
+      case "HIGH": return ""; // Default destructive styling
+      case "MEDIUM": return "";
+      case "LOW": return "";
+      default: return "";
+    }
+  };
+  
+  const getRiskBadgeText = (risk: string) => {
+    switch (risk) {
+      case "NEED_ORDER": return "Order Now";
+      case "HIGH": return "High Risk";
+      case "MEDIUM": return "Medium";
+      case "LOW": return "Low";
+      case "UNKNOWN": return "Unknown";
+      default: return risk;
     }
   };
   
@@ -614,8 +645,8 @@ function InsightsTab() {
       {/* Ad Demand Signals */}
       <AdDemandSignals variant="ai-agent" />
       
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Summary Cards - V1: Now includes NEED_ORDER as separate critical category */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
@@ -624,10 +655,18 @@ function InsightsTab() {
             </div>
           </CardContent>
         </Card>
+        <Card className="border-destructive">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-destructive" data-testid="text-need-order">{insights?.summary.needOrder || 0}</p>
+              <p className="text-sm text-muted-foreground">Need Order</p>
+            </div>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-2xl font-bold text-destructive" data-testid="text-high-risk">{insights?.summary.high || 0}</p>
+              <p className="text-2xl font-bold text-red-500" data-testid="text-high-risk">{insights?.summary.high || 0}</p>
               <p className="text-sm text-muted-foreground">High Risk</p>
             </div>
           </CardContent>
@@ -652,7 +691,7 @@ function InsightsTab() {
           <CardContent className="pt-6">
             <div className="text-center">
               <p className="text-2xl font-bold text-primary" data-testid="text-action-required">{insights?.summary.actionRequired || 0}</p>
-              <p className="text-sm text-muted-foreground">Need Order</p>
+              <p className="text-sm text-muted-foreground">Action Required</p>
             </div>
           </CardContent>
         </Card>
@@ -675,13 +714,14 @@ function InsightsTab() {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-32" data-testid="select-risk-filter">
+                <SelectTrigger className="w-36" data-testid="select-risk-filter">
                   <Filter className="h-4 w-4 mr-2" />
                   <SelectValue placeholder="Risk" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Risks</SelectItem>
-                  <SelectItem value="HIGH">High</SelectItem>
+                  <SelectItem value="NEED_ORDER">Need Order</SelectItem>
+                  <SelectItem value="HIGH">High Risk</SelectItem>
                   <SelectItem value="MEDIUM">Medium</SelectItem>
                   <SelectItem value="LOW">Low</SelectItem>
                 </SelectContent>
@@ -752,8 +792,12 @@ function InsightsTab() {
                         {Math.floor(rec.metrics?.projectedDaysUntilStockout ?? 0)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <Badge variant={getRiskBadgeVariant(rec.riskLevel)} data-testid={`badge-risk-${rec.itemId}`}>
-                          {rec.riskLevel}
+                        <Badge 
+                          variant={getRiskBadgeVariant(rec.riskLevel)} 
+                          className={getRiskBadgeClassName(rec.riskLevel)}
+                          data-testid={`badge-risk-${rec.itemId}`}
+                        >
+                          {getRiskBadgeText(rec.riskLevel)}
                         </Badge>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
@@ -803,9 +847,12 @@ function InsightsTab() {
           </DialogHeader>
           {selectedItem && (
             <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <Badge variant={getRiskBadgeVariant(selectedItem.riskLevel)}>
-                  {selectedItem.riskLevel} Risk
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge 
+                  variant={getRiskBadgeVariant(selectedItem.riskLevel)}
+                  className={getRiskBadgeClassName(selectedItem.riskLevel)}
+                >
+                  {getRiskBadgeText(selectedItem.riskLevel)}
                 </Badge>
                 <Badge variant={getActionBadgeVariant(selectedItem.recommendedAction)}>
                   {selectedItem.recommendedAction}
@@ -815,16 +862,34 @@ function InsightsTab() {
                     Order {selectedItem.recommendedQty} units
                   </Badge>
                 )}
+                {selectedItem.primaryChannel && (
+                  <Badge variant="secondary">
+                    {selectedItem.primaryChannel}
+                  </Badge>
+                )}
               </div>
               
               <div className="p-4 bg-muted rounded-lg">
                 <p className="text-sm" data-testid="text-explanation">{selectedItem.explanation}</p>
               </div>
               
+              {/* V1: Enhanced metrics grid with availableForSale and Extensiv data */}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <p className="text-muted-foreground">On Hand</p>
-                  <p className="font-medium">{selectedItem.metrics?.onHand ?? 0} units</p>
+                  <p className="text-muted-foreground">Available for Sale</p>
+                  <p className={`font-medium ${(selectedItem.metrics?.availableForSale ?? 0) < 0 ? "text-destructive" : ""}`}>
+                    {selectedItem.metrics?.availableForSale ?? 0} units
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Extensiv On Hand</p>
+                  <p className="font-medium">{selectedItem.metrics?.extensivOnHand ?? 0} units</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Extensiv Variance</p>
+                  <p className={`font-medium ${Math.abs(selectedItem.metrics?.extensivVariance ?? 0) > 0 ? "text-yellow-600" : ""}`}>
+                    {selectedItem.metrics?.extensivVariance ?? 0} ({(selectedItem.metrics?.extensivVariancePercent ?? 0).toFixed(0)}%)
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Daily Velocity</p>
@@ -835,6 +900,10 @@ function InsightsTab() {
                   <p className="font-medium">{Math.floor(selectedItem.metrics?.projectedDaysUntilStockout ?? 0)} days</p>
                 </div>
                 <div>
+                  <p className="text-muted-foreground">Effective Lead Time</p>
+                  <p className="font-medium">{selectedItem.metrics?.effectiveLeadTime ?? 7} days</p>
+                </div>
+                <div>
                   <p className="text-muted-foreground">Reorder Point</p>
                   <p className="font-medium">{selectedItem.metrics?.reorderPoint ?? 0} units</p>
                 </div>
@@ -843,11 +912,16 @@ function InsightsTab() {
                   <p className="font-medium">{((selectedItem.metrics?.returnRate ?? 0) * 100).toFixed(1)}%</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Supplier Lead Time</p>
-                  <p className="font-medium">{selectedItem.metrics?.supplierLeadTimeDays ?? 7} days</p>
+                  <p className="text-muted-foreground">Backorder Count</p>
+                  <p className="font-medium">{selectedItem.metrics?.backorderCount ?? 0}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Inbound PO</p>
+                  <p className="font-medium">{selectedItem.metrics?.inboundPO ?? 0} units</p>
                 </div>
               </div>
               
+              {/* V1: Risk indicators */}
               <div className="flex flex-wrap gap-2">
                 {(selectedItem.metrics?.supplierScore ?? 100) < 80 && (
                   <Badge variant="outline" className="text-xs text-orange-600">
@@ -857,6 +931,16 @@ function InsightsTab() {
                 {(selectedItem.metrics?.returnRate ?? 0) > 0.1 && (
                   <Badge variant="outline" className="text-xs text-yellow-600">
                     High Return Rate
+                  </Badge>
+                )}
+                {Math.abs(selectedItem.metrics?.extensivVariance ?? 0) > 10 && (
+                  <Badge variant="outline" className="text-xs text-yellow-600">
+                    Extensiv Variance Alert
+                  </Badge>
+                )}
+                {(selectedItem.metrics?.availableForSale ?? 0) < 0 && (
+                  <Badge variant="destructive" className="text-xs">
+                    Negative Stock
                   </Badge>
                 )}
               </div>

@@ -488,6 +488,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get items sorted by criticality for PO creation
+  app.get("/api/items/critical-order", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const items = await storage.getAllItems();
+      
+      // Calculate days until stockout and sort by criticality
+      const itemsWithCriticality = items.map(item => {
+        // For finished products, use pivotQty; for components, use currentStock
+        const stock = item.type === 'finished_product' 
+          ? (item.pivotQty || 0)
+          : item.currentStock;
+        
+        const daysUntilStockout = item.dailyUsage > 0 
+          ? Math.floor(stock / item.dailyUsage)
+          : 9999;
+        
+        return {
+          ...item,
+          daysUntilStockout,
+        };
+      });
+
+      // Sort by days until stockout (most critical first), then alphabetically
+      itemsWithCriticality.sort((a, b) => {
+        if (a.daysUntilStockout !== b.daysUntilStockout) {
+          return a.daysUntilStockout - b.daysUntilStockout;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+      res.json(itemsWithCriticality);
+    } catch (error: any) {
+      console.error("[Items] Error fetching items by criticality:", error);
+      res.status(500).json({ error: "Failed to fetch items" });
+    }
+  });
+
   app.get("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const item = await storage.getItem(req.params.id);
@@ -3621,43 +3658,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("[PurchaseOrder] Error creating and sending PO:", error);
       res.status(500).json({ error: error.message || "Failed to create and send purchase order" });
-    }
-  });
-
-  // Get items sorted by criticality for PO creation
-  app.get("/api/items/critical-order", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const items = await storage.getAllItems();
-      
-      // Calculate days until stockout and sort by criticality
-      const itemsWithCriticality = items.map(item => {
-        // For finished products, use pivotQty; for components, use currentStock
-        const stock = item.type === 'finished_product' 
-          ? (item.pivotQty || 0)
-          : item.currentStock;
-        
-        const daysUntilStockout = item.dailyUsage > 0 
-          ? Math.floor(stock / item.dailyUsage)
-          : 9999;
-        
-        return {
-          ...item,
-          daysUntilStockout,
-        };
-      });
-
-      // Sort by days until stockout (most critical first), then alphabetically
-      itemsWithCriticality.sort((a, b) => {
-        if (a.daysUntilStockout !== b.daysUntilStockout) {
-          return a.daysUntilStockout - b.daysUntilStockout;
-        }
-        return a.name.localeCompare(b.name);
-      });
-
-      res.json(itemsWithCriticality);
-    } catch (error: any) {
-      console.error("[Items] Error fetching items by criticality:", error);
-      res.status(500).json({ error: "Failed to fetch items" });
     }
   });
 

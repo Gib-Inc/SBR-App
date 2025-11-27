@@ -1,0 +1,59 @@
+I want you to wire the rebuilt SKU Recommendations table into the Purchase Order engine so that recommendations become actionable, while keeping everything inside the existing structure (no new pages).
+
+Do NOT redesign anything else right now; focus only on: (1) connecting recommendations → PO creation, and (2) keeping statuses and logs consistent.
+
+From recommendation → PO draft
+
+– In AI Agent → Insights → SKU Recommendations, add an action on each row that lets me start a PO directly from that recommendation.
+– The action could be called “Create PO” or “Start Purchase Order”, but it MUST:
+• Open the existing PO creation flow inside Suppliers → “PO History & Issues” (use the same modal/drawer pattern you already use, do not create a separate /purchase-orders page).
+• Pre-fill the supplier based on the product’s default supplier.
+• Pre-fill the line items with the recommended SKU and recommendedQty from the recommendation row.
+• Allow me to adjust qty and other fields before saving, just like any normal PO creation.
+
+– When the PO is actually created/saved:
+• Link the recommendation to that PO record (e.g., store aiRecommendationId on the PO, or store poId on the recommendation).
+• Automatically change the recommendation status from NEW → ACCEPTED.
+• Update qtyOnPo in that recommendation row to reflect the open PO quantity for that SKU.
+
+Status handling and “Qty ordered” consistency
+
+– Make sure qtyOnPo in SKU Recommendations is computed from the real PO data:
+• Sum all open PO line quantities for that SKU where the PO is not fully received or cancelled.
+• When a PO linked to that recommendation is fully received, ensure qtyOnPo for that SKU is updated (and goes to zero if there are no other open POs).
+
+– When a recommendation is ACCEPTED via the “Create PO” flow vs via the “Mark Accepted” button:
+• Treat both as status = ACCEPTED, but if a PO is created, store the linkage so we can see which PO came from which recommendation.
+• In the details panel for a recommendation, show a small list or link to the associated PO(s) if present.
+
+AI Logs and audit
+
+– Whenever a PO is created from a recommendation row:
+• Log an AI Logs entry with something like:
+source = USER or SYSTEM
+type = AI_RECOMMENDATION_PO_CREATED
+metadata: { sku, recommendedQty, poId, supplier, riskLevel, daysUntilStockout, stockGapPercent }
+
+– When a recommendation is ACCEPTED or DISMISSED without creating a PO (just using the buttons in the table):
+• Keep the existing AI Logs behavior you already implemented (do not break it).
+
+UI behavior and containment
+
+– Do NOT add any new pages. Everything must use the existing Suppliers → “PO History & Issues” tab and its PO detail/draft UI.
+– The SKU Recommendations table should continue to:
+• Show only SKUs with recommendations.
+• Use the New / Accepted / Dismissed statuses as we defined.
+• Show Available for Sale, Days Until Stockout, Recommended Qty, % off target, Qty on PO, Ad Impact, etc.
+– Keep the table in its existing scrollable container (no full-page horizontal scrolling). If you add new columns (like a “Linked PO” icon), respect the existing scroll/containment rules.
+
+Safety and accounting
+
+– When creating a PO from a recommendation:
+• Use the same inventory and QuickBooks wiring you already implemented for POs → Bills. Do NOT create any extra QuickBooks entries beyond the existing PO→Bill flow.
+• Do NOT double-count anything; a PO created from a recommendation should behave identically to a manually created PO from the Suppliers page.
+
+After you implement this, summarize for me:
+
+– How to go from a SKU Recommendation row to a pre-filled PO.
+– How recommendation status, qtyOnPo, and links to POs behave end-to-end.
+– What AI Logs entries are written when a PO is created from a recommendation and when a recommendation is accepted/dismissed.

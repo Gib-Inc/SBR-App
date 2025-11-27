@@ -537,6 +537,7 @@ export default function Suppliers() {
           <TabsTrigger value="discovery" data-testid="tab-discovery">
             <TrendingUp className="h-4 w-4 mr-2" />
             Discovery & Creation
+            <Badge variant="outline" className="ml-2 text-[10px] px-1.5 py-0 h-4">V2</Badge>
           </TabsTrigger>
         </TabsList>
 
@@ -851,8 +852,29 @@ export default function Suppliers() {
         </TabsContent>
 
         <TabsContent value="discovery" className="w-full max-w-full min-w-0 space-y-4">
-          {/* Discovery Form */}
+          {/* V2 Coming Soon Notice */}
           <Card>
+            <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="rounded-full bg-muted p-4 mb-4">
+                <Search className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Supplier Discovery</h3>
+              <Badge variant="outline" className="mb-4">Coming in V2</Badge>
+              <p className="text-muted-foreground max-w-md">
+                Automated supplier discovery via PhantomBuster web scraping will be available in V2. 
+                This feature will help you find new suppliers based on keywords and location filters.
+              </p>
+              <div className="mt-6 p-4 bg-muted/50 rounded-lg max-w-md">
+                <p className="text-sm text-muted-foreground">
+                  <strong>V2 Features:</strong> LinkedIn & Google scraping, lead management, 
+                  automatic supplier conversion, and discovery analytics.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+          
+          {/* Hidden for V1 - Discovery Form */}
+          {false && <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Search className="h-5 w-5" />
@@ -932,10 +954,10 @@ export default function Suppliers() {
                 </div>
               )}
             </CardContent>
-          </Card>
+          </Card>}
 
-          {/* Leads Table */}
-          <Card>
+          {/* Hidden for V1 - Leads Table */}
+          {false && <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2">
@@ -1070,7 +1092,7 @@ export default function Suppliers() {
                 </div>
               )}
             </CardContent>
-          </Card>
+          </Card>}
         </TabsContent>
       </Tabs>
 

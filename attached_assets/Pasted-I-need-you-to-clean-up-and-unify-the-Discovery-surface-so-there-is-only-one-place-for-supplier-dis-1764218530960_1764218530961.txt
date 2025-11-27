@@ -1,0 +1,56 @@
+I need you to clean up and unify the “Discovery” surface so there is only one place for supplier discovery, and it is clearly stubbed for V1.
+
+Please do the following:
+
+Remove “Discovery” tab from AI Agent
+
+On the AI Agent page, the top tab bar should have only:
+
+Data Sources
+
+Rules
+
+LLM Config
+
+Insights
+
+Remove the Discovery tab from this tab list and delete any route/conditional rendering that expects aiTab === "discovery" (or equivalent).
+
+If you created a separate component/file for the AI Agent “Discovery” view, do not keep it as a separate screen. Either delete it or reuse any generic pieces later, but for now there should be no Discovery view under AI Agent.
+
+Keep Supplier “Discovery & Creation” as the only Discovery surface
+
+On the Suppliers page, keep the two tabs:
+
+PO History & Issues
+
+Discovery & Creation
+
+The Discovery & Creation tab should be a V1 stub only, not a full feature:
+
+Replace any existing complex UI there with a single, well-designed stub panel.
+
+Show a clear message like:
+“Supplier Discovery & Creation is coming in V2. In V1, supplier management is limited to Purchase Orders & existing suppliers.”
+
+Optionally list a few bullet points of future capabilities (AI-generated supplier suggestions, outreach flows, etc.), but no active forms, no saving, no external API calls.
+
+Disable or remove any buttons that would try to create leads, send POs, or call GHL/LLM from this tab. It should be view-only stub content.
+
+Avoid duplicate structures and keep V1 scope tight
+
+Make sure there is no other “Discovery” or “Supplier Leads” page under AI Agent, Dashboard, or any other route.
+
+Do not add new pages, routes, or tabs beyond what we already have; just adjust the existing AI Agent and Suppliers pages as described.
+
+After the change:
+
+AI Agent tabs: Data Sources | Rules | LLM Config | Insights
+
+Suppliers tabs: PO History & Issues | Discovery & Creation (stubbed V2 message)
+
+When you’re done, restart the app and verify:
+
+The AI Agent page no longer shows a Discovery tab.
+
+The only Discovery UI lives under Suppliers → “Discovery & Creation”, and it is clearly marked as “Coming in V2” with no active backend behavior.

@@ -27,11 +27,12 @@ import {
   TrendingDown,
   Flag,
   PackageCheck,
+  Mail,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CreatePOSheet } from "@/components/create-po-sheet";
-import type { PurchaseOrder, SupplierLead, Supplier, Item, PurchaseOrderLine } from "@shared/schema";
+import type { PurchaseOrder, Supplier, Item, PurchaseOrderLine } from "@shared/schema";
 
 interface POSummary {
   total: number;
@@ -70,10 +71,6 @@ export default function Suppliers() {
 
   const { data: purchaseOrders = [], isLoading: isLoadingPOs } = useQuery<EnrichedPO[]>({
     queryKey: ['/api/purchase-orders'],
-  });
-
-  const { data: supplierLeads = [], isLoading: isLoadingLeads } = useQuery<SupplierLead[]>({
-    queryKey: ['/api/supplier-leads'],
   });
 
   const { data: suppliers = [] } = useQuery<Supplier[]>({
@@ -672,94 +669,39 @@ export default function Suppliers() {
 
         <TabsContent value="discovery" className="w-full max-w-full min-w-0 space-y-4">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-              <CardTitle>Supplier Leads</CardTitle>
-              <Button size="sm" data-testid="button-create-lead">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Lead
-              </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-2 mb-4">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search leads..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9"
-                    data-testid="input-search-lead"
-                  />
+            <CardContent className="pt-6">
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center mb-6">
+                  <TrendingUp className="h-10 w-10 text-muted-foreground" />
+                </div>
+                <Badge variant="secondary" className="mb-4" data-testid="badge-coming-v2">Coming in V2</Badge>
+                <h3 className="text-xl font-semibold mb-3">Supplier Discovery & Creation</h3>
+                <p className="text-muted-foreground max-w-lg mb-6">
+                  In V1, supplier management is limited to Purchase Orders & existing suppliers. 
+                  Advanced discovery features will be available in a future release.
+                </p>
+                <div className="text-left max-w-md space-y-2 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground mb-3">Planned V2 capabilities:</p>
+                  <ul className="space-y-2">
+                    <li className="flex items-start gap-2">
+                      <Search className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>AI-powered supplier discovery based on your inventory needs</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Building2 className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>Automated lead generation and supplier qualification</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Mail className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>Outreach automation via email and SMS campaigns</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <TrendingUp className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                      <span>Supplier scoring and performance benchmarking</span>
+                    </li>
+                  </ul>
                 </div>
               </div>
-
-              {isLoadingLeads ? (
-                <div className="text-center py-8 text-muted-foreground">Loading supplier leads...</div>
-              ) : supplierLeads.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  No supplier leads yet. Add your first lead to get started.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Name</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Website</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Source</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Status</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Category</th>
-                        <th className="text-left p-2 font-medium whitespace-nowrap">Last Contacted</th>
-                        <th className="text-right p-2 font-medium whitespace-nowrap">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {supplierLeads.map((lead) => (
-                        <tr key={lead.id} className="border-b hover-elevate" data-testid={`row-lead-${lead.id}`}>
-                          <td className="p-2 font-medium whitespace-nowrap">{lead.name}</td>
-                          <td className="p-2 whitespace-nowrap">
-                            {lead.websiteUrl ? (
-                              <a 
-                                href={lead.websiteUrl} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-primary hover:underline text-sm"
-                              >
-                                Visit
-                              </a>
-                            ) : (
-                              <span className="text-muted-foreground">-</span>
-                            )}
-                          </td>
-                          <td className="p-2 whitespace-nowrap">
-                            <Badge variant="outline" data-testid={`badge-source-${lead.id}`}>
-                              {lead.source}
-                            </Badge>
-                          </td>
-                          <td className="p-2 whitespace-nowrap">
-                            <Badge variant={
-                              lead.status === 'CONVERTED' ? 'default' :
-                              lead.status === 'CONTACTED' ? 'secondary' :
-                              'outline'
-                            } data-testid={`badge-status-${lead.id}`}>
-                              {lead.status}
-                            </Badge>
-                          </td>
-                          <td className="p-2 text-sm whitespace-nowrap">{lead.category || '-'}</td>
-                          <td className="p-2 text-sm whitespace-nowrap">
-                            {lead.lastContactedAt ? new Date(lead.lastContactedAt).toLocaleDateString() : '-'}
-                          </td>
-                          <td className="p-2 text-right whitespace-nowrap">
-                            <Button size="sm" variant="ghost" data-testid={`button-view-lead-${lead.id}`}>
-                              View
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </CardContent>
           </Card>
         </TabsContent>

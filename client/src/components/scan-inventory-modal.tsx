@@ -132,8 +132,13 @@ export function ScanInventoryModal({
       quantity: number;
       mode: ScanMode;
     }) => {
-      // Find the item by barcode
-      const item = items.find(i => i.barcodeValue === data.barcodeValue);
+      // Find the item by barcode (same lookup as UI preview)
+      const trimmedValue = data.barcodeValue.trim();
+      const item = items.find(i => 
+        i.barcodeValue === trimmedValue || 
+        i.sku === trimmedValue ||
+        i.barcode === trimmedValue
+      );
       
       if (!item) {
         throw new Error("Barcode not found in system");

@@ -154,8 +154,11 @@ export function CameraBarcodeScanner({
   useEffect(() => {
     if (enabled) {
       getVideoDevices();
+    } else {
+      // Stop camera when disabled (e.g., switching to keyboard tab)
+      stopCamera();
     }
-  }, [enabled, getVideoDevices]);
+  }, [enabled, getVideoDevices, stopCamera]);
 
   useEffect(() => {
     return () => {

@@ -15,7 +15,8 @@ Preferred communication style: Simple, everyday language.
 *   **Frameworks**: React with TypeScript, Wouter for routing, TanStack Query for state management.
 *   **UI/UX**: Radix UI primitives with shadcn/ui customization, Tailwind CSS for styling, inspired by Carbon Design System.
 *   **Design**: IBM Plex Sans typography, light/dark mode support, responsive layouts for desktop and tablets.
-*   **Key Pages**: Dashboard (KPIs, forecasting), Products (catalog, BOM builder), Barcodes (management, generation), Settings (authentication, API keys, LLM config).
+*   **Key Pages**: Dashboard (KPIs, forecasting), Products (catalog, BOM builder), Barcodes (management, generation), Settings (authentication, LLM config with model/temperature/tokens).
+*   **Architecture Simplification (Nov 2025)**: Removed Settings → Integrations tab; all external integration configuration (Shopify, Amazon, Extensiv, GoHighLevel, PhantomBuster) now exclusively lives in AI Agent → Data Sources tab.
 
 ### Backend Architecture
 

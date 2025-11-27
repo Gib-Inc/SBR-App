@@ -16,7 +16,6 @@ Preferred communication style: Simple, everyday language.
 *   **UI/UX**: Radix UI primitives with shadcn/ui customization, Tailwind CSS for styling, inspired by Carbon Design System.
 *   **Design**: IBM Plex Sans typography, light/dark mode support, responsive layouts for desktop and tablets.
 *   **Key Pages**: Dashboard (KPIs, forecasting), Products (catalog, BOM builder), Barcodes (management, generation), Settings (authentication, LLM config with model/temperature/tokens).
-*   **Architecture Simplification (Nov 2025)**: Removed Settings → Integrations tab; all external integration configuration (Shopify, Amazon, Extensiv, GoHighLevel, PhantomBuster) now exclusively lives in AI Agent → Data Sources tab.
 
 ### Backend Architecture
 
@@ -24,95 +23,35 @@ Preferred communication style: Simple, everyday language.
 *   **Database ORM**: Drizzle ORM.
 *   **Authentication**: Session-based with `connect-pg-simple`, `bcrypt` for password hashing.
 *   **API**: RESTful endpoints under `/api/*`.
-*   **Core Services**: 
-    *   LLMService (pluggable AI for forecasting, PO message generation)
-    *   BarcodeService (generation)
-    *   ShopifyClient (order sync via Admin API)
-    *   AmazonClient (order sync via SP-API with OAuth)
-    *   ExtensivClient (inventory sync via API)
-    *   GoHighLevelClient (CRM integration, SMS/email to suppliers)
-    *   QuickBooksClient (OAuth 2.0 sales history sync, PO-to-Bill creation)
-    *   PhantomBusterClient (supplier discovery via web scraping phantoms)
-    *   Storage Layer (abstracted data access)
-*   **Production**: Static assets served via Express.
+*   **Core Services**: LLMService, BarcodeService, ShopifyClient, AmazonClient, ExtensivClient, GoHighLevelClient, QuickBooksClient, PhantomBusterClient, Storage Layer.
 
 ### Data Architecture
 
 *   **Database**: PostgreSQL (via Neon serverless driver) with Drizzle Kit for migrations.
-*   **Core Entities**: Users, Items (components, finished products), Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders (multi-channel with Shopify/Amazon/GHL/Direct), BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes.
+*   **Core Entities**: Users, Items, Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders, BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes.
 *   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers, SalesOrders to Items via line items with SKU mapping.
-*   **Integration Data**: SalesOrders include rawPayload JSONB field storing original external API responses for debugging and audit purposes.
+*   **Integration Data**: SalesOrders include rawPayload JSONB field.
 
 ### Forecasting & Analytics
 
 *   **Constraint-based Planning**: Calculates "days until stockout" and identifies bottleneck components.
-*   **Production Capacity**: Determines maximum producible finished products based on BOM and component constraints.
-*   **LLM-Powered Forecasting**: Utilizes AI for multi-period analysis, generating reorder recommendations based on historical data, current stock, and usage rates.
+*   **Production Capacity**: Determines maximum producible finished products.
+*   **LLM-Powered Forecasting**: Utilizes AI for multi-period analysis, generating reorder recommendations.
 
 ### System Design Choices
 
-*   **Inventory Location Fields for Finished Products**:
-    *   `hildaleQty`: Physical inventory at Hildale warehouse (receives returns, production output)
-    *   `pivotQty`: Authoritative mirror of Extensiv/3PL inventory (only updated by Extensiv sync)
-    *   `availableForSaleQty`: Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns). Used for AI risk calculations.
-*   **Inventory Movement Rules**:
-    *   Sales Order Created (Shopify/Amazon): Decrements `availableForSaleQty` (can go negative to show shortage)
-    *   Sales Order Cancelled: Increments `availableForSaleQty`
-    *   Sales Order Shipped (Hildale): Decrements `hildaleQty`; (Pivot): No change to projection (already decremented at create)
-    *   PO Received: Increments both `pivotQty` and `availableForSaleQty`
-    *   Returns: Always go to HILDALE ONLY - increments `hildaleQty` only (NOT `availableForSaleQty`). Returned items are buffer stock until transferred to Pivot.
-    *   Extensiv Sync: READ-ONLY - sets `pivotQty` from Extensiv and adjusts `availableForSaleQty` by the delta. NO write-back to Extensiv.
-*   **InventoryMovement Helper**: Centralized service (`server/services/inventory-movement.ts`) for all order-related inventory changes with audit logging. Used by Sales Orders, Returns, PO receipts, and Extensiv sync.
-*   **availableForSaleQty Ownership**: Only the following events modify availableForSaleQty (all via InventoryMovement.apply()):
-    *   `EXTENSIV_SYNC`: Sets baseline by adjusting availableForSaleQty by (newPivotQty - oldPivotQty)
-    *   `SALES_ORDER_CREATED`: Decrements for Pivot-fulfilled orders (Shopify/Amazon)
-    *   `SALES_ORDER_CANCELLED`: Increments for Pivot-fulfilled orders (restores stock)
-    *   `RETURN_RECEIVED`: NO CHANGE - returns go to Hildale only (NOT availableForSale until transferred)
-    *   `PURCHASE_ORDER_RECEIVED`: Increments (new stock from PO)
-    *   `SALES_ORDER_SHIPPED`: NO CHANGE for Pivot orders (already decremented at create), only affects hildaleQty for Hildale orders
-*   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.
-*   **Transaction Service**: Centralized logic for production/transfer movements. Note: Uses legacy direct updates; future work to migrate to InventoryMovement helper.
-*   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency, triggered by inventory transactions, rather than real-time per-transaction calls.
-*   **Multi-Channel Order Sync**: Shopify and Amazon orders sync with duplicate prevention using externalOrderId + channel combination, SKU-to-product mapping with graceful handling, and automatic backorder/forecast context refresh.
-*   **Integration Management**: All external integrations (Extensiv, Shopify, Amazon) managed through AI Agent → Data Sources tab with unified IntegrationSettings component, removing need for separate Integrations page.
-*   **Demo Data Seeding**: Development database can be populated with realistic demo data via `npx tsx server/seed.ts`. Includes 6 multi-channel sales orders (3 Shopify, 3 Amazon) with various statuses, and 2 linked return requests demonstrating the full order-to-return workflow.
-*   **Responsive Layout**: Implemented `min-w-0` on flex containers and explicit width constraints to ensure proper adaptation and prevent horizontal scrolling issues.
-*   **Sticky Elements**: Actions columns in wide tables are sticky for improved usability during horizontal scrolling.
-*   **Table Standardization**: All data tables across the application use `whitespace-nowrap` on headers and cells to enforce single-line row heights, preventing text wrapping and maintaining consistent, scannable layouts.
-*   **LLM-Powered PO Creation**: Create PO flow via Suppliers page with 3-step wizard (select supplier → choose items sorted by criticality → review & send). LLM generates professional PO messages (email subject/body and SMS) with fallback templates. GoHighLevel integration sends PO via SMS or email to suppliers with automatic contact creation.
-*   **Integration Health & Key Rotation**: Automated monitoring of OAuth tokens and API keys across all integrations (QuickBooks, Meta Ads, Google Ads, Extensiv, Shopify, Amazon, GoHighLevel, PhantomBuster). Features include:
-    *   Health status classification: OK (>=14 days), WARNING (7-13 days), CRITICAL (<7 days), EXPIRED
-    *   API key age tracking for non-expiring keys (warns after 90 days)
-    *   Consecutive auth failure detection (CRITICAL after 3 failures)
-    *   GoHighLevel SMS/email alerts when tokens approach expiry (24h throttle to prevent spam)
-    *   **Per-Integration Card UI**: 2-column responsive grid showing each integration with:
-        *   Provider icon and name with status badge
-        *   Last rotation timestamp (when credentials were last changed)
-        *   Next rotation due date (configurable via aiTokenRotationDays setting, default 90 days)
-        *   "Rotate Now" button with confirmation dialog
-    *   Token rotation tracking via `tokenLastRotatedAt` and `tokenNextRotationAt` fields on integrationConfigs, quickbooksAuth, and adPlatformConfigs tables
-    *   Rotation events logged to audit trail with `INTEGRATION_TOKEN_ROTATION_REQUESTED` event type
-    *   Audit trail logging for all health checks and rotation alerts
-    *   Manual "Run Check" button for on-demand health verification
-
-### V1 Integration Architecture Rules
-
-**System of Record Principles:**
-1.  **Inventory App is System of Record for Quantities**: currentStock (raw materials), hildaleQty, pivotQty, availableForSaleQty are managed locally. All changes MUST go through InventoryMovement helper for audit trail.
-2.  **Shopify + Amazon are Order Sources Only**: We import orders → SalesOrders table + InventoryMovement(SALES_ORDER_CREATED). We do NOT push inventory quantities back to channels (stay compliant, no fake stock levels).
-3.  **Extensiv/Pivot is Read-Only**: We pull inventory snapshots for 3PL reconciliation. Store Extensiv quantities in `extensivOnHandSnapshot` for variance display. EXTENSIV_SYNC updates pivotQty and adjusts availableForSaleQty by delta.
-4.  **QuickBooks is Financial-Only (V1 Implemented)**: Read-only sales history sync + PO-to-Bill creation. QuickBooks serves as source of truth for historical revenue data. We do NOT create/modify QuickBooks sales documents (Invoices, SalesReceipts, Payments) and do NOT create SalesOrders from QuickBooks to prevent double-counting orders from Shopify/Amazon. Monthly sales snapshots supplement AI velocity calculations when local data is sparse.
-5.  **GoHighLevel is Messaging-Only**: Used for PO contact creation + email/SMS sending. Does NOT drive inventory quantities.
-6.  **PhantomBuster is Discovery-Only (V1 Implemented)**: Manual-trigger supplier discovery via web scraping phantoms. Discovered leads stored in SupplierLeads table with source tracking (PHANTOMBUSTER_LINKEDIN, PHANTOMBUSTER_GOOGLE, etc.). Leads can be converted to Suppliers. No scheduled automation in V1 - all discovery runs are user-initiated via Suppliers → Discovery tab.
-
-**Idempotency Guarantees:**
-*   Unique constraint on (channel, externalOrderId) prevents duplicate order imports
-*   Shopify/Amazon syncs use getSalesOrdersByExternalId lookup before creating new orders
-
-**Extensiv Variance Tracking:**
-*   `extensivOnHandSnapshot`: Last synced Extensiv quantity (read-only, for variance comparison)
-*   `extensivLastSyncAt`: Timestamp of last Extensiv sync for this item
-*   UI displays variance (Extensiv OnHand vs availableForSaleQty) in Products table with color coding
+*   **Inventory Location Fields**: `hildaleQty`, `pivotQty`, `availableForSaleQty` for tracking different inventory states.
+*   **Inventory Movement Rules**: Defined logic for how sales orders, cancellations, shipments, PO receipts, returns, and Extensiv sync affect inventory quantities. All changes are tracked via an `InventoryTransaction` table and centralized `InventoryMovement` helper.
+*   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency.
+*   **Multi-Channel Order Sync**: Shopify and Amazon orders sync with duplicate prevention and SKU mapping.
+*   **Integration Management**: All external integrations managed through the AI Agent → Data Sources tab.
+*   **Demo Data Seeding**: Development database can be populated with realistic demo data.
+*   **UI/UX**: Responsive layouts, sticky table elements, and standardized table presentation.
+*   **LLM-Powered PO Creation**: 3-step wizard for Purchase Order creation with LLM-generated messages and GoHighLevel integration for sending.
+*   **Integration Health & Key Rotation**: Automated monitoring of OAuth tokens and API keys, health status classification (OK, WARNING, CRITICAL, EXPIRED), and alerts.
+*   **System of Record Principles**: Inventory App is the system of record for quantities; Shopify/Amazon are order sources only; Extensiv/Pivot are read-only; QuickBooks is financial-only; GoHighLevel is messaging-only; PhantomBuster is discovery-only.
+*   **Idempotency Guarantees**: Unique constraints prevent duplicate order imports.
+*   **Extensiv Variance Tracking**: `extensivOnHandSnapshot` and `extensivLastSyncAt` track variance with Extensiv.
 
 ## External Dependencies
 
@@ -121,31 +60,4 @@ Preferred communication style: Simple, everyday language.
 *   **External Service Integrations**: GoHighLevel (CRM), Shopify (e-commerce), Extensiv/Pivot (3PL warehouse management), PhantomBuster (web scraping).
 *   **LLM Providers**: OpenAI (ChatGPT), Anthropic (Claude), Grok, Custom Endpoint support.
 *   **Database Provider**: Neon (Serverless PostgreSQL).
-*   **Hardware Support**: USB/Bluetooth barcode scanners (HID keyboard mode).
-
-## V1 Release Status (November 2025)
-
-### Fully Functional Features
-
-1.  **SKU & BOM Management**: Create products, components, and Bill of Materials with full CRUD operations
-2.  **Extensiv 3PL Sync**: READ-ONLY inventory sync updates pivotQty and adjusts availableForSaleQty
-3.  **Shopify Order Import**: Orders sync to SalesOrders with InventoryMovement(SALES_ORDER_CREATED) decrementing availableForSaleQty
-4.  **Amazon Order Import**: SP-API integration with OAuth, same flow as Shopify
-5.  **PO Creation + GHL Sending**: 3-step wizard with LLM-generated messages, GoHighLevel SMS/email delivery with contact creation
-6.  **Returns Processing**: RETURN_RECEIVED increments hildaleQty only (Extensiv is READ-ONLY)
-7.  **QuickBooks Sales History**: OAuth 2.0 sync of historical sales (Invoice + SalesReceipt), monthly snapshots for AI velocity calculations
-8.  **AI System Reviewer**: Weekly LLM-powered log analysis with actionable suggestions (INTEGRATION_ISSUE, INVENTORY_PATTERN, etc.)
-9.  **Integration Health Monitoring**: OAuth token expiry tracking, consecutive failure detection, GHL alerts
-10. **Barcode Management**: Generation, printing, CSV export, scanner integration
-
-### Deferred to V2
-
-1.  **Supplier Discovery (PhantomBuster)**: UI labeled "Coming in V2" - LinkedIn/Google scraping via phantoms
-2.  **Google/Meta/TikTok Ads Data Sync**: OAuth flows exist, but actual spend/conversion data ingestion is stubbed
-3.  **Scheduled Automation**: All syncs are manual-trigger in V1; cron-based scheduling is V2
-
-### Known Dev-Mode Behaviors
-
-*   **LLM Stubs**: When LLM API keys are not configured, system uses fallback template responses (expected for dev)
-*   **Return Label STUB Provider**: When SHIPPO_API_KEY is not set, uses stub provider for label generation (expected for dev)
-*   **PostCSS Warning**: Known Tailwind CSS issue, does not affect functionality
+*   **Hardware Support**: USB/Bluetooth barcode scanners.

@@ -52,11 +52,45 @@ import {
   Package,
   PackageX,
   ExternalLink,
-  MessageSquare,
   Download,
   Upload,
   Share2
 } from "lucide-react";
+
+function GhlConversationIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path
+        d="M12 4L12 14M12 4L8 8M12 4L16 8"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6 8L6 18M6 8L2 12M6 8L10 12"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.7"
+      />
+      <path
+        d="M18 8L18 18M18 8L14 12M18 8L22 12"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.7"
+      />
+    </svg>
+  );
+}
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useForm, useFieldArray } from "react-hook-form";
@@ -709,6 +743,32 @@ export default function SalesOrders() {
                       </td>
                       <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                         <div className="flex items-center justify-end gap-1">
+                          {/* GHL Conversation Button - Always visible, first in action order */}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const ghlConversationUrl = (order as any).ghlConversationUrl;
+                                    if (ghlConversationUrl) {
+                                      window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
+                                    }
+                                  }}
+                                  disabled={!(order as any).ghlConversationUrl && !order.ghlContactId}
+                                  data-testid={`button-ghl-conversation-${order.id}`}
+                                >
+                                  <GhlConversationIcon className="h-4 w-4" />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {(order as any).ghlConversationUrl || order.ghlContactId ? "GHL Conversation" : "No GHL contact linked"}
+                            </TooltipContent>
+                          </Tooltip>
+
                           {/* View Source Button */}
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -732,32 +792,6 @@ export default function SalesOrders() {
                             </TooltipTrigger>
                             <TooltipContent>
                               {(order as any).sourceUrl ? `View in ${order.channel}` : "No source link available"}
-                            </TooltipContent>
-                          </Tooltip>
-
-                          {/* GHL Conversation Button */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const ghlConversationUrl = (order as any).ghlConversationUrl;
-                                    if (ghlConversationUrl) {
-                                      window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
-                                    }
-                                  }}
-                                  disabled={!(order as any).ghlConversationUrl && !order.ghlContactId}
-                                  data-testid={`button-ghl-conversation-${order.id}`}
-                                >
-                                  <MessageSquare className="h-4 w-4" />
-                                </Button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {(order as any).ghlConversationUrl || order.ghlContactId ? "Open GHL Conversation" : "No GHL contact linked"}
                             </TooltipContent>
                           </Tooltip>
 

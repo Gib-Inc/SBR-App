@@ -60,6 +60,13 @@ Preferred communication style: Simple, everyday language.
     *   Returns: Always go to HILDALE - increments `hildaleQty` AND `availableForSaleQty`
     *   Extensiv Sync: Sets `pivotQty` from Extensiv and adjusts `availableForSaleQty` by the delta
 *   **InventoryMovement Helper**: Centralized service (`server/services/inventory-movement.ts`) for all order-related inventory changes with audit logging. Used by Sales Orders, Returns, PO receipts, and Extensiv sync.
+*   **availableForSaleQty Ownership**: Only the following events modify availableForSaleQty (all via InventoryMovement.apply()):
+    *   `EXTENSIV_SYNC`: Sets baseline by adjusting availableForSaleQty by (newPivotQty - oldPivotQty)
+    *   `SALES_ORDER_CREATED`: Decrements for Pivot-fulfilled orders (Shopify/Amazon)
+    *   `SALES_ORDER_CANCELLED`: Increments for Pivot-fulfilled orders (restores stock)
+    *   `RETURN_RECEIVED`: Increments (returned stock becomes sellable again)
+    *   `PURCHASE_ORDER_RECEIVED`: Increments (new stock from PO)
+    *   `SALES_ORDER_SHIPPED`: NO CHANGE for Pivot orders (already decremented at create), only affects hildaleQty for Hildale orders
 *   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.
 *   **Transaction Service**: Centralized logic for production/transfer movements. Note: Uses legacy direct updates; future work to migrate to InventoryMovement helper.
 *   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency, triggered by inventory transactions, rather than real-time per-transaction calls.

@@ -879,21 +879,6 @@ export default function Barcodes() {
             <Printer className="mr-2 h-4 w-4" />
             Print Labels
           </Button>
-          
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-create-barcode">
-                <Plus className="mr-2 h-4 w-4" />
-                Create Barcode
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create New Barcode</DialogTitle>
-              </DialogHeader>
-              <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
 
@@ -985,7 +970,7 @@ export default function Barcodes() {
 
         <div className="flex-1" />
         
-        {/* Search on far right */}
+        {/* Search */}
         <div className="relative w-72">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -996,6 +981,22 @@ export default function Barcodes() {
             data-testid="input-search-barcodes"
           />
         </div>
+
+        {/* Create Button */}
+        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+          <DialogTrigger asChild>
+            <Button data-testid="button-create-barcode">
+              <Plus className="mr-1 h-4 w-4" />
+              Create
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create New Barcode</DialogTitle>
+            </DialogHeader>
+            <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Items with Barcode Metadata */}

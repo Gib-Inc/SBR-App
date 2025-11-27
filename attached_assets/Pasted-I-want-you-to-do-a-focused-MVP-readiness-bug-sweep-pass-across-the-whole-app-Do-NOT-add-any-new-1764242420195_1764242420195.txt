@@ -1,0 +1,105 @@
+I want you to do a focused “MVP readiness + bug sweep” pass across the whole app. Do NOT add any new big features. The goal is to make the current V1 modules solid, consistent, and usable for real businesses.
+
+Treat this as a QA/hardening step, not a brainstorming step.
+
+MVP SCOPE (what must be solid in this pass)
+- Barcodes (finished products + internal stock barcodes)
+- Products + BOM / Stock Inventory
+- Suppliers → PO History & Issues (including PO creation and receiving)
+- Sales Orders
+- Returns
+- AI Agent:
+  - Data Sources
+  - Rules / LLM config (whatever is already implemented)
+  - Insights → SKU Recommendations (the rebuilt version with NEW/ACCEPTED/DISMISSED, recommended qty, % off target, qty on PO, ad impact, etc.)
+  - AI Logs / Audit
+- Integrations already wired or stubbed:
+  - Extensiv / Pivot
+  - Shopify
+  - Amazon Seller Central
+  - QuickBooks
+  - GoHighLevel
+  - PhantomBuster
+  - Any initial Meta/Google Ads work that already exists
+- Integration health / key rotation alerts (if present)
+
+1) Run end-to-end “golden path” flows with test data
+Create a small set of test SKUs and run at least these flows end-to-end INSIDE the running app:
+
+Flow A: New product from scratch
+- Create a finished product with BOM (components from stock inventory).
+- Assign proper barcodes (GS1 for finished products, internal for raw materials) and verify they print/preview correctly.
+- Create a PO for raw materials → Receive it into Pivot/Hildale → verify:
+  - Inventory transaction records created.
+  - Stock inventory and AvailableForSale update correctly.
+  - AI Logs show the movement.
+- Produce units (if applicable) and verify forecasting fields update (Hildale/Pivot/AvailableForSale).
+
+Flow B: Sale + AI recommendation
+- Create a sales order for that product (or pull one from Shopify/Amazon if the integration is already wired).
+- Verify:
+  - Inventory decrements correctly (exactly once, no double counting).
+  - AvailableForSale updates correctly.
+  - AI Logs show the sale movement.
+  - After running the decision engine, SKU Recommendations shows a NEW recommendation if stock is low (risk, days until stockout, recommended qty, % off target, qty on PO).
+
+Flow C: Return + inventory correction
+- Create a return for that sale using the Returns module.
+- Move it through the states (Created → In Transit → Received).
+- Verify:
+  - The correct transaction is written when the return is RECEIVED.
+  - Stock increases at the correct location.
+  - AvailableForSale updates when appropriate.
+  - AI Logs show the return movement.
+  - SKU Recommendations update (risk and recommended qty change after the return).
+
+Flow D: Recommendation → PO
+- From SKU Recommendations, take a NEW recommendation and start a PO from it.
+- Verify:
+  - PO is created inside Suppliers → PO History & Issues (not a new page).
+  - Supplier, SKU, and recommended qty are pre-filled.
+  - Saving the PO sets the recommendation status to ACCEPTED and links it to that PO.
+  - Qty on PO and status columns in SKU Recommendations update correctly.
+  - AI Logs record that a recommendation turned into a PO.
+
+2) UI + table consistency check
+For each of these pages:
+- Barcodes
+- Products/BOM + Stock Inventory
+- Suppliers → PO History & Issues
+- Sales Orders
+- Returns
+- AI Agent → Data Sources / Rules / SKU Recommendations / Logs
+
+Make the UI consistent with the rest of the app:
+- Each section has a clear heading and controls at the top, and the data table in a card/container below it.
+- Data tables:
+  - Are contained in their card with vertical/horizontal scroll INSIDE the card.
+  - The overall page does NOT become horizontally scrollable.
+  - Action icons/columns on the right remain visible or behave consistently while scrolling.
+- Modals / side drawers:
+  - No fields run off-screen horizontally.
+  - Buttons and fields show the same structure regardless of how you open them.
+- Remove any leftover “debug” text, temp buttons, or inconsistent labels from earlier experiments.
+
+3) Integration sanity checks (no deep rebuilds)
+For Extensiv, Shopify, Amazon, QuickBooks, GHL, PhantomBuster, and any Meta/Google Ads work that already exists:
+- Make sure:
+  - The configuration screens (Data Sources) do not crash when credentials are missing.
+  - “Test” or “Sync” actions fail gracefully with clear error messages when not connected.
+  - We do NOT write duplicate inventory movements from integrations; inventory movements must still go through the single transaction pipeline we defined.
+- Verify Integration Health / key rotation alerts (if implemented) do NOT leak tokens and show sane messages.
+
+4) Fix any issues you find
+- For every error, inconsistency, or obvious bug encountered in the flows above:
+  - Fix it in the code.
+  - Add/adjust tests or basic checks where appropriate (follow existing testing patterns).
+  - Keep fixes scoped to stability and correctness; do not add new features.
+
+5) Produce a short MVP readiness summary (in comments or logs)
+After the fixes, create a short internal summary (in a markdown file or code comments) that answers:
+- Which flows are passing: Flow A (product + BOM + PO), Flow B (sale), Flow C (return), Flow D (recommendation → PO).
+- Any known limitations that are acceptable for V1 (clearly marked as V2 items).
+- Any areas where the app still relies on stubs (e.g., external carriers for labels) so we know what’s not fully wired.
+
+Do all of this WITHOUT adding new major features. This step is about hardening the existing V1 app so it is stable, consistent, and trustworthy for real-world use.

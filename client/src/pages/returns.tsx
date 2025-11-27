@@ -208,40 +208,36 @@ export default function Returns() {
       </div>
 
       {/* Return Requests Section */}
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Return Requests</h2>
-            <p className="text-sm text-muted-foreground">Track and process customer returns</p>
-          </div>
-        </div>
-
-        {isLoading ? (
-          <div className="flex h-48 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          </div>
-        ) : !returns || returns.length === 0 ? (
-          <Card>
-            <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Return Requests</CardTitle>
+          <p className="text-sm text-muted-foreground">Track and process customer returns</p>
+        </CardHeader>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex h-48 items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            </div>
+          ) : !returns || returns.length === 0 ? (
+            <div className="flex h-48 flex-col items-center justify-center gap-2">
               <Package className="h-12 w-12 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">No return requests yet</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full">
-              <thead className="bg-muted/50">
-                <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
+            </div>
+          ) : (
+            <div className="overflow-auto max-h-[calc(100vh-280px)]">
+              <table className="w-full min-w-[800px]">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr className="border-b">
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap sticky right-0 bg-muted/50">Actions</th>
+                  </tr>
+                </thead>
               <tbody>
                 {returns.map((returnRequest) => (
                   <tr
@@ -275,7 +271,7 @@ export default function Returns() {
                     <td className="px-3 align-middle whitespace-nowrap">
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
                     </td>
-                    <td className="px-3 align-middle text-right whitespace-nowrap">
+                    <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 bg-background">
                       <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                         <TooltipProvider>
                           {/* Receipt Icon - Always visible */}
@@ -372,7 +368,8 @@ export default function Returns() {
             </table>
           </div>
         )}
-      </div>
+        </CardContent>
+      </Card>
 
       {selectedReturnId && returnDetails && (
         <ReturnDetailsModal

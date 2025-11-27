@@ -2,6 +2,47 @@ import type { IStorage } from "../storage";
 import type { Item } from "@shared/schema";
 import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBase } from "./audit-logger";
 
+/**
+ * INVENTORY MOVEMENT PATTERN DOCUMENTATION
+ * =========================================
+ * 
+ * This system uses PATTERN B: INTERNAL-DRIVEN inventory movements.
+ * 
+ * Core Principle:
+ * - Sales Orders in THIS app are the canonical source of stock movements
+ * - Shopify/Amazon/external channels FEED order data into our Sales Orders
+ * - External channels do NOT move stock directly - only our Sales Orders do
+ * 
+ * Movement Rules:
+ * 
+ * SALES_ORDER_CREATED (from Shopify/Amazon/Direct):
+ *   - For Pivot-fulfilled orders (Shopify/Amazon): decrements availableForSaleQty
+ *   - For Hildale orders: no movement at create time (movement happens at ship)
+ *   - ONE movement per order line - no double counting
+ * 
+ * SALES_ORDER_SHIPPED:
+ *   - For Pivot orders: no additional movement (already decremented at create)
+ *   - For Hildale orders: decrements hildaleQty
+ * 
+ * SALES_ORDER_CANCELLED:
+ *   - For Pivot orders: increments availableForSaleQty (restores stock)
+ *   - For Hildale orders: no movement (nothing was decremented)
+ * 
+ * RETURN_RECEIVED:
+ *   - Returns ALWAYS go to HILDALE for finished products
+ *   - Increments hildaleQty AND availableForSaleQty
+ *   - Only on RESTOCK disposition, not SCRAP/INSPECT
+ * 
+ * PURCHASE_ORDER_RECEIVED:
+ *   - Increments pivotQty AND availableForSaleQty for finished products
+ *   - Increments currentStock for components
+ * 
+ * IDEMPOTENCY:
+ * - Unique constraint on (channel, externalOrderId) prevents duplicate imports
+ * - Shopify/Amazon syncs check getSalesOrdersByExternalId before creating
+ * - Each event type results in exactly ONE transaction record
+ */
+
 export type InventoryEventType =
   | "SALES_ORDER_CREATED"
   | "SALES_ORDER_SHIPPED"

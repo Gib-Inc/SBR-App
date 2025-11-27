@@ -384,7 +384,7 @@ ${payload.companyName}`;
       const response = await this.askLLM({
         provider: settings.llmProvider as LLMProvider,
         apiKey: settings.llmApiKey,
-        customEndpoint: settings.customLlmEndpoint || undefined,
+        customEndpoint: settings.llmCustomEndpoint || undefined,
         taskType: "po_generation",
         payload,
       });
@@ -679,7 +679,7 @@ Analyze this inventory situation and reason through the following:
             hildaleQty,
             totalOwned,
           }),
-          itemType: isFinishedProduct ? 'finished_product' : 'component',
+          itemType: isFinishedProduct ? 'finished_product' as const : 'component' as const,
           recommendedOrderQty: parsedData.recommendedOrderQty,
           urgency: parsedData.urgency,
           reason: parsedData.reasoning,
@@ -691,15 +691,19 @@ Analyze this inventory situation and reason through the following:
         recommendations.push(recommendation);
         
         // Create AIRecommendation record for audit trail
-        const recommendedAction = parsedData.urgency === 'critical' || parsedData.urgency === 'high' ? 'ORDER' : 'MONITOR';
+        const riskLevel = parsedData.urgency === 'critical' ? 'HIGH' : parsedData.urgency === 'high' ? 'MEDIUM' : 'LOW';
         await storage.createAIRecommendation({
-          type: 'FORECAST_REORDER',
+          sku: item.sku,
           itemId: item.id,
-          location: isFinishedProduct ? 'PIVOT' : null,
+          productName: item.name,
+          recommendationType: 'REORDER',
+          riskLevel,
+          daysUntilStockout: parsedData.daysUntilStockout || Math.floor(stockForCalculation / Math.max(item.dailyUsage, 0.01)),
+          availableForSale: stockForCalculation,
           recommendedQty: parsedData.recommendedOrderQty,
-          recommendedAction,
-          horizonDays: 30,
-          contextSnapshot: {
+          qtyOnPo: 0, // Will be populated by decision engine
+          reasonSummary: parsedData.reasoning,
+          sourceSignals: {
             currentStock: stockForCalculation,
             dailyUsage: item.dailyUsage,
             pivotQty: isFinishedProduct ? pivotQty : undefined,
@@ -708,11 +712,9 @@ Analyze this inventory situation and reason through the following:
             last30DaysSales,
             last90DaysSales,
             avgLeadTime,
-            daysUntilStockout: parsedData.daysUntilStockout,
             urgency: parsedData.urgency,
-            reasoning: parsedData.reasoning,
+            llmModel: 'gpt-4o-mini',
           },
-          llmResponseTimeMs: null, // Could track this with performance.now()
         });
       } catch (error: any) {
         console.error(`[LLM] Unexpected error for ${item.name}:`, error.message);
@@ -768,9 +770,9 @@ Analyze this inventory situation and reason through the following:
         hildaleQty,
         totalOwned,
       }),
-      itemType: isFinishedProduct ? 'finished_product' : 'component',
+      itemType: isFinishedProduct ? 'finished_product' as const : 'component' as const,
       recommendedOrderQty: recommendedQty,
-      urgency,
+      urgency: urgency as 'critical' | 'high' | 'medium' | 'low',
       reason: isFinishedProduct
         ? (urgency === 'critical' 
           ? `Critical: Only ${Math.floor(daysUntilStockout)} days of ready-to-ship stock (Pivot) remaining - order now. Hildale has ${hildaleQty} units in buffer.`
@@ -787,26 +789,28 @@ Analyze this inventory situation and reason through the following:
     };
     
     // Create AIRecommendation record for fallback path
-    const recommendedAction = urgency === 'critical' || urgency === 'high' ? 'ORDER' : 'MONITOR';
+    const riskLevel = urgency === 'critical' ? 'HIGH' : urgency === 'high' ? 'MEDIUM' : 'LOW';
     await storage.createAIRecommendation({
-      type: 'FORECAST_REORDER',
+      sku: item.sku,
       itemId: item.id,
-      location: isFinishedProduct ? 'PIVOT' : null,
+      productName: item.name,
+      recommendationType: 'REORDER',
+      riskLevel,
+      daysUntilStockout: Math.floor(daysUntilStockout),
+      availableForSale: stockForCalculation,
       recommendedQty,
-      recommendedAction,
-      horizonDays: 30,
-      contextSnapshot: {
+      qtyOnPo: 0,
+      reasonSummary: recommendation.reason,
+      sourceSignals: {
         currentStock: stockForCalculation,
         dailyUsage: item.dailyUsage,
         pivotQty: isFinishedProduct ? pivotQty : undefined,
         hildaleQty: isFinishedProduct ? hildaleQty : undefined,
         totalOwned: isFinishedProduct ? totalOwned : undefined,
         avgLeadTime,
-        daysUntilStockout: Math.floor(daysUntilStockout),
         urgency,
         fallback: true,
       },
-      llmResponseTimeMs: null,
     });
     
     return recommendation;

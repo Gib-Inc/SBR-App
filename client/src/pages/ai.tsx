@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
@@ -745,7 +745,17 @@ function RulesTab() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="velocity-lookback">Lookback Window</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="velocity-lookback">Lookback Window</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-velocity-lookback-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>How many days of past sales data to analyze when calculating how fast items sell. A longer window gives more stable averages but may miss recent trends.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">{formValues.velocityLookbackDays} days</span>
                 </div>
                 <Slider
@@ -757,14 +767,21 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, velocityLookbackDays: val }))}
                   data-testid="slider-velocity-lookback"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Number of days of sales history to analyze for velocity calculation
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="safety-stock">Safety Stock Buffer</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="safety-stock">Safety Stock Buffer</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-safety-stock-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Extra inventory days to keep as a cushion against unexpected demand spikes or supplier delays. Higher values mean less stockout risk but more capital tied up.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">{formValues.safetyStockDays} days</span>
                 </div>
                 <Slider
@@ -776,9 +793,6 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, safetyStockDays: val }))}
                   data-testid="slider-safety-stock"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Extra days of inventory to maintain as safety buffer
-                </p>
               </div>
             </div>
           </div>
@@ -792,7 +806,17 @@ function RulesTab() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="risk-high">High Risk (Critical)</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="risk-high">High Risk (Critical)</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-risk-high-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Items projected to run out within this many days are flagged as critical and need immediate attention. These show as red alerts in your dashboard.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">&le; {formValues.riskThresholdHighDays} days</span>
                 </div>
                 <Slider
@@ -804,14 +828,21 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, riskThresholdHighDays: val }))}
                   data-testid="slider-risk-high"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Items with this many days (or fewer) until stockout are HIGH risk
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="risk-medium">Medium Risk</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="risk-medium">Medium Risk</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-risk-medium-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Items projected to run out within this many days get a warning. These show as yellow alerts—time to start planning a reorder.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">&le; {formValues.riskThresholdMediumDays} days</span>
                 </div>
                 <Slider
@@ -823,9 +854,6 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, riskThresholdMediumDays: val }))}
                   data-testid="slider-risk-medium"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Items with this many days (or fewer) until stockout are MEDIUM risk
-                </p>
               </div>
             </div>
           </div>
@@ -833,13 +861,23 @@ function RulesTab() {
           {/* Impact Weights */}
           <div className="space-y-4">
             <h3 className="font-semibold flex items-center gap-2">
-              <Info className="h-4 w-4" />
+              <Scale className="h-4 w-4" />
               Impact Weights
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="return-rate-impact">Return Rate Impact</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="return-rate-impact">Return Rate Impact</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-return-rate-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>How much the AI adjusts order quantities based on historical return rates. At 50%, if an item has 10% returns, the AI orders 5% extra to compensate.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">{Math.round(formValues.returnRateImpact * 100)}%</span>
                 </div>
                 <Slider
@@ -851,14 +889,21 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, returnRateImpact: val / 100 }))}
                   data-testid="slider-return-rate"
                 />
-                <p className="text-xs text-muted-foreground">
-                  How much to factor in historical return rates when calculating order quantities
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="ad-demand-impact">Ad Demand Signal Impact</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="ad-demand-impact">Ad Demand Signal Impact</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-ad-demand-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>How much to increase demand forecasts when running ad campaigns. Higher values mean more aggressive stock-up when ads are active.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <span className="text-sm text-muted-foreground">{Math.round(formValues.adDemandImpact * 100)}%</span>
                 </div>
                 <Slider
@@ -870,9 +915,6 @@ function RulesTab() {
                   onValueChange={([val]) => setFormValues(prev => ({ ...prev, adDemandImpact: val / 100 }))}
                   data-testid="slider-ad-demand"
                 />
-                <p className="text-xs text-muted-foreground">
-                  How much to boost demand projections when ad campaigns are active
-                </p>
               </div>
             </div>
           </div>
@@ -886,7 +928,17 @@ function RulesTab() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-order-recommendations-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>When enabled, AI analyzes your inventory levels and sales velocity to suggest when and how much to reorder for each item.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <Switch
                     id="enable-order-recommendations"
                     checked={enableOrderRecommendations}
@@ -894,15 +946,20 @@ function RulesTab() {
                     data-testid="switch-order-recommendations"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  AI suggests optimal reorder quantities and timing
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <Label htmlFor="enable-supplier-ranking" className="text-muted-foreground">Supplier Ranking</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-supplier-ranking-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>AI will analyze supplier performance (pricing, lead times, reliability) and rank them to help you choose the best supplier for each order.</p>
+                      </TooltipContent>
+                    </Tooltip>
                     <Badge variant="secondary" className="text-xs">V2</Badge>
                   </div>
                   <Switch
@@ -912,14 +969,21 @@ function RulesTab() {
                     data-testid="switch-supplier-ranking"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  AI ranks suppliers by price, lead time, and reliability
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-forecasting-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Uses machine learning to predict future demand based on historical sales patterns, seasonality, and trends.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <Switch
                     id="enable-forecasting"
                     checked={enableForecasting}
@@ -927,14 +991,21 @@ function RulesTab() {
                     data-testid="switch-forecasting"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  AI predicts future demand based on historical data
-                </p>
               </div>
               
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="enable-vision-capture">Vision Capture</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="enable-vision-capture">Vision Capture</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-vision-capture-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Use your device camera to scan and identify inventory items. AI will recognize products and help you add them to your inventory quickly.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
                   <Switch
                     id="enable-vision-capture"
                     checked={enableVisionCapture}
@@ -942,9 +1013,6 @@ function RulesTab() {
                     data-testid="switch-vision-capture"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Use camera to identify inventory items with AI vision
-                </p>
               </div>
             </div>
           </div>
@@ -957,7 +1025,17 @@ function RulesTab() {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="default-lead-time">Default Lead Time</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="default-lead-time">Default Lead Time</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-default-lead-time-info" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p>When a supplier doesn't have a specific lead time set, this fallback value is used. It tells the AI how far in advance to recommend ordering.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 <div className="flex items-center gap-2">
                   <Input
                     id="default-lead-time"
@@ -970,13 +1048,20 @@ function RulesTab() {
                   />
                   <span className="text-sm text-muted-foreground whitespace-nowrap">days</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Used when supplier lead time is unknown
-                </p>
               </div>
               
               <div className="space-y-2">
-                <Label htmlFor="dispute-penalty">Dispute Penalty</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="dispute-penalty">Dispute Penalty</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-dispute-penalty-info" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p>Extra buffer days added when ordering from suppliers with past issues. If a supplier has been unreliable, the AI recommends ordering even earlier.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 <div className="flex items-center gap-2">
                   <Input
                     id="dispute-penalty"
@@ -989,13 +1074,20 @@ function RulesTab() {
                   />
                   <span className="text-sm text-muted-foreground whitespace-nowrap">days</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Extra buffer for suppliers with dispute history
-                </p>
               </div>
               
               <div className="space-y-2">
-                <Label htmlFor="min-order-qty">Min Order Quantity</Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor="min-order-qty">Min Order Quantity</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-min-order-qty-info" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p>The smallest quantity the AI will ever recommend ordering. Even if you only need 2 units, recommendations will be at least this amount.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 <div className="flex items-center gap-2">
                   <Input
                     id="min-order-qty"
@@ -1008,9 +1100,6 @@ function RulesTab() {
                   />
                   <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Minimum quantity for any order recommendation
-                </p>
               </div>
             </div>
           </div>

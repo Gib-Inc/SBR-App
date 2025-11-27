@@ -292,8 +292,27 @@ export interface IStorage {
 
   // Audit Logs
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
-  getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]>;
+  getAuditLogs(options?: { 
+    limit?: number; 
+    offset?: number; 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<{ logs: AuditLog[]; total: number }>;
   getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]>;
+  countAuditLogs(options?: { 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<number>;
 }
 
 export class MemStorage implements IStorage {
@@ -1969,27 +1988,99 @@ export class MemStorage implements IStorage {
     return auditLog;
   }
 
-  async getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]> {
+  async getAuditLogs(options?: { 
+    limit?: number; 
+    offset?: number; 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<{ logs: AuditLog[]; total: number }> {
     let logs = Array.from(this.auditLogs.values());
     
+    if (options?.source) {
+      logs = logs.filter(log => log.source === options.source);
+    }
     if (options?.eventType) {
       logs = logs.filter(log => log.eventType === options.eventType);
     }
     if (options?.entityType) {
       logs = logs.filter(log => log.entityType === options.entityType);
     }
+    if (options?.status) {
+      logs = logs.filter(log => log.status === options.status);
+    }
+    if (options?.dateFrom) {
+      logs = logs.filter(log => log.timestamp && log.timestamp >= options.dateFrom!);
+    }
+    if (options?.dateTo) {
+      logs = logs.filter(log => log.timestamp && log.timestamp <= options.dateTo!);
+    }
+    if (options?.search) {
+      const searchLower = options.search.toLowerCase();
+      logs = logs.filter(log => 
+        (log.description?.toLowerCase().includes(searchLower)) ||
+        (log.entityId?.toLowerCase().includes(searchLower)) ||
+        (log.entityLabel?.toLowerCase().includes(searchLower))
+      );
+    }
     
+    const total = logs.length;
     logs.sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0));
     
     const offset = options?.offset ?? 0;
-    const limit = options?.limit ?? 100;
-    return logs.slice(offset, offset + limit);
+    const limit = options?.limit ?? 50;
+    return { logs: logs.slice(offset, offset + limit), total };
   }
 
   async getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]> {
     return Array.from(this.auditLogs.values())
       .filter(log => log.purchaseOrderId === purchaseOrderId)
       .sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0));
+  }
+
+  async countAuditLogs(options?: { 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<number> {
+    let logs = Array.from(this.auditLogs.values());
+    
+    if (options?.source) {
+      logs = logs.filter(log => log.source === options.source);
+    }
+    if (options?.eventType) {
+      logs = logs.filter(log => log.eventType === options.eventType);
+    }
+    if (options?.entityType) {
+      logs = logs.filter(log => log.entityType === options.entityType);
+    }
+    if (options?.status) {
+      logs = logs.filter(log => log.status === options.status);
+    }
+    if (options?.dateFrom) {
+      logs = logs.filter(log => log.timestamp && log.timestamp >= options.dateFrom!);
+    }
+    if (options?.dateTo) {
+      logs = logs.filter(log => log.timestamp && log.timestamp <= options.dateTo!);
+    }
+    if (options?.search) {
+      const searchLower = options.search.toLowerCase();
+      logs = logs.filter(log => 
+        (log.description?.toLowerCase().includes(searchLower)) ||
+        (log.entityId?.toLowerCase().includes(searchLower)) ||
+        (log.entityLabel?.toLowerCase().includes(searchLower))
+      );
+    }
+    
+    return logs.length;
   }
 }
 
@@ -3312,31 +3403,118 @@ export class PostgresStorage implements IStorage {
     return results[0];
   }
 
-  async getAuditLogs(options?: { limit?: number; offset?: number; eventType?: string; entityType?: string }): Promise<AuditLog[]> {
-    let query = this.db.select().from(schema.auditLogs);
-    
+  async getAuditLogs(options?: { 
+    limit?: number; 
+    offset?: number; 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<{ logs: AuditLog[]; total: number }> {
     const conditions = [];
+    
+    if (options?.source) {
+      conditions.push(eq(schema.auditLogs.source, options.source));
+    }
     if (options?.eventType) {
       conditions.push(eq(schema.auditLogs.eventType, options.eventType));
     }
     if (options?.entityType) {
       conditions.push(eq(schema.auditLogs.entityType, options.entityType));
     }
-    
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions)) as typeof query;
+    if (options?.status) {
+      conditions.push(eq(schema.auditLogs.status, options.status));
+    }
+    if (options?.dateFrom) {
+      conditions.push(drizzleSql`${schema.auditLogs.timestamp} >= ${options.dateFrom}`);
+    }
+    if (options?.dateTo) {
+      conditions.push(drizzleSql`${schema.auditLogs.timestamp} <= ${options.dateTo}`);
+    }
+    if (options?.search) {
+      const searchPattern = `%${options.search}%`;
+      conditions.push(drizzleSql`(
+        ${schema.auditLogs.description} ILIKE ${searchPattern} OR 
+        ${schema.auditLogs.entityId} ILIKE ${searchPattern} OR 
+        ${schema.auditLogs.entityLabel} ILIKE ${searchPattern}
+      )`);
     }
     
-    return await query
-      .orderBy(drizzleSql`${schema.auditLogs.timestamp} DESC`)
-      .limit(options?.limit ?? 100)
-      .offset(options?.offset ?? 0);
+    let countQuery = this.db.select({ count: drizzleSql<number>`count(*)` }).from(schema.auditLogs);
+    let query = this.db.select().from(schema.auditLogs);
+    
+    if (conditions.length > 0) {
+      const whereClause = and(...conditions);
+      countQuery = countQuery.where(whereClause) as typeof countQuery;
+      query = query.where(whereClause) as typeof query;
+    }
+    
+    const [countResult, logs] = await Promise.all([
+      countQuery,
+      query
+        .orderBy(drizzleSql`${schema.auditLogs.timestamp} DESC`)
+        .limit(options?.limit ?? 50)
+        .offset(options?.offset ?? 0)
+    ]);
+    
+    return { logs, total: Number(countResult[0]?.count ?? 0) };
   }
 
   async getAuditLogsByPurchaseOrder(purchaseOrderId: string): Promise<AuditLog[]> {
     return await this.db.select().from(schema.auditLogs)
       .where(eq(schema.auditLogs.purchaseOrderId, purchaseOrderId))
       .orderBy(drizzleSql`${schema.auditLogs.timestamp} DESC`);
+  }
+
+  async countAuditLogs(options?: { 
+    source?: string;
+    eventType?: string; 
+    entityType?: string;
+    status?: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    search?: string;
+  }): Promise<number> {
+    const conditions = [];
+    
+    if (options?.source) {
+      conditions.push(eq(schema.auditLogs.source, options.source));
+    }
+    if (options?.eventType) {
+      conditions.push(eq(schema.auditLogs.eventType, options.eventType));
+    }
+    if (options?.entityType) {
+      conditions.push(eq(schema.auditLogs.entityType, options.entityType));
+    }
+    if (options?.status) {
+      conditions.push(eq(schema.auditLogs.status, options.status));
+    }
+    if (options?.dateFrom) {
+      conditions.push(drizzleSql`${schema.auditLogs.timestamp} >= ${options.dateFrom}`);
+    }
+    if (options?.dateTo) {
+      conditions.push(drizzleSql`${schema.auditLogs.timestamp} <= ${options.dateTo}`);
+    }
+    if (options?.search) {
+      const searchPattern = `%${options.search}%`;
+      conditions.push(drizzleSql`(
+        ${schema.auditLogs.description} ILIKE ${searchPattern} OR 
+        ${schema.auditLogs.entityId} ILIKE ${searchPattern} OR 
+        ${schema.auditLogs.entityLabel} ILIKE ${searchPattern}
+      )`);
+    }
+    
+    let query = this.db.select({ count: drizzleSql<number>`count(*)` }).from(schema.auditLogs);
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as typeof query;
+    }
+    
+    const result = await query;
+    return Number(result[0]?.count ?? 0);
   }
 }
 

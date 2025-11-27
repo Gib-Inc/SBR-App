@@ -13,6 +13,7 @@ import { ShopifyClient } from "./services/shopify-client";
 import { AmazonClient } from "./services/amazon-client";
 import { GoHighLevelClient } from "./services/gohighlevel-client";
 import { PhantomBusterClient } from "./services/phantombuster-client";
+import { AuditLogger } from "./services/audit-logger";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import multer from "multer";
@@ -461,6 +462,98 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invalid rules configuration", details: error.errors });
       }
       res.status(500).json({ error: error.message || "Failed to update AI rules" });
+    }
+  });
+
+  // GET /api/ai/logs - Get paginated audit logs for the AI Logs tab
+  app.get("/api/ai/logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const {
+        page = '1',
+        pageSize = '50',
+        source,
+        eventType,
+        status,
+        dateFrom,
+        dateTo,
+        search,
+      } = req.query;
+
+      const pageNum = Math.max(1, parseInt(page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(pageSize as string) || 50));
+      const offset = (pageNum - 1) * limit;
+
+      const options: {
+        limit: number;
+        offset: number;
+        source?: string;
+        eventType?: string;
+        status?: string;
+        dateFrom?: Date;
+        dateTo?: Date;
+        search?: string;
+      } = {
+        limit,
+        offset,
+      };
+
+      if (source && typeof source === 'string') {
+        options.source = source;
+      }
+      if (eventType && typeof eventType === 'string') {
+        options.eventType = eventType;
+      }
+      if (status && typeof status === 'string') {
+        options.status = status;
+      }
+      if (dateFrom && typeof dateFrom === 'string') {
+        const date = new Date(dateFrom);
+        if (!isNaN(date.getTime())) {
+          options.dateFrom = date;
+        }
+      }
+      if (dateTo && typeof dateTo === 'string') {
+        const date = new Date(dateTo);
+        if (!isNaN(date.getTime())) {
+          options.dateTo = date;
+        }
+      }
+      if (search && typeof search === 'string' && search.trim()) {
+        options.search = search.trim();
+      }
+
+      const { logs, total } = await storage.getAuditLogs(options);
+
+      res.json({
+        logs,
+        pagination: {
+          page: pageNum,
+          pageSize: limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    } catch (error: any) {
+      console.error("[AI Logs] Error fetching logs:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch logs" });
+    }
+  });
+
+  // GET /api/ai/logs/:id - Get a single audit log by ID
+  app.get("/api/ai/logs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { logs } = await storage.getAuditLogs({ limit: 1, offset: 0 });
+      const log = logs.find(l => l.id === id);
+      
+      if (!log) {
+        return res.status(404).json({ error: "Log not found" });
+      }
+      
+      res.json(log);
+    } catch (error: any) {
+      console.error("[AI Logs] Error fetching log:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch log" });
     }
   });
 
@@ -1727,11 +1820,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             createdCount++;
+
+            // Log sale import
+            try {
+              await AuditLogger.logSaleImported({
+                orderId: salesOrder.id,
+                orderNumber: orderData.externalOrderId,
+                source: 'SHOPIFY',
+                customerName: orderData.customerName,
+                totalAmount: typeof orderData.totalAmount === 'string' ? parseFloat(orderData.totalAmount) : orderData.totalAmount,
+                itemCount: orderData.lineItems.length,
+              });
+            } catch (logError) {
+              console.warn('[Shopify] Failed to log sale import:', logError);
+            }
           }
         } catch (error: any) {
           errors.push(`Order ${orderData.externalOrderId}: ${error.message}`);
           console.error(`[Shopify] Failed to process order ${orderData.externalOrderId}:`, error);
         }
+      }
+
+      // Log sync completion
+      try {
+        await AuditLogger.logIntegrationSync({
+          source: 'SHOPIFY',
+          integrationName: 'Shopify Orders',
+          recordsProcessed: normalizedOrders.length,
+          recordsCreated: createdCount,
+          recordsUpdated: updatedCount,
+          recordsSkipped: skippedCount,
+        });
+      } catch (logError) {
+        console.warn('[Shopify] Failed to log sync completion:', logError);
       }
 
       // Refresh backorder snapshots and forecast context for affected products
@@ -1951,11 +2072,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
 
             createdCount++;
+
+            // Log sale import
+            try {
+              await AuditLogger.logSaleImported({
+                orderId: salesOrder.id,
+                orderNumber: orderData.externalOrderId,
+                source: 'AMAZON',
+                customerName: orderData.customerName,
+                totalAmount: typeof orderData.totalAmount === 'string' ? parseFloat(orderData.totalAmount) : orderData.totalAmount,
+                itemCount: orderData.lineItems.length,
+              });
+            } catch (logError) {
+              console.warn('[Amazon] Failed to log sale import:', logError);
+            }
           }
         } catch (error: any) {
           errors.push(`Order ${orderData.externalOrderId}: ${error.message}`);
           console.error(`[Amazon] Failed to process order ${orderData.externalOrderId}:`, error);
         }
+      }
+
+      // Log sync completion
+      try {
+        await AuditLogger.logIntegrationSync({
+          source: 'AMAZON',
+          integrationName: 'Amazon Orders',
+          recordsProcessed: normalizedOrders.length,
+          recordsCreated: createdCount,
+          recordsUpdated: updatedCount,
+          recordsSkipped: skippedCount,
+        });
+      } catch (logError) {
+        console.warn('[Amazon] Failed to log sync completion:', logError);
       }
 
       // Refresh backorder snapshots and forecast context for affected products
@@ -3445,6 +3594,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
+
+      // Log PO creation
+      try {
+        const supplier = validatedPO.supplierId ? await storage.getSupplier(validatedPO.supplierId) : null;
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logPOCreated({
+          poId: purchaseOrder.id,
+          poNumber: purchaseOrder.poNumber,
+          supplierId: validatedPO.supplierId || '',
+          supplierName: supplier?.name || 'Unknown Supplier',
+          userId: req.session.userId!,
+          userName: user?.email,
+          itemCount: createdLines.length,
+        });
+      } catch (logError) {
+        console.warn('[PurchaseOrder] Failed to log PO creation:', logError);
+      }
+
       res.status(201).json({ ...purchaseOrder, lines: createdLines });
     } catch (error: any) {
       if (createdPOId) {
@@ -3539,6 +3706,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           recommendedQtyAtOrderTime: latestRecommendation?.recommendedQty || null,
           finalOrderedQty: item.quantity,
         });
+      }
+
+      // Log PO creation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logPOCreated({
+          poId: purchaseOrder.id,
+          poNumber: poNumber,
+          supplierId: finalSupplierId,
+          supplierName: supplier.name,
+          userId: req.session.userId!,
+          userName: user?.email,
+          itemCount: items.length,
+        });
+      } catch (logError) {
+        console.warn('[PurchaseOrder] Failed to log PO creation:', logError);
       }
 
       // Generate PO content via LLM
@@ -4758,6 +4941,22 @@ Generate only the email body text, no subject line.`;
         returnItems.push(returnItem);
       }
 
+      // Log return creation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logReturnCreated({
+          returnId: returnRequest.id,
+          returnNumber: returnRequest.externalOrderId || returnRequest.id,
+          orderId: salesOrderId || '',
+          orderNumber: salesOrderId || 'N/A',
+          reason: requestData.reason,
+          userId: req.session.userId!,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Returns] Failed to log return creation:', logError);
+      }
+
       res.status(201).json({ 
         returnRequest,
         items: returnItems 
@@ -4821,9 +5020,22 @@ Generate only the email body text, no subject line.`;
       });
 
       // Update return request status
+      const oldStatus = returnRequest.status;
       await storage.updateReturnRequest(id, {
         status: 'LABEL_CREATED',
       });
+
+      // Log status change
+      try {
+        await AuditLogger.logReturnStatusChanged({
+          returnId: id,
+          returnNumber: returnRequest.externalOrderId || id,
+          oldStatus: oldStatus,
+          newStatus: 'LABEL_CREATED',
+        });
+      } catch (logError) {
+        console.warn('[Returns] Failed to log status change:', logError);
+      }
 
       res.json({
         trackingNumber: labelResponse.trackingNumber,
@@ -4952,6 +5164,21 @@ Generate only the email body text, no subject line.`;
       }
 
       const updatedRequest = await storage.updateReturnRequest(id, updates);
+
+      // Log status change
+      try {
+        const user = await storage.getUser(userId);
+        await AuditLogger.logReturnStatusChanged({
+          returnId: id,
+          returnNumber: returnRequest.externalOrderId || id,
+          oldStatus: returnRequest.status,
+          newStatus: updates.status,
+          userId: userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Returns] Failed to log status change:', logError);
+      }
 
       // Fetch updated items
       const updatedItems = await storage.getReturnItemsByRequestId(id);

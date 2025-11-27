@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -868,6 +868,427 @@ function InsightsTab() {
   );
 }
 
+interface AuditLogEntry {
+  id: string;
+  eventType: string;
+  entityType: string | null;
+  entityId: string | null;
+  source: string | null;
+  status: string | null;
+  description: string | null;
+  metadata: Record<string, any> | null;
+  performedByUserId: string | null;
+  createdAt: string;
+}
+
+interface LogsResponse {
+  logs: AuditLogEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+function LogsTab() {
+  const [page, setPage] = useState(1);
+  const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
+  const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
+  
+  const pageSize = 25;
+  
+  // Build query params
+  const queryParams = new URLSearchParams();
+  queryParams.set("page", page.toString());
+  queryParams.set("pageSize", pageSize.toString());
+  if (eventTypeFilter !== "all") queryParams.set("eventType", eventTypeFilter);
+  if (entityTypeFilter !== "all") queryParams.set("entityType", entityTypeFilter);
+  if (sourceFilter !== "all") queryParams.set("source", sourceFilter);
+  if (statusFilter !== "all") queryParams.set("status", statusFilter);
+  if (searchQuery) queryParams.set("search", searchQuery);
+  
+  const { data: logsData, isLoading, refetch, isFetching } = useQuery<LogsResponse>({
+    queryKey: ["/api/ai/logs", page, eventTypeFilter, entityTypeFilter, sourceFilter, statusFilter, searchQuery],
+    queryFn: async () => {
+      const response = await fetch(`/api/ai/logs?${queryParams.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch logs");
+      return response.json();
+    },
+  });
+  
+  const eventTypes = [
+    "PO_CREATED",
+    "PO_SENT_GHL_EMAIL",
+    "PO_SENT_GHL_SMS",
+    "PO_SEND_FAILED",
+    "SALES_ORDER_IMPORTED",
+    "RETURN_CREATED",
+    "RETURN_LABEL_ISSUED",
+    "RETURN_RECEIVED",
+    "INVENTORY_UPDATED",
+    "AI_RECOMMENDATION",
+    "INTEGRATION_SYNC",
+    "SHOPIFY_SYNC",
+    "AMAZON_SYNC",
+  ];
+  
+  const entityTypes = ["PO", "ORDER", "RETURN", "ITEM", "SUPPLIER"];
+  const sources = ["SYSTEM", "USER", "SHOPIFY", "AMAZON", "GHL", "EXTENSIV"];
+  const statuses = ["SUCCESS", "FAILED", "PENDING", "INFO"];
+  
+  const getStatusBadgeVariant = (status: string | null) => {
+    switch (status?.toUpperCase()) {
+      case "SUCCESS": return "default" as const;
+      case "FAILED": return "destructive" as const;
+      case "PENDING": return "secondary" as const;
+      default: return "outline" as const;
+    }
+  };
+  
+  const getEventIcon = (eventType: string) => {
+    if (eventType.includes("PO")) return <FileText className="h-4 w-4" />;
+    if (eventType.includes("RETURN")) return <RotateCcw className="h-4 w-4" />;
+    if (eventType.includes("ORDER") || eventType.includes("SALES")) return <ShoppingBag className="h-4 w-4" />;
+    if (eventType.includes("SYNC")) return <RefreshCw className="h-4 w-4" />;
+    return <Info className="h-4 w-4" />;
+  };
+  
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleString();
+  };
+  
+  const handleClearFilters = () => {
+    setEventTypeFilter("all");
+    setEntityTypeFilter("all");
+    setSourceFilter("all");
+    setStatusFilter("all");
+    setSearchQuery("");
+    setPage(1);
+  };
+  
+  const hasActiveFilters = eventTypeFilter !== "all" || entityTypeFilter !== "all" || sourceFilter !== "all" || statusFilter !== "all" || searchQuery !== "";
+  
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-96" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-64 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <FileText className="h-5 w-5" />
+                System Logs
+              </CardTitle>
+              <CardDescription>
+                Track all system events including order imports, returns, PO sending, and AI decisions
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                data-testid="button-refresh-logs"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Filters */}
+          <div className="flex flex-wrap items-center gap-3 p-3 bg-muted rounded-lg">
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Filters:</span>
+            </div>
+            
+            <Select value={eventTypeFilter} onValueChange={(v) => { setEventTypeFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-[180px]" data-testid="select-event-type">
+                <SelectValue placeholder="Event Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Events</SelectItem>
+                {eventTypes.map((type) => (
+                  <SelectItem key={type} value={type}>{type.replace(/_/g, " ")}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Select value={entityTypeFilter} onValueChange={(v) => { setEntityTypeFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-[140px]" data-testid="select-entity-type">
+                <SelectValue placeholder="Entity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Entities</SelectItem>
+                {entityTypes.map((type) => (
+                  <SelectItem key={type} value={type}>{type}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-[130px]" data-testid="select-source">
+                <SelectValue placeholder="Source" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sources</SelectItem>
+                {sources.map((source) => (
+                  <SelectItem key={source} value={source}>{source}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-[120px]" data-testid="select-status">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                {statuses.map((status) => (
+                  <SelectItem key={status} value={status}>{status}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search logs..."
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                className="pl-8 w-[180px]"
+                data-testid="input-search-logs"
+              />
+            </div>
+            
+            {hasActiveFilters && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleClearFilters}
+                data-testid="button-clear-filters"
+              >
+                <XCircle className="mr-1 h-4 w-4" />
+                Clear
+              </Button>
+            )}
+          </div>
+          
+          {/* Logs Table */}
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[180px] whitespace-nowrap">Timestamp</TableHead>
+                  <TableHead className="w-[180px] whitespace-nowrap">Event</TableHead>
+                  <TableHead className="w-[100px] whitespace-nowrap">Entity</TableHead>
+                  <TableHead className="w-[100px] whitespace-nowrap">Source</TableHead>
+                  <TableHead className="w-[100px] whitespace-nowrap">Status</TableHead>
+                  <TableHead className="whitespace-nowrap">Description</TableHead>
+                  <TableHead className="w-[60px] whitespace-nowrap">Details</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {logsData?.logs && logsData.logs.length > 0 ? (
+                  logsData.logs.map((log) => (
+                    <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
+                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                        {formatDate(log.createdAt)}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 whitespace-nowrap">
+                          {getEventIcon(log.eventType)}
+                          <span className="text-sm font-medium">{log.eventType.replace(/_/g, " ")}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {log.entityType ? (
+                          <Badge variant="outline" className="text-xs">
+                            {log.entityType}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {log.source || "-"}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {log.status ? (
+                          <Badge variant={getStatusBadgeVariant(log.status)} className="text-xs">
+                            {log.status}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm max-w-[300px] truncate">
+                        {log.description || "-"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => setSelectedLog(log)}
+                          data-testid={`button-view-log-${log.id}`}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={7} className="h-24 text-center">
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <FileText className="h-8 w-8" />
+                        <p>No logs found</p>
+                        {hasActiveFilters && (
+                          <Button size="sm" variant="link" onClick={handleClearFilters}>
+                            Clear filters
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          
+          {/* Pagination */}
+          {logsData && logsData.totalPages > 1 && (
+            <div className="flex items-center justify-between px-2">
+              <p className="text-sm text-muted-foreground">
+                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, logsData.total)} of {logsData.total} logs
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  data-testid="button-prev-page"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground px-2">
+                  Page {page} of {logsData.totalPages}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPage(p => Math.min(logsData.totalPages, p + 1))}
+                  disabled={page >= logsData.totalPages}
+                  data-testid="button-next-page"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      
+      {/* Log Detail Dialog */}
+      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {selectedLog && getEventIcon(selectedLog.eventType)}
+              {selectedLog?.eventType.replace(/_/g, " ")}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedLog && formatDate(selectedLog.createdAt)}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedLog && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Entity Type</p>
+                  <p className="font-medium">{selectedLog.entityType || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Entity ID</p>
+                  <p className="font-medium font-mono text-sm">{selectedLog.entityId || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Source</p>
+                  <p className="font-medium">{selectedLog.source || "N/A"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Status</p>
+                  {selectedLog.status ? (
+                    <Badge variant={getStatusBadgeVariant(selectedLog.status)}>
+                      {selectedLog.status}
+                    </Badge>
+                  ) : (
+                    <span>N/A</span>
+                  )}
+                </div>
+              </div>
+              
+              {selectedLog.description && (
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">Description</p>
+                  <div className="p-3 bg-muted rounded-lg">
+                    <p className="text-sm">{selectedLog.description}</p>
+                  </div>
+                </div>
+              )}
+              
+              {selectedLog.metadata && Object.keys(selectedLog.metadata).length > 0 && (
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">Metadata</p>
+                  <ScrollArea className="h-[200px]">
+                    <pre className="p-3 bg-muted rounded-lg text-xs font-mono overflow-x-auto">
+                      {JSON.stringify(selectedLog.metadata, null, 2)}
+                    </pre>
+                  </ScrollArea>
+                </div>
+              )}
+              
+              {selectedLog.performedByUserId && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Performed By</p>
+                  <p className="font-medium font-mono text-sm">{selectedLog.performedByUserId}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
@@ -1006,7 +1427,7 @@ export default function AIAgent() {
       </div>
 
       <Tabs defaultValue="data-sources" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="data-sources" data-testid="tab-data-sources">
             Data Sources
           </TabsTrigger>
@@ -1018,6 +1439,9 @@ export default function AIAgent() {
           </TabsTrigger>
           <TabsTrigger value="insights" data-testid="tab-insights">
             Insights
+          </TabsTrigger>
+          <TabsTrigger value="logs" data-testid="tab-logs">
+            Logs
           </TabsTrigger>
         </TabsList>
 
@@ -1116,6 +1540,11 @@ export default function AIAgent() {
         {/* Insights Tab */}
         <TabsContent value="insights" className="space-y-4">
           <InsightsTab />
+        </TabsContent>
+
+        {/* Logs Tab */}
+        <TabsContent value="logs" className="space-y-4">
+          <LogsTab />
         </TabsContent>
       </Tabs>
 

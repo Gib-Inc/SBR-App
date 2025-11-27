@@ -1,0 +1,53 @@
+I want you to implement a lean but production-ready AI Logs system and UI, without expanding scope beyond what’s needed for V1. Do NOT add any brand-new pages; only extend the existing structure.
+
+1. AI Agent UI: add a “Logs” tab
+- On the AI Agent page, keep the tabs as: Data Sources | Rules | LLM Config | Insights | Logs.
+- The new Logs tab should show a scrollable data table similar to the other pages (BOM, Suppliers, etc.).
+- Columns: Timestamp, Source (Shopify / Amazon / Extensiv / GHL / System / User), Event Type (PO_SENT, RETURN_CREATED, RETURN_RECEIVED, SALE_IMPORTED, INVENTORY_UPDATED, AI_DECISION, ERROR, etc.), Entity (e.g., SKU or PO #), Performed By (user name or “System/AI”), Status (info/warning/error), and a short Description.
+- Clicking a row should open a side panel / modal with full details, including the raw metadata JSON pretty-printed.
+
+2. Backend data model: central AuditLog
+- If an AuditLog model/service already exists, reuse and extend it. If not, create one.
+- Fields (at minimum):
+  - id
+  - createdAt
+  - source (enum/string: SHOPIFY, AMAZON, EXTENSIV, GHL, SYSTEM, USER)
+  - eventType (enum/string: PO_SENT, RETURN_CREATED, RETURN_STATUS_CHANGED, SALE_IMPORTED, INVENTORY_UPDATED, AI_DECISION, ERROR, etc.)
+  - entityType (e.g., PURCHASE_ORDER, RETURN, SALES_ORDER, PRODUCT, SUPPLIER)
+  - entityId (string/UUID)
+  - performedByUserId (nullable)
+  - status (INFO | WARNING | ERROR)
+  - description (short human-readable summary)
+  - metadata (JSONB) for any extra fields (quantities, old/new values, raw payloads, etc.)
+- Make sure this table is indexed appropriately for createdAt and source/eventType so the Logs tab stays fast.
+
+3. Central logging service
+- Implement a single server-side helper (e.g., AuditLogger.logEvent({...})) that all modules call instead of ad-hoc logging.
+- This helper should:
+  - Accept the fields above (source, eventType, entityType, entityId, performedByUserId, status, description, metadata).
+  - Insert into the AuditLog table.
+  - Be easy to call from anywhere in the codebase.
+
+4. Wire key flows into AuditLog (V1 scope only)
+For now, hook only the most important flows into AuditLog so we stay in budget:
+  - When a Shopify or Amazon sale is imported / created as a Sales Order, log SALE_IMPORTED (source: SHOPIFY/AMAZON, entityType: SALES_ORDER).
+  - When a Return is created, its status changes (e.g., OPEN → LABEL_ISSUED → RECEIVED), or a shipping label is issued, log RETURN_CREATED / RETURN_STATUS_CHANGED.
+  - When a Purchase Order is created or sent to a supplier via GHL (email or SMS), log PO_CREATED and PO_SENT (include the chosen channel, supplier, and PO # in metadata).
+  - When inventory quantities change in a way that affects risk (e.g., stock crosses a threshold used by the AI risk logic), log INVENTORY_UPDATED with before/after values in metadata.
+  - When an AI decision is generated for SKU recommendations or risk levels (even if just stubbed for now), log AI_DECISION with the relevant SKU and summary.
+
+5. API for Logs tab
+- Expose a paginated API endpoint for the Logs tab, e.g. GET /api/ai/logs with query params:
+  - page / pageSize
+  - dateFrom / dateTo
+  - source
+  - eventType
+  - status
+  - text search (applied to description and entityId).
+- The Logs tab UI should use this endpoint, support basic filtering (date range, source, eventType), and lazy-load additional pages as the user scrolls.
+
+6. Keep everything V1-safe
+- Do NOT add any heavy new features like real-time websockets, complex analytics, or new navigation pages.
+- The goal is: a clean Logs tab in AI Agent, backed by a single AuditLog table and AuditLogger service, with the key flows wired in so that a real business operator can see exactly what the system is doing.
+
+Please implement this end-to-end (schema, backend, API, and UI), update types where needed, and ensure existing pages continue to work.

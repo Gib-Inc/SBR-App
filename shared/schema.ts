@@ -859,24 +859,39 @@ export type BackorderSnapshot = typeof backorderSnapshots.$inferSelect;
 // AUDIT LOGS (System Event Tracking for AI Agent Logs Tab)
 // ============================================================================
 
+// Source enum values: SHOPIFY, AMAZON, EXTENSIV, GHL, SYSTEM, USER
+// Event types: PO_CREATED, PO_SENT, SALE_IMPORTED, RETURN_CREATED, RETURN_STATUS_CHANGED, 
+//              INVENTORY_UPDATED, AI_DECISION, ERROR, etc.
+// Status levels: INFO, WARNING, ERROR
+
 export const auditLogs = pgTable("audit_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   timestamp: timestamp("timestamp").notNull().default(sql`now()`),
-  actorType: text("actor_type").notNull(), // 'SYSTEM' | 'USER'
-  actorId: varchar("actor_id"), // User ID if actorType is USER
-  eventType: text("event_type").notNull(), // e.g., PO_SENT_GHL_EMAIL, PO_SENT_GHL_SMS, PO_SEND_FAILED, etc.
-  entityType: text("entity_type"), // 'PURCHASE_ORDER' | 'SALES_ORDER' | 'ITEM' | 'SUPPLIER' | etc.
+  source: text("source").notNull().default('SYSTEM'), // SHOPIFY, AMAZON, EXTENSIV, GHL, SYSTEM, USER
+  eventType: text("event_type").notNull(), // PO_SENT, RETURN_CREATED, SALE_IMPORTED, INVENTORY_UPDATED, AI_DECISION, ERROR, etc.
+  entityType: text("entity_type"), // PURCHASE_ORDER, SALES_ORDER, RETURN, ITEM, SUPPLIER, etc.
   entityId: varchar("entity_id"), // ID of the related entity
+  entityLabel: varchar("entity_label"), // Human-readable label (e.g., SKU, PO#, Order#)
+  performedByUserId: varchar("performed_by_user_id").references(() => users.id, { onDelete: 'set null' }),
+  performedByName: varchar("performed_by_name"), // Cached name for display (user name or "System/AI")
+  status: text("status").notNull().default('INFO'), // INFO, WARNING, ERROR
+  description: text("description"), // Short human-readable summary
+  details: jsonb("details"), // Additional context as JSON (quantities, old/new values, raw payloads)
+  // Legacy fields for backward compatibility (can be removed in future cleanup)
+  actorType: text("actor_type"), // Deprecated: use source instead
+  actorId: varchar("actor_id"), // Deprecated: use performedByUserId instead
   purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: 'set null' }),
   supplierId: varchar("supplier_id").references(() => suppliers.id, { onDelete: 'set null' }),
-  success: boolean("success").notNull().default(true),
-  errorMessage: text("error_message"),
-  details: jsonb("details"), // Additional context as JSON (e.g., GHL response, message content, etc.)
+  success: boolean("success").default(true), // Deprecated: use status instead
+  errorMessage: text("error_message"), // Deprecated: use description instead
 }, (table) => ({
   timestampIdx: index("audit_logs_timestamp_idx").on(table.timestamp),
+  sourceIdx: index("audit_logs_source_idx").on(table.source),
   eventTypeIdx: index("audit_logs_event_type_idx").on(table.eventType),
   entityTypeIdx: index("audit_logs_entity_type_idx").on(table.entityType),
+  statusIdx: index("audit_logs_status_idx").on(table.status),
   purchaseOrderIdIdx: index("audit_logs_purchase_order_id_idx").on(table.purchaseOrderId),
+  performedByUserIdIdx: index("audit_logs_performed_by_user_id_idx").on(table.performedByUserId),
 }));
 
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ 

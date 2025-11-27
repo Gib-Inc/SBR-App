@@ -27,7 +27,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Printer, Search, AlertCircle, CheckCircle2, HelpCircle, ChevronLeft, ChevronRight, Package, Save, Trash2, ChevronDown, Settings2 } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Printer, Search, AlertCircle, CheckCircle2, HelpCircle, ChevronLeft, ChevronRight, Package, Save, Trash2, ChevronDown, Settings2, Layers } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
@@ -148,6 +153,10 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
   const [saveFormatName, setSaveFormatName] = useState("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
+  // Label groups
+  const [labelGroupsOpen, setLabelGroupsOpen] = useState(false);
+  const [selectedLabelGroup, setSelectedLabelGroup] = useState<string>("");
+
   // Fetch saved formats
   const { data: savedFormats = [] } = useQuery<LabelFormat[]>({
     queryKey: ["/api/label-formats"],
@@ -157,6 +166,18 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
   // Fetch items
   const { data: items } = useQuery<any[]>({
     queryKey: ["/api/items"],
+  });
+
+  // Fetch purchase orders (for incoming POs)
+  const { data: purchaseOrders = [] } = useQuery<any[]>({
+    queryKey: ["/api/purchase-orders"],
+    enabled: isOpen,
+  });
+
+  // Fetch AI settings (for risk thresholds)
+  const { data: aiRules } = useQuery<any>({
+    queryKey: ["/api/ai/decision-engine/rules"],
+    enabled: isOpen,
   });
 
   // Save format mutation
@@ -331,6 +352,78 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     if (item) {
       item.quantity = Math.max(1, Math.min(100, quantity));
       setSelectedItems(newSelectedItems);
+    }
+  };
+
+  // Apply label group selection
+  const applyLabelGroup = (groupType: string) => {
+    if (!items || items.length === 0) return;
+
+    const newSelectedItems = new Map<string, SelectedItem>();
+    const riskThresholdHigh = aiRules?.riskThresholdHighDays ?? 7;
+    const riskThresholdMedium = aiRules?.riskThresholdMediumDays ?? 14;
+
+    // Get item IDs from incoming POs (approved/sent but not received)
+    const incomingPOItemIds = new Set<string>();
+    if (purchaseOrders && purchaseOrders.length > 0) {
+      purchaseOrders
+        .filter((po: any) => ['approved', 'sent'].includes(po.status))
+        .forEach((po: any) => {
+          if (po.lineItems) {
+            po.lineItems.forEach((line: any) => {
+              if (line.itemId) incomingPOItemIds.add(line.itemId);
+            });
+          }
+        });
+    }
+
+    items.forEach((item: any) => {
+      let shouldSelect = false;
+      const daysOfCover = item.dailyUsage > 0 
+        ? Math.floor(item.currentStock / item.dailyUsage) 
+        : 999;
+
+      switch (groupType) {
+        case "incoming":
+          shouldSelect = incomingPOItemIds.has(item.id);
+          break;
+        case "critical":
+          shouldSelect = daysOfCover <= riskThresholdHigh;
+          break;
+        case "medium":
+          shouldSelect = daysOfCover > riskThresholdHigh && daysOfCover <= riskThresholdMedium;
+          break;
+      }
+
+      if (shouldSelect) {
+        newSelectedItems.set(item.id, {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          barcodeValue: item.barcodeValue || item.sku,
+          internalCode: item.internalCode,
+          quantity: 1,
+        });
+      }
+    });
+
+    setSelectedItems(newSelectedItems);
+    setLabelGroupsOpen(false);
+    setSelectedLabelGroup("");
+    setValidationError(null);
+
+    const count = newSelectedItems.size;
+    if (count === 0) {
+      toast({ 
+        title: "No items found", 
+        description: `No items match the "${groupType}" criteria.`,
+        variant: "default" 
+      });
+    } else {
+      toast({ 
+        title: `${count} item${count !== 1 ? 's' : ''} selected`, 
+        description: `Applied "${groupType === 'incoming' ? 'Incoming POs' : groupType === 'critical' ? 'Critical Stock' : 'Medium Stock'}" group.` 
+      });
     }
   };
 
@@ -892,11 +985,50 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
             <div className="flex-1 flex flex-col min-h-0 min-w-0">
               <div className="flex items-center gap-2 mb-2">
                 <Label className="text-sm font-medium">Select Items</Label>
-                {selectedCount > 0 && (
-                  <Badge variant="secondary" className="ml-auto">
-                    {selectedCount} selected
-                  </Badge>
-                )}
+                <div className="ml-auto flex items-center gap-2">
+                  <Popover open={labelGroupsOpen} onOpenChange={setLabelGroupsOpen}>
+                    <PopoverTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="gap-1.5 h-7"
+                        data-testid="button-label-groups"
+                      >
+                        <Layers className="h-3.5 w-3.5" />
+                        Label Groups
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-64 p-3" align="end">
+                      <div className="space-y-3">
+                        <Label className="text-sm font-medium">Select a group to print</Label>
+                        <Select 
+                          value={selectedLabelGroup} 
+                          onValueChange={(value) => {
+                            setSelectedLabelGroup(value);
+                            applyLabelGroup(value);
+                          }}
+                        >
+                          <SelectTrigger data-testid="select-label-group">
+                            <SelectValue placeholder="Choose a group..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="incoming">Incoming POs</SelectItem>
+                            <SelectItem value="critical">Critical Stock</SelectItem>
+                            <SelectItem value="medium">Medium Stock</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Selects items matching the chosen criteria
+                        </p>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  {selectedCount > 0 && (
+                    <Badge variant="secondary">
+                      {selectedCount} selected
+                    </Badge>
+                  )}
+                </div>
               </div>
               
               <div className="relative mb-2">

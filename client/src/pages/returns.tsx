@@ -207,12 +207,16 @@ export default function Returns() {
         </div>
       </div>
 
-      {/* Return Requests Section */}
+      {/* Return Requests Header */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg">Return Requests</CardTitle>
+        <CardHeader>
+          <CardTitle>Return Requests</CardTitle>
           <p className="text-sm text-muted-foreground">Track and process customer returns</p>
         </CardHeader>
+      </Card>
+
+      {/* Return Requests Table */}
+      <Card>
         <CardContent className="p-0">
           {isLoading ? (
             <div className="flex h-48 items-center justify-center">
@@ -224,9 +228,9 @@ export default function Returns() {
               <p className="text-sm text-muted-foreground">No return requests yet</p>
             </div>
           ) : (
-            <div className="overflow-auto max-h-[calc(100vh-280px)]">
+            <div className="overflow-auto max-h-[calc(100vh-320px)]">
               <table className="w-full min-w-[800px]">
-                <thead className="bg-muted/50 sticky top-0 z-10">
+                <thead className="bg-muted sticky top-0 z-10">
                   <tr className="border-b">
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
@@ -235,7 +239,7 @@ export default function Returns() {
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
-                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap sticky right-0 bg-muted/50">Actions</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                   </tr>
                 </thead>
               <tbody>
@@ -271,7 +275,7 @@ export default function Returns() {
                     <td className="px-3 align-middle whitespace-nowrap">
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
                     </td>
-                    <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 bg-background">
+                    <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 z-10 bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                       <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                         <TooltipProvider>
                           {/* Receipt Icon - Always visible */}

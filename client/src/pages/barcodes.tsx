@@ -12,7 +12,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2 } from "lucide-react";
+import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building } from "lucide-react";
+import { SiAmazon as AmazonIcon, SiShopify as ShopifyIcon } from "react-icons/si";
+import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CameraCaptureModal } from "@/components/camera-capture-modal";
@@ -251,6 +253,58 @@ function BarcodeTableRow({
   );
 }
 
+function ChannelBadges({ channels }: { channels: string[] | null | undefined }) {
+  if (!channels || channels.length === 0) {
+    return <span className="text-xs text-muted-foreground">-</span>;
+  }
+  
+  return (
+    <div className="flex gap-1 flex-wrap">
+      {channels.map((channel: string) => {
+        if (channel.toLowerCase() === 'amazon') {
+          return (
+            <Badge key={channel} variant="outline" className="text-xs bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200 gap-1">
+              <AmazonIcon className="h-3 w-3" />
+              Amazon
+            </Badge>
+          );
+        }
+        if (channel.toLowerCase() === 'shopify') {
+          return (
+            <Badge key={channel} variant="outline" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 gap-1">
+              <ShopifyIcon className="h-3 w-3" />
+              Shopify
+            </Badge>
+          );
+        }
+        if (channel.toLowerCase() === 'internal') {
+          return (
+            <Badge key={channel} variant="outline" className="text-xs bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200 gap-1">
+              <Building className="h-3 w-3" />
+              Internal
+            </Badge>
+          );
+        }
+        return (
+          <Badge key={channel} variant="outline" className="text-xs">
+            {channel}
+          </Badge>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatRole(barcodeUsage: string | null | undefined): { label: string; variant: "for_sale" | "stock" | "none" } {
+  if (barcodeUsage === 'EXTERNAL_GS1') {
+    return { label: "For Sale", variant: "for_sale" };
+  }
+  if (barcodeUsage === 'INTERNAL_STOCK') {
+    return { label: "Stock", variant: "stock" };
+  }
+  return { label: "-", variant: "none" };
+}
+
 function ItemTableRow({
   item,
   testIdPrefix,
@@ -293,8 +347,11 @@ function ItemTableRow({
     }
   };
 
+  const role = formatRole(item.barcodeUsage);
+
   return (
     <tr key={item.id} className="border-b hover-elevate" data-testid={`row-${testIdPrefix}-${item.id}`}>
+      {/* Barcode Column */}
       <td className="p-3 whitespace-nowrap">
         {item.barcodeValue ? (
           <div className="flex flex-col items-center gap-1">
@@ -311,6 +368,7 @@ function ItemTableRow({
           <span className="text-xs text-muted-foreground">No barcode</span>
         )}
       </td>
+      {/* Name Column */}
       <td className="p-3 whitespace-nowrap">
         {editingField === "name" ? (
           <div className="flex items-center gap-2">
@@ -339,6 +397,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
+      {/* SKU Column */}
       <td className="p-3 whitespace-nowrap">
         {editingField === "sku" ? (
           <div className="flex items-center gap-2">
@@ -367,6 +426,7 @@ function ItemTableRow({
           </div>
         )}
       </td>
+      {/* UPC/Barcode Value Column */}
       <td className="p-3 whitespace-nowrap">
         {editingField === "barcodeValue" ? (
           <div className="flex items-center gap-2">
@@ -395,15 +455,25 @@ function ItemTableRow({
           </div>
         )}
       </td>
+      {/* Role Column */}
       <td className="p-3 whitespace-nowrap">
-        {item.productKind ? (
-          <Badge className={`text-xs ${item.productKind === 'FINISHED' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}>
-            {item.productKind}
+        {role.variant === "for_sale" ? (
+          <Badge className="text-xs bg-blue-600 text-white">
+            For Sale
+          </Badge>
+        ) : role.variant === "stock" ? (
+          <Badge className="text-xs bg-amber-600 text-white">
+            Stock
           </Badge>
         ) : (
           <span className="text-xs text-muted-foreground">-</span>
         )}
       </td>
+      {/* Channel Column */}
+      <td className="p-3 whitespace-nowrap">
+        <ChannelBadges channels={item.salesChannels} />
+      </td>
+      {/* Format Column */}
       <td className="p-3 whitespace-nowrap">
         {editingField === "barcodeFormat" ? (
           <div className="flex items-center gap-2">
@@ -440,21 +510,11 @@ function ItemTableRow({
           </div>
         )}
       </td>
-      <td className="p-3 whitespace-nowrap">
-        {item.barcodeUsage ? (
-          <Badge variant="outline" className={`text-xs ${item.barcodeUsage === 'EXTERNAL_GS1' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'}`}>
-            {item.barcodeUsage === 'EXTERNAL_GS1' ? 'External (GS1)' : 'Internal'}
-          </Badge>
-        ) : (
-          <span className="text-xs text-muted-foreground">-</span>
-        )}
+      {/* Last Updated Column */}
+      <td className="p-3 whitespace-nowrap text-sm text-muted-foreground">
+        {item.updatedAt ? format(new Date(item.updatedAt), 'MMM d, yyyy') : '-'}
       </td>
-      <td className="p-3 whitespace-nowrap">
-        <Badge variant="outline" className="text-xs">
-          {item.barcodeSource || "None"}
-        </Badge>
-      </td>
-      <td className="p-3 text-right text-sm whitespace-nowrap">{item.currentStock}</td>
+      {/* Actions Column */}
       <td className="sticky right-0 z-10 bg-card p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
           <Button
@@ -525,13 +585,12 @@ function BarcodeItemsSection({
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode Value</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product Kind</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">UPC</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Role</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Format</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Usage</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode Source</th>
-                <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Stock</th>
-                <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Last Updated</th>
+                <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -555,9 +614,9 @@ function BarcodeItemsSection({
 
 export default function Barcodes() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [productKindFilter, setProductKindFilter] = useState<string>("all");
-  const [barcodeUsageFilter, setBarcodeUsageFilter] = useState<string>("all");
-  const [barcodeSourceFilter, setBarcodeSourceFilter] = useState<string>("all");
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [channelFilter, setChannelFilter] = useState<string>("all");
+  const [formatFilter, setFormatFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<string>("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -585,16 +644,26 @@ export default function Barcodes() {
       (item.sku && item.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (item.barcodeValue && item.barcodeValue.toLowerCase().includes(searchQuery.toLowerCase()));
     
-    // Product kind filter
-    const matchesProductKind = productKindFilter === "all" || item.productKind === productKindFilter;
+    // Role filter (For Sale = EXTERNAL_GS1, Stock = INTERNAL_STOCK)
+    let matchesRole = true;
+    if (roleFilter === "for_sale") {
+      matchesRole = item.barcodeUsage === "EXTERNAL_GS1";
+    } else if (roleFilter === "stock") {
+      matchesRole = item.barcodeUsage === "INTERNAL_STOCK";
+    }
     
-    // Barcode usage filter
-    const matchesBarcodeUsage = barcodeUsageFilter === "all" || item.barcodeUsage === barcodeUsageFilter;
+    // Channel filter
+    let matchesChannel = true;
+    if (channelFilter !== "all" && item.salesChannels) {
+      matchesChannel = item.salesChannels.some((c: string) => c.toLowerCase() === channelFilter.toLowerCase());
+    } else if (channelFilter !== "all" && !item.salesChannels) {
+      matchesChannel = false;
+    }
     
-    // Barcode source filter
-    const matchesBarcodeSource = barcodeSourceFilter === "all" || item.barcodeSource === barcodeSourceFilter;
+    // Format filter
+    const matchesFormat = formatFilter === "all" || item.barcodeFormat === formatFilter;
     
-    return matchesSearch && matchesProductKind && matchesBarcodeUsage && matchesBarcodeSource;
+    return matchesSearch && matchesRole && matchesChannel && matchesFormat;
   });
 
   // Apply sorting
@@ -783,7 +852,7 @@ export default function Barcodes() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Product Barcodes</h1>
-          <p className="text-sm text-muted-foreground">View items with barcode metadata and GS1 configuration</p>
+          <p className="text-sm text-muted-foreground">Manage barcodes, UPCs, and print labels for your products</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button 
@@ -808,14 +877,14 @@ export default function Barcodes() {
             data-testid="button-print-labels"
           >
             <Printer className="mr-2 h-4 w-4" />
-            Print Labels
+            Print
           </Button>
           
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button data-testid="button-create-barcode">
                 <Plus className="mr-2 h-4 w-4" />
-                Create Barcode
+                Create
               </Button>
             </DialogTrigger>
             <DialogContent>
@@ -828,103 +897,104 @@ export default function Barcodes() {
         </div>
       </div>
 
-      {/* Search and Filters */}
-      <div className="space-y-4">
+      {/* Filters Row */}
+      <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder="Search by name, SKU, or barcode value..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
-              data-testid="input-search-barcodes"
-            />
-          </div>
+          <Label className="text-sm font-medium whitespace-nowrap">Role:</Label>
+          <Select value={roleFilter} onValueChange={setRoleFilter}>
+            <SelectTrigger className="w-32" data-testid="select-filter-role">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="for_sale">For Sale</SelectItem>
+              <SelectItem value="stock">Stock</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Product Kind:</Label>
-            <Select value={productKindFilter} onValueChange={setProductKindFilter}>
-              <SelectTrigger className="w-40" data-testid="select-filter-product-kind">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="FINISHED">Finished</SelectItem>
-                <SelectItem value="RAW">Raw</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-medium whitespace-nowrap">Channel:</Label>
+          <Select value={channelFilter} onValueChange={setChannelFilter}>
+            <SelectTrigger className="w-36" data-testid="select-filter-channel">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="amazon">Amazon</SelectItem>
+              <SelectItem value="shopify">Shopify</SelectItem>
+              <SelectItem value="internal">Internal</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Usage:</Label>
-            <Select value={barcodeUsageFilter} onValueChange={setBarcodeUsageFilter}>
-              <SelectTrigger className="w-48" data-testid="select-filter-barcode-usage">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="EXTERNAL_GS1">External GS1</SelectItem>
-                <SelectItem value="INTERNAL_STOCK">Internal Stock</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-medium whitespace-nowrap">Format:</Label>
+          <Select value={formatFilter} onValueChange={setFormatFilter}>
+            <SelectTrigger className="w-36" data-testid="select-filter-format">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="CODE128">CODE128</SelectItem>
+              <SelectItem value="EAN13">EAN13</SelectItem>
+              <SelectItem value="UPC">UPC</SelectItem>
+              <SelectItem value="QR">QR Code</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Source:</Label>
-            <Select value={barcodeSourceFilter} onValueChange={setBarcodeSourceFilter}>
-              <SelectTrigger className="w-48" data-testid="select-filter-barcode-source">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                <SelectItem value="AUTO_GENERATED">Auto Generated</SelectItem>
-                <SelectItem value="MANUAL_ENTRY">Manual Entry</SelectItem>
-                <SelectItem value="EXTERNAL_SYSTEM">External System</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-medium whitespace-nowrap">Sort:</Label>
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-28" data-testid="select-sort-by">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="name">Name</SelectItem>
+              <SelectItem value="sku">SKU</SelectItem>
+              <SelectItem value="updatedAt">Updated</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+            data-testid="button-toggle-sort-order"
+          >
+            {sortOrder === "asc" ? "↑" : "↓"}
+          </Button>
+        </div>
 
-          <div className="flex items-center gap-2">
-            <Label className="text-sm font-medium">Sort by:</Label>
-            <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-32" data-testid="select-sort-by">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="name">Name</SelectItem>
-                <SelectItem value="sku">SKU</SelectItem>
-                <SelectItem value="barcodeValue">Barcode</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
-              data-testid="button-toggle-sort-order"
-            >
-              {sortOrder === "asc" ? "↑" : "↓"}
-            </Button>
-          </div>
+        {(searchQuery || roleFilter !== "all" || channelFilter !== "all" || formatFilter !== "all") && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearchQuery("");
+              setRoleFilter("all");
+              setChannelFilter("all");
+              setFormatFilter("all");
+            }}
+            data-testid="button-clear-filters"
+          >
+            <X className="mr-1 h-4 w-4" />
+            Clear
+          </Button>
+        )}
 
-          {(searchQuery || productKindFilter !== "all" || barcodeUsageFilter !== "all" || barcodeSourceFilter !== "all") && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearchQuery("");
-                setProductKindFilter("all");
-                setBarcodeUsageFilter("all");
-                setBarcodeSourceFilter("all");
-              }}
-              data-testid="button-clear-filters"
-            >
-              <X className="mr-2 h-4 w-4" />
-              Clear Filters
-            </Button>
-          )}
+        <div className="flex-1" />
+        
+        {/* Search on far right */}
+        <div className="relative w-72">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search name, SKU, or UPC..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+            data-testid="input-search-barcodes"
+          />
         </div>
       </div>
 

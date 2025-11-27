@@ -568,19 +568,24 @@ export function ImportWizard({ open, onOpenChange }: ImportWizardProps) {
         {currentStep === "results" && results && (
           <Card>
             <CardHeader>
-              <CardTitle>Import Complete</CardTitle>
+              <CardTitle>
+                {results.success 
+                  ? `Congratulations! You've successfully imported ${file?.name || 'your file'}`
+                  : "Import Complete"
+                }
+              </CardTitle>
               <CardDescription>Summary of import results</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {results.success ? (
                 <Alert>
                   <CheckCircle2 className="h-4 w-4" />
-                  <AlertDescription>Import completed successfully!</AlertDescription>
+                  <AlertDescription>All records processed successfully!</AlertDescription>
                 </Alert>
               ) : (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
-                  <AlertDescription>Import completed with errors</AlertDescription>
+                  <AlertDescription>Import completed with some errors</AlertDescription>
                 </Alert>
               )}
 

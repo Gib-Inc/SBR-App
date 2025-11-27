@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Key, Zap, CheckCircle2, XCircle, AlertCircle, Barcode } from "lucide-react";
+import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -18,7 +19,7 @@ export default function Settings() {
       {/* Page Header */}
       <div>
         <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-sm text-muted-foreground">Manage account, integrations, and LLM configuration</p>
+        <p className="text-sm text-muted-foreground">Manage account and LLM configuration</p>
       </div>
 
       {/* Tabs */}
@@ -27,10 +28,6 @@ export default function Settings() {
           <TabsTrigger value="account" data-testid="tab-account">
             <User className="mr-2 h-4 w-4" />
             Account
-          </TabsTrigger>
-          <TabsTrigger value="integrations" data-testid="tab-integrations">
-            <Key className="mr-2 h-4 w-4" />
-            Integrations
           </TabsTrigger>
           <TabsTrigger value="llm" data-testid="tab-llm">
             <Zap className="mr-2 h-4 w-4" />
@@ -44,10 +41,6 @@ export default function Settings() {
 
         <TabsContent value="account" className="space-y-4">
           <AccountSettings />
-        </TabsContent>
-
-        <TabsContent value="integrations" className="space-y-4">
-          <IntegrationSettings />
         </TabsContent>
 
         <TabsContent value="llm" className="space-y-4">
@@ -117,251 +110,13 @@ function AccountSettings() {
   );
 }
 
-function IntegrationSettings() {
-  const [testingConnection, setTestingConnection] = useState<string | null>(null);
-  const [apiKeys, setApiKeys] = useState<Record<string, string>>({
-    gohighlevel: '',
-    shopify: '',
-    extensiv: '',
-    phantombuster: '',
-  });
-  const { toast } = useToast();
-
-  // Load existing settings
-  const { data: settings } = useQuery<any>({
-    queryKey: ["/api/settings"],
-  });
-
-  // Load integration health status
-  const { data: integrationHealth } = useQuery<any[]>({
-    queryKey: ["/api/integrations/health"],
-  });
-
-  useEffect(() => {
-    if (settings) {
-      setApiKeys({
-        gohighlevel: settings.gohighlevelApiKey || '',
-        shopify: settings.shopifyApiKey || '',
-        extensiv: settings.extensivApiKey || '',
-        phantombuster: settings.phantombusterApiKey || '',
-      });
-    }
-  }, [settings]);
-
-  const healthData = integrationHealth || [];
-  
-  // Helper to check if API key is configured
-  const hasValidApiKey = (apiKeyField: string): boolean => {
-    if (!settings) return false;
-    const apiKey = settings[apiKeyField];
-    return !!(apiKey && apiKey.trim());
-  };
-  
-  const integrations = [
-    {
-      id: "gohighlevel",
-      name: "GoHighLevel",
-      description: "Sync sales history and trigger SMS alerts",
-      status: hasValidApiKey("gohighlevelApiKey") 
-        ? (healthData.find((h: any) => h.integrationName === "gohighlevel")?.lastStatus || "pending_setup")
-        : "pending_setup",
-      apiKeyField: "gohighlevelApiKey",
-    },
-    {
-      id: "shopify",
-      name: "Shopify",
-      description: "E-commerce platform integration",
-      status: hasValidApiKey("shopifyApiKey")
-        ? (healthData.find((h: any) => h.integrationName === "shopify")?.lastStatus || "pending_setup")
-        : "pending_setup",
-      apiKeyField: "shopifyApiKey",
-    },
-    {
-      id: "extensiv",
-      name: "Extensiv/Pivot",
-      description: "Finished goods inventory snapshot",
-      status: hasValidApiKey("extensivApiKey")
-        ? (healthData.find((h: any) => h.integrationName === "extensiv")?.lastStatus || "pending_setup")
-        : "pending_setup",
-      apiKeyField: "extensivApiKey",
-    },
-    {
-      id: "phantombuster",
-      name: "PhantomBuster",
-      description: "Supplier availability and lead times",
-      status: hasValidApiKey("phantombusterApiKey")
-        ? (healthData.find((h: any) => h.integrationName === "phantombuster")?.lastStatus || "pending_setup")
-        : "pending_setup",
-      apiKeyField: "phantombusterApiKey",
-    },
-  ];
-
-  const saveApiKeyMutation = useMutation({
-    mutationFn: async ({ integrationId, apiKey, apiKeyField }: { integrationId: string; apiKey: string; apiKeyField: string }) => {
-      const res = await apiRequest("PATCH", "/api/settings", {
-        [apiKeyField]: apiKey,
-      });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || "Failed to save API key");
-      }
-      return await res.json();
-    },
-    onSuccess: async (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
-      
-      const integrationName = integrations.find(i => i.id === variables.integrationId)?.name;
-      toast({
-        title: "API Key Saved",
-        description: `${integrationName} API key saved. Testing connection...`,
-      });
-      
-      // Automatically test the connection if API key is not empty
-      if (variables.apiKey && variables.apiKey.trim()) {
-        setTestingConnection(variables.integrationId);
-        try {
-          const res = await apiRequest("POST", `/api/integrations/${variables.integrationId}/sync`, {});
-          if (!res.ok) {
-            throw new Error("Connection test failed");
-          }
-          await res.json();
-          queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
-          queryClient.invalidateQueries({ queryKey: ["/api/dashboard"] });
-          toast({
-            title: "Connection Verified",
-            description: `${integrationName} is connected and working`,
-          });
-        } catch (error: any) {
-          toast({
-            title: "Connection Failed",
-            description: `${integrationName} API key saved but connection test failed. Please verify your API key.`,
-            variant: "destructive",
-          });
-        } finally {
-          setTestingConnection(null);
-        }
-      }
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save API key",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const testConnection = async (integrationId: string) => {
-    setTestingConnection(integrationId);
-    try {
-      const res = await apiRequest("POST", `/api/integrations/${integrationId}/sync`, {});
-      await res.json();
-      toast({
-        title: "Connection successful",
-        description: "Integration is working properly",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Connection failed",
-        description: error.message || "Could not connect to integration",
-        variant: "destructive",
-      });
-    } finally {
-      setTestingConnection(null);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      {integrations.map((integration) => (
-        <Card key={integration.id}>
-          <CardHeader>
-            <div className="flex items-start justify-between">
-              <div>
-                <CardTitle className="text-lg">{integration.name}</CardTitle>
-                <CardDescription>{integration.description}</CardDescription>
-              </div>
-              <Badge variant={
-                !hasValidApiKey(integration.apiKeyField)
-                  ? "outline"
-                  : integration.status === "success" || integration.status === "connected"
-                  ? "default"
-                  : integration.status === "failed" || integration.status === "error"
-                  ? "destructive"
-                  : "secondary"
-              }>
-                {!hasValidApiKey(integration.apiKeyField) ? (
-                  <>
-                    <AlertCircle className="mr-1 h-3 w-3" />
-                    Not Configured
-                  </>
-                ) : integration.status === "success" || integration.status === "connected" ? (
-                  <>
-                    <CheckCircle2 className="mr-1 h-3 w-3" />
-                    Connected
-                  </>
-                ) : integration.status === "failed" || integration.status === "error" ? (
-                  <>
-                    <XCircle className="mr-1 h-3 w-3" />
-                    Failed
-                  </>
-                ) : (
-                  <>
-                    <AlertCircle className="mr-1 h-3 w-3" />
-                    Pending Test
-                  </>
-                )}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor={`${integration.id}-api-key`}>API Key</Label>
-              <Input
-                id={`${integration.id}-api-key`}
-                type="password"
-                placeholder="••••••••••••••••"
-                value={apiKeys[integration.id] || ''}
-                onChange={(e) => setApiKeys({ ...apiKeys, [integration.id]: e.target.value })}
-                data-testid={`input-api-key-${integration.id}`}
-              />
-              <p className="text-xs text-muted-foreground">
-                Your API key will be encrypted and stored securely
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => testConnection(integration.id)}
-                disabled={testingConnection === integration.id || !apiKeys[integration.id]}
-                data-testid={`button-test-${integration.id}`}
-              >
-                {testingConnection === integration.id ? "Testing..." : "Test Connection"}
-              </Button>
-              <Button
-                onClick={() => saveApiKeyMutation.mutate({ 
-                  integrationId: integration.id, 
-                  apiKey: apiKeys[integration.id] || '',
-                  apiKeyField: integration.apiKeyField,
-                })}
-                disabled={saveApiKeyMutation.isPending || !apiKeys[integration.id]}
-                data-testid={`button-save-${integration.id}`}
-              >
-                {saveApiKeyMutation.isPending ? "Saving..." : "Save Configuration"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
 function LLMSettings() {
   const { toast } = useToast();
   const [llmProvider, setLlmProvider] = useState("chatgpt");
   const [llmApiKey, setLlmApiKey] = useState("");
+  const [llmModel, setLlmModel] = useState("gpt-4");
+  const [llmTemperature, setLlmTemperature] = useState(0.7);
+  const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
   const [customEndpoint, setCustomEndpoint] = useState("");
   const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
   const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
@@ -369,6 +124,33 @@ function LLMSettings() {
   const [enableVisionCapture, setEnableVisionCapture] = useState(false);
   const [visionProvider, setVisionProvider] = useState("gpt-4-vision");
   const [visionModel, setVisionModel] = useState("gpt-4o");
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [hasApiKey, setHasApiKey] = useState(false);
+
+  // Model presets for each provider
+  const modelPresets: Record<string, { value: string; label: string }[]> = {
+    chatgpt: [
+      { value: "gpt-4", label: "GPT-4 (Standard)" },
+      { value: "gpt-4-turbo", label: "GPT-4 Turbo (Faster)" },
+      { value: "gpt-4o", label: "GPT-4o (Latest)" },
+      { value: "gpt-4o-mini", label: "GPT-4o Mini (Cost-effective)" },
+      { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo (Budget)" },
+    ],
+    claude: [
+      { value: "claude-3-opus", label: "Claude 3 Opus (Most capable)" },
+      { value: "claude-3-sonnet", label: "Claude 3 Sonnet (Balanced)" },
+      { value: "claude-3-haiku", label: "Claude 3 Haiku (Fastest)" },
+      { value: "claude-3.5-sonnet", label: "Claude 3.5 Sonnet (Latest)" },
+    ],
+    grok: [
+      { value: "grok-1", label: "Grok-1" },
+      { value: "grok-2", label: "Grok-2" },
+    ],
+    custom: [
+      { value: "custom-model", label: "Custom Model" },
+    ],
+  };
 
   // Load existing LLM settings
   const { data: settings } = useQuery<any>({
@@ -378,7 +160,11 @@ function LLMSettings() {
   useEffect(() => {
     if (settings) {
       setLlmProvider(settings.llmProvider || 'chatgpt');
-      setLlmApiKey(settings.llmApiKey || '');
+      setHasApiKey(!!(settings.llmApiKey && settings.llmApiKey.trim()));
+      setLlmApiKey('');
+      setLlmModel(settings.llmModel || 'gpt-4');
+      setLlmTemperature(settings.llmTemperature ?? 0.7);
+      setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
       setCustomEndpoint(settings.llmCustomEndpoint || '');
       setEnableOrderRecommendations(settings.enableLlmOrderRecommendations || false);
       setEnableSupplierRanking(settings.enableLlmSupplierRanking || false);
@@ -388,6 +174,17 @@ function LLMSettings() {
       setVisionModel(settings.visionModel || 'gpt-4o');
     }
   }, [settings]);
+
+  // Update model when provider changes
+  useEffect(() => {
+    const presets = modelPresets[llmProvider];
+    if (presets && presets.length > 0) {
+      const currentModelValid = presets.some(p => p.value === llmModel);
+      if (!currentModelValid) {
+        setLlmModel(presets[0].value);
+      }
+    }
+  }, [llmProvider]);
 
   const saveSettingMutation = useMutation({
     mutationFn: async (data: Record<string, any>) => {
@@ -417,12 +214,48 @@ function LLMSettings() {
   const saveLLMProvider = async () => {
     const updates: Record<string, any> = {
       llmProvider,
-      llmApiKey,
+      llmModel,
+      llmTemperature,
+      llmMaxTokens,
     };
+    if (llmApiKey.trim()) {
+      updates.llmApiKey = llmApiKey;
+    }
     if (llmProvider === 'custom') {
       updates.llmCustomEndpoint = customEndpoint;
     }
     await saveSettingMutation.mutateAsync(updates);
+    if (llmApiKey.trim()) {
+      setHasApiKey(true);
+      setLlmApiKey('');
+    }
+  };
+
+  const testConnection = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await apiRequest("POST", "/api/llm/health-check", {});
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTestResult({ success: true, message: `Connection successful! Provider: ${data.provider}` });
+        toast({
+          title: "Connection Successful",
+          description: `LLM provider is responding correctly (${data.provider})`,
+        });
+      } else {
+        throw new Error(data.error || "Connection test failed");
+      }
+    } catch (error: any) {
+      setTestResult({ success: false, message: error.message || "Connection failed" });
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Could not connect to LLM provider",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTesting(false);
+    }
   };
 
   const saveLLMFeatures = async () => {
@@ -443,86 +276,182 @@ function LLMSettings() {
 
   return (
     <div className="space-y-4">
+      {/* Active Provider Card */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">LLM Provider Selection</CardTitle>
+          <CardTitle className="text-lg">Active LLM Provider</CardTitle>
           <CardDescription>
-            Choose an AI provider for inventory decisions and forecasting
+            Configure the primary AI provider for all LLM-powered features
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="llm-provider">Provider</Label>
-            <Select value={llmProvider} onValueChange={setLlmProvider}>
-              <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="chatgpt">ChatGPT (OpenAI)</SelectItem>
-                <SelectItem value="claude">Claude (Anthropic)</SelectItem>
-                <SelectItem value="grok">Grok</SelectItem>
-                <SelectItem value="custom">Custom Endpoint</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="llm-provider">Provider</Label>
+              <Select value={llmProvider} onValueChange={setLlmProvider}>
+                <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="chatgpt">ChatGPT (OpenAI)</SelectItem>
+                  <SelectItem value="claude">Claude (Anthropic)</SelectItem>
+                  <SelectItem value="grok">Grok</SelectItem>
+                  <SelectItem value="custom">Custom Endpoint</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="llm-model">Default Model</Label>
+              <Select value={llmModel} onValueChange={setLlmModel}>
+                <SelectTrigger id="llm-model" data-testid="select-llm-model">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelPresets[llmProvider]?.map((preset) => (
+                    <SelectItem key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
-          {llmProvider === "custom" ? (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="custom-endpoint">Custom Endpoint URL</Label>
-                <Input
-                  id="custom-endpoint"
-                  type="url"
-                  placeholder="https://api.example.com/v1"
-                  value={customEndpoint}
-                  onChange={(e) => setCustomEndpoint(e.target.value)}
-                  data-testid="input-custom-endpoint"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="custom-api-key">API Key</Label>
-                <Input
-                  id="custom-api-key"
-                  type="password"
-                  placeholder="••••••••••••••••"
-                  value={llmApiKey}
-                  onChange={(e) => setLlmApiKey(e.target.value)}
-                  data-testid="input-custom-api-key"
-                />
-              </div>
-            </>
-          ) : (
+          {llmProvider === "custom" && (
             <div className="space-y-2">
-              <Label htmlFor="llm-api-key">
-                {llmProvider === "chatgpt" ? "OpenAI API Key" : 
-                 llmProvider === "claude" ? "Anthropic API Key" :
-                 llmProvider === "grok" ? "Grok API Key" : "API Key"}
-              </Label>
+              <Label htmlFor="custom-endpoint">Custom Endpoint URL</Label>
+              <Input
+                id="custom-endpoint"
+                type="url"
+                placeholder="https://api.example.com/v1"
+                value={customEndpoint}
+                onChange={(e) => setCustomEndpoint(e.target.value)}
+                data-testid="input-custom-endpoint"
+              />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="llm-api-key">
+              {llmProvider === "chatgpt" ? "OpenAI API Key" : 
+               llmProvider === "claude" ? "Anthropic API Key" :
+               llmProvider === "grok" ? "Grok API Key" : "API Key"}
+            </Label>
+            <div className="flex items-center gap-2">
               <Input
                 id="llm-api-key"
                 type="password"
-                placeholder="••••••••••••••••"
+                placeholder={hasApiKey ? "••••••••••••••• (saved)" : "Enter API key..."}
                 value={llmApiKey}
                 onChange={(e) => setLlmApiKey(e.target.value)}
                 data-testid="input-llm-api-key"
               />
+              {hasApiKey && (
+                <Badge variant="outline" className="shrink-0">
+                  <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
+                  Saved
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {llmProvider === "chatgpt" && "Get your key from platform.openai.com"}
+              {llmProvider === "claude" && "Get your key from console.anthropic.com"}
+              {llmProvider === "grok" && "Get your key from the Grok platform"}
+              {llmProvider === "custom" && "Enter the API key for your custom endpoint"}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="llm-temperature">Temperature: {llmTemperature.toFixed(1)}</Label>
+                <span className="text-xs text-muted-foreground">
+                  {llmTemperature < 0.3 ? "Focused" : llmTemperature < 0.7 ? "Balanced" : "Creative"}
+                </span>
+              </div>
+              <Slider
+                id="llm-temperature"
+                min={0}
+                max={2}
+                step={0.1}
+                value={[llmTemperature]}
+                onValueChange={([v]) => setLlmTemperature(v)}
+                data-testid="slider-temperature"
+              />
               <p className="text-xs text-muted-foreground">
-                Get your API key from the{" "}
-                {llmProvider === "chatgpt" && "OpenAI dashboard"}
-                {llmProvider === "claude" && "Anthropic console"}
-                {llmProvider === "grok" && "Grok platform"}
+                Lower = more deterministic, Higher = more creative
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="llm-max-tokens">Max Tokens</Label>
+              <Input
+                id="llm-max-tokens"
+                type="number"
+                min={256}
+                max={8192}
+                value={llmMaxTokens}
+                onChange={(e) => setLlmMaxTokens(parseInt(e.target.value) || 2048)}
+                data-testid="input-max-tokens"
+              />
+              <p className="text-xs text-muted-foreground">
+                Maximum response length (256-8192)
+              </p>
+            </div>
+          </div>
+
+          {testResult && (
+            <div className={`p-3 rounded-md ${testResult.success ? 'bg-green-500/10 border border-green-500/20' : 'bg-destructive/10 border border-destructive/20'}`}>
+              <div className="flex items-center gap-2">
+                {testResult.success ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-destructive" />
+                )}
+                <span className={`text-sm ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+                  {testResult.message}
+                </span>
+              </div>
             </div>
           )}
 
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={testConnection}
+              disabled={isTesting || !hasApiKey}
+              data-testid="button-test-llm"
+            >
+              {isTesting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Testing...
+                </>
+              ) : (
+                "Test Connection"
+              )}
+            </Button>
             <Button
               onClick={saveLLMProvider}
               disabled={saveSettingMutation.isPending}
               data-testid="button-save-llm-provider"
             >
-              {saveSettingMutation.isPending ? "Saving..." : "Save Provider"}
+              {saveSettingMutation.isPending ? "Saving..." : "Save Configuration"}
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Info Banner */}
+      <Card className="border-blue-500/30 bg-blue-500/5">
+        <CardContent className="flex items-start gap-3 pt-6">
+          <Info className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium">External integrations moved</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              All third-party integrations (Shopify, Amazon, Extensiv, QuickBooks, GoHighLevel, etc.) are now configured from the AI Agent → Data Sources tab.
+            </p>
           </div>
         </CardContent>
       </Card>

@@ -313,6 +313,8 @@ export const settings = pgTable("settings", {
   llmProvider: text("llm_provider"), // 'chatgpt', 'claude', 'grok', 'custom'
   llmApiKey: text("llm_api_key"),
   llmModel: text("llm_model"), // 'gpt-4', 'gpt-4-turbo', 'claude-3-opus', etc.
+  llmTemperature: real("llm_temperature").notNull().default(0.7), // 0.0-2.0, controls randomness
+  llmMaxTokens: integer("llm_max_tokens").notNull().default(2048), // Max tokens for response
   llmCustomEndpoint: text("llm_custom_endpoint"),
   llmPromptTemplate: text("llm_prompt_template"),
   enableLlmOrderRecommendations: boolean("enable_llm_order_recommendations").notNull().default(false),

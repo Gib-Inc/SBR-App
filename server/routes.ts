@@ -3923,6 +3923,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // LLM
   // ============================================================================
   
+  app.post("/api/llm/health-check", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const settings = await storage.getSettings(userId);
+      
+      if (!settings?.llmProvider) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No LLM provider configured" 
+        });
+      }
+      
+      const hasApiKey = settings.llmApiKey && settings.llmApiKey.trim();
+      const hasCustomEndpoint = settings.llmProvider === "custom" && settings.llmCustomEndpoint;
+      
+      if (!hasApiKey && !hasCustomEndpoint) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "No API key or custom endpoint configured" 
+        });
+      }
+      
+      const normalizedProvider = settings.llmProvider?.toLowerCase().replace(/\s+/g, "_") === "custom_endpoint" 
+        ? "custom" 
+        : settings.llmProvider!;
+      
+      const testResult = await LLMService.askLLM({
+        provider: normalizedProvider as LLMProvider,
+        apiKey: settings.llmApiKey || undefined,
+        customEndpoint: settings.llmCustomEndpoint || undefined,
+        taskType: 'HEALTH_CHECK',
+        payload: { test: true },
+      });
+      
+      await storage.logSystemEvent({
+        eventType: 'LLM_HEALTH_CHECK',
+        status: 'success',
+        details: {
+          provider: normalizedProvider,
+          model: settings.llmModel,
+          responseLength: testResult?.text?.length || 0,
+        },
+      });
+      
+      res.json({ 
+        success: true, 
+        provider: normalizedProvider,
+        model: settings.llmModel,
+        message: "LLM connection verified successfully"
+      });
+    } catch (error: any) {
+      const userId = req.session.userId;
+      const settings = userId ? await storage.getSettings(userId) : null;
+      
+      await storage.logSystemEvent({
+        eventType: 'LLM_HEALTH_CHECK',
+        status: 'error',
+        details: {
+          provider: settings?.llmProvider,
+          error: error.message,
+        },
+      });
+      
+      res.status(500).json({ 
+        success: false, 
+        error: error.message || "LLM health check failed" 
+      });
+    }
+  });
+
   app.post("/api/llm/ask", requireAuth, async (req: Request, res: Response) => {
     try {
       const { provider, apiKey, customEndpoint, taskType, payload } = req.body;

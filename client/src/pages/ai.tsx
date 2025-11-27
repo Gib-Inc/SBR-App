@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -1006,7 +1006,7 @@ export default function AIAgent() {
       </div>
 
       <Tabs defaultValue="data-sources" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="data-sources" data-testid="tab-data-sources">
             Data Sources
           </TabsTrigger>
@@ -1015,6 +1015,9 @@ export default function AIAgent() {
           </TabsTrigger>
           <TabsTrigger value="llm-config" data-testid="tab-llm-config">
             LLM Config
+          </TabsTrigger>
+          <TabsTrigger value="discovery" data-testid="tab-discovery">
+            Discovery
           </TabsTrigger>
           <TabsTrigger value="insights" data-testid="tab-insights">
             Insights
@@ -1111,6 +1114,24 @@ export default function AIAgent() {
         {/* LLM Config Tab */}
         <TabsContent value="llm-config" className="space-y-4">
           <LLMConfigTab settingsData={settingsData} />
+        </TabsContent>
+
+        {/* Discovery Tab - Stubbed for V2 */}
+        <TabsContent value="discovery" className="space-y-4">
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
+                  <Search className="h-8 w-8 text-muted-foreground" />
+                </div>
+                <h3 className="text-lg font-semibold mb-2">Supplier Discovery & Creation</h3>
+                <p className="text-muted-foreground max-w-md mb-4">
+                  AI-powered supplier discovery, lead generation, and automated outreach tools will be available in a future release.
+                </p>
+                <Badge variant="secondary" data-testid="badge-coming-v2">Coming in V2</Badge>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Insights Tab */}

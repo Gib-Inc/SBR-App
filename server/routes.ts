@@ -7,6 +7,7 @@ import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
 import { ImportService } from "./import-service";
 import { TransactionService } from "./transaction-service";
+import { BackorderService } from "./services/backorder-service";
 import { ExtensivClient } from "./services/extensiv-client";
 import { ShopifyClient } from "./services/shopify-client";
 import { AmazonClient } from "./services/amazon-client";
@@ -3122,6 +3123,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
 
   const transactionService = new TransactionService(storage);
+  const backorderService = new BackorderService(storage);
 
   app.post("/api/transactions", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -3782,6 +3784,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         receivedAt: allFullyReceived ? new Date() : po.receivedAt,
       });
 
+      // Auto-fulfill backorders for items that received stock
+      const receivedItemIds = [...new Set(
+        lineReceipts
+          .filter((lr: any) => lr.qtyReceived > 0)
+          .map((lr: any) => {
+            const line = allLines.find(l => l.id === lr.lineId);
+            return line?.itemId;
+          })
+          .filter(Boolean)
+      )] as string[];
+
+      for (const itemId of receivedItemIds) {
+        await backorderService.checkAndFulfillBackorders(itemId, 0);
+      }
+
       res.json({ ...updated, lines: updatedLines });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error receiving PO:", error);
@@ -4098,6 +4115,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         status: 'RECEIVED',
         receivedAt: new Date(),
       });
+
+      // Auto-fulfill backorders for all items that received stock
+      const receivedItemIds = [...new Set(linesToProcess.map(l => l.line.itemId))];
+      for (const itemId of receivedItemIds) {
+        await backorderService.checkAndFulfillBackorders(itemId, 0);
+      }
 
       // Fetch updated PO to return latest data
       const updated = await storage.getPurchaseOrder(id);
@@ -4543,9 +4566,9 @@ Generate only the email body text, no subject line.`;
         }
       }
 
-      // Process each received item
-      // TODO: For true atomicity, wrap in database transaction
-      // For now, validate everything first, then apply (same pattern as PO bulk receive)
+      // Process each received item using TransactionService (same path as PO receipts)
+      const restockedItemIds: string[] = [];
+      
       for (const receivedItem of receivedItems) {
         const returnItem = returnItems.find(ri => ri.id === receivedItem.returnItemId);
         if (!returnItem) continue;
@@ -4557,66 +4580,58 @@ Generate only the email body text, no subject line.`;
           notes: receivedItem.notes || null,
         });
 
-        // If disposition is RESTOCK, update inventory
-        if (receivedItem.disposition === 'RESTOCK') {
+        // If disposition is RESTOCK, update inventory via TransactionService
+        if (receivedItem.disposition === 'RESTOCK' && receivedItem.qtyReceived > 0) {
           const item = await storage.getItem(returnItem.inventoryItemId);
           if (!item) continue;
 
-          // For finished products, restock to Hildale (buffer stock)
-          // For components, update currentStock
-          if (item.type === 'finished_product') {
-            await storage.updateItem(item.id, {
-              hildaleQty: item.hildaleQty + receivedItem.qtyReceived
-            });
-            await storage.createInventoryTransaction({
-              itemId: item.id,
-              itemType: 'FINISHED',
-              type: 'RECEIVE',
-              quantity: receivedItem.qtyReceived,
-              location: 'Hildale',
-              notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
-              createdBy: userId,
-            });
-          } else {
-            await storage.updateItem(item.id, {
-              currentStock: item.currentStock + receivedItem.qtyReceived
-            });
-            await storage.createInventoryTransaction({
-              itemId: item.id,
-              itemType: 'COMPONENT',
-              type: 'RECEIVE',
-              quantity: receivedItem.qtyReceived,
-              location: 'Warehouse',
-              notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
-              createdBy: userId,
-            });
-          }
+          // Use TransactionService for consistent inventory updates
+          const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
+          const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+          
+          const result = await transactionService.applyTransaction({
+            itemId: item.id,
+            itemType,
+            type: 'RECEIVE',
+            location,
+            quantity: receivedItem.qtyReceived,
+            notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
+            createdBy: userId,
+          });
 
-          // Update Extensiv warehouse inventory if configured
-          const extensivApiKey = process.env.EXTENSIV_API_KEY;
-          if (extensivApiKey) {
-            try {
-              const { ExtensivClient } = await import('./services/extensiv-client');
-              const extensivClient = new ExtensivClient(extensivApiKey);
-              
-              // Use warehouseLocationCode from return request or default warehouse
-              const warehouseCode = returnRequest.warehouseLocationCode || 'DEFAULT_WAREHOUSE';
-              
-              await extensivClient.adjustInventory(
-                warehouseCode,
-                item.sku,
-                receivedItem.qtyReceived,
-                `Return received: ${returnRequest.externalOrderId || returnRequest.id}`
-              );
-              
-              console.log(`[Returns] Updated Extensiv inventory for SKU ${item.sku} at ${warehouseCode}: +${receivedItem.qtyReceived}`);
-            } catch (extensivError: any) {
-              // Log error but don't fail the entire operation
-              console.error(`[Returns] Failed to update Extensiv for SKU ${item.sku}:`, extensivError.message);
-              // Optionally track this failure for manual reconciliation
+          if (result.success) {
+            restockedItemIds.push(item.id);
+            
+            // Update Extensiv warehouse inventory if configured
+            const extensivApiKey = process.env.EXTENSIV_API_KEY;
+            if (extensivApiKey) {
+              try {
+                const { ExtensivClient } = await import('./services/extensiv-client');
+                const extensivClient = new ExtensivClient(extensivApiKey);
+                
+                const warehouseCode = returnRequest.warehouseLocationCode || 'DEFAULT_WAREHOUSE';
+                
+                await extensivClient.adjustInventory(
+                  warehouseCode,
+                  item.sku,
+                  receivedItem.qtyReceived,
+                  `Return received: ${returnRequest.externalOrderId || returnRequest.id}`
+                );
+                
+                console.log(`[Returns] Updated Extensiv inventory for SKU ${item.sku} at ${warehouseCode}: +${receivedItem.qtyReceived}`);
+              } catch (extensivError: any) {
+                console.error(`[Returns] Failed to update Extensiv for SKU ${item.sku}:`, extensivError.message);
+              }
             }
+          } else {
+            console.error(`[Returns] Failed to restock item ${item.sku}: ${result.error}`);
           }
         }
+      }
+
+      // Auto-fulfill backorders for items that were restocked
+      for (const itemId of [...new Set(restockedItemIds)]) {
+        await backorderService.checkAndFulfillBackorders(itemId, 0);
       }
 
       // Update return request status

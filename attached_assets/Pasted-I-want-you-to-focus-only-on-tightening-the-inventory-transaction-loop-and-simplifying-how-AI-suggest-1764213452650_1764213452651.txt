@@ -1,0 +1,53 @@
+I want you to focus only on tightening the inventory transaction loop and simplifying how AI suggestions show up. Do not add any new pages, tabs, or big new widgets.
+
+
+Close the inventory transaction loop
+
+
+
+
+Make sure approved RETURNS actually update inventory correctly:
+• When a return is “Received,” increase finished product stock for the returned SKUs.
+• Use the same inventory/transaction service that POs use so all stock changes flow through one path.
+• Make sure the Dashboard, BOM, and AI Agent all reflect the updated stock after a return is received (no stale numbers).
+
+
+Implement backorder auto-fulfill logic:
+• When stock for a finished product increases (from PO receipts or returns), automatically check for open backorders on that SKU.
+• If enough stock exists, mark those backordered lines as fulfilled (or ready to fulfill), update the Sales Orders page, and clear the backorder counts.
+• Make sure this logic runs in one place in the backend so Shopify/Amazon/Extensiv all see consistent quantities.
+
+
+
+
+Keep AI suggestions simple and visible
+
+
+
+
+On AI Agent → Insights, treat the “SKU Recommendations” table as the main “Suggestions” view.
+
+
+Keep the existing risk tiles (High Risk, Medium Risk, Low Risk, Need Order), but do NOT add any new “Ad & Demand Signals” widgets or separate ad dashboards.
+
+
+Internally you can still read Google/Meta/TikTok/Shopify/Amazon metrics, but those should only be used to compute the SKU Recommendations (risk level, recommended quantity, and recommended action).
+
+
+Each row in the SKU Recommendations table should show, at minimum: SKU, Product Name, On-Hand, Days Left (based on velocity), Risk level, Recommended Action (e.g., “Create PO”, “Hold Orders”, “Stop Buying Ads”), and Recommended Qty where applicable.
+
+
+
+
+Guardrails
+
+
+
+
+Do not duplicate data or double-count sales: Shopify and Amazon orders should be de-duplicated so a single customer order only affects inventory once, even if it appears in multiple integrations or in QuickBooks.
+
+
+Do not add any new nav items. Do not build the “Discovery & Creation” flow yet; leave that tab clearly stubbed as “Coming in V2” with no functional code behind it.
+
+
+When you’re done, summarize exactly how returns now affect inventory, how backorders are auto-fulfilled, and how the SKU Recommendations table is populated end-to-end.

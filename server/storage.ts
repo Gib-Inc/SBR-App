@@ -67,7 +67,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, gt, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -279,6 +279,7 @@ export interface IStorage {
   createSalesOrderLine(line: InsertSalesOrderLine): Promise<SalesOrderLine>;
   updateSalesOrderLine(id: string, line: Partial<InsertSalesOrderLine>): Promise<SalesOrderLine | undefined>;
   deleteSalesOrderLine(id: string): Promise<boolean>;
+  getOpenBackorderLinesByProduct(productId: string): Promise<SalesOrderLine[]>;
 
   // Backorder Snapshots
   getAllBackorderSnapshots(): Promise<BackorderSnapshot[]>;
@@ -1856,6 +1857,24 @@ export class MemStorage implements IStorage {
     return this.salesOrderLines.delete(id);
   }
 
+  async getOpenBackorderLinesByProduct(productId: string): Promise<SalesOrderLine[]> {
+    const allLines = Array.from(this.salesOrderLines.values())
+      .filter(line => line.productId === productId && (line.backorderQty ?? 0) > 0);
+    
+    const openLines: SalesOrderLine[] = [];
+    for (const line of allLines) {
+      const order = await this.getSalesOrder(line.salesOrderId);
+      if (order && order.status !== 'CANCELLED' && order.status !== 'FULFILLED') {
+        openLines.push(line);
+      }
+    }
+    return openLines.sort((a, b) => {
+      const orderA = this.salesOrders.get(a.salesOrderId);
+      const orderB = this.salesOrders.get(b.salesOrderId);
+      return (orderA?.orderDate?.getTime() ?? 0) - (orderB?.orderDate?.getTime() ?? 0);
+    });
+  }
+
   // Backorder Snapshots
   async getAllBackorderSnapshots(): Promise<BackorderSnapshot[]> {
     return Array.from(this.backorderSnapshots.values());
@@ -3150,6 +3169,33 @@ export class PostgresStorage implements IStorage {
   async deleteSalesOrderLine(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.salesOrderLines).where(eq(schema.salesOrderLines.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getOpenBackorderLinesByProduct(productId: string): Promise<SalesOrderLine[]> {
+    return await this.db.select({
+      id: schema.salesOrderLines.id,
+      salesOrderId: schema.salesOrderLines.salesOrderId,
+      productId: schema.salesOrderLines.productId,
+      sku: schema.salesOrderLines.sku,
+      qtyOrdered: schema.salesOrderLines.qtyOrdered,
+      qtyAllocated: schema.salesOrderLines.qtyAllocated,
+      qtyShipped: schema.salesOrderLines.qtyShipped,
+      qtyFulfilled: schema.salesOrderLines.qtyFulfilled,
+      returnedQty: schema.salesOrderLines.returnedQty,
+      backorderQty: schema.salesOrderLines.backorderQty,
+      unitPrice: schema.salesOrderLines.unitPrice,
+      notes: schema.salesOrderLines.notes,
+    })
+      .from(schema.salesOrderLines)
+      .leftJoin(schema.salesOrders, eq(schema.salesOrderLines.salesOrderId, schema.salesOrders.id))
+      .where(
+        and(
+          eq(schema.salesOrderLines.productId, productId),
+          gt(schema.salesOrderLines.backorderQty, 0),
+          drizzleSql`${schema.salesOrders.status} NOT IN ('CANCELLED', 'FULFILLED')`
+        )
+      )
+      .orderBy(schema.salesOrders.orderDate);
   }
 
   // Backorder Snapshots

@@ -20,7 +20,7 @@
 
 import { IStorage } from "../storage";
 import { AuditLogger } from "./audit-logger";
-import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest, QuickbooksSalesSnapshot } from "@shared/schema";
+import type { Item, Settings, PurchaseOrder, SalesOrder, ReturnRequest, QuickbooksSalesSnapshot, AdMetricsDaily } from "@shared/schema";
 
 // Types for the decision engine
 // Note: These match the frontend expectations
@@ -61,6 +61,10 @@ export interface SkuMetrics {
   supplierLeadTimeDays: number; // Alias for effectiveLeadTime (frontend compatibility)
   backorderCount: number;
   reorderPoint: number;
+  // V1 Ad Demand Metrics
+  adDemandMultiplier?: number;  // Velocity multiplier from ad spend trends (default 1)
+  adRecentSpend?: number;       // Ad spend in last 7 days
+  adPriorSpend?: number;        // Ad spend in previous 7 days (for trend comparison)
 }
 
 export interface SkuRecommendation {
@@ -236,6 +240,117 @@ export class InventoryDecisionEngine {
     }
 
     return velocityMap;
+  }
+
+  /**
+   * Compute ad demand multiplier for SKUs with recent ad spend
+   * 
+   * V1 Logic: Compares recent period (last 7 days) vs prior period (previous 7 days)
+   * - If spend increased significantly, predict demand increase → multiplier > 1
+   * - If spend decreased, predict demand softening → multiplier < 1
+   * - If no ad data, multiplier = 1 (no impact)
+   * 
+   * Formula: 1 + (spendDelta% * adDemandImpact)
+   * Example: 50% spend increase with 0.2 impact → 1 + (0.5 * 0.2) = 1.1 (10% velocity boost)
+   */
+  private computeAdDemandMultiplier(
+    sku: string,
+    adMetrics: AdMetricsDaily[],
+    adDemandImpact: number
+  ): { multiplier: number; recentSpend: number; priorSpend: number } {
+    const now = new Date();
+    const recentCutoff = new Date(now);
+    recentCutoff.setDate(recentCutoff.getDate() - 7);
+    const priorCutoff = new Date(now);
+    priorCutoff.setDate(priorCutoff.getDate() - 14);
+
+    const recentCutoffStr = recentCutoff.toISOString().split('T')[0];
+    const priorCutoffStr = priorCutoff.toISOString().split('T')[0];
+    const nowStr = now.toISOString().split('T')[0];
+
+    // Filter metrics for this SKU
+    const skuMetrics = adMetrics.filter(m => m.sku === sku);
+    
+    if (skuMetrics.length === 0) {
+      return { multiplier: 1, recentSpend: 0, priorSpend: 0 };
+    }
+
+    // Sum spend for recent period (last 7 days) and prior period (previous 7 days)
+    let recentSpend = 0;
+    let priorSpend = 0;
+
+    for (const metric of skuMetrics) {
+      const metricDate = metric.date;
+      if (metricDate >= recentCutoffStr && metricDate <= nowStr) {
+        recentSpend += Number(metric.spend) || 0;
+      } else if (metricDate >= priorCutoffStr && metricDate < recentCutoffStr) {
+        priorSpend += Number(metric.spend) || 0;
+      }
+    }
+
+    // No prior spend = no trend to compare, multiplier = 1
+    if (priorSpend === 0) {
+      // If we have recent spend but no prior, assume slight increase (new campaign)
+      const multiplier = recentSpend > 0 ? 1 + (adDemandImpact * 0.5) : 1;
+      return { multiplier, recentSpend, priorSpend };
+    }
+
+    // Calculate spend delta percentage
+    const spendDeltaPct = (recentSpend - priorSpend) / priorSpend;
+    
+    // Apply multiplier clamped to reasonable bounds (0.5 to 1.5)
+    // Formula: 1 + (spendDelta% * adDemandImpact)
+    const rawMultiplier = 1 + (spendDeltaPct * adDemandImpact);
+    const multiplier = Math.max(0.5, Math.min(1.5, rawMultiplier));
+
+    return { multiplier, recentSpend, priorSpend };
+  }
+
+  /**
+   * Build a map of SKU -> ad demand multiplier from ad metrics
+   */
+  private async buildAdDemandMultiplierMap(
+    items: Item[],
+    adDemandImpact: number
+  ): Promise<Map<string, { multiplier: number; recentSpend: number; priorSpend: number }>> {
+    const multiplierMap = new Map<string, { multiplier: number; recentSpend: number; priorSpend: number }>();
+
+    if (adDemandImpact === 0) {
+      // Ad impact disabled, return empty map (all multipliers = 1)
+      return multiplierMap;
+    }
+
+    // Fetch all ad metrics for the last 14 days
+    const now = new Date();
+    const startDate = new Date(now);
+    startDate.setDate(startDate.getDate() - 14);
+    const startDateStr = startDate.toISOString().split('T')[0];
+    const endDateStr = now.toISOString().split('T')[0];
+
+    // Fetch ad metrics for each SKU (finished products only)
+    for (const item of items) {
+      if (item.type !== 'finished_product') continue;
+      
+      try {
+        const metrics = await this.storage.getAdMetricsBySkuAndDateRange(
+          item.sku,
+          startDateStr,
+          endDateStr
+        );
+        
+        if (metrics.length > 0) {
+          const result = this.computeAdDemandMultiplier(item.sku, metrics, adDemandImpact);
+          if (result.multiplier !== 1) {
+            multiplierMap.set(item.sku, result);
+          }
+        }
+      } catch (error) {
+        // Log error but continue - ad metrics are supplementary
+        console.error(`Error fetching ad metrics for SKU ${item.sku}:`, error);
+      }
+    }
+
+    return multiplierMap;
   }
 
   /**
@@ -472,6 +587,13 @@ export class InventoryDecisionEngine {
       parts.push(`supplier score ${metrics.supplierScore.toFixed(0)}/100`);
     }
 
+    // V1 Ad demand adjustment (show when significant)
+    if (metrics.adDemandMultiplier && metrics.adDemandMultiplier !== 1) {
+      const pctChange = Math.round((metrics.adDemandMultiplier - 1) * 100);
+      const direction = pctChange > 0 ? "up" : "down";
+      parts.push(`ad spend trend: velocity ${direction} ${Math.abs(pctChange)}%`);
+    }
+
     return parts.join("; ") + ".";
   }
 
@@ -544,6 +666,9 @@ export class InventoryDecisionEngine {
     // Extract rules (handle undefined as null for the helper)
     const rules = this.extractRulesFromSettings(settings ?? null);
 
+    // V1 Ad Demand Multiplier: Build map of SKU -> multiplier based on ad spend trends
+    const adMultiplierMap = await this.buildAdDemandMultiplierMap(items, rules.adDemandImpact);
+
     // Process each item
     const recommendations: SkuRecommendation[] = [];
 
@@ -592,6 +717,13 @@ export class InventoryDecisionEngine {
         velocity = qbVelocity * 0.8;
         usedQbFallback = true;
       }
+
+      // V1 Ad Demand Adjustment: Apply ad spend trend multiplier to velocity
+      // This adjusts velocity up/down based on recent ad spend changes
+      const adInfo = adMultiplierMap.get(item.sku);
+      const adMultiplier = adInfo?.multiplier ?? 1;
+      const baseVelocity = velocity;
+      velocity = velocity * adMultiplier;
 
       // Compute supplier metrics (for inbound POs and reliability)
       const supplierMetrics = this.computeSupplierMetrics(
@@ -681,6 +813,10 @@ export class InventoryDecisionEngine {
         supplierLeadTimeDays: supplierMetrics.effectiveLeadTime, // Alias for frontend
         backorderCount,
         reorderPoint: Math.round(reorderPoint),
+        // V1 Ad Demand Metrics
+        adDemandMultiplier: adMultiplier !== 1 ? adMultiplier : undefined,
+        adRecentSpend: adInfo?.recentSpend,
+        adPriorSpend: adInfo?.priorSpend,
       };
 
       // Generate explanation

@@ -225,15 +225,26 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         setLabelWidth(String(format.labelWidth));
         setLabelHeight(String(format.labelHeight));
         setLayoutType(format.layoutType as "thermal" | "sheet");
+        // Always update sheet fields from the saved format (use defaults for thermal)
         if (format.layoutType === "sheet") {
-          setColumns(String(format.columns || 1));
-          setRows(String(format.rows || 1));
-          setMarginTop(String(format.marginTop || 0));
-          setMarginLeft(String(format.marginLeft || 0));
-          setGapX(String(format.gapX || 0));
-          setGapY(String(format.gapY || 0));
-          setPageWidth(String(format.pageWidth || 8.5));
-          setPageHeight(String(format.pageHeight || 11));
+          setColumns(String(format.columns ?? 3));
+          setRows(String(format.rows ?? 10));
+          setMarginTop(String(format.marginTop ?? 0.5));
+          setMarginLeft(String(format.marginLeft ?? 0.19));
+          setGapX(String(format.gapX ?? 0.13));
+          setGapY(String(format.gapY ?? 0));
+          setPageWidth(String(format.pageWidth ?? 8.5));
+          setPageHeight(String(format.pageHeight ?? 11));
+        } else {
+          // Reset sheet options to defaults for thermal layouts
+          setColumns("3");
+          setRows("10");
+          setMarginTop("0.5");
+          setMarginLeft("0.19");
+          setGapX("0.13");
+          setGapY("0");
+          setPageWidth("8.5");
+          setPageHeight("11");
         }
       }
     }

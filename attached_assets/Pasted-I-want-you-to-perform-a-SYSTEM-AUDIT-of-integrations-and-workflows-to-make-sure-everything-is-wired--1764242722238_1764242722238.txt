@@ -1,0 +1,163 @@
+I want you to perform a SYSTEM AUDIT of integrations and workflows to make sure everything is wired correctly for the MVP. Do NOT add big new features. The goal is to verify and fix wiring, data flows, and workflows for the existing integrations and modules.
+
+INTEGRATION CONTRACT (what each system is supposed to do)
+
+Treat this as the “source of truth” for how integrations are supposed to behave:
+
+1) Extensiv / Pivot
+- Purpose: READ-ONLY inventory feed from the 3PL.
+- Role:
+  • Pull current stock levels from Extensiv/Pivot.
+  • Populate/refresh Pivot stock fields on the Products / BOM / Stock Inventory side (e.g., Pivot qty, part of “available for sale” logic).
+  • NO write-back to Extensiv from this app.
+- Key requirement: Extensiv must NEVER double-move inventory; it only informs what Pivot actually has on hand.
+
+2) Shopify
+- Purpose: Full sales-order integration for inventory management.
+- Role:
+  • Pull Shopify orders into our Sales Orders layer (or whatever internal abstraction we use).
+  • Ensure each Shopify order turns into exactly ONE inventory movement (stock-OUT) through our transaction system.
+  • Feed sales history to the InventoryDecisionEngine and SKU Recommendations.
+- Key requirement: No double counting. A sale from Shopify must not decrement inventory twice via overlapping paths.
+
+3) Amazon Seller Central
+- Purpose: Sales-order integration for inventory management, similar to Shopify.
+- Role:
+  • Pull Amazon orders into our Sales Orders layer (or equivalent).
+  • Ensure each Amazon order produces ONE inventory movement (stock-OUT) through the same transaction pipeline as Shopify.
+  • Feed sales history to InventoryDecisionEngine and SKU Recommendations.
+- Key requirement: Amazon orders must behave like Shopify orders in terms of inventory and AI logic, with no duplicate decrements.
+
+4) GoHighLevel (GHL)
+- Purpose: All communications with suppliers and team members.
+- Role:
+  • Handle outbound supplier communications (PO emails/SMS, dispute messages, key-rotation alerts, etc.).
+  • Handle internal team notifications (tasks, “ROTATE API KEYS” prompts, issues to review).
+  • Create contacts when needed (e.g., suppliers or internal recipients) and send messages based on our app’s triggers.
+- Key requirement: Our app decides WHEN to notify; GHL is the channel. There should be no stray or half-wired calls—every GHL call should be traceable to a clear workflow.
+
+5) QuickBooks
+- Purpose: Historical and financial insights for forecasting and reporting.
+- Role:
+  • Read historical sales data (by SKU, by month/season) for trend and seasonality analysis (Quickbooks snapshots).
+  • Optionally receive POs → Bills mapping if already implemented.
+  • NOT be used as a second inventory movement engine (inventory movements must still go through our own transaction system).
+- Key requirement: QuickBooks informs the AI and financial view; it should not conflict with our own stock transaction pipeline.
+
+6) Google Ads + Meta Ads
+- Purpose: Ad spend and performance signals for inventory decisions.
+- Role:
+  • Pull aggregated ad metrics (impressions, clicks, conversions, spend, revenue if available) at the SKU level.
+  • Provide “how much money is being spent at what closing rate and how many products is that” so the InventoryDecisionEngine can adjust velocity / demand (aiAdDemandImpact).
+  • No user-level/PII; only aggregated metrics wired into the ad demand multiplier and Insights.
+- Key requirement: Ads affect demand signals and recommendations, not stock movements directly.
+
+7) PhantomBuster
+- Purpose: Supplier discovery / enrichment only (for V1).
+- Role:
+  • Provide data for discovering/sourcing suppliers.
+  • Feed supplier discovery/creation UIs (e.g., in Suppliers → Discovery tab when we fully implement it).
+- Key requirement: For MVP, this can remain minimal/stubbed but must not break anything when configured.
+
+SYSTEM AUDIT OBJECTIVES
+
+Perform a focused wiring audit around these contracts, plus core workflows, without adding major new features:
+
+A) Integration wiring & data flow checks
+For EACH integration above:
+
+1) Inspect existing code:
+   - Find all modules/services where this integration is used.
+   - Identify:
+     • What triggers a call (cron, webhook, manual sync).
+     • What data is read/written.
+     • Where that data ends up (Products/BOM, Stock Inventory, Sales Orders, POs, AI logs, etc.).
+
+2) Compare implementation to the contract:
+   - Does Extensiv only read and update Pivot stock fields? Confirm it does NOT write back or double-move inventory.
+   - Do Shopify and Amazon:
+     • Always flow through a SINGLE “sales order → inventory transaction” path?
+     • Avoid duplicating stock movements if webhooks + manual sync both exist?
+   - Does GHL:
+     • Only trigger on defined workflows (PO creation, disputes, key rotation, etc.)?
+     • Avoid orphaned or unused calls?
+   - Does QuickBooks:
+     • Read data for snapshots/seasonality?
+     • Only receive POs → Bills where we explicitly configured it?
+   - Do Google/Meta:
+     • Only aggregate metrics into the ad metrics tables and ad demand logic?
+     • Never move stock directly or store PII?
+   - Does PhantomBuster:
+     • Only participate in supplier discovery?
+     • Stay safely stubbed where not fully implemented?
+
+3) Fix wiring issues:
+   - Remove or disable any duplicate or conflicting flows (e.g., two different places decrementing inventory for the same Shopify order).
+   - Standardize on the chosen sales pattern:
+     • Use whatever pattern is already implemented today (external-driven or internal Sales Orders) and make all integrations obey it.
+   - Make sure all inventory-affecting events, regardless of integration, go through the same transaction pipeline and show up in AI Logs.
+
+B) Workflow path checks (end-to-end)
+
+With test data, run these end-to-end checks:
+
+1) Extensiv → Inventory → AI
+   - Pull stock from Extensiv/Pivot.
+   - Confirm Products/BOM/Stock Inventory show correct Pivot qtys.
+   - Confirm InventoryDecisionEngine and SKU Recommendations are using those Pivot fields in “available for sale” calculations.
+
+2) Shopify/Amazon → Sales → Inventory → AI
+   - Pull at least one Shopify and one Amazon order for a test SKU.
+   - Verify:
+     • Exactly one inventory transaction per order.
+     • Pivot/AvailableForSale fields update correctly.
+     • AI Logs record the movement.
+     • SKU Recommendations reflect the reduced cover and, if appropriate, create NEW recommendations.
+
+3) Returns → Inventory → AI
+   - Use the existing Returns flow on those same SKUs.
+   - Verify:
+     • Inventory increases at the right location when the return is RECEIVED.
+     • AI Logs record the return movement.
+     • SKU Recommendations adjust (risk + recommended qty) afterward.
+
+4) POs + GHL communications
+   - Create a PO from SKU Recommendations and from Suppliers directly.
+   - Verify:
+     • PO is created correctly and linked to the SKU.
+     • Any configured GHL notifications (supplier email/SMS, key rotation alerts, disputes) actually fire and are logged.
+     • No duplicate messages are sent for a single event.
+
+5) QuickBooks trend usage
+   - Confirm the QuickBooks integration can pull and expose historical sales snapshots (as already implemented).
+   - Verify that the InventoryDecisionEngine can see and use that data in its logic (even if only as a simple seasonal/velocity check).
+   - Confirm QuickBooks does NOT introduce extra inventory movements.
+
+6) Ads demand usage
+   - For at least one test SKU, ensure ad metrics exist (mock/simulated if needed).
+   - Verify:
+     • Ad metrics are stored in the ad metrics table(s).
+     • The ad demand multiplier is applied for that SKU.
+     • SKU Recommendations show ad impact in the Insights/Recommendations view.
+     • AI Logs describe when an ad multiplier has been applied.
+
+C) Logging & diagnostics
+
+- Ensure every major integration event has:
+  • An Audit/AI Log entry with a clear source (EXTENSIV, SHOPIFY, AMAZON, QUICKBOOKS, GHL, META_ADS, GOOGLE_ADS, PHANTOMBUSTER).
+  • Enough metadata to trace what happened (sku, orderId/poId, qty, direction, etc.).
+- Fix or add missing logs where events currently happen silently.
+
+D) MVP + Debug boundaries
+
+- Keep this entire pass inside the existing MVP scope:
+  • NO new big features.
+  • NO new pages.
+  • Only wiring fixes, bug fixes, and consistency improvements.
+
+- If you find work that clearly belongs to V2 (for example, deeper PhantomBuster-powered supplier discovery UI or full ad dashboards), document it as a TODO with a clear comment, but DO NOT implement it now.
+
+At the end of this audit, the app should:
+- Have each integration behaving exactly as described in the integration contract above.
+- Have a single, reliable inventory movement pipeline feeding the AI.
+- Have logs that make it easy to debug and trust what the system is doing.

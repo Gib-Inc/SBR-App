@@ -401,6 +401,7 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
                       <Checkbox
                         checked={!!selected}
                         onCheckedChange={() => toggleItemSelection(item.id)}
+                        onClick={(e) => e.stopPropagation()}
                         data-testid={`checkbox-item-${item.id}`}
                       />
                       <div>

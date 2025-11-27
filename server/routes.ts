@@ -1000,6 +1000,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/integration-health/rotation - Get rotation metadata for all integrations
+  app.get("/api/integration-health/rotation", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { integrationHealthService } = await import('./services/integration-health-service');
+      const userId = (req as any).user?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "User not authenticated" });
+      }
+      
+      const rotationData = await integrationHealthService.getRotationMetadata(userId);
+      res.json(rotationData);
+    } catch (error: any) {
+      console.error("[IntegrationHealth] Error fetching rotation metadata:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch rotation metadata" });
+    }
+  });
+
+  // POST /api/integration-health/rotate - Trigger token rotation for an integration
+  app.post("/api/integration-health/rotate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { integrationHealthService } = await import('./services/integration-health-service');
+      const userId = (req as any).user?.id;
+      
+      if (!userId) {
+        return res.status(401).json({ error: "User not authenticated" });
+      }
+      
+      const { provider, configId } = req.body;
+      
+      if (!provider) {
+        return res.status(400).json({ error: "Provider is required" });
+      }
+      
+      const result = await integrationHealthService.recordRotation(userId, provider, configId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[IntegrationHealth] Error recording rotation:", error);
+      res.status(500).json({ error: error.message || "Failed to record rotation" });
+    }
+  });
+
   // ============================================================================
   // ITEMS
   // ============================================================================

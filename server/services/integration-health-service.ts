@@ -670,6 +670,275 @@ This is an automated alert from your Inventory Management System.
     
     return summary;
   }
+
+  /**
+   * Get rotation metadata for all integrations for display in per-integration health cards
+   */
+  async getRotationMetadata(userId: string): Promise<{
+    integrations: Array<{
+      provider: HealthCheckProvider;
+      configId?: string;
+      accountName?: string;
+      isConnected: boolean;
+      tokenLastRotatedAt?: Date | null;
+      tokenNextRotationAt?: Date | null;
+      status: HealthStatus;
+      daysUntilExpiry?: number;
+      message: string;
+    }>;
+  }> {
+    const integrations: Array<{
+      provider: HealthCheckProvider;
+      configId?: string;
+      accountName?: string;
+      isConnected: boolean;
+      tokenLastRotatedAt?: Date | null;
+      tokenNextRotationAt?: Date | null;
+      status: HealthStatus;
+      daysUntilExpiry?: number;
+      message: string;
+    }> = [];
+
+    // Get QuickBooks
+    const qbAuth = await storage.getQuickbooksAuth(userId);
+    if (qbAuth) {
+      let status: HealthStatus = 'UNKNOWN';
+      let daysUntilExpiry: number | undefined;
+      let message = 'Not connected';
+
+      if (qbAuth.isConnected && qbAuth.accessTokenExpiresAt) {
+        const msUntil = qbAuth.accessTokenExpiresAt.getTime() - Date.now();
+        daysUntilExpiry = Math.max(0, Math.floor(msUntil / (1000 * 60 * 60 * 24)));
+        if (daysUntilExpiry <= 0) {
+          status = 'EXPIRED';
+          message = 'Token expired - rotation required';
+        } else if (daysUntilExpiry < 7) {
+          status = 'CRITICAL';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        } else if (daysUntilExpiry < 14) {
+          status = 'WARNING';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        } else {
+          status = 'OK';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        }
+      }
+
+      integrations.push({
+        provider: 'QUICKBOOKS',
+        configId: qbAuth.id,
+        accountName: qbAuth.companyName || undefined,
+        isConnected: qbAuth.isConnected,
+        tokenLastRotatedAt: (qbAuth as any).tokenLastRotatedAt || null,
+        tokenNextRotationAt: (qbAuth as any).tokenNextRotationAt || null,
+        status,
+        daysUntilExpiry,
+        message,
+      });
+    }
+
+    // Get Ad Platforms (Meta, Google)
+    const adConfigs = await storage.getAllAdPlatformConfigs(userId);
+    for (const config of adConfigs) {
+      let status: HealthStatus = 'UNKNOWN';
+      let daysUntilExpiry: number | undefined;
+      let message = 'Not connected';
+
+      if (config.isConnected && config.accessTokenExpiresAt) {
+        const msUntil = config.accessTokenExpiresAt.getTime() - Date.now();
+        daysUntilExpiry = Math.max(0, Math.floor(msUntil / (1000 * 60 * 60 * 24)));
+        if (daysUntilExpiry <= 0) {
+          status = 'EXPIRED';
+          message = 'Token expired - rotation required';
+        } else if (daysUntilExpiry < 7) {
+          status = 'CRITICAL';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        } else if (daysUntilExpiry < 14) {
+          status = 'WARNING';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        } else {
+          status = 'OK';
+          message = `Token expires in ${daysUntilExpiry} days`;
+        }
+      } else if (config.isConnected) {
+        status = 'OK';
+        message = 'Connected';
+      }
+
+      const provider: HealthCheckProvider = config.platform === 'META' ? 'META_ADS' : 'GOOGLE_ADS';
+      integrations.push({
+        provider,
+        configId: config.id,
+        accountName: config.accountName || undefined,
+        isConnected: config.isConnected,
+        tokenLastRotatedAt: (config as any).tokenLastRotatedAt || null,
+        tokenNextRotationAt: (config as any).tokenNextRotationAt || null,
+        status,
+        daysUntilExpiry,
+        message,
+      });
+    }
+
+    // Get API Key-based integrations (Extensiv, Shopify, Amazon, GHL, PhantomBuster)
+    const integrationConfigs = await storage.getIntegrationConfigsByUserId(userId);
+    for (const config of integrationConfigs) {
+      let status: HealthStatus = config.isEnabled ? 'OK' : 'UNKNOWN';
+      let message = config.isEnabled ? 'Healthy' : 'Disabled';
+
+      if (config.consecutiveFailures && config.consecutiveFailures >= STATUS_THRESHOLDS.MAX_CONSECUTIVE_FAILURES) {
+        status = 'CRITICAL';
+        message = `${config.consecutiveFailures} consecutive failures`;
+      } else if (config.lastTokenCheckStatus) {
+        status = config.lastTokenCheckStatus as HealthStatus;
+        if (status === 'WARNING') {
+          message = 'Key rotation recommended';
+        }
+      }
+
+      integrations.push({
+        provider: config.provider as HealthCheckProvider,
+        configId: config.id,
+        accountName: config.accountName || undefined,
+        isConnected: config.isEnabled && !!config.apiKey,
+        tokenLastRotatedAt: (config as any).tokenLastRotatedAt || null,
+        tokenNextRotationAt: (config as any).tokenNextRotationAt || null,
+        status,
+        message,
+      });
+    }
+
+    return { integrations };
+  }
+
+  /**
+   * Record a token rotation event for an integration
+   * Updates timestamps, logs audit event, and optionally sends GHL alert
+   */
+  async recordRotation(
+    userId: string, 
+    provider: HealthCheckProvider, 
+    configId?: string
+  ): Promise<{ 
+    success: boolean; 
+    tokenLastRotatedAt: Date; 
+    tokenNextRotationAt: Date;
+    message: string;
+  }> {
+    const now = new Date();
+    const settings = await storage.getSettings(userId);
+    const rotationDays = (settings as any)?.aiTokenRotationDays || 90;
+    const nextRotationAt = new Date(now.getTime() + rotationDays * 24 * 60 * 60 * 1000);
+
+    // Update the appropriate table based on provider
+    if (provider === 'QUICKBOOKS') {
+      const qbAuth = await storage.getQuickbooksAuth(userId);
+      if (qbAuth) {
+        await storage.updateQuickbooksAuth(qbAuth.id, {
+          tokenLastRotatedAt: now,
+          tokenNextRotationAt: nextRotationAt,
+        } as any);
+      }
+    } else if (provider === 'META_ADS' || provider === 'GOOGLE_ADS') {
+      const platform = provider === 'META_ADS' ? 'META' : 'GOOGLE';
+      const config = await storage.getAdPlatformConfig(userId, platform);
+      if (config) {
+        await storage.updateAdPlatformConfig(config.id, {
+          tokenLastRotatedAt: now,
+          tokenNextRotationAt: nextRotationAt,
+        } as any);
+      }
+    } else {
+      // API key-based integrations
+      const configs = await storage.getIntegrationConfigsByUserId(userId);
+      const config = configs.find(c => c.provider === provider);
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          tokenLastRotatedAt: now,
+          tokenNextRotationAt: nextRotationAt,
+        } as any);
+      }
+    }
+
+    // Log audit event
+    await AuditLogger.logEvent({
+      source: provider as any,
+      eventType: 'INTEGRATION_TOKEN_ROTATION_REQUESTED',
+      status: 'INFO',
+      description: `Token rotation recorded for ${provider}`,
+      details: {
+        userId,
+        provider,
+        configId,
+        tokenLastRotatedAt: now.toISOString(),
+        tokenNextRotationAt: nextRotationAt.toISOString(),
+        rotationIntervalDays: rotationDays,
+      },
+    });
+
+    // Optionally send GHL alert
+    if (settings && (settings.alertAdminEmail || settings.alertAdminPhone)) {
+      try {
+        await this.sendRotationAlert(provider, settings);
+      } catch (error) {
+        console.warn('[IntegrationHealth] Failed to send rotation alert:', error);
+      }
+    }
+
+    return {
+      success: true,
+      tokenLastRotatedAt: now,
+      tokenNextRotationAt: nextRotationAt,
+      message: `Rotation recorded. Next rotation due in ${rotationDays} days.`,
+    };
+  }
+
+  /**
+   * Send rotation reminder alert via GoHighLevel
+   */
+  private async sendRotationAlert(
+    provider: HealthCheckProvider,
+    settings: Settings
+  ): Promise<void> {
+    const ghlApiKey = settings.gohighlevelApiKey;
+    const ghlLocationId = settings.gohighlevelLocationId;
+    const ghlBaseUrl = settings.gohighlevelBaseUrl || 'https://services.leadconnectorhq.com';
+
+    if (!ghlApiKey || !ghlLocationId) {
+      console.log('[IntegrationHealth] GoHighLevel not configured, skipping rotation alert');
+      return;
+    }
+
+    const { GoHighLevelClient } = await import('./gohighlevel-client');
+    const ghlClient = new GoHighLevelClient(ghlBaseUrl, ghlApiKey, ghlLocationId);
+
+    const subject = `TOKEN ROTATED – ${provider}`;
+    const body = `
+TOKEN ROTATION COMPLETED
+
+Provider: ${provider}
+Status: Rotation marked as complete
+Action: Update your API credentials in the corresponding integration settings
+
+Please ensure you have actually updated the credentials in the external system.
+
+---
+This is an automated alert from your Inventory Management System.
+`.trim();
+
+    // Send email if configured
+    if (settings.alertAdminEmail) {
+      try {
+        await ghlClient.sendEmail(
+          settings.alertAdminEmail,
+          subject,
+          body,
+          settings.alertAdminEmail.split('@')[0] || 'Admin'
+        );
+      } catch (error) {
+        console.error('[IntegrationHealth] Failed to send rotation email:', error);
+      }
+    }
+  }
 }
 
 export const integrationHealthService = new IntegrationHealthService();

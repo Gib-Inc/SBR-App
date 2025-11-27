@@ -85,7 +85,13 @@ Preferred communication style: Simple, everyday language.
     *   API key age tracking for non-expiring keys (warns after 90 days)
     *   Consecutive auth failure detection (CRITICAL after 3 failures)
     *   GoHighLevel SMS/email alerts when tokens approach expiry (24h throttle to prevent spam)
-    *   UI component on AI Agent → Data Sources tab showing all integration health status
+    *   **Per-Integration Card UI**: 2-column responsive grid showing each integration with:
+        *   Provider icon and name with status badge
+        *   Last rotation timestamp (when credentials were last changed)
+        *   Next rotation due date (configurable via aiTokenRotationDays setting, default 90 days)
+        *   "Rotate Now" button with confirmation dialog
+    *   Token rotation tracking via `tokenLastRotatedAt` and `tokenNextRotationAt` fields on integrationConfigs, quickbooksAuth, and adPlatformConfigs tables
+    *   Rotation events logged to audit trail with `INTEGRATION_TOKEN_ROTATION_REQUESTED` event type
     *   Audit trail logging for all health checks and rotation alerts
     *   Manual "Run Check" button for on-demand health verification
 

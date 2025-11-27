@@ -1,0 +1,53 @@
+I want to upgrade the Integration Health section on the AI Agent → Data Sources page into a per-integration token health panel.
+
+Scope:
+- Keep all existing integrations and business logic as-is (Extensiv/Pivot, Shopify, Amazon Seller Central, GoHighLevel, PhantomBuster, QuickBooks Online, Meta Ads, Google Ads).
+- This change is UI + light metadata only. Do NOT change how integrations sync data or call external APIs.
+
+Goals:
+- At the bottom of the AI Agent → Data Sources tab, replace the current single “Integration Health” block with a grid of HALF-WIDTH cards (2 columns on desktop, 1 column on mobile/tablet).
+- Each card represents one integration and shows:
+  - Provider name (GoHighLevel, Shopify, Extensiv/Pivot, Amazon Seller Central, QuickBooks Online, PhantomBuster, Meta Ads, Google Ads).
+  - “Last Rotation” date/time for that integration’s credentials/token.
+  - “Next Rotation Due” date (when I should rotate this key/token again).
+  - A “Rotate Now” button.
+
+Data & storage:
+- If we already have an IntegrationHealth service or equivalent, reuse it and extend it instead of inventing a new pattern.
+- Persist rotation metadata per integration in a simple way:
+  - Add fields to the existing integration/config schema (or a small companion table) such as:
+    - tokenLastRotatedAt (timestamp)
+    - tokenNextRotationAt (timestamp, nullable)
+  - When these fields are empty, display “Not set” in the UI.
+- Do NOT auto-rotate keys or revoke tokens in V1. Rotation is a tracked action + notification, not an automatic credential change.
+- When the user clicks “Rotate Now”:
+  1) Show a confirmation modal explaining that rotation is a manual security step (they will need to update credentials in the corresponding Configure modal or external system).
+  2) On confirm:
+     - Log an AuditLogger event like:
+       - source: the provider (GHL, SHOPIFY, EXTENSIV, AMAZON, QUICKBOOKS, PHANTOMBUSTER, META_ADS, GOOGLE_ADS)
+       - eventType: INTEGRATION_TOKEN_ROTATION_REQUESTED
+       - status: INFO
+     - Optionally trigger the existing Integration Health / GHL alert mechanism to send a reminder message in GoHighLevel (e.g. “Rotate API key for Shopify in Inventory Agent”).
+     - Update tokenLastRotatedAt to now() and tokenNextRotationAt based on a simple rule:
+       - If there is a global token rotation interval in Settings (e.g. aiTokenRotationDays), use that.
+       - Otherwise default to 90 days from now.
+- Make sure these rotation events also appear in AI Agent → Logs as SYSTEM/INTEGRATION events so the LLM can later audit them.
+
+UI details:
+- Use the existing card styling from the Data Sources grid (icon + title) but make these cards half-width and visually distinct as “Integration Health”.
+- For each card, show:
+  - Title: provider name.
+  - Subtitle/rows:
+    - “Last Rotation: <date or ‘Not set’>”
+    - “Next Due: <date or ‘Not set’>”
+  - Right-aligned “Rotate Now” button.
+- Keep the top “Integration Health” heading, and under it place this responsive grid of cards.
+- Ensure the layout doesn’t break the rest of the Data Sources page and respects existing spacing/margins.
+
+Finally:
+- Wire the new cards to the real data (tokenLastRotatedAt / tokenNextRotationAt) instead of hard-coded placeholders.
+- Confirm that:
+  - Clicking “Rotate Now” updates the DB fields.
+  - An audit log entry is created.
+  - The AI Agent → Logs tab shows these rotation events.
+- Summarize what you implemented and where in the code (components, services, schema changes) so I know how to maintain it.

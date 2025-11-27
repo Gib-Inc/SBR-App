@@ -336,6 +336,8 @@ export const settings = pgTable("settings", {
   // Integration Health & Key Rotation Alerts
   alertAdminEmail: text("alert_admin_email"), // Email for rotation alerts via GHL
   alertAdminPhone: text("alert_admin_phone"), // Phone for rotation alerts via GHL SMS
+  // Token rotation interval (default 90 days)
+  aiTokenRotationDays: integer("ai_token_rotation_days").notNull().default(90), // Days until next rotation reminder
 });
 
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
@@ -365,6 +367,9 @@ export const integrationConfigs = pgTable("integration_configs", {
   lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL
   lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
   consecutiveFailures: integer("consecutive_failures").default(0), // Track repeated auth errors
+  // Token Rotation Tracking (V1 UI-driven rotation reminders)
+  tokenLastRotatedAt: timestamp("token_last_rotated_at"), // When user last rotated credentials
+  tokenNextRotationAt: timestamp("token_next_rotation_at"), // When next rotation is due
 }, (table) => ({
   userProviderIdx: index("integration_configs_user_provider_idx").on(table.userId, table.provider),
 }));
@@ -981,6 +986,9 @@ export const quickbooksAuth = pgTable("quickbooks_auth", {
   lastTokenCheckAt: timestamp("last_token_check_at"),
   lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL, EXPIRED
   lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
+  // Token Rotation Tracking (V1 UI-driven rotation reminders)
+  tokenLastRotatedAt: timestamp("token_last_rotated_at"), // When user last rotated credentials
+  tokenNextRotationAt: timestamp("token_next_rotation_at"), // When next rotation is due
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -1092,6 +1100,9 @@ export const adPlatformConfigs = pgTable("ad_platform_configs", {
   lastTokenCheckAt: timestamp("last_token_check_at"),
   lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL, EXPIRED
   lastAlertSentAt: timestamp("last_alert_sent_at"), // For spam prevention (24h throttle)
+  // Token Rotation Tracking (V1 UI-driven rotation reminders)
+  tokenLastRotatedAt: timestamp("token_last_rotated_at"), // When user last rotated credentials
+  tokenNextRotationAt: timestamp("token_next_rotation_at"), // When next rotation is due
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({

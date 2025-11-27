@@ -12,11 +12,44 @@ export type AuditEventType =
   | 'RETURN_STATUS_CHANGED'
   | 'RETURN_LABEL_ISSUED'
   | 'INVENTORY_UPDATED'
+  | 'INVENTORY_TRANSFER'
+  | 'INVENTORY_ADJUST'
+  | 'INVENTORY_RECEIVE'
+  | 'INVENTORY_SHIP'
+  | 'INVENTORY_PRODUCE'
   | 'AI_DECISION'
   | 'AI_RISK_CALCULATED'
   | 'INTEGRATION_SYNC'
   | 'INTEGRATION_ERROR'
-  | 'ERROR';
+  | 'ERROR'
+  | 'ITEM_CREATED'
+  | 'ITEM_UPDATED'
+  | 'ITEM_DELETED'
+  | 'BARCODE_GENERATED'
+  | 'BARCODE_PRINTED'
+  | 'BOM_CREATED'
+  | 'BOM_UPDATED'
+  | 'BOM_DELETED'
+  | 'BOM_COMPONENT_ADDED'
+  | 'BOM_COMPONENT_REMOVED'
+  | 'SUPPLIER_CREATED'
+  | 'SUPPLIER_UPDATED'
+  | 'SUPPLIER_DELETED'
+  | 'SUPPLIER_ITEM_LINKED'
+  | 'SUPPLIER_ITEM_UNLINKED'
+  | 'SETTINGS_UPDATED'
+  | 'LLM_CONFIG_UPDATED'
+  | 'AI_RULES_UPDATED'
+  | 'INTEGRATION_CONFIG_UPDATED'
+  | 'USER_LOGIN'
+  | 'USER_LOGOUT'
+  | 'USER_REGISTERED'
+  | 'ORDER_STATUS_CHANGED'
+  | 'BACKORDER_CREATED'
+  | 'BACKORDER_FULFILLED'
+  | 'BIN_CREATED'
+  | 'BIN_UPDATED'
+  | 'BIN_DELETED';
 
 export type AuditEntityType = 
   | 'PURCHASE_ORDER'
@@ -24,7 +57,13 @@ export type AuditEntityType =
   | 'RETURN'
   | 'ITEM'
   | 'SUPPLIER'
-  | 'INTEGRATION';
+  | 'INTEGRATION'
+  | 'BARCODE'
+  | 'BOM'
+  | 'SETTINGS'
+  | 'USER'
+  | 'BIN'
+  | 'BACKORDER';
 
 export interface LogEventParams {
   source: AuditSource;
@@ -363,6 +402,787 @@ class AuditLoggerService {
       status: 'ERROR',
       description: params.error,
       details: params.context,
+    });
+  }
+
+  // ============================================================================
+  // ITEM/PRODUCT EVENTS
+  // ============================================================================
+
+  async logItemCreated(params: {
+    itemId: string;
+    sku: string;
+    name: string;
+    type: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'ITEM_CREATED',
+      entityType: 'ITEM',
+      entityId: params.itemId,
+      entityLabel: params.sku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `${params.type === 'finished_product' ? 'Product' : 'Component'} created: ${params.name} (${params.sku})`,
+      details: {
+        sku: params.sku,
+        name: params.name,
+        type: params.type,
+      },
+    });
+  }
+
+  async logItemUpdated(params: {
+    itemId: string;
+    sku: string;
+    name: string;
+    changes: Record<string, { from: unknown; to: unknown }>;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const changedFields = Object.keys(params.changes).join(', ');
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'ITEM_UPDATED',
+      entityType: 'ITEM',
+      entityId: params.itemId,
+      entityLabel: params.sku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `${params.name} (${params.sku}) updated: ${changedFields}`,
+      details: {
+        sku: params.sku,
+        name: params.name,
+        changes: params.changes,
+      },
+    });
+  }
+
+  async logItemDeleted(params: {
+    itemId: string;
+    sku: string;
+    name: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'ITEM_DELETED',
+      entityType: 'ITEM',
+      entityId: params.itemId,
+      entityLabel: params.sku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'WARNING',
+      description: `Item deleted: ${params.name} (${params.sku})`,
+      details: {
+        sku: params.sku,
+        name: params.name,
+      },
+    });
+  }
+
+  // ============================================================================
+  // BARCODE EVENTS
+  // ============================================================================
+
+  async logBarcodeGenerated(params: {
+    barcodeId: string;
+    itemId: string;
+    sku: string;
+    barcodeType: string;
+    barcodeValue: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BARCODE_GENERATED',
+      entityType: 'BARCODE',
+      entityId: params.barcodeId,
+      entityLabel: params.barcodeValue,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Barcode generated for ${params.sku}: ${params.barcodeValue} (${params.barcodeType})`,
+      details: {
+        itemId: params.itemId,
+        sku: params.sku,
+        barcodeType: params.barcodeType,
+        barcodeValue: params.barcodeValue,
+      },
+    });
+  }
+
+  async logBarcodePrinted(params: {
+    barcodeId: string;
+    itemId: string;
+    sku: string;
+    barcodeValue: string;
+    copies?: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BARCODE_PRINTED',
+      entityType: 'BARCODE',
+      entityId: params.barcodeId,
+      entityLabel: params.barcodeValue,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Barcode printed for ${params.sku}${params.copies ? ` (${params.copies} copies)` : ''}`,
+      details: {
+        itemId: params.itemId,
+        sku: params.sku,
+        barcodeValue: params.barcodeValue,
+        copies: params.copies,
+      },
+    });
+  }
+
+  // ============================================================================
+  // INVENTORY TRANSACTION EVENTS
+  // ============================================================================
+
+  async logInventoryTransaction(params: {
+    itemId: string;
+    sku: string;
+    productName: string;
+    transactionType: 'TRANSFER' | 'ADJUST' | 'RECEIVE' | 'SHIP' | 'PRODUCE';
+    quantity: number;
+    fromLocation?: string;
+    toLocation?: string;
+    notes?: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const eventTypeMap: Record<string, AuditEventType> = {
+      'TRANSFER': 'INVENTORY_TRANSFER',
+      'ADJUST': 'INVENTORY_ADJUST',
+      'RECEIVE': 'INVENTORY_RECEIVE',
+      'SHIP': 'INVENTORY_SHIP',
+      'PRODUCE': 'INVENTORY_PRODUCE',
+    };
+    
+    let description = '';
+    switch (params.transactionType) {
+      case 'TRANSFER':
+        description = `Transferred ${params.quantity} units of ${params.sku} from ${params.fromLocation} to ${params.toLocation}`;
+        break;
+      case 'ADJUST':
+        description = `Adjusted ${params.sku} by ${params.quantity >= 0 ? '+' : ''}${params.quantity} units${params.notes ? `: ${params.notes}` : ''}`;
+        break;
+      case 'RECEIVE':
+        description = `Received ${params.quantity} units of ${params.sku}${params.toLocation ? ` at ${params.toLocation}` : ''}`;
+        break;
+      case 'SHIP':
+        description = `Shipped ${params.quantity} units of ${params.sku}${params.fromLocation ? ` from ${params.fromLocation}` : ''}`;
+        break;
+      case 'PRODUCE':
+        description = `Produced ${params.quantity} units of ${params.sku}`;
+        break;
+    }
+
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: eventTypeMap[params.transactionType] || 'INVENTORY_UPDATED',
+      entityType: 'ITEM',
+      entityId: params.itemId,
+      entityLabel: params.sku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description,
+      details: {
+        sku: params.sku,
+        productName: params.productName,
+        transactionType: params.transactionType,
+        quantity: params.quantity,
+        fromLocation: params.fromLocation,
+        toLocation: params.toLocation,
+        notes: params.notes,
+      },
+    });
+  }
+
+  // ============================================================================
+  // BOM EVENTS
+  // ============================================================================
+
+  async logBOMCreated(params: {
+    bomId: string;
+    finishedProductId: string;
+    finishedProductSku: string;
+    finishedProductName: string;
+    componentCount: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BOM_CREATED',
+      entityType: 'BOM',
+      entityId: params.bomId,
+      entityLabel: params.finishedProductSku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Bill of Materials created for ${params.finishedProductName} with ${params.componentCount} components`,
+      details: {
+        finishedProductId: params.finishedProductId,
+        finishedProductSku: params.finishedProductSku,
+        finishedProductName: params.finishedProductName,
+        componentCount: params.componentCount,
+      },
+    });
+  }
+
+  async logBOMComponentAdded(params: {
+    bomId: string;
+    finishedProductSku: string;
+    componentId: string;
+    componentSku: string;
+    componentName: string;
+    quantity: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BOM_COMPONENT_ADDED',
+      entityType: 'BOM',
+      entityId: params.bomId,
+      entityLabel: params.finishedProductSku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Added ${params.quantity}x ${params.componentName} (${params.componentSku}) to BOM for ${params.finishedProductSku}`,
+      details: {
+        finishedProductSku: params.finishedProductSku,
+        componentId: params.componentId,
+        componentSku: params.componentSku,
+        componentName: params.componentName,
+        quantity: params.quantity,
+      },
+    });
+  }
+
+  async logBOMComponentRemoved(params: {
+    bomId: string;
+    finishedProductSku: string;
+    componentId: string;
+    componentSku: string;
+    componentName: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BOM_COMPONENT_REMOVED',
+      entityType: 'BOM',
+      entityId: params.bomId,
+      entityLabel: params.finishedProductSku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Removed ${params.componentName} (${params.componentSku}) from BOM for ${params.finishedProductSku}`,
+      details: {
+        finishedProductSku: params.finishedProductSku,
+        componentId: params.componentId,
+        componentSku: params.componentSku,
+        componentName: params.componentName,
+      },
+    });
+  }
+
+  // ============================================================================
+  // SUPPLIER EVENTS
+  // ============================================================================
+
+  async logSupplierCreated(params: {
+    supplierId: string;
+    supplierName: string;
+    email?: string;
+    phone?: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'SUPPLIER_CREATED',
+      entityType: 'SUPPLIER',
+      entityId: params.supplierId,
+      entityLabel: params.supplierName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Supplier created: ${params.supplierName}`,
+      supplierId: params.supplierId,
+      details: {
+        supplierName: params.supplierName,
+        email: params.email,
+        phone: params.phone,
+      },
+    });
+  }
+
+  async logSupplierUpdated(params: {
+    supplierId: string;
+    supplierName: string;
+    changes: Record<string, { from: unknown; to: unknown }>;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const changedFields = Object.keys(params.changes).join(', ');
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'SUPPLIER_UPDATED',
+      entityType: 'SUPPLIER',
+      entityId: params.supplierId,
+      entityLabel: params.supplierName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Supplier ${params.supplierName} updated: ${changedFields}`,
+      supplierId: params.supplierId,
+      details: {
+        supplierName: params.supplierName,
+        changes: params.changes,
+      },
+    });
+  }
+
+  async logSupplierDeleted(params: {
+    supplierId: string;
+    supplierName: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'SUPPLIER_DELETED',
+      entityType: 'SUPPLIER',
+      entityId: params.supplierId,
+      entityLabel: params.supplierName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'WARNING',
+      description: `Supplier deleted: ${params.supplierName}`,
+      supplierId: params.supplierId,
+      details: {
+        supplierName: params.supplierName,
+      },
+    });
+  }
+
+  async logSupplierItemLinked(params: {
+    supplierId: string;
+    supplierName: string;
+    itemId: string;
+    sku: string;
+    itemName: string;
+    unitCost?: number;
+    leadTimeDays?: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'SUPPLIER_ITEM_LINKED',
+      entityType: 'SUPPLIER',
+      entityId: params.supplierId,
+      entityLabel: params.supplierName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Linked ${params.itemName} (${params.sku}) to supplier ${params.supplierName}`,
+      supplierId: params.supplierId,
+      details: {
+        supplierName: params.supplierName,
+        itemId: params.itemId,
+        sku: params.sku,
+        itemName: params.itemName,
+        unitCost: params.unitCost,
+        leadTimeDays: params.leadTimeDays,
+      },
+    });
+  }
+
+  async logSupplierItemUnlinked(params: {
+    supplierId: string;
+    supplierName: string;
+    itemId: string;
+    sku: string;
+    itemName: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'SUPPLIER_ITEM_UNLINKED',
+      entityType: 'SUPPLIER',
+      entityId: params.supplierId,
+      entityLabel: params.supplierName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Unlinked ${params.itemName} (${params.sku}) from supplier ${params.supplierName}`,
+      supplierId: params.supplierId,
+      details: {
+        supplierName: params.supplierName,
+        itemId: params.itemId,
+        sku: params.sku,
+        itemName: params.itemName,
+      },
+    });
+  }
+
+  // ============================================================================
+  // SETTINGS EVENTS
+  // ============================================================================
+
+  async logSettingsUpdated(params: {
+    settingType: 'LLM_CONFIG' | 'AI_RULES' | 'INTEGRATION' | 'GENERAL';
+    settingName: string;
+    changes?: Record<string, { from: unknown; to: unknown }>;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const eventTypeMap: Record<string, AuditEventType> = {
+      'LLM_CONFIG': 'LLM_CONFIG_UPDATED',
+      'AI_RULES': 'AI_RULES_UPDATED',
+      'INTEGRATION': 'INTEGRATION_CONFIG_UPDATED',
+      'GENERAL': 'SETTINGS_UPDATED',
+    };
+    
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: eventTypeMap[params.settingType] || 'SETTINGS_UPDATED',
+      entityType: 'SETTINGS',
+      entityLabel: params.settingName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `${params.settingName} settings updated`,
+      details: {
+        settingType: params.settingType,
+        settingName: params.settingName,
+        changes: params.changes,
+      },
+    });
+  }
+
+  async logIntegrationConfigUpdated(params: {
+    integrationType: string;
+    integrationName: string;
+    configured: boolean;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'INTEGRATION_CONFIG_UPDATED',
+      entityType: 'INTEGRATION',
+      entityLabel: params.integrationName,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `${params.integrationName} integration ${params.configured ? 'configured' : 'disconnected'}`,
+      details: {
+        integrationType: params.integrationType,
+        integrationName: params.integrationName,
+        configured: params.configured,
+      },
+    });
+  }
+
+  // ============================================================================
+  // AUTH EVENTS
+  // ============================================================================
+
+  async logUserLogin(params: {
+    userId: string;
+    email: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'USER',
+      eventType: 'USER_LOGIN',
+      entityType: 'USER',
+      entityId: params.userId,
+      entityLabel: params.email,
+      performedByUserId: params.userId,
+      performedByName: params.email,
+      status: 'INFO',
+      description: `User logged in: ${params.email}`,
+      details: {
+        email: params.email,
+      },
+    });
+  }
+
+  async logUserLogout(params: {
+    userId: string;
+    email: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'USER',
+      eventType: 'USER_LOGOUT',
+      entityType: 'USER',
+      entityId: params.userId,
+      entityLabel: params.email,
+      performedByUserId: params.userId,
+      performedByName: params.email,
+      status: 'INFO',
+      description: `User logged out: ${params.email}`,
+      details: {
+        email: params.email,
+      },
+    });
+  }
+
+  async logUserRegistered(params: {
+    userId: string;
+    email: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'USER',
+      eventType: 'USER_REGISTERED',
+      entityType: 'USER',
+      entityId: params.userId,
+      entityLabel: params.email,
+      performedByUserId: params.userId,
+      performedByName: params.email,
+      status: 'INFO',
+      description: `New user registered: ${params.email}`,
+      details: {
+        email: params.email,
+      },
+    });
+  }
+
+  // ============================================================================
+  // ORDER EVENTS
+  // ============================================================================
+
+  async logOrderStatusChanged(params: {
+    orderId: string;
+    orderNumber: string;
+    oldStatus: string;
+    newStatus: string;
+    source?: AuditSource;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.source ?? (params.userId ? 'USER' : 'SYSTEM'),
+      eventType: 'ORDER_STATUS_CHANGED',
+      entityType: 'SALES_ORDER',
+      entityId: params.orderId,
+      entityLabel: params.orderNumber,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Order ${params.orderNumber} status changed from ${params.oldStatus} to ${params.newStatus}`,
+      details: {
+        orderNumber: params.orderNumber,
+        oldStatus: params.oldStatus,
+        newStatus: params.newStatus,
+      },
+    });
+  }
+
+  async logBackorderCreated(params: {
+    backorderId: string;
+    orderId: string;
+    orderNumber: string;
+    itemId: string;
+    sku: string;
+    quantity: number;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: 'SYSTEM',
+      eventType: 'BACKORDER_CREATED',
+      entityType: 'BACKORDER',
+      entityId: params.backorderId,
+      entityLabel: params.orderNumber,
+      status: 'WARNING',
+      description: `Backorder created for ${params.quantity}x ${params.sku} on order ${params.orderNumber}`,
+      details: {
+        orderId: params.orderId,
+        orderNumber: params.orderNumber,
+        itemId: params.itemId,
+        sku: params.sku,
+        quantity: params.quantity,
+      },
+    });
+  }
+
+  async logBackorderFulfilled(params: {
+    backorderId: string;
+    orderId: string;
+    orderNumber: string;
+    itemId: string;
+    sku: string;
+    quantity: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BACKORDER_FULFILLED',
+      entityType: 'BACKORDER',
+      entityId: params.backorderId,
+      entityLabel: params.orderNumber,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Backorder fulfilled: ${params.quantity}x ${params.sku} for order ${params.orderNumber}`,
+      details: {
+        orderId: params.orderId,
+        orderNumber: params.orderNumber,
+        itemId: params.itemId,
+        sku: params.sku,
+        quantity: params.quantity,
+      },
+    });
+  }
+
+  // ============================================================================
+  // BIN EVENTS
+  // ============================================================================
+
+  async logBinCreated(params: {
+    binId: string;
+    binCode: string;
+    location?: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BIN_CREATED',
+      entityType: 'BIN',
+      entityId: params.binId,
+      entityLabel: params.binCode,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Bin created: ${params.binCode}${params.location ? ` at ${params.location}` : ''}`,
+      details: {
+        binCode: params.binCode,
+        location: params.location,
+      },
+    });
+  }
+
+  async logBinUpdated(params: {
+    binId: string;
+    binCode: string;
+    changes: Record<string, { from: unknown; to: unknown }>;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const changedFields = Object.keys(params.changes).join(', ');
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BIN_UPDATED',
+      entityType: 'BIN',
+      entityId: params.binId,
+      entityLabel: params.binCode,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `Bin ${params.binCode} updated: ${changedFields}`,
+      details: {
+        binCode: params.binCode,
+        changes: params.changes,
+      },
+    });
+  }
+
+  async logBinDeleted(params: {
+    binId: string;
+    binCode: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BIN_DELETED',
+      entityType: 'BIN',
+      entityId: params.binId,
+      entityLabel: params.binCode,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'WARNING',
+      description: `Bin deleted: ${params.binCode}`,
+      details: {
+        binCode: params.binCode,
+      },
+    });
+  }
+
+  // ============================================================================
+  // BOM UPDATE EVENT (simplified for bulk saves)
+  // ============================================================================
+
+  async logBOMUpdated(params: {
+    productId: string;
+    productName: string;
+    productSku: string;
+    componentsCount: number;
+    previousComponentsCount: number;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'BOM_UPDATED',
+      entityType: 'BOM',
+      entityId: params.productId,
+      entityLabel: params.productSku,
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `BOM updated for ${params.productName} (${params.productSku}): ${params.previousComponentsCount} -> ${params.componentsCount} components`,
+      details: {
+        productId: params.productId,
+        productName: params.productName,
+        productSku: params.productSku,
+        componentsCount: params.componentsCount,
+        previousComponentsCount: params.previousComponentsCount,
+      },
+    });
+  }
+
+  // ============================================================================
+  // AI RULES UPDATE EVENT
+  // ============================================================================
+
+  async logAIRulesUpdated(params: {
+    changes: Record<string, { from: unknown; to: unknown }>;
+    userId?: string;
+    userName?: string;
+  }): Promise<AuditLog> {
+    const changedFields = Object.keys(params.changes).join(', ');
+    return this.logEvent({
+      source: params.userId ? 'USER' : 'SYSTEM',
+      eventType: 'AI_RULES_UPDATED',
+      entityType: 'SETTINGS',
+      entityLabel: 'AI Decision Rules',
+      performedByUserId: params.userId,
+      performedByName: params.userName,
+      status: 'INFO',
+      description: `AI decision rules updated: ${changedFields}`,
+      details: {
+        changes: params.changes,
+      },
     });
   }
 }

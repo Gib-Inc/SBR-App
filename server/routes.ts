@@ -92,6 +92,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auto-login after registration
       req.session.userId = user.id;
 
+      // Log user registration
+      try {
+        await AuditLogger.logUserRegistered({
+          userId: user.id,
+          email: user.email,
+        });
+      } catch (logError) {
+        console.warn('[Auth] Failed to log user registration:', logError);
+      }
+
       // Don't send password back
       const { password: _, ...userWithoutPassword } = user;
       
@@ -125,6 +135,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Set session
       req.session.userId = user.id;
 
+      // Log user login
+      try {
+        await AuditLogger.logUserLogin({
+          userId: user.id,
+          email: user.email,
+        });
+      } catch (logError) {
+        console.warn('[Auth] Failed to log user login:', logError);
+      }
+
       // Don't send password back
       const { password: _, ...userWithoutPassword } = user;
       
@@ -155,11 +175,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     try {
-      req.session.destroy((err) => {
+      const userId = req.session.userId;
+      
+      // Get user email before destroying session
+      let userEmail = '';
+      if (userId) {
+        const user = await storage.getUser(userId);
+        userEmail = user?.email || '';
+      }
+      
+      req.session.destroy(async (err) => {
         if (err) {
           console.error("Error destroying session:", err);
           return res.status(500).json({ error: "Failed to logout" });
         }
+        
+        // Log user logout
+        if (userId) {
+          try {
+            await AuditLogger.logUserLogout({
+              userId,
+              email: userEmail,
+            });
+          } catch (logError) {
+            console.warn('[Auth] Failed to log user logout:', logError);
+          }
+        }
+        
         res.json({ message: "Logged out successfully" });
       });
     } catch (error) {
@@ -435,8 +477,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         settingsUpdate.aiMinOrderQuantity = validated.minOrderQuantity;
       }
       
+      // Get existing settings for logging comparison
+      const existingSettings = await storage.getSettings(userId);
+      
       // Update settings
       const updated = await storage.updateSettings(userId, settingsUpdate);
+      
+      // Log AI rules update
+      try {
+        const user = await storage.getUser(userId);
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        Object.keys(settingsUpdate).forEach(key => {
+          if (existingSettings && (existingSettings as any)[key] !== (settingsUpdate as any)[key]) {
+            changes[key] = { from: (existingSettings as any)[key], to: (settingsUpdate as any)[key] };
+          }
+        });
+        if (Object.keys(changes).length > 0) {
+          await AuditLogger.logAIRulesUpdated({
+            changes,
+            userId,
+            userName: user?.email,
+          });
+        }
+      } catch (logError) {
+        console.warn('[AI Rules] Failed to log AI rules update:', logError);
+      }
       
       // Clear the decision engine cache so next request uses new rules
       decisionEngine.clearCache();
@@ -666,6 +731,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create the item
       const item = await storage.createItem(validated);
       
+      // Log item creation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logItemCreated({
+          itemId: item.id,
+          sku: item.sku,
+          name: item.name,
+          type: item.type,
+          userId: req.session.userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Items] Failed to log item creation:', logError);
+      }
+      
       // For finished products with initial stock, create RECEIVE transactions
       if (validated.type === 'finished_product') {
         const userId = req.session.userId || "system";
@@ -802,10 +882,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      // Get item info before deleting for logging
+      const item = await storage.getItem(req.params.id);
+      
       const success = await storage.deleteItem(req.params.id);
       if (!success) {
         return res.status(404).json({ error: "Item not found" });
       }
+      
+      // Log item deletion
+      if (item) {
+        try {
+          const user = await storage.getUser(req.session.userId!);
+          await AuditLogger.logItemDeleted({
+            itemId: req.params.id,
+            sku: item.sku,
+            name: item.name,
+            userId: req.session.userId,
+            userName: user?.email,
+          });
+        } catch (logError) {
+          console.warn('[Items] Failed to log item deletion:', logError);
+        }
+      }
+      
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete item" });
@@ -1024,6 +1124,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const barcode = await storage.createBarcode(validated);
+      
+      // Log barcode generation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        let sku = '';
+        if (barcode.referenceId) {
+          const item = await storage.getItem(barcode.referenceId);
+          sku = item?.sku || '';
+        }
+        await AuditLogger.logBarcodeGenerated({
+          barcodeId: barcode.id,
+          itemId: barcode.referenceId || '',
+          sku,
+          barcodeType: barcode.purpose,
+          barcodeValue: barcode.value,
+          userId: req.session.userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Barcodes] Failed to log barcode generation:', logError);
+      }
+      
       res.status(201).json(barcode);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid barcode data" });
@@ -1121,6 +1243,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validated = insertSupplierSchema.parse(req.body);
       const supplier = await storage.createSupplier(validated);
+      
+      // Log supplier creation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logSupplierCreated({
+          supplierId: supplier.id,
+          supplierName: supplier.name,
+          email: supplier.email ?? undefined,
+          phone: supplier.phone ?? undefined,
+          userId: req.session.userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Suppliers] Failed to log supplier creation:', logError);
+      }
+      
       res.status(201).json(supplier);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid supplier data" });
@@ -1130,10 +1268,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/suppliers/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateSupplierSchema.parse(req.body);
+      const existingSupplier = await storage.getSupplier(req.params.id);
       const supplier = await storage.updateSupplier(req.params.id, validated);
       if (!supplier) {
         return res.status(404).json({ error: "Supplier not found" });
       }
+      
+      // Log supplier update
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        if (existingSupplier) {
+          Object.keys(validated).forEach(key => {
+            if ((existingSupplier as any)[key] !== (validated as any)[key]) {
+              changes[key] = { from: (existingSupplier as any)[key], to: (validated as any)[key] };
+            }
+          });
+        }
+        if (Object.keys(changes).length > 0) {
+          await AuditLogger.logSupplierUpdated({
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            changes,
+            userId: req.session.userId,
+            userName: user?.email,
+          });
+        }
+      } catch (logError) {
+        console.warn('[Suppliers] Failed to log supplier update:', logError);
+      }
+      
       res.json(supplier);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Failed to update supplier" });
@@ -1142,10 +1306,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/suppliers/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      // Get supplier info before deleting for logging
+      const supplier = await storage.getSupplier(req.params.id);
+      
       const success = await storage.deleteSupplier(req.params.id);
       if (!success) {
         return res.status(404).json({ error: "Supplier not found" });
       }
+      
+      // Log supplier deletion
+      if (supplier) {
+        try {
+          const user = await storage.getUser(req.session.userId!);
+          await AuditLogger.logSupplierDeleted({
+            supplierId: req.params.id,
+            supplierName: supplier.name,
+            userId: req.session.userId,
+            userName: user?.email,
+          });
+        } catch (logError) {
+          console.warn('[Suppliers] Failed to log supplier deletion:', logError);
+        }
+      }
+      
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete supplier" });
@@ -1166,6 +1349,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validated = insertSupplierItemSchema.parse(req.body);
       const supplierItem = await storage.createSupplierItem(validated);
+      
+      // Log supplier item linking
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        const supplier = await storage.getSupplier(validated.supplierId);
+        const item = await storage.getItem(validated.itemId);
+        if (supplier && item) {
+          await AuditLogger.logSupplierItemLinked({
+            supplierId: validated.supplierId,
+            supplierName: supplier.name,
+            itemId: validated.itemId,
+            sku: item.sku,
+            itemName: item.name,
+            unitCost: validated.unitCost ?? undefined,
+            leadTimeDays: validated.leadTimeDays ?? undefined,
+            userId: req.session.userId,
+            userName: user?.email,
+          });
+        }
+      } catch (logError) {
+        console.warn('[SupplierItems] Failed to log supplier item linking:', logError);
+      }
+      
       res.status(201).json(supplierItem);
     } catch (error: any) {
       res.status(400).json({ error: error.message || "Invalid supplier item data" });
@@ -1187,10 +1393,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.delete("/api/supplier-items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      // Get supplier item info before deleting for logging
+      const supplierItems = await storage.getAllSupplierItems();
+      const supplierItem = supplierItems.find(si => si.id === req.params.id);
+      
       const success = await storage.deleteSupplierItem(req.params.id);
       if (!success) {
         return res.status(404).json({ error: "Supplier item not found" });
       }
+      
+      // Log supplier item unlinking
+      if (supplierItem) {
+        try {
+          const user = await storage.getUser(req.session.userId!);
+          const supplier = await storage.getSupplier(supplierItem.supplierId);
+          const item = await storage.getItem(supplierItem.itemId);
+          if (supplier && item) {
+            await AuditLogger.logSupplierItemUnlinked({
+              supplierId: supplierItem.supplierId,
+              supplierName: supplier.name,
+              itemId: supplierItem.itemId,
+              sku: item.sku,
+              itemName: item.name,
+              userId: req.session.userId,
+              userName: user?.email,
+            });
+          }
+        } catch (logError) {
+          console.warn('[SupplierItems] Failed to log supplier item unlinking:', logError);
+        }
+      }
+      
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete supplier item" });
@@ -1235,6 +1468,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Components must be an array" });
       }
 
+      // Get the product for logging
+      const product = await storage.getItem(req.params.itemId);
+
       // Delete existing BOM entries for this product
       const existingBOM = await storage.getBillOfMaterialsByProductId(req.params.itemId);
       for (const entry of existingBOM) {
@@ -1253,6 +1489,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
           quantityRequired: component.quantity,
         });
         newBOM.push(entry);
+      }
+
+      // Log BOM update
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logBOMUpdated({
+          productId: req.params.itemId,
+          productName: product?.name || '',
+          productSku: product?.sku || '',
+          componentsCount: newBOM.length,
+          previousComponentsCount: existingBOM.length,
+          userId: req.session.userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[BOM] Failed to log BOM update:', logError);
       }
 
       res.json(newBOM);
@@ -1328,6 +1580,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!updated) {
         return res.status(500).json({ error: "Failed to update settings" });
+      }
+      
+      // Log settings update
+      try {
+        const user = await storage.getUser(userId);
+        // Build changes object - compare with existing settings
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        Object.keys(normalized).forEach(key => {
+          if (existing && (existing as any)[key] !== (normalized as any)[key]) {
+            // Mask API keys in logs
+            const isApiKey = key.toLowerCase().includes('apikey') || key.toLowerCase().includes('api_key');
+            changes[key] = { 
+              from: isApiKey ? '****' : (existing as any)[key], 
+              to: isApiKey ? '****' : (normalized as any)[key] 
+            };
+          }
+        });
+        if (Object.keys(changes).length > 0) {
+          // Determine setting type based on what was updated
+          let settingType: 'LLM_CONFIG' | 'AI_RULES' | 'INTEGRATION' | 'GENERAL' = 'GENERAL';
+          const llmFields = ['llmProvider', 'llmApiKey', 'llmModel', 'llmCustomEndpoint', 'llmPromptTemplate', 'enableLlmOrderRecommendations', 'enableLlmSupplierRanking', 'enableLlmForecasting'];
+          const integrationFields = ['gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 'phantombusterApiKey'];
+          if (Object.keys(normalized).some(k => llmFields.includes(k))) {
+            settingType = 'LLM_CONFIG';
+          } else if (Object.keys(normalized).some(k => integrationFields.includes(k))) {
+            settingType = 'INTEGRATION';
+          }
+          
+          await AuditLogger.logSettingsUpdated({
+            settingType,
+            settingName: Object.keys(normalized).join(', '),
+            changes,
+            userId,
+            userName: user?.email,
+          });
+        }
+      } catch (logError) {
+        console.warn('[Settings] Failed to log settings update:', logError);
       }
       
       // Update integration health status to "pending_test" when API keys are changed
@@ -1430,6 +1720,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         config: config || null,
       });
 
+      // Log integration config creation
+      try {
+        const user = await storage.getUser(userId);
+        await AuditLogger.logIntegrationConfigUpdated({
+          integrationType: provider.toUpperCase(),
+          integrationName: accountName || provider.toUpperCase(),
+          configured: true,
+          userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[IntegrationConfig] Failed to log config creation:', logError);
+      }
+
       res.status(201).json(newConfig);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to create integration config" });
@@ -1439,11 +1743,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update integration config
   app.patch("/api/integration-configs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const userId = req.session.userId!;
       const updates = req.body;
+      const existingConfig = await storage.getIntegrationConfigById(req.params.id);
       const updated = await storage.updateIntegrationConfig(req.params.id, updates);
 
       if (!updated) {
         return res.status(404).json({ error: "Integration config not found" });
+      }
+
+      // Log integration config update
+      try {
+        const user = await storage.getUser(userId);
+        await AuditLogger.logIntegrationConfigUpdated({
+          integrationType: updated.provider,
+          integrationName: updated.accountName || updated.provider,
+          configured: updated.isEnabled,
+          userId,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[IntegrationConfig] Failed to log config update:', logError);
       }
 
       res.json(updated);
@@ -1455,10 +1775,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete integration config
   app.delete("/api/integration-configs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
+      const userId = req.session.userId!;
+      // Get config info before deleting for logging
+      const config = await storage.getIntegrationConfigById(req.params.id);
+      
       const success = await storage.deleteIntegrationConfig(req.params.id);
       if (!success) {
         return res.status(404).json({ error: "Integration config not found" });
       }
+      
+      // Log integration config deletion
+      if (config) {
+        try {
+          const user = await storage.getUser(userId);
+          await AuditLogger.logIntegrationConfigUpdated({
+            integrationType: config.provider,
+            integrationName: config.accountName || config.provider,
+            configured: false,
+            userId,
+            userName: user?.email,
+          });
+        } catch (logError) {
+          console.warn('[IntegrationConfig] Failed to log config deletion:', logError);
+        }
+      }
+      
       res.status(204).send();
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to delete integration config" });

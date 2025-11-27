@@ -1,0 +1,64 @@
+Now I want you to CLOSE the inventory transaction loop and make sure the AI risk/insight layer is reading from a single, accurate inventory state for each SKU.
+
+Do NOT redesign the app or add new pages. Work with the existing models and UI (BOM, Suppliers/POs, Sales Orders, Returns, AI Agent). The goal is: when stock moves anywhere in the system, the numbers stay correct and the AI uses those same numbers.
+
+1. Audit and summarize current behavior
+- Inspect the existing code and tell me, in your own summary, how inventory quantities are currently stored and updated:
+  - Where is “true” inventory tracked (e.g., products / stock components table, fields like onHand, allocated, backordered, onOrder, etc.)?
+  - What currently happens to inventory when:
+    - A Sales Order is created / fulfilled / cancelled.
+    - A Purchase Order is received.
+    - A Return is created / received.
+- Identify any gaps or double-counting risks you see.
+
+2. Centralize inventory movements behind a helper
+- Implement a single server-side helper (for example: `InventoryMovement.apply({ eventType, skuId, quantity, source, orderId?, returnId?, poId? })`).
+- Supported event types for V1:
+  - `SALES_ORDER_CREATED`
+  - `SALES_ORDER_FULFILLED`
+  - `SALES_ORDER_CANCELLED`
+  - `PURCHASE_ORDER_RECEIVED`
+  - `RETURN_RECEIVED`
+  - (Optionally) `MANUAL_ADJUSTMENT`
+- This helper should:
+  - Run inside a database transaction.
+  - Update the correct fields on the product/stock record (onHand, allocated, backordered, onOrder, etc.) according to the event type.
+  - Call the AuditLogger you just built to insert an AI Log entry for each movement (source, eventType, entityType, entityId, description, metadata with before/after quantities).
+
+3. Wire key flows into the helper
+Update existing flows to use the new helper instead of updating inventory ad-hoc:
+  - Sales Orders:
+    - When a new sales order is created, adjust allocated/backordered as appropriate.
+    - When items are shipped/marked fulfilled, decrease onHand and allocated, and decrease backordered if applicable.
+    - When an order is cancelled, reverse any allocations/backorders.
+  - Purchase Orders:
+    - When a PO is received (or line items are received), call `PURCHASE_ORDER_RECEIVED` to increase onHand and decrease onOrder.
+  - Returns:
+    - When a return is marked as received, increase onHand for the returned items (finished goods), respecting the resolution (refund vs replacement) if needed.
+  - Make sure all of these movements generate AI Log entries.
+
+4. Backorders and auto-fulfill behavior (simple V1 rules)
+- Implement minimal but correct backorder handling:
+  - When a PO receipt or return increases onHand for a SKU that has backordered quantities, attempt to fulfill backordered items in FIFO order.
+  - Update the related Sales Orders’ line-item status (`BACKORDERED` → `OPEN`/`FULFILLED` where appropriate) and quantities.
+  - Log these events as `BACKORDER_FULFILLED` in the AuditLog with details of which orders were cleared.
+
+5. Align AI Insights & risk calculations with the new state
+- Make AI risk scores, “Days Until Stockout,” and SKU recommendations in the AI Agent Insights tab read from the single, authoritative inventory state (onHand, onOrder, committed/backordered, recent sales velocity).
+- Do NOT introduce new risk models; simply ensure the existing Insights and “Top At Risk Items” are powered by the updated inventory numbers.
+- If there are any duplicated or stale calculations, remove or refactor them to use the centralized inventory fields instead.
+
+6. Verification / test pass (important)
+- Seed or update demo data so we can test this end-to-end:
+  - A few products with current stock and open POs.
+  - Sales orders that create backorders.
+  - Returns that send items back into stock.
+- Walk through and verify:
+  - Sales orders change inventory correctly.
+  - PO receipts increase stock and clear backorders.
+  - Returns received increase stock.
+  - The AI Logs tab shows all these movements.
+  - The Dashboard and AI Agent Insights reflect the correct onHand and risk levels.
+- Fix any inconsistencies you find in this pass, without expanding scope.
+
+Keep the implementation tight and V1-safe. No new complex features; just make sure inventory, backorders, and AI insights are all reading from the same, correct numbers and are fully logged.

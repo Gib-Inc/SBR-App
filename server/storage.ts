@@ -145,6 +145,7 @@ export interface IStorage {
   // Integration Configs
   getAllIntegrationConfigs(userId: string): Promise<IntegrationConfig[]>;
   getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined>;
+  getIntegrationConfigById(id: string): Promise<IntegrationConfig | undefined>;
   createIntegrationConfig(config: InsertIntegrationConfig): Promise<IntegrationConfig>;
   updateIntegrationConfig(id: string, config: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
   deleteIntegrationConfig(id: string): Promise<boolean>;
@@ -1101,6 +1102,10 @@ export class MemStorage implements IStorage {
 
   async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
     return Array.from(this.integrationConfigs.values()).find((c) => c.userId === userId && c.provider === provider);
+  }
+
+  async getIntegrationConfigById(id: string): Promise<IntegrationConfig | undefined> {
+    return this.integrationConfigs.get(id);
   }
 
   async createIntegrationConfig(insertConfig: InsertIntegrationConfig): Promise<IntegrationConfig> {
@@ -2555,6 +2560,12 @@ export class PostgresStorage implements IStorage {
   async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
     const results = await this.db.select().from(schema.integrationConfigs)
       .where(and(eq(schema.integrationConfigs.userId, userId), eq(schema.integrationConfigs.provider, provider)));
+    return results[0];
+  }
+
+  async getIntegrationConfigById(id: string): Promise<IntegrationConfig | undefined> {
+    const results = await this.db.select().from(schema.integrationConfigs)
+      .where(eq(schema.integrationConfigs.id, id));
     return results[0];
   }
 

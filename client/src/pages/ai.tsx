@@ -668,18 +668,23 @@ function RulesTab() {
     }
   }, [settingsData]);
   
-  // Save mutation for rules
+  // Save mutation for rules (also saves AI features)
   const saveMutation = useMutation({
-    mutationFn: async (updates: Partial<AIRules>) => {
-      return await apiRequest("PATCH", "/api/ai/rules", updates);
+    mutationFn: async (data: { rules: Partial<AIRules>; features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean } }) => {
+      // Save both rules and features in parallel
+      await Promise.all([
+        apiRequest("PATCH", "/api/ai/rules", data.rules),
+        apiRequest("PATCH", "/api/settings", data.features),
+      ]);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/rules"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/insights"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/at-risk"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       toast({
         title: "Rules Updated",
-        description: "AI decision rules have been saved. Recommendations will be recalculated.",
+        description: "AI decision rules and features have been saved.",
       });
     },
     onError: (error: any) => {
@@ -691,44 +696,16 @@ function RulesTab() {
     },
   });
   
-  // Save mutation for LLM features
-  const saveFeaturesMutation = useMutation({
-    mutationFn: async (updates: { enableLlmOrderRecommendations?: boolean; enableLlmSupplierRanking?: boolean; enableLlmForecasting?: boolean; enableVisionCapture?: boolean }) => {
-      return await apiRequest("PATCH", "/api/settings", updates);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({
-        title: "Features Updated",
-        description: "AI features have been saved.",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Save Failed",
-        description: error.message || "Failed to save AI features",
-        variant: "destructive",
-      });
-    },
-  });
-  
   const handleSave = () => {
-    saveMutation.mutate(formValues);
-  };
-  
-  const handleFeatureToggle = (feature: 'orderRecommendations' | 'supplierRanking' | 'forecasting' | 'visionCapture', value: boolean) => {
-    if (feature === 'orderRecommendations') setEnableOrderRecommendations(value);
-    if (feature === 'supplierRanking') setEnableSupplierRanking(value);
-    if (feature === 'forecasting') setEnableForecasting(value);
-    if (feature === 'visionCapture') setEnableVisionCapture(value);
-    
-    const updates: Record<string, boolean> = {};
-    if (feature === 'orderRecommendations') updates.enableLlmOrderRecommendations = value;
-    else if (feature === 'supplierRanking') updates.enableLlmSupplierRanking = value;
-    else if (feature === 'forecasting') updates.enableLlmForecasting = value;
-    else if (feature === 'visionCapture') updates.enableVisionCapture = value;
-    
-    saveFeaturesMutation.mutate(updates);
+    saveMutation.mutate({
+      rules: formValues,
+      features: {
+        enableLlmOrderRecommendations: enableOrderRecommendations,
+        enableLlmSupplierRanking: enableSupplierRanking,
+        enableLlmForecasting: enableForecasting,
+        enableVisionCapture: enableVisionCapture,
+      },
+    });
   };
   
   if (isLoading) {
@@ -900,6 +877,75 @@ function RulesTab() {
             </div>
           </div>
           
+          {/* AI Features */}
+          <div className="space-y-4">
+            <h3 className="font-semibold flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              AI Features
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
+                  <Switch
+                    id="enable-order-recommendations"
+                    checked={enableOrderRecommendations}
+                    onCheckedChange={setEnableOrderRecommendations}
+                    data-testid="switch-order-recommendations"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  AI suggests optimal reorder quantities and timing
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="enable-supplier-ranking">Supplier Ranking</Label>
+                  <Switch
+                    id="enable-supplier-ranking"
+                    checked={enableSupplierRanking}
+                    onCheckedChange={setEnableSupplierRanking}
+                    data-testid="switch-supplier-ranking"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  AI ranks suppliers by price, lead time, and reliability
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
+                  <Switch
+                    id="enable-forecasting"
+                    checked={enableForecasting}
+                    onCheckedChange={setEnableForecasting}
+                    data-testid="switch-forecasting"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  AI predicts future demand based on historical data
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="enable-vision-capture">Vision Capture</Label>
+                  <Switch
+                    id="enable-vision-capture"
+                    checked={enableVisionCapture}
+                    onCheckedChange={setEnableVisionCapture}
+                    data-testid="switch-vision-capture"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Use camera to identify inventory items with AI vision
+                </p>
+              </div>
+            </div>
+          </div>
+          
           {/* Supplier & Lead Time */}
           <div className="space-y-4">
             <h3 className="font-semibold flex items-center gap-2">
@@ -976,69 +1022,6 @@ function RulesTab() {
             {saveMutation.isPending ? "Saving..." : "Save Rules"}
           </Button>
         </CardFooter>
-      </Card>
-      
-      {/* LLM Features - Simple Toggles */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
-                <p className="text-sm text-muted-foreground">AI suggests optimal reorder quantities and timing</p>
-              </div>
-              <Switch
-                id="enable-order-recommendations"
-                checked={enableOrderRecommendations}
-                onCheckedChange={(checked) => handleFeatureToggle('orderRecommendations', checked)}
-                disabled={saveFeaturesMutation.isPending}
-                data-testid="switch-order-recommendations"
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="enable-supplier-ranking">Supplier Ranking</Label>
-                <p className="text-sm text-muted-foreground">AI ranks suppliers based on price, lead time, and reliability</p>
-              </div>
-              <Switch
-                id="enable-supplier-ranking"
-                checked={enableSupplierRanking}
-                onCheckedChange={(checked) => handleFeatureToggle('supplierRanking', checked)}
-                disabled={saveFeaturesMutation.isPending}
-                data-testid="switch-supplier-ranking"
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
-                <p className="text-sm text-muted-foreground">AI predicts future demand based on historical data</p>
-              </div>
-              <Switch
-                id="enable-forecasting"
-                checked={enableForecasting}
-                onCheckedChange={(checked) => handleFeatureToggle('forecasting', checked)}
-                disabled={saveFeaturesMutation.isPending}
-                data-testid="switch-forecasting"
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="enable-vision-capture">Vision Capture</Label>
-                <p className="text-sm text-muted-foreground">Use camera to identify and add inventory items with AI vision</p>
-              </div>
-              <Switch
-                id="enable-vision-capture"
-                checked={enableVisionCapture}
-                onCheckedChange={(checked) => handleFeatureToggle('visionCapture', checked)}
-                disabled={saveFeaturesMutation.isPending}
-                data-testid="switch-vision-capture"
-              />
-            </div>
-          </div>
-        </CardContent>
       </Card>
     </div>
   );

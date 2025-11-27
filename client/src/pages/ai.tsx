@@ -735,7 +735,7 @@ function RulesTab() {
             Configure the parameters that drive AI-powered inventory recommendations. These rules determine how the engine calculates risk levels, reorder points, and suggested quantities.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-8">
           {/* Sales Velocity Settings */}
           <div className="space-y-4">
             <h3 className="font-semibold flex items-center gap-2">

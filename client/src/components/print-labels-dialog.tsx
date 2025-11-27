@@ -727,70 +727,63 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         </DialogHeader>
 
         <div className="flex-1 flex flex-col min-h-0 gap-4">
-          {/* Label Size Configuration */}
-          <div className="flex-shrink-0 p-4 border rounded-lg bg-muted/30">
-            <div className="flex items-center justify-between mb-3">
+          {/* Label Size Configuration - Single Row */}
+          <div className="flex-shrink-0 px-4 py-2 border rounded-lg bg-muted/30">
+            <div className="flex flex-wrap items-center gap-3">
               <Label className="text-sm font-medium">Label Size</Label>
-              <div className="flex items-center gap-2">
-                {savedFormats.length > 0 && (
-                  <Select value={selectedSavedFormat} onValueChange={setSelectedSavedFormat}>
-                    <SelectTrigger className="w-[180px] h-8" data-testid="select-saved-format">
-                      <SelectValue placeholder="Load saved format" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="custom">Custom</SelectItem>
-                      {savedFormats.map((format) => (
-                        <SelectItem key={format.id} value={format.id}>
-                          {format.name} ({format.labelWidth}" × {format.labelHeight}")
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-            </div>
+              
+              {/* Saved Formats Dropdown */}
+              {savedFormats.length > 0 && (
+                <Select value={selectedSavedFormat} onValueChange={setSelectedSavedFormat}>
+                  <SelectTrigger className="w-[160px] h-8" data-testid="select-saved-format">
+                    <SelectValue placeholder="Load saved..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="custom">Custom</SelectItem>
+                    {savedFormats.map((format) => (
+                      <SelectItem key={format.id} value={format.id}>
+                        {format.name} ({format.labelWidth}" × {format.labelHeight}")
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
 
-            <div className="flex flex-wrap items-end gap-4">
-              {/* Width & Height */}
-              <div className="flex items-end gap-2">
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Width (in)</Label>
-                  <Input
-                    type="number"
-                    step="0.125"
-                    min="0.25"
-                    max="12"
-                    value={labelWidth}
-                    onChange={(e) => {
-                      setLabelWidth(e.target.value);
-                      setSelectedSavedFormat("custom");
-                    }}
-                    className="w-20 h-9"
-                    data-testid="input-label-width"
-                  />
-                </div>
-                <span className="text-muted-foreground pb-2">×</span>
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Height (in)</Label>
-                  <Input
-                    type="number"
-                    step="0.125"
-                    min="0.25"
-                    max="12"
-                    value={labelHeight}
-                    onChange={(e) => {
-                      setLabelHeight(e.target.value);
-                      setSelectedSavedFormat("custom");
-                    }}
-                    className="w-20 h-9"
-                    data-testid="input-label-height"
-                  />
-                </div>
+              {/* Width & Height Inline */}
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  step="0.125"
+                  min="0.25"
+                  max="12"
+                  value={labelWidth}
+                  onChange={(e) => {
+                    setLabelWidth(e.target.value);
+                    setSelectedSavedFormat("custom");
+                  }}
+                  className="w-16 h-8"
+                  data-testid="input-label-width"
+                />
+                <span className="text-muted-foreground text-sm">×</span>
+                <Input
+                  type="number"
+                  step="0.125"
+                  min="0.25"
+                  max="12"
+                  value={labelHeight}
+                  onChange={(e) => {
+                    setLabelHeight(e.target.value);
+                    setSelectedSavedFormat("custom");
+                  }}
+                  className="w-16 h-8"
+                  data-testid="input-label-height"
+                />
+                <span className="text-xs text-muted-foreground">in</span>
               </div>
 
               {/* Layout Type Toggle */}
-              <div className="flex items-center gap-3 px-3 py-2 border rounded-md bg-background">
-                <Label className="text-sm">Thermal</Label>
+              <div className="flex items-center gap-2 px-2 py-1 border rounded-md bg-background">
+                <Label className="text-xs">Thermal</Label>
                 <Switch
                   checked={layoutType === "sheet"}
                   onCheckedChange={(checked) => {
@@ -799,7 +792,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
                   }}
                   data-testid="switch-layout-type"
                 />
-                <Label className="text-sm">Sheet</Label>
+                <Label className="text-xs">Sheet</Label>
               </div>
 
               {/* Save Button */}

@@ -361,7 +361,11 @@ export default function Dashboard() {
               {isLoadingRecommendations ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">Loading recommendations...</p>
               ) : !reorderRecommendations || reorderRecommendations.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">No reorder recommendations at this time</p>
+                <div className="flex flex-col items-center gap-2 py-8 text-center">
+                  <Package className="h-8 w-8 text-muted-foreground" />
+                  <p className="font-medium text-muted-foreground">No reorder recommendations</p>
+                  <p className="text-sm text-muted-foreground">Your inventory levels look good. Check back after more sales activity.</p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {reorderRecommendations.slice(0, 5).map((rec: any) => (
@@ -400,26 +404,31 @@ export default function Dashboard() {
               {isLoadingForecasts ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">Loading forecasts...</p>
               ) : !demandForecasts || demandForecasts.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">No demand forecasts available</p>
+                <div className="flex flex-col items-center gap-2 py-8 text-center">
+                  <TrendingUp className="h-8 w-8 text-muted-foreground" />
+                  <p className="font-medium text-muted-foreground">No demand forecasts yet</p>
+                  <p className="text-sm text-muted-foreground">Forecasts appear once there's enough sales history to analyze trends.</p>
+                </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="whitespace-nowrap">Item</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">Current Usage</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">Forecast</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">Confidence</TableHead>
-                      <TableHead className="text-center whitespace-nowrap">Trend</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <div className="rounded-md border overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 sticky top-0 z-10">
+                    <tr>
+                      <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
+                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Current Usage</th>
+                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Forecast</th>
+                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Confidence</th>
+                      <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
+                    </tr>
+                  </thead>
+                  <tbody>
                     {demandForecasts.slice(0, 10).map((forecast: any) => (
-                      <TableRow key={forecast.itemId}>
-                        <TableCell className="font-medium whitespace-nowrap">{forecast.itemName}</TableCell>
-                        <TableCell className="text-right font-mono text-sm whitespace-nowrap">
+                      <tr key={forecast.itemId} className="h-11 border-b hover-elevate">
+                        <td className="px-3 font-medium whitespace-nowrap">{forecast.itemName}</td>
+                        <td className="px-3 text-right font-mono text-sm whitespace-nowrap">
                           {forecast.currentDailyUsage}/day
-                        </TableCell>
-                        <TableCell className="text-right whitespace-nowrap">
+                        </td>
+                        <td className="px-3 text-right whitespace-nowrap">
                           <div className="flex flex-col items-end">
                             <span className="font-mono text-sm font-semibold">
                               {forecast.forecastedDailyUsage}/day
@@ -428,8 +437,8 @@ export default function Dashboard() {
                               ({forecast.confidenceInterval.low}–{forecast.confidenceInterval.high})
                             </span>
                           </div>
-                        </TableCell>
-                        <TableCell className="text-right whitespace-nowrap">
+                        </td>
+                        <td className="px-3 text-right whitespace-nowrap">
                           <Badge 
                             variant={
                               forecast.confidence === 'high' ? 'default' :
@@ -439,8 +448,8 @@ export default function Dashboard() {
                           >
                             {forecast.confidence}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-center whitespace-nowrap">
+                        </td>
+                        <td className="px-3 text-center whitespace-nowrap">
                           {forecast.trend === 'increasing' ? (
                             <ArrowUp className="h-4 w-4 text-green-600 inline" data-testid={`trend-${forecast.itemId}`} />
                           ) : forecast.trend === 'decreasing' ? (
@@ -448,11 +457,12 @@ export default function Dashboard() {
                           ) : (
                             <Minus className="h-4 w-4 text-muted-foreground inline" data-testid={`trend-${forecast.itemId}`} />
                           )}
-                        </TableCell>
-                      </TableRow>
+                        </td>
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
+              </div>
               )}
             </TabsContent>
           </Tabs>
@@ -481,31 +491,43 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent>
             {!aiAtRiskItems || aiAtRiskItems.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                {isLoadingAIAtRisk ? "Analyzing inventory..." : "No at-risk items"}
-              </p>
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                {isLoadingAIAtRisk ? (
+                  <>
+                    <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
+                    <p className="text-sm text-muted-foreground">Analyzing inventory...</p>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="h-8 w-8 text-muted-foreground" />
+                    <p className="font-medium text-muted-foreground">All items healthy</p>
+                    <p className="text-sm text-muted-foreground">No stock shortages or risk alerts detected.</p>
+                  </>
+                )}
+              </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="whitespace-nowrap">Item</TableHead>
-                    <TableHead className="whitespace-nowrap">Risk</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Stock</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Days Left</TableHead>
-                    <TableHead className="whitespace-nowrap">Action</TableHead>
-                    <TableHead className="text-center whitespace-nowrap">Why</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <div className="rounded-md border overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Risk</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Stock</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Days Left</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Action</th>
+                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Why</th>
+                  </tr>
+                </thead>
+                <tbody>
                   {aiAtRiskItems.map((item: AIAtRiskItem) => (
-                    <TableRow key={item.id} data-testid={`row-at-risk-${item.id}`}>
-                      <TableCell className="whitespace-nowrap">
+                    <tr key={item.id} className="h-11 border-b hover-elevate" data-testid={`row-at-risk-${item.id}`}>
+                      <td className="px-3 whitespace-nowrap">
                         <div>
                           <p className="font-medium">{item.name}</p>
                           <p className="text-xs font-mono text-muted-foreground">{item.sku}</p>
                         </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-3 whitespace-nowrap">
                         <Badge 
                           variant={
                             item.riskLevel === "HIGH" ? "destructive" : 
@@ -516,14 +538,14 @@ export default function Dashboard() {
                         >
                           {item.riskLevel}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{item.currentStock}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
+                      </td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.currentStock}</td>
+                      <td className="px-3 text-right whitespace-nowrap">
                         <Badge variant={item.daysOfCover <= 0 ? "destructive" : item.daysOfCover < 7 ? "secondary" : "outline"}>
                           {item.daysOfCover} days
                         </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-3 whitespace-nowrap">
                         {item.recommendedAction === "ORDER" && item.recommendedQty > 0 ? (
                           <Button size="sm" variant="default" data-testid={`button-order-${item.id}`}>
                             Order {item.recommendedQty}
@@ -533,8 +555,8 @@ export default function Dashboard() {
                         ) : (
                           <Badge variant="outline">OK</Badge>
                         )}
-                      </TableCell>
-                      <TableCell className="text-center whitespace-nowrap">
+                      </td>
+                      <td className="px-3 text-center whitespace-nowrap">
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
@@ -550,11 +572,12 @@ export default function Dashboard() {
                             <p className="text-sm">{item.explanation}</p>
                           </TooltipContent>
                         </Tooltip>
-                      </TableCell>
-                    </TableRow>
+                      </td>
+                    </tr>
                   ))}
-                </TableBody>
-              </Table>
+                </tbody>
+              </table>
+            </div>
             )}
           </CardContent>
         </Card>
@@ -588,7 +611,10 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <p className="py-4 text-center text-sm text-muted-foreground">No production constraints</p>
+              <div className="flex flex-col items-center gap-2 py-4 text-center">
+                <Package className="h-6 w-6 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">No constraints calculated. Add components with Bill of Materials to see production limits.</p>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -602,7 +628,11 @@ export default function Dashboard() {
         </CardHeader>
         <CardContent>
           {suppliers.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No suppliers configured</p>
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <Package className="h-8 w-8 text-muted-foreground" />
+              <p className="font-medium text-muted-foreground">No suppliers yet</p>
+              <p className="text-sm text-muted-foreground">Add suppliers with catalog URLs to enable quick ordering.</p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {suppliers.map((supplier: any) => (
@@ -641,7 +671,11 @@ export default function Dashboard() {
         </CardHeader>
         <CardContent>
           {integrations.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No integrations configured</p>
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <Activity className="h-8 w-8 text-muted-foreground" />
+              <p className="font-medium text-muted-foreground">No integrations configured</p>
+              <p className="text-sm text-muted-foreground">Connect Shopify, Amazon, or other services via AI Agent → Data Sources.</p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {integrations.map((integration: any) => (

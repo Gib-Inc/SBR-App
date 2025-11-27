@@ -1,0 +1,61 @@
+I want a LIGHT UX POLISH PASS for V1. Do NOT change any schemas, business logic, or integration code. Only adjust frontend components and copy.
+
+Goals:
+- Make the app feel coherent and easy to use for a first-time operator.
+- Focus ONLY on these pages:
+  1) Dashboard
+  2) BOM (Finished Products + Stock Inventory)
+  3) Suppliers → PO History & Issues
+  4) Returns
+  5) AI Agent → Insights
+  6) AI Agent → Logs
+  7) Settings → LLM Configuration
+  8) AI Agent → Data Sources
+
+Constraints:
+- NO new features, pages, or modals.
+- Do NOT add any new integrations.
+- Do NOT touch inventory math, decision engine logic, or database schemas.
+- Do NOT change how orders, returns, or POs are processed.
+- This is UX only: layout, spacing, labels, table behavior, empty states, and small wording fixes.
+
+Specific UX improvements I want:
+
+1) Tables & Scroll Behavior
+- All main data tables (BOM, Suppliers PO list, Returns, AI Agent → Insights “SKU Recommendations”, AI Agent → Logs) should:
+  - Use the same visual style: header bar clearly separated from the scrollable body (like other tables in the app).
+  - Be horizontally and vertically scrollable inside their section without blowing out the page layout.
+  - Keep column headers sticky when scrolling vertically.
+  - Use consistent row height and padding across all tables.
+
+2) Labels, Headings & Actions
+- Make sure headings above tables clearly describe what I’m seeing (e.g., “AI SKU Recommendations”, “System Logs”, “Pending Returns”, etc.).
+- Button labels should be action-oriented and consistent:
+  - Use verbs like “Create PO”, “Receive Return”, “View Logs”, “Refresh Recommendations”.
+  - Keep capitalization and style consistent across pages.
+- Tooltips: where an icon might be unclear (e.g., logs eye icon, AI refresh icon), add a short tooltip (“View details”, “Recalculate recommendations”, etc.).
+
+3) Filters & Empty States
+- On AI Agent → Insights (SKU Recommendations) and AI Agent → Logs:
+  - Ensure filters are clearly labeled and aligned in a single row.
+  - When no results match the filters, show a friendly empty state message instead of an empty table.
+- On Dashboard cards, if there is no data yet (e.g., no recommendations, no alerts), show an explanatory empty state message (“No AI recommendations yet. Run a forecast once sales data is available.”).
+
+4) Visual Consistency
+- Align spacing, margins, and font sizes so that:
+  - Section titles, cards, and tables line up cleanly on the page grid.
+  - Cards use consistent padding and border radius (match existing design system).
+  - Alert banners (like stockout warnings) visually match across Dashboard and Insights.
+
+5) Safety & Clarity
+- On any destructive or irreversible actions that already exist (e.g., deleting products, cancelling POs, dismissing AI recommendations), ensure:
+  - There is a confirmation dialog with clear primary/secondary buttons.
+  - The dialog text clearly states what will happen.
+- On AI Agent → Insights:
+  - Make sure it’s visually clear which rows are “New”, “Accepted”, and “Dismissed” recommendations (e.g., status pill or subtle badge).
+
+6) Final Review & Summary
+- After the UX pass, do a quick run through all the pages listed at the top to confirm no functionality changed, only UX.
+- Then, please summarize the UX changes you made by page (Dashboard, BOM, Suppliers, Returns, AI Agent → Insights/Logs, Settings → LLM Configuration, Data Sources) so I know what improved and where to click to see it.
+
+Remember: NO business logic or schema changes, and do not change how inventory quantities, recommendations, or integrations are computed—this pass is purely UX polish for V1.

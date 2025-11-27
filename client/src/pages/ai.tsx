@@ -1897,16 +1897,21 @@ function LogsTab() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => refetch()}
-                disabled={isFetching}
-                data-testid="button-refresh-logs"
-              >
-                <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-                Refresh
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => refetch()}
+                    disabled={isFetching}
+                    data-testid="button-refresh-logs"
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+                    Refresh Logs
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reload the latest system logs</TooltipContent>
+              </Tooltip>
             </div>
           </div>
         </CardHeader>
@@ -1991,33 +1996,33 @@ function LogsTab() {
           </div>
           
           {/* Logs Table */}
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[180px] whitespace-nowrap">Timestamp</TableHead>
-                  <TableHead className="w-[180px] whitespace-nowrap">Event</TableHead>
-                  <TableHead className="w-[100px] whitespace-nowrap">Entity</TableHead>
-                  <TableHead className="w-[100px] whitespace-nowrap">Source</TableHead>
-                  <TableHead className="w-[100px] whitespace-nowrap">Status</TableHead>
-                  <TableHead className="whitespace-nowrap">Description</TableHead>
-                  <TableHead className="w-[60px] whitespace-nowrap">Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+          <div className="rounded-md border overflow-auto max-h-[500px]">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 sticky top-0 z-10">
+                <tr>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Timestamp</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Event</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Entity</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Source</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Description</th>
+                  <th className="h-11 px-4 text-center font-medium text-muted-foreground whitespace-nowrap w-[60px]">Details</th>
+                </tr>
+              </thead>
+              <tbody>
                 {logsData?.logs && logsData.logs.length > 0 ? (
                   logsData.logs.map((log) => (
-                    <TableRow key={log.id} data-testid={`row-log-${log.id}`}>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                    <tr key={log.id} className="h-11 border-b hover-elevate" data-testid={`row-log-${log.id}`}>
+                      <td className="px-4 text-muted-foreground whitespace-nowrap">
                         {formatDate(log.createdAt)}
-                      </TableCell>
-                      <TableCell>
+                      </td>
+                      <td className="px-4">
                         <div className="flex items-center gap-2 whitespace-nowrap">
                           {getEventIcon(log.eventType)}
-                          <span className="text-sm font-medium">{log.eventType.replace(/_/g, " ")}</span>
+                          <span className="font-medium">{log.eventType.replace(/_/g, " ")}</span>
                         </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-4 whitespace-nowrap">
                         {log.entityType ? (
                           <Badge variant="outline" className="text-xs">
                             {log.entityType}
@@ -2025,11 +2030,11 @@ function LogsTab() {
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
-                      </TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">
+                      </td>
+                      <td className="px-4 whitespace-nowrap">
                         {log.source || "-"}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      </td>
+                      <td className="px-4 whitespace-nowrap">
                         {log.status ? (
                           <Badge variant={getStatusBadgeVariant(log.status)} className="text-xs">
                             {log.status}
@@ -2037,39 +2042,49 @@ function LogsTab() {
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
-                      </TableCell>
-                      <TableCell className="text-sm max-w-[300px] truncate">
+                      </td>
+                      <td className="px-4 max-w-[300px] truncate">
                         {log.description || "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => setSelectedLog(log)}
-                          data-testid={`button-view-log-${log.id}`}
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                      </td>
+                      <td className="px-4 text-center">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => setSelectedLog(log)}
+                              data-testid={`button-view-log-${log.id}`}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View details</TooltipContent>
+                        </Tooltip>
+                      </td>
+                    </tr>
                   ))
                 ) : (
-                  <TableRow>
-                    <TableCell colSpan={7} className="h-24 text-center">
-                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                  <tr>
+                    <td colSpan={7} className="h-32 text-center">
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
                         <FileText className="h-8 w-8" />
-                        <p>No logs found</p>
+                        <p className="font-medium">No logs found</p>
+                        <p className="text-sm">
+                          {hasActiveFilters 
+                            ? "Try adjusting your filters to see more results" 
+                            : "System logs will appear here as actions occur"}
+                        </p>
                         {hasActiveFilters && (
                           <Button size="sm" variant="link" onClick={handleClearFilters}>
-                            Clear filters
+                            Clear all filters
                           </Button>
                         )}
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 )}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
           
           {/* Pagination */}

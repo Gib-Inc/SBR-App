@@ -469,45 +469,47 @@ function ReturnDetailsModal({
           )}
 
           <div>
-            <h3 className="font-semibold mb-3">Items</h3>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap">SKU</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Ordered</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Requested</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Approved</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Received</TableHead>
-                  <TableHead className="whitespace-nowrap">Reason</TableHead>
-                  <TableHead className="whitespace-nowrap">Disposition</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium whitespace-nowrap">{item.sku}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyOrdered}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyRequested}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyApproved}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyReceived}</TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {item.itemReason ? (
-                        <span className="text-sm text-muted-foreground">{item.itemReason}</span>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {item.disposition ? (
-                        <Badge variant="outline">{item.disposition}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <h3 className="font-semibold mb-3">Return Items</h3>
+            <div className="rounded-md border overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">SKU</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Ordered</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Requested</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Approved</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Received</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Reason</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Disposition</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id} className="h-11 border-b hover-elevate">
+                      <td className="px-3 font-medium whitespace-nowrap">{item.sku}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyOrdered}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyRequested}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyApproved}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyReceived}</td>
+                      <td className="px-3 whitespace-nowrap">
+                        {item.itemReason ? (
+                          <span className="text-muted-foreground">{item.itemReason}</span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="px-3 whitespace-nowrap">
+                        {item.disposition ? (
+                          <Badge variant="outline">{item.disposition}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {shipments.length > 0 && (
@@ -650,34 +652,36 @@ function ReturnReceiptModal({
           {/* Line Items Table */}
           <div>
             <h3 className="font-semibold mb-3">Line Items</h3>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="whitespace-nowrap">SKU</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Qty Ordered</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Qty Requested</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Qty Received</TableHead>
-                  <TableHead className="whitespace-nowrap">Disposition</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium whitespace-nowrap">{item.sku}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyOrdered}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyRequested}</TableCell>
-                    <TableCell className="text-right whitespace-nowrap">{item.qtyReceived}</TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {item.disposition ? (
-                        <Badge variant="outline">{item.disposition}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="rounded-md border overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">SKU</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Ordered</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Requested</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Received</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Disposition</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item.id} className="h-11 border-b hover-elevate">
+                      <td className="px-3 font-medium whitespace-nowrap">{item.sku}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyOrdered}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyRequested}</td>
+                      <td className="px-3 text-right whitespace-nowrap">{item.qtyReceived}</td>
+                      <td className="px-3 whitespace-nowrap">
+                        {item.disposition ? (
+                          <Badge variant="outline">{item.disposition}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Bottom Buttons */}

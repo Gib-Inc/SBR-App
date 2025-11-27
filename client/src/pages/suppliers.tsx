@@ -1002,23 +1002,23 @@ export default function Suppliers() {
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead className="bg-muted/50">
-                      <tr className="border-b">
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Name</th>
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Company</th>
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Contact</th>
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Location</th>
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Source</th>
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Status</th>
-                        <th className="text-center p-2 text-xs font-medium whitespace-nowrap">Actions</th>
+                    <thead className="bg-muted/50 sticky top-0 z-10">
+                      <tr>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Name</th>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Company</th>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Contact</th>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Location</th>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Source</th>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+                        <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredLeads.map((lead) => (
-                        <tr key={lead.id} className="border-b hover:bg-muted/25" data-testid={`row-lead-${lead.id}`}>
-                          <td className="p-2 text-sm whitespace-nowrap">{lead.name}</td>
-                          <td className="p-2 text-sm whitespace-nowrap">{lead.companyName || '-'}</td>
-                          <td className="p-2 text-sm whitespace-nowrap">
+                        <tr key={lead.id} className="h-11 border-b hover-elevate" data-testid={`row-lead-${lead.id}`}>
+                          <td className="px-3 text-sm whitespace-nowrap">{lead.name}</td>
+                          <td className="px-3 text-sm whitespace-nowrap">{lead.companyName || '-'}</td>
+                          <td className="px-3 text-sm whitespace-nowrap">
                             <div className="flex flex-col gap-1">
                               {lead.contactEmail && (
                                 <div className="flex items-center gap-1 text-xs">
@@ -1037,13 +1037,13 @@ export default function Suppliers() {
                               {!lead.contactEmail && !lead.contactPhone && '-'}
                             </div>
                           </td>
-                          <td className="p-2 text-sm whitespace-nowrap">{lead.location || '-'}</td>
-                          <td className="p-2">
+                          <td className="px-3 text-sm whitespace-nowrap">{lead.location || '-'}</td>
+                          <td className="px-3 whitespace-nowrap">
                             <Badge variant="outline" className="text-xs">
                               {lead.source?.replace('PHANTOMBUSTER_', '') || 'MANUAL'}
                             </Badge>
                           </td>
-                          <td className="p-2">
+                          <td className="px-3 whitespace-nowrap">
                             <Badge
                               variant={
                                 lead.status === 'CONVERTED' ? 'default' :
@@ -1056,7 +1056,7 @@ export default function Suppliers() {
                               {lead.status}
                             </Badge>
                           </td>
-                          <td className="p-2">
+                          <td className="px-3 text-center">
                             <div className="flex items-center justify-center gap-1">
                               {lead.websiteUrl && (
                                 <Button
@@ -1140,18 +1140,18 @@ export default function Suppliers() {
 
               {/* Line Items */}
               <div>
-                <Label className="text-sm font-medium">Line Items</Label>
-                <div className="mt-2 border rounded-md overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-muted/50">
-                      <tr className="border-b">
-                        <th className="text-left p-2 text-xs font-medium whitespace-nowrap">Item</th>
-                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">AI Suggested</th>
-                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Ordered</th>
-                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Received</th>
-                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Remaining</th>
-                        <th className="text-right p-2 text-xs font-medium whitespace-nowrap">Unit Cost</th>
-                        <th className="text-center p-2 text-xs font-medium whitespace-nowrap">Decision</th>
+                <h3 className="text-sm font-semibold mb-2">PO Line Items</h3>
+                <div className="border rounded-md overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 sticky top-0 z-10">
+                      <tr>
+                        <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
+                        <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">AI Suggested</th>
+                        <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Ordered</th>
+                        <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Received</th>
+                        <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Remaining</th>
+                        <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Unit Cost</th>
+                        <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Decision</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1183,9 +1183,9 @@ export default function Suppliers() {
                         }
                         
                         return (
-                          <tr key={line.id} className="border-b">
-                            <td className="p-2 text-sm whitespace-nowrap">{item?.name || 'Unknown'}</td>
-                            <td className="p-2 text-sm text-right whitespace-nowrap">
+                          <tr key={line.id} className="h-11 border-b hover-elevate">
+                            <td className="px-3 whitespace-nowrap">{item?.name || 'Unknown'}</td>
+                            <td className="px-3 text-right whitespace-nowrap">
                               {aiSuggested !== null && aiSuggested !== undefined ? (
                                 <div className="flex items-center justify-end gap-1">
                                   <Brain className="h-3 w-3 text-primary" />
@@ -1195,13 +1195,13 @@ export default function Suppliers() {
                                 <span className="text-muted-foreground">—</span>
                               )}
                             </td>
-                            <td className="p-2 text-sm text-right font-medium whitespace-nowrap">{ordered}</td>
-                            <td className="p-2 text-sm text-right whitespace-nowrap">{line.qtyReceived}</td>
-                            <td className="p-2 text-sm text-right whitespace-nowrap">{remaining}</td>
-                            <td className="p-2 text-sm text-right whitespace-nowrap">
+                            <td className="px-3 text-right font-medium whitespace-nowrap">{ordered}</td>
+                            <td className="px-3 text-right whitespace-nowrap">{line.qtyReceived}</td>
+                            <td className="px-3 text-right whitespace-nowrap">{remaining}</td>
+                            <td className="px-3 text-right whitespace-nowrap">
                               ${line.unitCost?.toFixed(2) || '0.00'}
                             </td>
-                            <td className="p-2 text-center">
+                            <td className="px-3 text-center">
                               <Badge variant={decisionVariant} className="text-xs">
                                 {decisionStatus}
                               </Badge>

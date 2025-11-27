@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,9 +6,11 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { CheckCircle2, X, AlertTriangle, Package } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CheckCircle2, X, AlertTriangle, Package, Camera, Keyboard, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { CameraBarcodeScanner } from "./camera-barcode-scanner";
 import type { Item } from "@shared/schema";
 
 type ScanMode = "RAW" | "FINISHED";
@@ -32,6 +34,8 @@ interface ScanInventoryModalProps {
   onModeChange?: (mode: ScanMode) => void;
 }
 
+type InputMode = "keyboard" | "camera";
+
 export function ScanInventoryModal({
   isOpen,
   onClose,
@@ -44,6 +48,9 @@ export function ScanInventoryModal({
   const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
   const [showSuccessBanner, setShowSuccessBanner] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [inputMode, setInputMode] = useState<InputMode>("keyboard");
+  const [matchedItem, setMatchedItem] = useState<Item | null>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { toast } = useToast();
 
@@ -54,6 +61,12 @@ export function ScanInventoryModal({
     }
   }, [isOpen, recentScans]);
 
+  // Fetch items for validation
+  const { data: items = [] } = useQuery<Item[]>({
+    queryKey: ['/api/items'],
+    enabled: isOpen,
+  });
+
   // Clear form when modal closes
   useEffect(() => {
     if (!isOpen) {
@@ -61,14 +74,57 @@ export function ScanInventoryModal({
       setQuantity("1");
       setRecentScans([]);
       setValidationError(null);
+      setInputMode("keyboard");
+      setMatchedItem(null);
+      setIsLookingUp(false);
     }
   }, [isOpen]);
 
-  // Fetch items for validation
-  const { data: items = [] } = useQuery<Item[]>({
-    queryKey: ['/api/items'],
-    enabled: isOpen,
-  });
+  // Lookup item when barcode changes
+  const lookupItem = useCallback((barcode: string) => {
+    if (!barcode.trim() || !items.length) {
+      setMatchedItem(null);
+      return;
+    }
+    
+    setIsLookingUp(true);
+    const trimmedBarcode = barcode.trim();
+    const found = items.find((i: Item) => 
+      i.barcodeValue === trimmedBarcode || 
+      i.sku === trimmedBarcode ||
+      i.barcode === trimmedBarcode
+    );
+    setMatchedItem(found || null);
+    setIsLookingUp(false);
+    
+    if (!found) {
+      setValidationError(`No item found matching "${trimmedBarcode}"`);
+    } else {
+      setValidationError(null);
+    }
+  }, [items]);
+
+  // Handle barcode value change with item lookup
+  const handleBarcodeChange = useCallback((value: string) => {
+    setBarcodeValue(value);
+    if (value.trim().length >= 3) {
+      lookupItem(value);
+    } else {
+      setMatchedItem(null);
+      setValidationError(null);
+    }
+  }, [lookupItem]);
+
+  // Handle camera scan
+  const handleCameraScan = useCallback((barcode: string) => {
+    setBarcodeValue(barcode);
+    lookupItem(barcode);
+    
+    toast({
+      title: "Barcode Scanned",
+      description: `Detected: ${barcode}`,
+    });
+  }, [lookupItem, toast]);
 
   const scanMutation = useMutation({
     mutationFn: async (data: { 
@@ -282,25 +338,74 @@ export function ScanInventoryModal({
             </Alert>
           )}
 
-          {/* Scan Input Section */}
+          {/* Scan Input Section with Tabs */}
           <div className="space-y-4 p-4 rounded-lg border">
-            <div className="space-y-2">
-              <Label htmlFor="barcode-input">Barcode Value</Label>
-              <Input
-                id="barcode-input"
-                ref={inputRef}
-                value={barcodeValue}
-                onChange={(e) => setBarcodeValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Scan or enter barcode..."
-                disabled={scanMutation.isPending}
-                data-testid="input-scan-barcode"
-                className="font-mono"
-              />
-              <p className="text-xs text-muted-foreground">
-                Use barcode scanner or type manually
-              </p>
-            </div>
+            <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as InputMode)}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="keyboard" className="gap-2" data-testid="tab-keyboard">
+                  <Keyboard className="h-4 w-4" />
+                  Scanner / Manual
+                </TabsTrigger>
+                <TabsTrigger value="camera" className="gap-2" data-testid="tab-camera">
+                  <Camera className="h-4 w-4" />
+                  Camera
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="keyboard" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="barcode-input">Barcode Value</Label>
+                  <Input
+                    id="barcode-input"
+                    ref={inputRef}
+                    value={barcodeValue}
+                    onChange={(e) => handleBarcodeChange(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Scan or enter barcode..."
+                    disabled={scanMutation.isPending}
+                    data-testid="input-scan-barcode"
+                    className="font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use hardware barcode scanner or type manually
+                  </p>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="camera" className="mt-4">
+                <CameraBarcodeScanner
+                  onScan={handleCameraScan}
+                  enabled={inputMode === "camera" && isOpen}
+                />
+              </TabsContent>
+            </Tabs>
+
+            {/* Matched Item Preview */}
+            {matchedItem && (
+              <div className="p-3 rounded-lg border bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800">
+                <div className="flex items-center gap-2 mb-1">
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-medium text-green-800 dark:text-green-200">Item Found</span>
+                </div>
+                <div className="text-sm">
+                  <span className="font-medium">{matchedItem.name}</span>
+                  <span className="text-muted-foreground ml-2">SKU: {matchedItem.sku}</span>
+                  {matchedItem.type && (
+                    <Badge variant="outline" className="ml-2 text-xs">
+                      {matchedItem.type === 'finished_product' ? 'Finished' : 'Raw'}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Looking up indicator */}
+            {isLookingUp && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Looking up barcode...
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="quantity-input">Quantity</Label>
@@ -322,7 +427,7 @@ export function ScanInventoryModal({
 
             <Button
               onClick={handleScan}
-              disabled={scanMutation.isPending}
+              disabled={scanMutation.isPending || !barcodeValue.trim()}
               className="w-full"
               data-testid="button-process-scan"
             >

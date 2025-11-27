@@ -1,0 +1,113 @@
+In the existing “Print Labels” flow (the modal with label format, search items, and available items), upgrade the implementation so it is production-ready for real product labels and shows printer connectivity status.
+
+========================================
+1) PRINTER STATUS BADGE IN PRINT LABELS MODAL
+========================================
+UI
+- In the top bar of the Print Labels modal (next to the “Print Labels” title, aligned to the right), add a small status badge:
+  - Default text: “Printer: Checking…”
+  - States and colors:
+    - READY (green): “Printer: Ready”
+    - UNKNOWN (neutral): “Printer: Unknown”
+    - ERROR (red): “Printer: Error”
+- Use the existing badge/chip component from the design system; if none exists, create a lightweight one consistent with existing styling.
+
+LOGIC
+- On modal open:
+  - Run a best-effort printer capability check:
+    - If `window.print` exists and the browser is not in a known “headless” environment, set status to READY.
+    - If any error occurs or environment is clearly non-printable, set status to ERROR.
+    - Otherwise, fall back to UNKNOWN.
+- When the user clicks the main “Print” button:
+  - If status is ERROR, show a non-blocking warning toast (e.g. “We couldn’t verify a printer. Your system may still handle printing, but check your printer settings.”).
+  - Regardless of status, still trigger printing to let the OS handle routing to an actual printer.
+
+========================================
+2) LABEL CONFIGURATION – REAL PRODUCT LABELS
+========================================
+GOAL
+- Ensure the Print Labels feature can produce real-world product labels (4x6 thermal labels or equivalent) ready for physical printing.
+
+LABEL OPTIONS
+- Keep the “Label Format” dropdown but ensure it is wired to specific layout templates, for example:
+  - 4x6 inch – Thermal (single label per page)
+  - 2x1 inch – Sheet (multiple labels per page)
+- Each format should map to:
+  - Page size (inches/mm → CSS @page size).
+  - Label grid (rows × columns for sheet-based formats).
+  - Margins and padding.
+
+ITEM SELECTION
+- In the “Available Items” list:
+  - For each item, allow:
+    - A checkbox to select the item for printing (already present).
+    - A numeric input for “Quantity of labels” (default 1).
+- Maintain selected items and quantities in component state.
+
+DATA REQUIRED PER LABEL
+- For each label, ensure the data model can provide at least:
+  - Product name
+  - SKU
+  - Optional secondary identifier (e.g. internal code)
+  - Barcode value (SKU or separate barcode field you already use)
+- If a dedicated barcode value field does not exist, use SKU by default.
+
+========================================
+3) LABEL RENDERING & PRINT PREVIEW
+========================================
+LABEL TEMPLATE COMPONENT
+- Create a dedicated React component for labels, e.g. `<LabelSheet />`, that:
+  - Accepts:
+    - `format` (4x6, 2x1, etc.)
+    - `items` = array of { productName, sku, barcodeValue, quantity }
+  - Renders one DOM node per actual label cell.
+
+CSS & PAGE SETTINGS
+- Use a dedicated “print-only” container with:
+  - `@media print` styles.
+  - `@page` size matching the selected label format:
+    - 4x6: `@page { size: 4in 6in; margin: 0; }`
+    - For sheet layouts, size according to standard sheet (e.g. Letter or A4) and set margins so labels align.
+- Each label cell should include:
+  - Product name (bold)
+  - SKU
+  - Optional small text for internal code or location
+  - A barcode (see below)
+
+BARCODE
+- Use a browser-side JS barcode generator (e.g. JsBarcode or similar) to render barcodes into `<svg>` or `<canvas>` elements for each label.
+- Ensure the barcode is large and high-contrast enough to scan when printed on the selected label size.
+
+PREVIEW
+- Before calling `window.print()`, show a preview area inside the modal using the `<LabelSheet />` output so users can verify layout, data, and quantities.
+- Provide a scrollable preview if the sheet is taller than the modal.
+
+========================================
+4) PRINT ACTION
+========================================
+PRINT FLOW
+- “Print” button in the modal should:
+  - Ensure the preview/label DOM is fully rendered and barcode generation finished.
+  - Open a print-ready view:
+    - Either:
+      - Use a print-only section in the current window and call `window.print()`, or
+      - Open a new window/tab with just the `<LabelSheet />` HTML/CSS and call `print()` there.
+  - After printing, return the user to the main app view without losing state.
+
+PRINT TARGET
+- Rely on the browser/OS print dialog to route to the actual physical printer.
+- Do NOT introduce extra pop-ups or steps beyond the standard print dialog flow.
+
+========================================
+5) GENERAL UX & VALIDATION
+========================================
+- Disable the “Print” button when no items are selected.
+- If user tries to print with no selected items, show a simple inline error: “Select at least one item to print.”
+- Persist the last-used label format and, optionally, quantities per item for the session so repeated prints are faster.
+- Ensure the modal remains responsive and usable on smaller screens.
+
+Implement or update the Print Labels feature according to the above so that:
+- A printer status badge is always visible and reflects best-known capability.
+- Users can configure real-world label formats.
+- Labels include product information and barcodes.
+- The final output is print-ready and suitable for physical labels.

@@ -1,0 +1,276 @@
+You are editing my existing AI Inventory web app for Sticker Bud Roller in this Replit project:
+https://agent-senior-stack--saasbooster.replit.app
+
+Do NOT start from scratch. Extend the current codebase (backend + frontend + DB) and reuse existing patterns, types, routes, and integrations. This is an incremental enhancement to the current build, not a rewrite.
+
+==================================================
+A) DATA MODEL / TYPES – ADD FIELDS
+==================================================
+Update the Order / OrderLine / related types and DB models to support:
+
+Order-level fields:
+- expectedDeliveryDate: Date/ISO string (promised delivery date from Amazon/Shopify).
+- orderTotal: number (final order total).
+- componentsUsed: number (total BOM components consumed for fulfilled quantity).
+- productionStatus: string enum: "ready" | "alerted" | "pending" | "in_transit" | "fulfilled".
+- source: string enum: "amazon" | "shopify" | "other".
+- sourceOrderId: string (platform order id).
+- sourceUrl: string (deep link to the order in the platform).
+- ghlProductionOpportunityId: string | null (linked GHL production opportunity).
+- ghlContactId: string | null (linked GHL contact id for the customer).
+- ghlConversationUrl: string | null (deep link to GHL conversations for this contact).
+
+Line-level fields (if not already present):
+- backorderQty: number (units short for this line).
+
+Ensure all API responses that return orders include these fields.
+
+==================================================
+B) EXPECTED DELIVERY DATE COLUMN (MM/DD/YYYY)
+==================================================
+BACKEND
+- When ingesting orders from Shopify/Amazon:
+  - Map the platform’s promised/estimated delivery date into expectedDeliveryDate (Date/ISO string).
+  - If the platform does not provide a date, set expectedDeliveryDate = orderCreatedAt + DEFAULT_TRANSIT_DAYS (config constant, e.g. 5 days).
+- Store expectedDeliveryDate on the Order and expose it via order APIs.
+
+FRONTEND
+- On the Sales Orders table, add a column “Expected Delivery”.
+- Display expectedDeliveryDate formatted as MM/DD/YYYY using a shared date-format helper.
+- Include this column in CSV/PDF exports.
+
+==================================================
+C) BACKORDER LOGIC + GHL OPPORTUNITY
+==================================================
+INVENTORY / ORDER PROCESSING
+- For each order line:
+  - Let qtyOrdered = line quantity, qtyOnHand = current inventory for that product.
+  - If qtyOrdered <= qtyOnHand:
+    - qtyFulfilledFromStock = qtyOrdered.
+    - backorderQty = 0.
+    - Reduce qtyOnHand by qtyOrdered.
+  - If qtyOrdered > qtyOnHand:
+    - qtyFulfilledFromStock = qtyOnHand.
+    - backorderQty = qtyOrdered - qtyOnHand.
+    - Set qtyOnHand = 0.
+  - Persist backorderQty per line.
+
+- At order level:
+  - Compute totalBackorderQty = sum of backorderQty across all lines.
+
+GHL OPPORTUNITY CREATION
+- If totalBackorderQty > 0 for the order:
+  - Immediately create ONE GHL Opportunity for the order.
+  - Use env/config:
+    - GHL_API_KEY (or existing credential config).
+    - GHL_PROD_PIPELINE_ID.
+    - GHL_PROD_STAGE_ALERTED_ID.
+  - Use existing GHL client/utilities (do not duplicate) to:
+    - Create an opportunity in pipeline GHL_PROD_PIPELINE_ID at stage GHL_PROD_STAGE_ALERTED_ID.
+    - Link to the correct GHL contact for the customer.
+    - Include in description or custom fields:
+      - Order id.
+      - For each short item: product name/SKU and backorderQty.
+  - Store the created opportunity id in ghlProductionOpportunityId on the Order.
+
+==================================================
+D) BACKORDER & COMPONENTS COLUMNS
+==================================================
+BACKORDER COLUMN
+- For a row-per-order table:
+  - Add a “Backorder” column showing totalBackorderQty (sum of backorderQty across lines).
+- For row-per-line tables:
+  - Show backorderQty per line in the “Backorder” column.
+- Include backorder values in exports.
+
+COMPONENTS COLUMN
+- Use existing BOM (Bill of Materials) data that maps each product to its components and quantityPerUnit.
+- For each line:
+  - Use qtyFulfilledFromStock (not including backorderQty).
+  - For each BOM component: consumed = quantityPerUnit * qtyFulfilledFromStock.
+- Sum all consumed components across the order and store as componentsUsed on the Order (or compute on-the-fly in the API).
+- Add a “Components” column to the Sales Orders table displaying componentsUsed.
+- Include componentsUsed in exports.
+
+==================================================
+E) ORDER TOTAL COLUMN
+==================================================
+BACKEND
+- Add orderTotal on the Order.
+- Compute orderTotal as:
+  - Prefer platform’s total (including discounts/tax/shipping) if provided.
+  - Otherwise: orderTotal = sum(lineItem.unitPrice * lineItem.qtyOrdered).
+- Persist orderTotal and expose via APIs.
+
+FRONTEND
+- Add an “Order Total” column on the Sales Orders table.
+- Format as currency.
+- Include in exports.
+
+==================================================
+F) PRODUCTION STATUS STATE MACHINE
+==================================================
+FIELD
+- Use productionStatus on the Order with allowed values:
+  - "ready"
+  - "alerted"
+  - "pending"
+  - "in_transit"
+  - "fulfilled"
+
+INITIAL STATE
+- When a new order is created:
+  - If totalBackorderQty == 0: productionStatus = "ready".
+  - If totalBackorderQty > 0: productionStatus = "alerted" (because production team has been alerted via GHL opportunity).
+
+GHL STAGE-BASED UPDATES
+- Store ghlProductionOpportunityId on the Order when creating the opportunity.
+- Extend or create a GHL webhook handler for opportunity updates.
+- On webhook:
+  - If the opportunity id matches ghlProductionOpportunityId for an order AND the opportunity moves to a configured “production pending” stage:
+    - Add env/config: GHL_PROD_STAGE_PENDING_ID.
+    - Set productionStatus = "pending" for that order.
+
+SHIPPING / IN TRANSIT
+- Wherever an order is marked as shipped from the Hildale warehouse (e.g. via Shippo/Extensiv or existing shipping code):
+  - Also set productionStatus = "in_transit".
+
+DELIVERY CONFIRMATION & FULFILLED
+- When expectedDeliveryDate is set/updated:
+  - Push this date into a GHL custom field on the contact or linked opportunity (e.g. expected_delivery_date) using the GHL API client.
+- Add a backend endpoint, e.g. POST /webhooks/ghl/delivery-confirmed that:
+  - Accepts a reference to the order (order id and/or ghlProductionOpportunityId).
+  - When called, sets productionStatus = "fulfilled" for that order.
+- Intended GHL workflow (document in code comments, not implemented here):
+  - On expectedDeliveryDate, GHL sends an SMS to the customer asking to confirm delivery.
+  - On affirmative confirmation, GHL calls the /webhooks/ghl/delivery-confirmed endpoint with the correct order id.
+
+APPLY TO REGULAR VS BACKORDER ORDERS
+- Regular (no backorder): ready → in_transit → fulfilled.
+- Backorder: alerted → pending → in_transit → fulfilled.
+
+FRONTEND
+- Add a “Production” column to the Sales Orders table showing productionStatus with human-readable labels:
+  - ready → “Ready”
+  - alerted → “Alerted”
+  - pending → “Pending”
+  - in_transit → “In Transit”
+  - fulfilled → “Fulfilled”
+- Support sorting/filtering by productionStatus if applicable.
+
+==================================================
+G) SINGLE “SOURCE” ACTION BUTTON (AMAZON / SHOPIFY)
+==================================================
+DATA
+- Ensure each order has:
+  - source: "amazon" | "shopify" | "other".
+  - sourceOrderId.
+  - sourceUrl.
+
+URL CONSTRUCTION
+- In config, add:
+  - SHOPIFY_ADMIN_BASE_URL (e.g. https://<shop>.myshopify.com/admin).
+  - AMAZON_ORDER_BASE_URL (appropriate Seller Central orders URL or equivalent).
+- For Shopify orders:
+  - sourceUrl = `${SHOPIFY_ADMIN_BASE_URL}/orders/${sourceOrderId}`
+- For Amazon orders:
+  - sourceUrl = `${AMAZON_ORDER_BASE_URL}${sourceOrderId}` or correct pattern.
+- Persist sourceUrl and return it via APIs.
+
+FRONTEND
+- In the Sales Orders table’s Actions column:
+  - Add a single “View Source” button/icon per row.
+  - On click:
+    - If sourceUrl exists, open window.open(sourceUrl, "_blank", "noopener,noreferrer").
+- The button is always present for each order; if no sourceUrl, disable with a tooltip like “No source link available”.
+
+==================================================
+H) GHL CONVERSATION BUTTON IN ACTIONS COLUMN
+==================================================
+DATA
+- Ensure each Order can be mapped to a GHL contact:
+  - Store ghlContactId on the Order when linking/creating the contact in GHL.
+- Construct ghlConversationUrl in a central place:
+  - In config, add:
+    - GHL_BASE_URL (e.g. https://app.gohighlevel.com).
+    - GHL_LOCATION_ID (for the correct sub-account).
+  - Example:
+    - ghlConversationUrl = `${GHL_BASE_URL}/v2/location/${GHL_LOCATION_ID}/conversations/contact/${ghlContactId}`
+  - Persist or compute this and expose via order APIs.
+
+FRONTEND
+- In the Sales Orders Actions column:
+  - Add a “GHL Conversation” action button that is always shown for each order.
+  - On click:
+    - If ghlConversationUrl exists, open window.open(ghlConversationUrl, "_blank", "noopener,noreferrer").
+    - If not, disable and show tooltip “No GHL contact linked”.
+- Icon:
+  - Implement a small reusable component, e.g. <GhlConversationIcon /> using SVG.
+  - Design it as three upward-pointing arrows arranged to visually resemble the GHL multi-arrow logo, using the app’s design system (size, color, hover states).
+- Keep styling consistent with existing action buttons and preserve current layout on all screen sizes.
+
+==================================================
+I) SHARE / EXPORT BUTTON (CSV + PDF)
+==================================================
+FRONTEND
+- On the Sales Orders page header, add a “Share” button.
+- On click, open a modal/dropdown with options:
+  - “Export as CSV” (primary).
+  - “Export as PDF”.
+
+CSV EXPORT
+- Implement an export function that takes the currently filtered/visible orders and generates a CSV file.
+- Include at least:
+  - Order ID
+  - Source
+  - Expected Delivery (MM/DD/YYYY)
+  - Order Total
+  - Production Status
+  - Backorder (totalBackorderQty)
+  - Components (componentsUsed)
+  - Any other important fields already displayed in the table.
+- Trigger a download named like: sales-orders-<YYYYMMDD-HHMM>.csv.
+
+PDF EXPORT
+- Use a client-side PDF library (e.g. jsPDF + autoTable or equivalent) to generate a simple tabular PDF with the same columns.
+- Trigger a download named like: sales-orders-<YYYYMMDD-HHMM>.pdf.
+
+==================================================
+J) IMPORT BUTTON (CSV-ONLY STRUCTURED IMPORT)
+==================================================
+FRONTEND
+- Add an “Import” button next to “Share”.
+- On click:
+  - Open a file picker with accept=".csv".
+  - Show helper text: “Structured imports are supported via CSV (recommended).”
+
+CSV IMPORT LOGIC
+- Parse the CSV (e.g. with PapaParse or equivalent) on the client or server as appropriate for the existing architecture.
+- Expect headers that match the export format (id, source, quantities, expectedDeliveryDate, etc.).
+- Convert expectedDeliveryDate from MM/DD/YYYY into a Date/ISO value.
+- Send parsed rows to a backend endpoint for processing.
+
+BACKEND
+- Create or update an endpoint that ingests these imported orders:
+  - Insert or upsert orders by order id (depending on current behavior).
+  - Run the same inventory/backorder logic as normal so productionStatus, backorderQty, componentsUsed, etc. are consistent.
+
+NON-CSV (PDF/JPEG) FILES
+- If a user selects PDF/JPEG or other non-CSV formats:
+  - Do NOT attempt OCR.
+  - Show a message: “Only CSV is supported for structured imports. Please convert your data to CSV.”
+
+==================================================
+K) WIRING, CONSISTENCY, AND RISK NOTES
+==================================================
+- Update all TypeScript interfaces/types, DB schemas, and API handlers to include the new fields listed above.
+- Reuse existing service layers, GHL client code, and design system components; do not duplicate functionality.
+- Ensure the Sales Orders page remains functional:
+  - Pagination, filtering, and sorting continue to work.
+  - New columns and buttons do not break layout or responsiveness.
+
+In code comments only (not UI), briefly note:
+- Deep-linking into Amazon/Shopify and use of their APIs must respect each platform’s Terms of Service.
+- Automated SMS flows via GHL must comply with applicable telecom/anti-spam laws (e.g. TCPA and regional equivalents).
+
+Implement all changes within the existing AI Inventory project, preserving all current behavior and UI while adding the new fields, logic, and actions described above.

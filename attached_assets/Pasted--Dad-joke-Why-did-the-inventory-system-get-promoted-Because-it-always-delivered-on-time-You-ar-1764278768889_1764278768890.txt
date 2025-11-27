@@ -1,0 +1,276 @@
+// Dad joke: Why did the inventory system get promoted? Because it always delivered on time.
+
+You are editing my existing “AI Inventory” app for Sticker Bud Roller in this Replit project:
+https://agent-senior-stack--saasbooster.replit.app
+
+Do NOT start from scratch. Extend the current codebase (backend + frontend + DB) and reuse existing patterns, types, routes, and integrations. I want the Sales Orders page and order pipeline upgraded with the following exact behavior.
+
+==================================================
+1) EXPECTED DELIVERY DATE COLUMN (MM/DD/YYYY)
+==================================================
+Goal: Add an “Expected Delivery” column to Sales Orders, driven by the promised delivery date from Amazon/Shopify.
+
+BACKEND / DATA MODEL
+- Add a new field on the Order model (or equivalent) called `expectedDeliveryDate` (Date/DateTime in DB, but can be stored as ISO string in JSON).
+- Wherever orders are ingested from Shopify/Amazon (existing import/integration logic), map the marketplace’s promised/estimated delivery date into this field:
+  - Use whatever currently-available field holds that date (e.g. `delivery_date`, `estimated_delivery_at`, `promise_delivery_date`, etc.).
+  - If the platform does not provide a date, default to `orderCreatedAt + DEFAULT_TRANSIT_DAYS` where `DEFAULT_TRANSIT_DAYS` is a config constant (e.g. 5) defined in a central config file.
+- Make sure this field is returned by all relevant order APIs used by the frontend.
+
+FRONTEND
+- On the Sales Orders table, add a new read-only column labeled “Expected Delivery”.
+- Display the value of `expectedDeliveryDate` formatted as `MM/DD/YYYY` only (no time). Use a single shared date-format helper so the same format is used everywhere.
+- Make sure this column participates in sorting and filtering if those exist.
+
+EXPORT
+- Include `expectedDeliveryDate` in all exports (CSV/PDF/etc.) using the same `MM/DD/YYYY` formatting.
+
+==================================================
+2) BACKORDER LOGIC + GHL OPPORTUNITY WHEN STOCK IS SHORT
+==================================================
+Goal: If someone buys 10 and we only have 5 in stock, immediately create a GHL Opportunity and track backorder of 5 tied to the correct product row.
+
+INVENTORY / ORDER LOGIC
+- For each order line item:
+  - Lookup current inventory quantity for the product (reuse the existing inventory table/model; do NOT create a duplicate).
+  - Let `qtyOrdered` = quantity ordered, `qtyOnHand` = current inventory.
+  - If `qtyOrdered <= qtyOnHand`:
+    - Fulfill from stock as normal (reduce `qtyOnHand` by `qtyOrdered`).
+    - No backorder on this line.
+  - If `qtyOrdered > qtyOnHand`:
+    - `qtyFulfilledFromStock = qtyOnHand`
+    - `qtyShort = qtyOrdered - qtyOnHand`
+    - Reduce inventory on-hand to 0.
+    - Persist `backorderQty` for that product/order line equal to `qtyShort`.
+- Add a `backorderQty` field at the appropriate level (per line item and/or aggregated per order as needed by the UI).
+
+GHL OPPORTUNITY CREATION
+- Immediately after computing a shortage on any line items in an order:
+  - Create ONE GHL Opportunity per order (not one per line).
+  - Introduce env/config for target pipeline + stage for production alerts:
+    - `GHL_PROD_PIPELINE_ID`
+    - `GHL_PROD_STAGE_ALERTED_ID`
+  - Use the existing GHL API client in the project (or add one if missing) to:
+    - Create the Opportunity in the above pipeline & stage.
+    - Attach the customer/contact, relevant custom fields, etc., consistent with how GHL is already used in this project.
+    - In the Opportunity description or custom fields, list each short item:
+      - Product name/SKU + `qtyShort` per line.
+  - Store the created opportunity id on the order: add a field like `ghlProductionOpportunityId` on the Order model.
+
+==================================================
+3) BACKORDER & COMPONENTS COLUMNS ON SALES ORDERS
+==================================================
+Goal: Show backordered units and total components consumed per order using existing BOM data.
+
+BACKORDER COLUMN
+- In the Sales Orders table:
+  - Add a `Backorder` column.
+  - If your table is row-per-order:
+    - Show the sum of `backorderQty` across all line items on that order.
+  - If it’s row-per-line:
+    - Show `backorderQty` per line.
+- Ensure `backorderQty` is included in order API responses.
+
+COMPONENTS COLUMN (TOTAL CONSUMED)
+- Use the existing BOM structure (whatever currently maps a product to its components and `quantityPerUnit`).
+- For each order line:
+  - Let `qtyFulfilledFromStock` be the quantity actually fulfilled from existing inventory (not backordered).
+  - For each BOM component, compute `component.quantityPerUnit * qtyFulfilledFromStock`.
+- Aggregate across the order to get total component count consumed.
+- Persist a numeric field like `componentsUsed` on the order (or compute on-the-fly if that’s more consistent with the codebase) and expose it via the order API.
+- Add a `Components` column to the Sales Orders table showing this total.
+- Include `backorderQty` and `componentsUsed` in CSV/PDF exports.
+
+==================================================
+4) ORDER TOTAL COLUMN
+==================================================
+Goal: Show the order total per order.
+
+BACKEND
+- Add `orderTotal` field to the Order model.
+- Compute `orderTotal` as:
+
+  `orderTotal = sum(lineItem.unitPrice * lineItem.qtyOrdered)`  
+
+  - If the upstream source already includes total, tax, discounts, or shipping:
+    - Prefer the source-of-truth total if available.
+    - Otherwise fall back to the simple sum above.
+
+- Persist `orderTotal` and expose it in order APIs.
+
+FRONTEND
+- Add an `Order Total` column (formatted as currency) to the Sales Orders table.
+- Include `orderTotal` in exports.
+
+==================================================
+5) PRODUCTION COLUMN + STATUS STATE MACHINE
+==================================================
+Goal: Add a `Production` column with states:
+- `"ready"`
+- `"alerted"`
+- `"pending"`
+- `"in_transit"`
+- `"fulfilled"`
+
+DATA MODEL
+- Add a `productionStatus` enum/string field on the Order model with the allowed values above.
+
+INITIAL STATES
+- When an order is created:
+  - If *no* backorder exists for any line: `productionStatus = "ready"`.
+  - If *any* backorder exists and a GHL production opportunity is created: `productionStatus = "alerted"`.
+
+LINK TO GHL OPPORTUNITY
+- Make sure the Order stores `ghlProductionOpportunityId` for the created opportunity.
+- Add/update a webhook endpoint that receives GHL opportunity updates (use or extend existing GHL webhook handler).
+- When a webhook arrives:
+  - If the opportunity matches `ghlProductionOpportunityId` and:
+    - It moves into a configured “production pending” stage:
+      - Use new env var `GHL_PROD_STAGE_PENDING_ID`.
+      - Set `productionStatus = "pending"`.
+
+SHIPPING / IN TRANSIT
+- When the order is marked as shipped from the Hildale warehouse (via existing Shippo/Extensiv/integration logic):
+  - Whatever handler you use to mark an order as shipped should also set `productionStatus = "in_transit"`.
+
+DELIVERY CONFIRMATION & GHL SMS
+- When `expectedDeliveryDate` is set/updated:
+  - Push this date into a GHL custom field on the contact or Opportunity (e.g. `expected_delivery_date`) using the existing GHL API client.
+- Add an Express (or equivalent) endpoint in this app for delivery confirmation, e.g.:
+
+  `POST /webhooks/ghl/delivery-confirmed`
+
+  - Accept an identifier that lets you find the order (order id and/or `ghlProductionOpportunityId`).
+  - When this endpoint is called, set `productionStatus = "fulfilled"` on that order.
+- In code comments (not here), clearly document the required GHL workflow:
+  - Trigger an SMS to the customer on `expected_delivery_date` asking them to confirm arrival.
+  - On a positive confirmation (e.g. reply “YES” or an internal tag), have GHL call the above webhook with the correct order id so the app marks it `fulfilled`.
+
+APPLY SAME FLOW TO REGULAR (NON-BACKORDER) ORDERS
+- For regular orders that are fully stocked:
+  - `ready` → (when shipped) `in_transit` → (on confirmed delivery) `fulfilled`.
+- For backordered orders:
+  - `alerted` → (on production stage) `pending` → (when shipped) `in_transit` → (on confirmed delivery) `fulfilled`.
+
+FRONTEND
+- Add a `Production` column on the Sales Orders table that displays `productionStatus` with readable labels (e.g. “Ready”, “Alerted”, “Pending”, “In Transit”, “Fulfilled”).
+- Make sure filtering/sorting by `productionStatus` works if those features exist.
+
+==================================================
+6) SINGLE “SOURCE” ACTION BUTTON (AMAZON / SHOPIFY)
+==================================================
+Goal: One action button per order that opens the original source order page (Amazon or Shopify) based on the order’s source.
+
+DATA FIELDS
+- Ensure each order has:
+  - `source`: `"amazon" | "shopify" | "other"` (string/enum).
+  - `sourceOrderId`: the platform’s order identifier.
+  - `sourceUrl`: a precomputed URL that deep-links to the platform’s order page.
+
+URL LOGIC
+- Configure base URLs in env/config:
+  - `SHOPIFY_ADMIN_BASE_URL` (e.g. `https://<shop>.myshopify.com/admin`).
+  - `AMAZON_ORDER_BASE_URL` (region-specific, e.g. Seller Central orders URL).
+- For Shopify orders:
+  - `sourceUrl = SHOPIFY_ADMIN_BASE_URL + "/orders/" + sourceOrderId`
+- For Amazon orders:
+  - `sourceUrl = AMAZON_ORDER_BASE_URL + sourceOrderId` (or whichever URL pattern is correct).
+- Persist `sourceUrl` and return it via the order API.
+
+FRONTEND
+- On the Sales Orders table, add a single “View Source” button or icon inside the Actions column.
+- Clicking it:
+  - Opens `sourceUrl` in a new browser tab.
+  - Button text/icon stays the same; only the URL changes based on `source`.
+
+==================================================
+7) SHARE / EXPORT BUTTON (CSV + PDF)
+==================================================
+Goal: Add a “Share” button on the Sales Orders page that lets me export the orders.
+
+FRONTEND
+- Add a top-right “Share” button on the Sales Orders page.
+- On click, open a modal or dropdown with options:
+  - “Export as CSV” (primary recommendation)
+  - “Export as PDF”
+  - (Optional) “Export as JSON”
+
+CSV EXPORT
+- Implement an export function that generates a CSV for the currently filtered/visible orders.
+- Columns to include at minimum:
+  - Order ID
+  - Source
+  - Expected Delivery (MM/DD/YYYY)
+  - Order Total
+  - Production Status
+  - Backorder (sum)
+  - Components (total components used)
+  - Any other key fields currently displayed in the table
+- Trigger a file download named like: `sales-orders-<YYYYMMDD-HHMM>.csv`.
+
+PDF EXPORT
+- Use a browser-friendly PDF library (e.g. jsPDF + autoTable or similar) to render the same data into a simple table.
+- Trigger a file download named like: `sales-orders-<YYYYMMDD-HHMM>.pdf`.
+
+OPTIONAL IMAGE EXPORT
+- JPEG export is not required for structured data; PDF is sufficient as a “printable” format.
+- If you choose to implement it:
+  - Use something like html2canvas to snapshot the table and export as an image, but this is optional, lower priority than CSV/PDF.
+
+==================================================
+8) IMPORT BUTTON (CSV AS PRIMARY IMPORT FORMAT)
+==================================================
+Goal: Add an Import button that supports structured imports, primarily via CSV.
+
+FRONTEND
+- Add an “Import” button next to “Share”.
+- On click:
+  - Open a file picker.
+  - Set `accept=".csv"` as the primary file type.
+- In the UI, show text like:
+  - “Structured imports are supported via CSV (recommended).”
+
+CSV IMPORT LOGIC
+- Use a CSV parser (e.g. PapaParse or equivalent) on the frontend or backend (depending on architecture).
+- Expect the CSV to use the same header names as the export to make import/export symmetrical.
+- Map CSV rows into orders:
+  - Required fields: order id, source, quantities, expectedDeliveryDate, etc.
+  - Parse `expectedDeliveryDate` from `MM/DD/YYYY` into a Date/ISO string.
+- Send the parsed data to a backend endpoint that:
+  - Inserts new orders or upserts existing ones by order id (depending on current app behavior).
+  - Re-runs inventory/backorder logic as needed so productionStatus/backorder/components etc. are consistent.
+
+PDF/JPEG IMPORT
+- Do NOT attempt to parse PDF/JPEG into structured orders in this step (would require OCR and is out of scope).
+- If a user selects non-CSV:
+  - Show a message: “For now, structured imports are CSV-only. Please convert your data to CSV before importing.”
+  - Block the actual import.
+
+==================================================
+9) WIRING, TYPES, AND LEGAL/TERMS NOTES
+==================================================
+WIRING
+- Update TypeScript types/interfaces/models (Order, OrderLine, Inventory, etc.) to include:
+  - `expectedDeliveryDate`
+  - `backorderQty`
+  - `componentsUsed`
+  - `orderTotal`
+  - `productionStatus`
+  - `source`
+  - `sourceOrderId`
+  - `sourceUrl`
+  - `ghlProductionOpportunityId`
+- Make sure all API routes that read/write orders are updated to handle these fields end-to-end (DB → API → frontend and back).
+- Keep all naming consistent and avoid duplicating logic across files.
+- Ensure the Sales Orders UI remains responsive and that pagination/filtering/sorting still work.
+
+LEGAL / TERMS / RISK NOTES (PUT AS COMMENTS IN THE CODE)
+- Add brief comments in the integration code noting:
+  - Deep-linking into Amazon/Shopify and using their APIs must respect their Terms of Service.
+  - Automated SMS via GHL must comply with TCPA/telecom rules and privacy policies in the regions where customers live.
+  - Delivery confirmation workflows should avoid storing unnecessary personal data beyond what is needed for fulfillment.
+
+==================================================
+FINAL INSTRUCTION
+==================================================
+Implement ALL of the above inside this existing AI Inventory project, using its current stack, conventions, and integrations. Do NOT remove or break any existing functionality. This is an incremental enhancement to the current build, not a rewrite.

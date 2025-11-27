@@ -35,7 +35,7 @@ export const items = pgTable("items", {
   // Finished product location quantities
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
-  pivotProjectionQty: integer("pivot_projection_qty").notNull().default(0), // Live projected 3PL stock (pivotQty baseline + local deltas from orders/returns)
+  availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // Enhanced barcode and product tracking fields
   productKind: text("product_kind"), // 'FINISHED' or 'RAW'
   barcodeValue: text("barcode_value"),

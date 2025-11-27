@@ -1,0 +1,81 @@
+Now I want you to tighten the external integrations (Shopify, Amazon Seller Central, Extensiv/Pivot, GoHighLevel, QuickBooks) around a SINGLE source-of-truth for inventory, and avoid any chance of double-counting sales or stock.
+
+Do NOT add new pages or big UI sections. Use the existing AI Agent → Data Sources cards and the existing models (BOM, Sales Orders, Returns, Suppliers, AI Logs, AI Insights). The goal is to make the sync paths clean and V1-safe.
+
+1. Clarify system of record + responsibilities
+- Inspect the code and then explicitly adopt these V1 rules in comments and implementation:
+  - Inventory app is the system of record for inventory quantities (onHand, onOrder, allocated, backordered, etc.).
+  - Shopify + Amazon are ORDER SOURCES ONLY in V1:
+    - We import orders from them into SalesOrders and adjust stock via the centralized InventoryMovement helper.
+    - We do NOT push inventory quantities back yet (no “faking” stock levels; stay compliant with channel policies).
+  - Extensiv/Pivot is READ-ONLY in V1:
+    - We pull inventory snapshots for 3PL locations for comparison/reconciliation, but we do not let Extensiv overwrite our main inventory fields automatically.
+  - QuickBooks is FINANCIAL-ONLY in V1:
+    - We can store mapping IDs for products/customers, but we do NOT create or update SalesOrders or inventory movements from QuickBooks yet (to avoid double-counting orders that already came from Shopify/Amazon).
+  - GoHighLevel is used for messaging POs only (contact creation + email/SMS) and does not drive inventory quantities.
+
+2. Normalize channel + external IDs on Sales Orders and Products
+- Ensure the SalesOrder model has these fields (if not, add them):
+  - `channel` (enum: MANUAL, SHOPIFY, AMAZON, etc.)
+  - `externalOrderId` (string, unique per channel)
+  - `externalSource` or reuse `channel` as the system tag
+- Ensure product/SKU model has:
+  - `shopifyProductId` / `shopifyVariantId` (optional)
+  - `amazonAsin` or other Amazon identifier (optional)
+  - `extensivItemId` (optional)
+  - `quickbooksItemId` (optional)
+- Add DB indexes / uniqueness constraints where appropriate so that:
+  - (channel, externalOrderId) combination cannot be duplicated → this is key for idempotency.
+
+3. Wire Shopify + Amazon imports into InventoryMovement (no double counting)
+- Implement/import or finalize the Shopify + Amazon order sync routines using the existing AI Agent data source configuration and the `InventoryMovement.apply(...)` helper you created earlier.
+- For each order from Shopify/Amazon:
+  - Upsert a SalesOrder based on (channel, externalOrderId).
+  - For new orders, call InventoryMovement with `SALES_ORDER_CREATED` (and later `FULFILLED` when appropriate).
+  - For re-runs of the sync, be idempotent: do not create duplicate SalesOrders, and only apply deltas when order state actually changes.
+- Log all of this via the AuditLogger/AI Logs:
+  - Event type examples: `SHOPIFY_ORDER_IMPORTED`, `AMAZON_ORDER_IMPORTED`, `SHOPIFY_ORDER_UPDATED`, etc.
+  - Metadata should include channel, externalOrderId, and any quantity changes applied.
+
+4. Extensiv/Pivot read-only snapshot + reconciliation
+- Implement a simple Extensiv sync that:
+  - Fetches current inventory per SKU from Extensiv.
+  - Stores the last-known Extensiv quantity in a separate field or table (e.g., `extensivOnHandSnapshot`) without overwriting the main onHand.
+  - Writes an AI Log entry for each sync run (success or error).
+- Expose the snapshot in an existing view (BOM or AI Insights) by adding:
+  - Columns for `Extensiv On Hand` and `Variance` = (our onHand – Extensiv snapshot).
+- Do NOT introduce automatic reconciliation logic in V1; just surface variance in the UI and logs.
+
+5. QuickBooks minimal integration (no inventory impact yet)
+- Keep QuickBooks in V1 limited to:
+  - Storing connection credentials and item mapping IDs on products/SKUs.
+  - Optionally logging that QuickBooks is connected and ready, but not yet driving inventory.
+- Ensure there is NO code path that creates SalesOrders or inventory movements from QuickBooks transactions in V1. If anything like that exists, remove or guard it behind a clearly commented feature flag that is OFF.
+
+6. GoHighLevel PO messaging hardening
+- Ensure the GHL PO send flow (createOrFindContact + sendEmail/sendSMS) writes to the AuditLog:
+  - `GHL_PO_EMAIL_SENT`, `GHL_PO_SMS_SENT`, with message IDs/timestamps if available.
+- If not already done, persist the send result (status + timestamp) on the PO record for traceability, but do NOT expand scope beyond simple fields.
+
+7. Logging and AI visibility for all integrations
+- For each integration (Shopify, Amazon, Extensiv, GHL, QuickBooks):
+  - Make sure key sync/send actions write structured entries into the AI Logs table (source, eventType, entity, description, metadata).
+  - In the AI Agent → Insights tab, add lightweight summary metrics based on these logs:
+    - Last successful sync per data source.
+    - Count of orders imported today (by channel).
+    - Count of Extensiv variance alerts (SKUs where |variance| exceeds a small threshold).
+- Keep UI changes minimal: small summary cards or existing sections only; no new pages.
+
+8. V1 validation pass: “no double counting”
+- Create / refresh demo data to simulate:
+  - Shopify orders that later appear in QuickBooks.
+  - Amazon orders.
+  - Extensiv inventory snapshot.
+- Confirm:
+  - Only Shopify/Amazon drive SalesOrders and InventoryMovement.
+  - QuickBooks does NOT create extra SalesOrders or inventory changes.
+  - Extensiv shows variance only and does not overwrite onHand.
+  - AI Logs captures the whole story end-to-end.
+- Fix any double-counting risk you find, but keep the scope limited to the behaviors described above.
+
+IMPORTANT: Do NOT implement any behavior that intentionally sends fake or misleading inventory quantities back to Shopify/Amazon. All integrations must remain compliant with their terms of service. If you see any code or assumptions that violate this, simplify them to standard, honest stock syncing and logging.

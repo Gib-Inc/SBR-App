@@ -924,29 +924,31 @@ function RulesTab() {
   );
 }
 
-// Performance tracking data type
-interface PerformanceRecord {
-  id: string;
-  sku: string;
-  productName: string;
-  aiRecommendedQty: number;
-  actualOrderQty: number;
-  variancePercent: number;
-  date: string;
-  status: "Followed AI" | "Partially Followed" | "Ignored";
-}
-
 function InsightsTab() {
-  const [dateRangeFilter, setDateRangeFilter] = useState<string>("30");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [sortColumn, setSortColumn] = useState<keyof PerformanceRecord>("date");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const { toast } = useToast();
+  const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [selectedItem, setSelectedItem] = useState<PersistedRecommendation | null>(null);
+  const [createPOOpen, setCreatePOOpen] = useState(false);
+  const [createPOData, setCreatePOData] = useState<{
+    supplierId?: string;
+    items: Array<{
+      itemId: string;
+      quantity: number;
+      aiRecommendationId: string;
+      sku?: string;
+      name?: string;
+    }>;
+  } | null>(null);
   
-  // Fetch all recommendations to track performance across all statuses
-  const { data: recsData, isLoading } = useQuery<PersistedRecommendationsResponse>({
-    queryKey: ["/api/ai/recommendations", "all"],
+  // Fetch persisted recommendations from database
+  // Map frontend status filter to API query parameter
+  const apiStatusParam = statusFilter === "all" ? "all" : statusFilter === "active" ? "active" : statusFilter;
+  const { data: recsData, isLoading, isFetching } = useQuery<PersistedRecommendationsResponse>({
+    queryKey: ["/api/ai/recommendations", apiStatusParam],
     queryFn: async () => {
-      const response = await fetch(`/api/ai/recommendations?status=all`, {
+      const response = await fetch(`/api/ai/recommendations?status=${apiStatusParam}`, {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to fetch recommendations");
@@ -954,126 +956,169 @@ function InsightsTab() {
     },
   });
   
-  // Transform recommendations into performance records
-  const performanceRecords: PerformanceRecord[] = (recsData?.recommendations || [])
-    .filter(rec => rec.recommendedQty && rec.recommendedQty > 0)
-    .map(rec => {
-      const aiQty = rec.recommendedQty ?? 0;
-      // Determine actual ordered quantity and status based on recommendation status
-      let actualQty: number;
-      let status: "Followed AI" | "Partially Followed" | "Ignored";
+  // Refresh mutation - triggers decision engine recalculation and persistence
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/ai/insights?refresh=true", {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to refresh");
+      return response.json() as Promise<InsightsResponse>;
+    },
+    onSuccess: (data) => {
+      // Invalidate all recommendation queries (different status filters)
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/insights"] });
+      toast({
+        title: "Recommendations Updated",
+        description: `AI recalculated recommendations. ${data.summary.persisted ?? 0} actionable items saved.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Refresh Failed",
+        description: error.message || "Failed to refresh recommendations",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Status update mutation
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      return await apiRequest("PATCH", `/api/ai/recommendations/${id}`, { status });
+    },
+    onSuccess: () => {
+      // Invalidate all recommendation queries to update counts across all filters
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Update Failed",
+        description: error.message || "Failed to update recommendation status",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Handler to create PO from recommendation
+  const handleCreatePO = async (rec: PersistedRecommendation) => {
+    // Create item data with sku/name defaults
+    const itemData = {
+      itemId: rec.itemId,
+      quantity: rec.recommendedQty || 1,
+      aiRecommendationId: rec.id,
+      sku: rec.sku,
+      name: rec.productName,
+    };
+    
+    try {
+      // Fetch designated supplier for this item
+      const response = await fetch(`/api/items/${rec.itemId}/designated-supplier`, {
+        credentials: "include",
+      });
       
-      if (rec.status === "DISMISSED") {
-        // Dismissed recommendations = Ignored (no order placed)
-        actualQty = 0;
-        status = "Ignored";
-      } else if (rec.status === "ACCEPTED") {
-        // Accepted recommendations - use qtyOnPo if available
-        actualQty = rec.qtyOnPo ?? aiQty;
-        const variance = aiQty > 0 ? Math.abs(((actualQty - aiQty) / aiQty) * 100) : 0;
-        if (variance <= 10) {
-          status = "Followed AI";
-        } else if (variance <= 25) {
-          status = "Partially Followed";
-        } else {
-          status = "Partially Followed"; // Still partially followed if accepted
-        }
+      // Check if response is OK before parsing
+      if (response.ok) {
+        const data = await response.json();
+        // Set up PO data with pre-filled values including supplier
+        setCreatePOData({
+          supplierId: data.supplier?.id,
+          items: [itemData],
+        });
       } else {
-        // NEW status - pending action
-        actualQty = 0;
-        status = "Ignored"; // No action taken yet
+        // Supplier not found or error - still open sheet without supplier
+        console.warn("No designated supplier found for item:", rec.itemId);
+        setCreatePOData({
+          items: [itemData],
+        });
       }
-      
-      const variance = aiQty > 0 ? ((actualQty - aiQty) / aiQty) * 100 : 0;
-      
-      return {
-        id: rec.id,
-        sku: rec.sku,
-        productName: rec.productName,
-        aiRecommendedQty: aiQty,
-        actualOrderQty: actualQty,
-        variancePercent: variance,
-        date: rec.updatedAt || rec.createdAt,
-        status,
-      };
+      setCreatePOOpen(true);
+    } catch (error) {
+      console.error("Failed to get supplier info:", error);
+      // Still open the PO sheet, just without pre-filled supplier
+      setCreatePOData({
+        items: [itemData],
+      });
+      setCreatePOOpen(true);
+    }
+  };
+  
+  // Callback when PO is successfully created
+  const handlePOCreated = (poId: string) => {
+    toast({
+      title: "PO Created",
+      description: "Purchase order created from recommendation. Status updated to Accepted.",
     });
-  
-  // Filter by date range
-  const now = new Date();
-  const filteredByDate = performanceRecords.filter(record => {
-    if (dateRangeFilter === "all") return true;
-    const recordDate = new Date(record.date);
-    const daysAgo = parseInt(dateRangeFilter);
-    const cutoff = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
-    return recordDate >= cutoff;
-  });
-  
-  // Filter by status
-  const filteredRecords = filteredByDate.filter(record => {
-    if (statusFilter === "all") return true;
-    return record.status === statusFilter;
-  });
-  
-  // Sort records
-  const sortedRecords = [...filteredRecords].sort((a, b) => {
-    let aVal: any = a[sortColumn];
-    let bVal: any = b[sortColumn];
-    
-    // Handle date sorting
-    if (sortColumn === "date") {
-      aVal = new Date(aVal).getTime();
-      bVal = new Date(bVal).getTime();
-    }
-    
-    // Handle string sorting
-    if (typeof aVal === "string" && typeof bVal === "string") {
-      return sortDirection === "asc" 
-        ? aVal.localeCompare(bVal) 
-        : bVal.localeCompare(aVal);
-    }
-    
-    // Handle number sorting
-    if (sortDirection === "asc") {
-      return aVal - bVal;
-    }
-    return bVal - aVal;
-  });
-  
-  const handleSort = (column: keyof PerformanceRecord) => {
-    if (sortColumn === column) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortColumn(column);
-      setSortDirection("desc");
-    }
+    setCreatePOOpen(false);
+    setCreatePOData(null);
   };
   
-  const getSortIcon = (column: keyof PerformanceRecord) => {
-    if (sortColumn !== column) {
-      return <span className="text-muted-foreground/50 ml-1">⇅</span>;
-    }
-    return <span className="text-primary ml-1">{sortDirection === "asc" ? "↑" : "↓"}</span>;
-  };
+  // Filter recommendations based on status and risk
+  const filteredRecommendations = (recsData?.recommendations || []).filter(rec => {
+    // Status filter: "active" = NEW + ACCEPTED, or specific status
+    if (statusFilter === "active" && rec.status === "DISMISSED") return false;
+    if (statusFilter !== "active" && statusFilter !== "all" && rec.status !== statusFilter) return false;
+    if (riskFilter !== "all" && rec.riskLevel !== riskFilter) return false;
+    if (typeFilter !== "all" && rec.recommendationType !== typeFilter) return false;
+    return true;
+  });
   
-  const getVarianceColor = (variance: number): string => {
-    const absVariance = Math.abs(variance);
-    if (absVariance <= 10) return "text-green-600 dark:text-green-400";
-    if (absVariance <= 25) return "text-yellow-600 dark:text-yellow-400";
-    return "text-red-600 dark:text-red-400";
+  const getRiskBadgeVariant = (risk: string): "destructive" | "secondary" | "outline" | "default" => {
+    switch (risk) {
+      case "HIGH": return "destructive";
+      case "MEDIUM": return "secondary";
+      case "LOW": return "outline";
+      default: return "outline";
+    }
   };
   
   const getStatusBadgeVariant = (status: string): "default" | "secondary" | "outline" => {
     switch (status) {
-      case "Followed AI": return "default";
-      case "Partially Followed": return "secondary";
-      case "Ignored": return "outline";
+      case "NEW": return "default";
+      case "ACCEPTED": return "secondary";
+      case "DISMISSED": return "outline";
       default: return "outline";
     }
+  };
+  
+  const getTypeBadgeColor = (type: string): string => {
+    switch (type) {
+      case "REORDER": return "text-red-600 dark:text-red-400";
+      case "ADS_SPIKE": return "text-purple-600 dark:text-purple-400";
+      case "CHECK_VARIANCE": return "text-yellow-600 dark:text-yellow-400";
+      case "HIGH_RETURNS": return "text-orange-600 dark:text-orange-400";
+      case "MONITOR": return "text-blue-600 dark:text-blue-400";
+      default: return "";
+    }
+  };
+  
+  const formatStockGap = (gap: number | null): string => {
+    if (gap === null) return "-";
+    const sign = gap >= 0 ? "+" : "";
+    return `${sign}${gap.toFixed(0)}%`;
+  };
+  
+  const getStockGapColor = (gap: number | null): string => {
+    if (gap === null) return "";
+    if (gap < -50) return "text-destructive font-bold";
+    if (gap < -20) return "text-red-500";
+    if (gap < 0) return "text-orange-500";
+    return "text-green-600";
   };
   
   if (isLoading) {
     return (
       <div className="space-y-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {[1, 2, 3, 4].map((i) => (
+                <Skeleton key={i} className="h-20 w-full" />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent className="pt-6">
             <Skeleton className="h-64 w-full" />
@@ -1083,145 +1128,292 @@ function InsightsTab() {
     );
   }
   
+  const summary = recsData?.summary || { total: 0, new: 0, accepted: 0, dismissed: 0, highRisk: 0, actionRequired: 0 };
+  
   return (
     <div className="space-y-4">
+      {/* Ad Demand Signals */}
+      <AdDemandSignals variant="ai-agent" />
+      
+      {/* Summary Cards - Status-based counts */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold" data-testid="text-total-recs">{summary.total}</p>
+              <p className="text-sm text-muted-foreground">Total Active</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-primary">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-primary" data-testid="text-new-recs">{summary.new}</p>
+              <p className="text-sm text-muted-foreground">New</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-green-600" data-testid="text-accepted-recs">{summary.accepted}</p>
+              <p className="text-sm text-muted-foreground">Accepted</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-muted-foreground" data-testid="text-dismissed-recs">{summary.dismissed}</p>
+              <p className="text-sm text-muted-foreground">Dismissed</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-destructive">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-destructive" data-testid="text-high-risk-recs">{summary.highRisk}</p>
+              <p className="text-sm text-muted-foreground">High Risk</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-orange-500" data-testid="text-action-required">{summary.actionRequired}</p>
+              <p className="text-sm text-muted-foreground">Needs Action</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+      
+      {/* AI Recommendations Header */}
       <Card>
         <CardHeader>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="h-5 w-5" />
-                AI Recommendation Performance
-              </CardTitle>
+              <CardTitle>AI Recommendations</CardTitle>
               <CardDescription>
-                Track how closely your ordering decisions align with AI recommendations
+                Actionable inventory recommendations. Accept or dismiss to track decisions.
+                {recsData?.fetchedAt && (
+                  <span className="block text-xs mt-1">
+                    Data as of: {new Date(recsData.fetchedAt).toLocaleString()}
+                  </span>
+                )}
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <Select value={dateRangeFilter} onValueChange={setDateRangeFilter}>
-                <SelectTrigger className="w-36" data-testid="select-date-range-filter">
-                  <SelectValue placeholder="Date Range" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="7">Last 7 days</SelectItem>
-                  <SelectItem value="30">Last 30 days</SelectItem>
-                  <SelectItem value="90">Last 90 days</SelectItem>
-                  <SelectItem value="all">All time</SelectItem>
-                </SelectContent>
-              </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-40" data-testid="select-status-filter">
+                <SelectTrigger className="w-28" data-testid="select-status-filter">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="Followed AI">Followed AI</SelectItem>
-                  <SelectItem value="Partially Followed">Partially Followed</SelectItem>
-                  <SelectItem value="Ignored">Ignored</SelectItem>
+                  <SelectItem value="NEW">New</SelectItem>
+                  <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                  <SelectItem value="DISMISSED">Dismissed</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={riskFilter} onValueChange={setRiskFilter}>
+                <SelectTrigger className="w-28" data-testid="select-risk-filter">
+                  <Filter className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="Risk" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Risks</SelectItem>
+                  <SelectItem value="HIGH">High</SelectItem>
+                  <SelectItem value="MEDIUM">Medium</SelectItem>
+                  <SelectItem value="LOW">Low</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger className="w-36" data-testid="select-type-filter">
+                  <SelectValue placeholder="Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="REORDER">Reorder</SelectItem>
+                  <SelectItem value="ADS_SPIKE">Ads Spike</SelectItem>
+                  <SelectItem value="CHECK_VARIANCE">Variance</SelectItem>
+                  <SelectItem value="HIGH_RETURNS">Returns</SelectItem>
+                  <SelectItem value="MONITOR">Monitor</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refreshMutation.mutate()}
+                disabled={refreshMutation.isPending || isFetching}
+                data-testid="button-refresh-recommendations"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${refreshMutation.isPending || isFetching ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
             </div>
           </div>
         </CardHeader>
+      </Card>
+      
+      {/* AI Recommendations Table - separate from header card */}
+      <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
                 <tr className="h-11 border-b">
-                  <th 
-                    className="px-3 text-left font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("sku")}
-                    data-testid="th-sku"
-                  >
-                    SKU {getSortIcon("sku")}
-                  </th>
-                  <th 
-                    className="px-3 text-left font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("productName")}
-                    data-testid="th-product-name"
-                  >
-                    Product Name {getSortIcon("productName")}
-                  </th>
-                  <th 
-                    className="px-3 text-right font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("aiRecommendedQty")}
-                    data-testid="th-ai-qty"
-                  >
-                    AI Recommended Qty {getSortIcon("aiRecommendedQty")}
-                  </th>
-                  <th 
-                    className="px-3 text-right font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("actualOrderQty")}
-                    data-testid="th-actual-qty"
-                  >
-                    Actual Order Qty {getSortIcon("actualOrderQty")}
-                  </th>
-                  <th 
-                    className="px-3 text-right font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("variancePercent")}
-                    data-testid="th-variance"
-                  >
-                    Variance % {getSortIcon("variancePercent")}
-                  </th>
-                  <th 
-                    className="px-3 text-left font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("date")}
-                    data-testid="th-date"
-                  >
-                    Date {getSortIcon("date")}
-                  </th>
-                  <th 
-                    className="px-3 text-left font-medium whitespace-nowrap cursor-pointer hover:bg-muted/70"
-                    onClick={() => handleSort("status")}
-                    data-testid="th-status"
-                  >
-                    Status {getSortIcon("status")}
-                  </th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap sticky left-0 bg-muted/50 z-10">SKU</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Product</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Type</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Risk</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Days Left</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Avail</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Gap%</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">On PO</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Rec Qty</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap">Velocity</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">Status</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap sticky right-0 bg-muted/50 z-10">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRecords.length === 0 ? (
+                {filteredRecommendations.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center text-muted-foreground py-8">
-                      <div className="flex flex-col items-center gap-2">
-                        <TrendingUp className="h-8 w-8 text-muted-foreground/50" />
-                        <p>No performance data available for the selected filters.</p>
-                        <p className="text-xs">Accept or dismiss AI recommendations to start tracking performance.</p>
-                      </div>
+                    <td colSpan={12} className="text-center text-muted-foreground py-8">
+                      {recsData?.recommendations.length === 0 
+                        ? "No actionable recommendations. Click Refresh to generate new recommendations."
+                        : "No items match the selected filters."
+                      }
                     </td>
                   </tr>
                 ) : (
-                  sortedRecords.map((record) => (
+                  filteredRecommendations.map((rec) => (
                     <tr 
-                      key={record.id} 
-                      data-testid={`row-performance-${record.id}`}
-                      className="h-11 border-b hover-elevate"
+                      key={rec.id} 
+                      data-testid={`row-recommendation-${rec.id}`}
+                      className={`h-11 border-b hover-elevate cursor-pointer ${rec.status === "DISMISSED" ? "opacity-50" : ""}`}
+                      onClick={() => setSelectedItem(rec)}
                     >
-                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap">
-                        {record.sku}
+                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
+                        {rec.sku}
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap max-w-[200px] truncate" title={record.productName}>
-                        {record.productName}
-                      </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap font-medium">
-                        {record.aiRecommendedQty}
-                      </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap font-medium">
-                        {record.actualOrderQty}
-                      </td>
-                      <td className={`px-3 align-middle text-right whitespace-nowrap font-medium ${getVarianceColor(record.variancePercent)}`}>
-                        {record.variancePercent >= 0 ? "+" : ""}{record.variancePercent.toFixed(1)}%
+                      <td className="px-3 align-middle whitespace-nowrap max-w-[180px] truncate" title={rec.productName}>
+                        {rec.productName}
                       </td>
                       <td className="px-3 align-middle whitespace-nowrap">
-                        {new Date(record.date).toLocaleDateString()}
+                        <span className={`text-sm font-medium ${getTypeBadgeColor(rec.recommendationType ?? "MONITOR")}`}>
+                          {(rec.recommendationType ?? "MONITOR").replace("_", " ")}
+                        </span>
                       </td>
                       <td className="px-3 align-middle whitespace-nowrap">
                         <Badge 
-                          variant={getStatusBadgeVariant(record.status)}
-                          data-testid={`badge-status-${record.id}`}
+                          variant={getRiskBadgeVariant(rec.riskLevel)} 
+                          data-testid={`badge-risk-${rec.id}`}
                         >
-                          {record.status}
+                          {rec.riskLevel}
                         </Badge>
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap">
+                        {rec.daysUntilStockout ?? "-"}
+                      </td>
+                      <td className={`px-3 align-middle text-right whitespace-nowrap ${(rec.availableForSale ?? 0) < 0 ? "text-destructive font-bold" : ""}`}>
+                        {rec.availableForSale ?? "-"}
+                      </td>
+                      <td className={`px-3 align-middle text-right whitespace-nowrap ${getStockGapColor(rec.stockGapPercent)}`}>
+                        {formatStockGap(rec.stockGapPercent)}
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap">
+                        {rec.qtyOnPo ?? 0}
+                      </td>
+                      <td className="px-3 align-middle text-right font-medium whitespace-nowrap">
+                        {rec.recommendedQty ?? "-"}
+                      </td>
+                      <td className="px-3 align-middle text-right whitespace-nowrap text-sm">
+                        {rec.adjustedVelocity?.toFixed(1) ?? "-"}/d
+                        {rec.adMultiplier && rec.adMultiplier > 1 && (
+                          <span className="text-purple-500 ml-1" title={`Ad boost: ${rec.adMultiplier.toFixed(1)}x`}>
+                            <Zap className="inline h-3 w-3" />
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap">
+                        <Badge 
+                          variant={getStatusBadgeVariant(rec.status)}
+                          data-testid={`badge-status-${rec.id}`}
+                        >
+                          {rec.status}
+                        </Badge>
+                      </td>
+                      <td className="px-3 align-middle whitespace-nowrap sticky right-0 bg-background z-10">
+                        <div className="flex items-center justify-center gap-1">
+                          {rec.status === "NEW" && rec.recommendationType !== "OK" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-primary"
+                                  onClick={(e) => { e.stopPropagation(); handleCreatePO(rec); }}
+                                  data-testid={`button-create-po-${rec.id}`}
+                                >
+                                  <Send className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Create Purchase Order</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {rec.status === "NEW" && (
+                            <>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-green-600"
+                                    onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "ACCEPTED" }); }}
+                                    disabled={updateStatusMutation.isPending}
+                                    data-testid={`button-accept-${rec.id}`}
+                                  >
+                                    <CheckCircle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Accept recommendation</TooltipContent>
+                              </Tooltip>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-muted-foreground"
+                                    onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "DISMISSED" }); }}
+                                    disabled={updateStatusMutation.isPending}
+                                    data-testid={`button-dismiss-${rec.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Dismiss recommendation</TooltipContent>
+                              </Tooltip>
+                            </>
+                          )}
+                          {rec.status !== "NEW" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ id: rec.id, status: "NEW" }); }}
+                                  disabled={updateStatusMutation.isPending}
+                                  data-testid={`button-reset-${rec.id}`}
+                                >
+                                  <RotateCcw className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Reset to New</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1231,6 +1423,163 @@ function InsightsTab() {
           </div>
         </CardContent>
       </Card>
+      
+      {/* Details Modal */}
+      <Dialog open={!!selectedItem} onOpenChange={(open) => !open && setSelectedItem(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5" />
+              Recommendation Details
+            </DialogTitle>
+            <DialogDescription>
+              {selectedItem?.productName} ({selectedItem?.sku})
+            </DialogDescription>
+          </DialogHeader>
+          {selectedItem && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant={getRiskBadgeVariant(selectedItem.riskLevel)}>
+                  {selectedItem.riskLevel} Risk
+                </Badge>
+                <Badge variant={getStatusBadgeVariant(selectedItem.status)}>
+                  {selectedItem.status}
+                </Badge>
+                <span className={`text-sm font-medium ${getTypeBadgeColor(selectedItem.recommendationType ?? "MONITOR")}`}>
+                  {(selectedItem.recommendationType ?? "MONITOR").replace("_", " ")}
+                </span>
+                {selectedItem.recommendedQty && selectedItem.recommendedQty > 0 && (
+                  <Badge variant="outline">
+                    Order {selectedItem.recommendedQty} units
+                  </Badge>
+                )}
+              </div>
+              
+              {selectedItem.reasonSummary && (
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-sm" data-testid="text-reason-summary">{selectedItem.reasonSummary}</p>
+                </div>
+              )}
+              
+              {/* Metrics grid */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Available for Sale</p>
+                  <p className={`font-medium ${(selectedItem.availableForSale ?? 0) < 0 ? "text-destructive" : ""}`}>
+                    {selectedItem.availableForSale ?? 0} units
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Days Until Stockout</p>
+                  <p className="font-medium">{selectedItem.daysUntilStockout ?? "N/A"} days</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Stock Gap</p>
+                  <p className={`font-medium ${getStockGapColor(selectedItem.stockGapPercent)}`}>
+                    {formatStockGap(selectedItem.stockGapPercent)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Qty on Open POs</p>
+                  <p className="font-medium">{selectedItem.qtyOnPo ?? 0} units</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Base Velocity</p>
+                  <p className="font-medium">{selectedItem.baseVelocity?.toFixed(2) ?? "N/A"}/day</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Adjusted Velocity</p>
+                  <p className="font-medium">
+                    {selectedItem.adjustedVelocity?.toFixed(2) ?? "N/A"}/day
+                    {selectedItem.adMultiplier && selectedItem.adMultiplier > 1 && (
+                      <span className="text-purple-500 ml-1">
+                        ({selectedItem.adMultiplier.toFixed(1)}x ads)
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Source signals */}
+              {selectedItem.sourceSignals && Object.keys(selectedItem.sourceSignals).length > 0 && (
+                <div className="border-t pt-4">
+                  <p className="text-sm font-medium mb-2">Source Signals</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(selectedItem.sourceSignals).map(([key, value]) => (
+                      <Badge key={key} variant="outline" className="text-xs">
+                        {key}: {typeof value === "number" ? value.toFixed(2) : String(value)}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Linked POs section */}
+              <LinkedPOsSection recommendationId={selectedItem.id} />
+              
+              {/* Action buttons */}
+              <div className="flex items-center justify-end gap-2 pt-4 border-t">
+                {selectedItem.status === "NEW" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        updateStatusMutation.mutate({ id: selectedItem.id, status: "DISMISSED" });
+                        setSelectedItem(null);
+                      }}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-dismiss"
+                    >
+                      <XCircle className="mr-2 h-4 w-4" />
+                      Dismiss
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        updateStatusMutation.mutate({ id: selectedItem.id, status: "ACCEPTED" });
+                        setSelectedItem(null);
+                      }}
+                      disabled={updateStatusMutation.isPending}
+                      data-testid="button-modal-accept"
+                    >
+                      <CheckCircle className="mr-2 h-4 w-4" />
+                      Accept
+                    </Button>
+                  </>
+                )}
+                {selectedItem.status !== "NEW" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      updateStatusMutation.mutate({ id: selectedItem.id, status: "NEW" });
+                      setSelectedItem(null);
+                    }}
+                    disabled={updateStatusMutation.isPending}
+                    data-testid="button-modal-reset"
+                  >
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    Reset to New
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      
+      {/* Create PO Sheet */}
+      <CreatePOSheet
+        open={createPOOpen}
+        onOpenChange={(open) => {
+          setCreatePOOpen(open);
+          if (!open) setCreatePOData(null);
+        }}
+        prefilledSupplierId={createPOData?.supplierId}
+        prefilledItems={createPOData?.items}
+        onPOCreated={handlePOCreated}
+      />
+      
+      {/* AI System Suggestions Section */}
+      <SystemSuggestionsSection />
     </div>
   );
 }

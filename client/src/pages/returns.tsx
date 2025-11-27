@@ -218,7 +218,7 @@ export default function Returns() {
               <p className="text-sm text-muted-foreground">No return requests yet</p>
             </div>
           ) : (
-            <div className="overflow-auto max-h-[calc(100vh-320px)]">
+            <div className="overflow-auto max-h-[calc(100vh-320px)] rounded-md">
               <table className="w-full min-w-[800px]">
                 <thead className="bg-muted sticky top-0 z-10">
                   <tr className="border-b">

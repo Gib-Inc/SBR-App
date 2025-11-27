@@ -191,6 +191,150 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Send SMS message to a contact
+   */
+  async sendSMS(contactId: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/conversations/messages`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          type: 'SMS',
+          contactId,
+          message,
+          locationId: this.locationId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Failed to send SMS:', errorText);
+        return {
+          success: false,
+          error: `Failed to send SMS: ${response.status} ${response.statusText}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        messageId: data.messageId || data.id,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error sending SMS:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to send SMS',
+      };
+    }
+  }
+
+  /**
+   * Send email to a contact
+   */
+  async sendEmail(
+    contactId: string, 
+    subject: string, 
+    body: string,
+    html?: string
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/conversations/messages`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          type: 'Email',
+          contactId,
+          subject,
+          message: body,
+          html: html || body,
+          locationId: this.locationId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Failed to send email:', errorText);
+        return {
+          success: false,
+          error: `Failed to send email: ${response.status} ${response.statusText}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        messageId: data.messageId || data.id,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error sending email:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to send email',
+      };
+    }
+  }
+
+  /**
+   * Create or find a contact by email/phone
+   */
+  async createOrFindContact(
+    name: string,
+    email?: string,
+    phone?: string
+  ): Promise<{ success: boolean; contactId?: string; error?: string }> {
+    try {
+      // First try to find existing contact
+      const existingContact = await this.getContactByPhoneOrEmail(phone, email);
+      if (existingContact) {
+        return {
+          success: true,
+          contactId: existingContact.id,
+        };
+      }
+
+      // Create new contact
+      const nameParts = name.split(' ');
+      const firstName = nameParts[0] || name;
+      const lastName = nameParts.slice(1).join(' ') || '';
+
+      const response = await fetch(`${this.baseUrl}/contacts`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          email,
+          phone,
+          locationId: this.locationId,
+          source: 'Inventory Management System',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Failed to create contact:', errorText);
+        return {
+          success: false,
+          error: `Failed to create contact: ${response.status}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        contactId: data.contact?.id || data.id,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error creating contact:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to create contact',
+      };
+    }
+  }
+
+  /**
    * Sync data (placeholder for future implementation)
    */
   async sync(): Promise<{ success: boolean; message: string }> {

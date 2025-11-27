@@ -6,8 +6,32 @@ export interface LLMRequest {
   provider: LLMProvider;
   apiKey: string;
   customEndpoint?: string;
-  taskType: "order_recommendation" | "supplier_ranking" | "forecasting";
+  taskType: "order_recommendation" | "supplier_ranking" | "forecasting" | "po_generation";
   payload: any;
+}
+
+export interface POGenerationPayload {
+  supplierName: string;
+  supplierEmail?: string;
+  supplierPhone?: string;
+  items: Array<{
+    sku: string;
+    name: string;
+    quantity: number;
+    currentStock: number;
+    daysUntilStockout?: number;
+    unitPrice?: number;
+  }>;
+  poNumber: string;
+  companyName: string;
+  deliveryAddress?: string;
+  notes?: string;
+}
+
+export interface POGenerationResult {
+  subject: string;
+  body: string;
+  smsMessage: string;
 }
 
 export interface LLMResponse {
@@ -268,8 +292,120 @@ export class LLMService {
       case "forecasting":
         return `Predict future demand based on historical sales data:\n${JSON.stringify(request.payload, null, 2)}`;
       
+      case "po_generation":
+        return this.buildPOPrompt(request.payload as POGenerationPayload);
+      
       default:
         return JSON.stringify(request.payload);
+    }
+  }
+
+  /**
+   * Build a professional PO generation prompt
+   */
+  private static buildPOPrompt(payload: POGenerationPayload): string {
+    const itemLines = payload.items.map(item => 
+      `- ${item.name} (SKU: ${item.sku}): ${item.quantity} units${item.unitPrice ? ` @ $${item.unitPrice.toFixed(2)}` : ''}${item.daysUntilStockout ? ` [${item.daysUntilStockout} days until stockout]` : ''}`
+    ).join('\n');
+
+    return `Generate a professional purchase order message to send to a supplier.
+
+SUPPLIER: ${payload.supplierName}
+PO NUMBER: ${payload.poNumber}
+COMPANY: ${payload.companyName}
+
+ITEMS TO ORDER:
+${itemLines}
+
+${payload.deliveryAddress ? `DELIVERY ADDRESS: ${payload.deliveryAddress}` : ''}
+${payload.notes ? `ADDITIONAL NOTES: ${payload.notes}` : ''}
+
+Please generate:
+1. An email subject line (concise, professional)
+2. An email body (professional, includes all items with quantities, asks for confirmation and expected delivery date)
+3. An SMS message (brief, mentions PO number and requests confirmation, max 160 characters)
+
+Format your response as JSON:
+{
+  "subject": "...",
+  "body": "...",
+  "smsMessage": "..."
+}`;
+  }
+
+  /**
+   * Generate PO content using LLM
+   */
+  static async generatePOContent(payload: POGenerationPayload): Promise<POGenerationResult> {
+    // Get LLM settings from database
+    const settings = await storage.getSettings(payload.companyName);
+    
+    // Default fallback if no LLM is configured
+    const itemsList = payload.items.map(item => 
+      `• ${item.name} (SKU: ${item.sku}) - Qty: ${item.quantity}${item.unitPrice ? ` @ $${item.unitPrice.toFixed(2)}` : ''}`
+    ).join('\n');
+
+    const totalValue = payload.items.reduce((sum, item) => 
+      sum + (item.quantity * (item.unitPrice || 0)), 0
+    );
+
+    const defaultSubject = `Purchase Order ${payload.poNumber} from ${payload.companyName}`;
+    const defaultBody = `Dear ${payload.supplierName},
+
+Please find our purchase order ${payload.poNumber} below.
+
+ORDER DETAILS:
+${itemsList}
+
+${totalValue > 0 ? `Estimated Total: $${totalValue.toFixed(2)}` : ''}
+${payload.deliveryAddress ? `\nDelivery Address:\n${payload.deliveryAddress}` : ''}
+${payload.notes ? `\nNotes: ${payload.notes}` : ''}
+
+Please confirm receipt of this order and provide expected delivery date.
+
+Thank you for your partnership.
+
+Best regards,
+${payload.companyName}`;
+
+    const defaultSMS = `PO ${payload.poNumber} sent. ${payload.items.length} item(s). Please confirm receipt. - ${payload.companyName}`;
+
+    // If no LLM configured, use defaults
+    if (!settings?.llmProvider || !settings?.llmApiKey) {
+      return {
+        subject: defaultSubject,
+        body: defaultBody,
+        smsMessage: defaultSMS,
+      };
+    }
+
+    // Try to use LLM for generation
+    try {
+      const response = await this.askLLM({
+        provider: settings.llmProvider as LLMProvider,
+        apiKey: settings.llmApiKey,
+        customEndpoint: settings.customLlmEndpoint || undefined,
+        taskType: "po_generation",
+        payload,
+      });
+
+      if (response.success && response.data?.poContent) {
+        return response.data.poContent as POGenerationResult;
+      }
+
+      // Fall back to defaults if LLM fails
+      return {
+        subject: defaultSubject,
+        body: defaultBody,
+        smsMessage: defaultSMS,
+      };
+    } catch (error) {
+      console.error('[LLMService] Error generating PO content:', error);
+      return {
+        subject: defaultSubject,
+        body: defaultBody,
+        smsMessage: defaultSMS,
+      };
     }
   }
 

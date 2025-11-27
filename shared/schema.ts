@@ -108,8 +108,11 @@ export type BillOfMaterials = typeof billOfMaterials.$inferSelect;
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
   catalogUrl: text("catalog_url"),
   logoUrl: text("logo_url"),
+  ghlContactId: text("ghl_contact_id"),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });

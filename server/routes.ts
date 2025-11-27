@@ -3422,6 +3422,245 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Create PO, generate message via LLM, and send via GHL
+  app.post("/api/purchase-orders/create-and-send", requireAuth, async (req: Request, res: Response) => {
+    let createdPOId: string | null = null;
+    try {
+      const { 
+        supplierId,
+        supplierName,
+        supplierEmail,
+        supplierPhone,
+        items,
+        sendVia,
+        notes,
+        isNewSupplier,
+      } = req.body;
+
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "At least one item is required" });
+      }
+
+      if (!supplierId && !isNewSupplier) {
+        return res.status(400).json({ error: "Supplier is required" });
+      }
+
+      // Create new supplier if needed
+      let finalSupplierId = supplierId;
+      if (isNewSupplier && supplierName) {
+        const newSupplier = await storage.createSupplier({
+          name: supplierName,
+          email: supplierEmail || null,
+          phone: supplierPhone || null,
+        });
+        finalSupplierId = newSupplier.id;
+      }
+
+      // Get supplier details
+      const supplier = await storage.getSupplier(finalSupplierId);
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found" });
+      }
+
+      // Use provided contact info or fall back to supplier's stored info
+      const contactEmail = supplierEmail || supplier.email;
+      const contactPhone = supplierPhone || supplier.phone;
+
+      if (!contactEmail && !contactPhone) {
+        return res.status(400).json({ error: "Supplier must have email or phone to receive PO" });
+      }
+
+      // Generate PO number
+      const allPOs = await storage.getAllPurchaseOrders();
+      const year = new Date().getFullYear();
+      const existingPOsThisYear = allPOs.filter(po => 
+        po.poNumber?.startsWith(`PO-${year}-`)
+      );
+      const nextSequence = existingPOsThisYear.length + 1;
+      const poNumber = `PO-${year}-${String(nextSequence).padStart(4, '0')}`;
+
+      // Create the PO
+      const purchaseOrder = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: finalSupplierId,
+        status: 'DRAFT',
+      });
+      createdPOId = purchaseOrder.id;
+
+      // Create PO lines
+      for (const item of items) {
+        const itemRecord = await storage.getItem(item.itemId);
+        const location = itemRecord?.type === 'finished_product' ? 'PIVOT' : null;
+        const latestRecommendation = await storage.getLatestAIRecommendationForItem(item.itemId, location);
+        
+        await storage.createPurchaseOrderLine({
+          purchaseOrderId: purchaseOrder.id,
+          itemId: item.itemId,
+          qtyOrdered: item.quantity,
+          unitCost: item.unitCost || null,
+          aiRecommendationId: latestRecommendation?.id || null,
+          recommendedQtyAtOrderTime: latestRecommendation?.recommendedQty || null,
+          finalOrderedQty: item.quantity,
+        });
+      }
+
+      // Generate PO content via LLM
+      const poItems = await Promise.all(items.map(async (item: any) => {
+        const itemRecord = await storage.getItem(item.itemId);
+        const daysUntilStockout = itemRecord && itemRecord.dailyUsage > 0
+          ? Math.floor(itemRecord.currentStock / itemRecord.dailyUsage)
+          : undefined;
+        return {
+          sku: itemRecord?.sku || 'N/A',
+          name: itemRecord?.name || 'Unknown Item',
+          quantity: item.quantity,
+          currentStock: itemRecord?.currentStock || 0,
+          daysUntilStockout,
+          unitPrice: item.unitCost,
+        };
+      }));
+
+      const poContent = await LLMService.generatePOContent({
+        supplierName: supplier.name,
+        supplierEmail: contactEmail || undefined,
+        supplierPhone: contactPhone || undefined,
+        items: poItems,
+        poNumber,
+        companyName: 'Inventory Management System',
+        notes: notes || undefined,
+      });
+
+      // Send via GHL
+      const settings = await storage.getSettingsByUserId(req.session.userId!);
+      let ghlResult: { success: boolean; messageId?: string; error?: string } = { success: false };
+      let sentMethod: 'EMAIL' | 'SMS' | null = null;
+
+      if (settings?.gohighlevelApiKey && settings?.gohighlevelLocationId) {
+        const ghlClient = new GoHighLevelClient(
+          'https://services.leadconnectorhq.com',
+          settings.gohighlevelApiKey,
+          settings.gohighlevelLocationId
+        );
+
+        // Create or find contact in GHL
+        const contactResult = await ghlClient.createOrFindContact(
+          supplier.name,
+          contactEmail || undefined,
+          contactPhone || undefined
+        );
+
+        if (contactResult.success && contactResult.contactId) {
+          // Update supplier with GHL contact ID
+          await storage.updateSupplier(finalSupplierId, {
+            ghlContactId: contactResult.contactId,
+          });
+
+          // Send based on preference
+          if (sendVia === 'EMAIL' && contactEmail) {
+            ghlResult = await ghlClient.sendEmail(
+              contactResult.contactId,
+              poContent.subject,
+              poContent.body
+            );
+            sentMethod = 'EMAIL';
+          } else if (sendVia === 'SMS' && contactPhone) {
+            ghlResult = await ghlClient.sendSMS(
+              contactResult.contactId,
+              poContent.smsMessage
+            );
+            sentMethod = 'SMS';
+          } else if (contactEmail) {
+            ghlResult = await ghlClient.sendEmail(
+              contactResult.contactId,
+              poContent.subject,
+              poContent.body
+            );
+            sentMethod = 'EMAIL';
+          } else if (contactPhone) {
+            ghlResult = await ghlClient.sendSMS(
+              contactResult.contactId,
+              poContent.smsMessage
+            );
+            sentMethod = 'SMS';
+          }
+        }
+      }
+
+      // Update PO status
+      if (ghlResult.success) {
+        await storage.updatePurchaseOrder(purchaseOrder.id, {
+          status: 'SENT',
+          sentAt: new Date(),
+        });
+      } else {
+        await storage.updatePurchaseOrder(purchaseOrder.id, {
+          status: 'APPROVAL_PENDING',
+        });
+      }
+
+      const updatedPO = await storage.getPurchaseOrder(purchaseOrder.id);
+      const lines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
+
+      res.status(201).json({
+        purchaseOrder: { ...updatedPO, lines },
+        poContent,
+        ghlResult: {
+          success: ghlResult.success,
+          sentMethod,
+          messageId: ghlResult.messageId,
+          error: ghlResult.error,
+        },
+      });
+    } catch (error: any) {
+      if (createdPOId) {
+        try {
+          await storage.deletePurchaseOrder(createdPOId);
+        } catch (rollbackError) {
+          console.error("[PurchaseOrder] Error rolling back PO:", rollbackError);
+        }
+      }
+      console.error("[PurchaseOrder] Error creating and sending PO:", error);
+      res.status(500).json({ error: error.message || "Failed to create and send purchase order" });
+    }
+  });
+
+  // Get items sorted by criticality for PO creation
+  app.get("/api/items/critical-order", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const items = await storage.getAllItems();
+      
+      // Calculate days until stockout and sort by criticality
+      const itemsWithCriticality = items.map(item => {
+        // For finished products, use pivotQty; for components, use currentStock
+        const stock = item.type === 'finished_product' 
+          ? (item.pivotQty || 0)
+          : item.currentStock;
+        
+        const daysUntilStockout = item.dailyUsage > 0 
+          ? Math.floor(stock / item.dailyUsage)
+          : 9999;
+        
+        return {
+          ...item,
+          daysUntilStockout,
+        };
+      });
+
+      // Sort by days until stockout (most critical first), then alphabetically
+      itemsWithCriticality.sort((a, b) => {
+        if (a.daysUntilStockout !== b.daysUntilStockout) {
+          return a.daysUntilStockout - b.daysUntilStockout;
+        }
+        return a.name.localeCompare(b.name);
+      });
+
+      res.json(itemsWithCriticality);
+    } catch (error: any) {
+      console.error("[Items] Error fetching items by criticality:", error);
+      res.status(500).json({ error: "Failed to fetch items" });
+    }
+  });
+
   app.patch("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;

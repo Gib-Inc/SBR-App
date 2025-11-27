@@ -370,7 +370,7 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
 
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="mt-8">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Zap className="h-5 w-5" />
@@ -675,7 +675,7 @@ function RulesTab() {
   
   if (isLoading) {
     return (
-      <Card>
+      <Card className="mt-8">
         <CardHeader>
           <CardTitle>Decision Engine Rules</CardTitle>
         </CardHeader>
@@ -690,7 +690,7 @@ function RulesTab() {
   
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="mt-8">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Zap className="h-5 w-5" />
@@ -1109,7 +1109,7 @@ function InsightsTab() {
   if (isLoading) {
     return (
       <div className="space-y-4">
-        <Card>
+        <Card className="mt-8">
           <CardContent className="pt-6">
             <Skeleton className="h-64 w-full" />
           </CardContent>
@@ -2049,7 +2049,7 @@ function LogsTab() {
   if (isLoading) {
     return (
       <div className="space-y-4">
-        <Card>
+        <Card className="mt-8">
           <CardHeader>
             <Skeleton className="h-6 w-48" />
             <Skeleton className="h-4 w-96" />
@@ -2064,7 +2064,7 @@ function LogsTab() {
   
   return (
     <div className="space-y-4">
-      <Card>
+      <Card className="mt-8">
         <CardHeader>
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -2787,7 +2787,7 @@ export default function AIAgent() {
 
         {/* Data Sources Tab */}
         <TabsContent value="data-sources" className="space-y-4">
-          <Card>
+          <Card className="mt-8">
             <CardHeader>
               <CardTitle>Connected Data Sources</CardTitle>
               <CardDescription>

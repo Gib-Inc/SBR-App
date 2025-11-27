@@ -601,7 +601,7 @@ export default function SalesOrders() {
                     onClick={() => fileInputRef.current?.click()}
                     data-testid="button-import-csv"
                   >
-                    <Upload className="h-4 w-4 mr-2" />
+                    <Download className="h-4 w-4 mr-2" />
                     Import
                   </Button>
                 </TooltipTrigger>
@@ -615,7 +615,7 @@ export default function SalesOrders() {
                     onClick={exportToCSV}
                     data-testid="button-export-csv"
                   >
-                    <Download className="h-4 w-4 mr-2" />
+                    <Upload className="h-4 w-4 mr-2" />
                     Export CSV
                   </Button>
                 </TooltipTrigger>

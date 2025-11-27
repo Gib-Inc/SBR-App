@@ -118,9 +118,6 @@ function LLMSettings() {
   const [llmTemperature, setLlmTemperature] = useState(0.7);
   const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
   const [customEndpoint, setCustomEndpoint] = useState("");
-  const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
-  const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
-  const [enableForecasting, setEnableForecasting] = useState(false);
   const [enableVisionCapture, setEnableVisionCapture] = useState(false);
   const [visionProvider, setVisionProvider] = useState("gpt-4-vision");
   const [visionModel, setVisionModel] = useState("gpt-4o");
@@ -166,9 +163,6 @@ function LLMSettings() {
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
       setCustomEndpoint(settings.llmCustomEndpoint || '');
-      setEnableOrderRecommendations(settings.enableLlmOrderRecommendations || false);
-      setEnableSupplierRanking(settings.enableLlmSupplierRanking || false);
-      setEnableForecasting(settings.enableLlmForecasting || false);
       setEnableVisionCapture(settings.enableVisionCapture || false);
       setVisionProvider(settings.visionProvider || 'gpt-4-vision');
       setVisionModel(settings.visionModel || 'gpt-4o');
@@ -256,14 +250,6 @@ function LLMSettings() {
     } finally {
       setIsTesting(false);
     }
-  };
-
-  const saveLLMFeatures = async () => {
-    await saveSettingMutation.mutateAsync({
-      enableLlmOrderRecommendations: enableOrderRecommendations,
-      enableLlmSupplierRanking: enableSupplierRanking,
-      enableLlmForecasting: enableForecasting,
-    });
   };
 
   const saveVisionSettings = async () => {
@@ -448,75 +434,10 @@ function LLMSettings() {
         <CardContent className="flex items-start gap-3 pt-6">
           <Info className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
           <div>
-            <p className="text-sm font-medium">External integrations moved</p>
+            <p className="text-sm font-medium">AI features moved</p>
             <p className="text-xs text-muted-foreground mt-1">
-              All third-party integrations (Shopify, Amazon, Extensiv, QuickBooks, GoHighLevel, etc.) are now configured from the AI Agent → Data Sources tab.
+              LLM features and external integrations are now configured from the AI Agent page (Rules tab and Data Sources tab).
             </p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">LLM Features</CardTitle>
-          <CardDescription>
-            Enable AI-powered features for inventory management
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
-              <p className="text-sm text-muted-foreground">
-                AI suggests optimal reorder quantities and timing
-              </p>
-            </div>
-            <Switch
-              id="enable-order-recommendations"
-              checked={enableOrderRecommendations}
-              onCheckedChange={setEnableOrderRecommendations}
-              data-testid="switch-order-recommendations"
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="enable-supplier-ranking">Supplier Ranking</Label>
-              <p className="text-sm text-muted-foreground">
-                AI ranks suppliers based on price, lead time, and reliability
-              </p>
-            </div>
-            <Switch
-              id="enable-supplier-ranking"
-              checked={enableSupplierRanking}
-              onCheckedChange={setEnableSupplierRanking}
-              data-testid="switch-supplier-ranking"
-            />
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
-              <p className="text-sm text-muted-foreground">
-                AI predicts future demand based on historical data
-              </p>
-            </div>
-            <Switch
-              id="enable-forecasting"
-              checked={enableForecasting}
-              onCheckedChange={setEnableForecasting}
-              data-testid="switch-forecasting"
-            />
-          </div>
-
-          <div className="flex justify-end">
-            <Button
-              onClick={saveLLMFeatures}
-              disabled={saveSettingMutation.isPending}
-              data-testid="button-save-llm-features"
-            >
-              {saveSettingMutation.isPending ? "Saving..." : "Save Features"}
-            </Button>
           </div>
         </CardContent>
       </Card>
@@ -602,25 +523,6 @@ function LLMSettings() {
         </CardContent>
       </Card>
 
-      {(enableOrderRecommendations || enableSupplierRanking || enableForecasting) && (
-        <Card className="border-primary/50 bg-primary/5">
-          <CardContent className="flex items-center gap-3 pt-6">
-            <Zap className="h-5 w-5 text-primary" />
-            <div>
-              <p className="text-sm font-medium">AI Features Enabled</p>
-              <p className="text-xs text-muted-foreground">
-                LLM will be used for {
-                  [
-                    enableOrderRecommendations && "order recommendations",
-                    enableSupplierRanking && "supplier ranking",
-                    enableForecasting && "demand forecasting"
-                  ].filter(Boolean).join(", ")
-                }
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

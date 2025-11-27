@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -626,6 +627,11 @@ function RulesTab() {
     queryKey: ["/api/ai/rules"],
   });
   
+  // Fetch settings for LLM features
+  const { data: settingsData } = useQuery<any>({
+    queryKey: ["/api/settings"],
+  });
+  
   // Local state for form
   const [formValues, setFormValues] = useState<AIRules>({
     velocityLookbackDays: 14,
@@ -639,6 +645,11 @@ function RulesTab() {
     minOrderQuantity: 1,
   });
   
+  // LLM Features state
+  const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
+  const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
+  const [enableForecasting, setEnableForecasting] = useState(false);
+  
   // Sync form with fetched rules
   useEffect(() => {
     if (rules) {
@@ -646,7 +657,16 @@ function RulesTab() {
     }
   }, [rules]);
   
-  // Save mutation
+  // Sync LLM features with settings
+  useEffect(() => {
+    if (settingsData) {
+      setEnableOrderRecommendations(settingsData.enableLlmOrderRecommendations || false);
+      setEnableSupplierRanking(settingsData.enableLlmSupplierRanking || false);
+      setEnableForecasting(settingsData.enableLlmForecasting || false);
+    }
+  }, [settingsData]);
+  
+  // Save mutation for rules
   const saveMutation = useMutation({
     mutationFn: async (updates: Partial<AIRules>) => {
       return await apiRequest("PATCH", "/api/ai/rules", updates);
@@ -669,8 +689,42 @@ function RulesTab() {
     },
   });
   
+  // Save mutation for LLM features
+  const saveFeaturesMutation = useMutation({
+    mutationFn: async (updates: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean }) => {
+      return await apiRequest("PATCH", "/api/settings", updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Features Updated",
+        description: "AI features have been saved.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Save Failed",
+        description: error.message || "Failed to save AI features",
+        variant: "destructive",
+      });
+    },
+  });
+  
   const handleSave = () => {
     saveMutation.mutate(formValues);
+  };
+  
+  const handleFeatureToggle = (feature: 'orderRecommendations' | 'supplierRanking' | 'forecasting', value: boolean) => {
+    if (feature === 'orderRecommendations') setEnableOrderRecommendations(value);
+    if (feature === 'supplierRanking') setEnableSupplierRanking(value);
+    if (feature === 'forecasting') setEnableForecasting(value);
+    
+    const updates = {
+      enableLlmOrderRecommendations: feature === 'orderRecommendations' ? value : enableOrderRecommendations,
+      enableLlmSupplierRanking: feature === 'supplierRanking' ? value : enableSupplierRanking,
+      enableLlmForecasting: feature === 'forecasting' ? value : enableForecasting,
+    };
+    saveFeaturesMutation.mutate(updates);
   };
   
   if (isLoading) {
@@ -918,6 +972,55 @@ function RulesTab() {
             {saveMutation.isPending ? "Saving..." : "Save Rules"}
           </Button>
         </CardFooter>
+      </Card>
+      
+      {/* LLM Features - Simple Toggles */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
+                <p className="text-sm text-muted-foreground">AI suggests optimal reorder quantities and timing</p>
+              </div>
+              <Switch
+                id="enable-order-recommendations"
+                checked={enableOrderRecommendations}
+                onCheckedChange={(checked) => handleFeatureToggle('orderRecommendations', checked)}
+                disabled={saveFeaturesMutation.isPending}
+                data-testid="switch-order-recommendations"
+              />
+            </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="enable-supplier-ranking">Supplier Ranking</Label>
+                <p className="text-sm text-muted-foreground">AI ranks suppliers based on price, lead time, and reliability</p>
+              </div>
+              <Switch
+                id="enable-supplier-ranking"
+                checked={enableSupplierRanking}
+                onCheckedChange={(checked) => handleFeatureToggle('supplierRanking', checked)}
+                disabled={saveFeaturesMutation.isPending}
+                data-testid="switch-supplier-ranking"
+              />
+            </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
+                <p className="text-sm text-muted-foreground">AI predicts future demand based on historical data</p>
+              </div>
+              <Switch
+                id="enable-forecasting"
+                checked={enableForecasting}
+                onCheckedChange={(checked) => handleFeatureToggle('forecasting', checked)}
+                disabled={saveFeaturesMutation.isPending}
+                data-testid="switch-forecasting"
+              />
+            </div>
+          </div>
+        </CardContent>
       </Card>
     </div>
   );

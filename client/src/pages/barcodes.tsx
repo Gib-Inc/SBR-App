@@ -515,7 +515,7 @@ function ItemTableRow({
         {item.updatedAt ? format(new Date(item.updatedAt), 'MMM d, yyyy') : '-'}
       </td>
       {/* Actions Column */}
-      <td className="sticky right-0 z-10 bg-card p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+      <td className="sticky right-0 z-10 bg-background p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
           <Button
             variant="ghost"
@@ -578,9 +578,9 @@ function BarcodeItemsSection({
     <Card>
       <CardContent className="p-6">
         <h3 className="mb-4 text-lg font-semibold">{title}</h3>
-        <div className="relative overflow-x-auto rounded-md border">
+        <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border">
           <table className="w-full min-w-[900px]">
-            <thead className="bg-muted/50">
+            <thead className="bg-muted sticky top-0 z-10">
               <tr className="border-b">
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
@@ -590,7 +590,7 @@ function BarcodeItemsSection({
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Format</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Last Updated</th>
-                <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
               </tr>
             </thead>
             <tbody>

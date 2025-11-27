@@ -4597,7 +4597,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Use InventoryMovement for stock update and audit logging
         const item = await storage.getItem(line.itemId);
         if (item) {
-          const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+          // PO receipts go to PIVOT warehouse for finished products
+          const location = item.type === 'finished_product' ? 'PIVOT' : 'N/A';
           
           // Apply inventory movement (updates stock and logs)
           await inventoryMovement.apply({
@@ -4681,7 +4682,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (remaining > 0) {
           const item = await storage.getItem(line.itemId);
           if (item) {
-            const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+            // PO receipts go to PIVOT warehouse for finished products
+            const location = item.type === 'finished_product' ? 'PIVOT' : 'N/A';
             
             // Apply inventory movement (updates stock and logs)
             await inventoryMovement.apply({
@@ -4910,8 +4912,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
 
           // Determine item type and location
+          // PO receipts go to PIVOT warehouse for finished products
           const itemType = item.type === 'finished_product' ? 'FINISHED' as const : 'RAW' as const;
-          const location = itemType === 'RAW' ? 'N/A' as const : 'HILDALE' as const;
+          const location = itemType === 'RAW' ? 'N/A' as const : 'PIVOT' as const;
           
           linesToProcess.push({
             line,
@@ -4931,19 +4934,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Step 2: Apply all transactions atomically
+      // Step 2: Apply all transactions atomically using InventoryMovement
       const processedLines = [];
+      const inventoryMovement = new InventoryMovement(storage);
+      
       for (const { line, item, itemType, location, remaining } of linesToProcess) {
         try {
-          // Use TransactionService to apply RECEIVE transaction
-          const result = await transactionService.applyTransaction({
+          // Use InventoryMovement for centralized inventory updates and audit logging
+          const result = await inventoryMovement.apply({
+            eventType: "PURCHASE_ORDER_RECEIVED",
             itemId: line.itemId,
-            itemType,
-            type: 'RECEIVE',
-            location,
             quantity: remaining,
+            location: location as any,
+            source: "SYSTEM",
+            poId: id,
             notes: `Bulk confirm receipt for PO ${po.poNumber}`,
-            createdBy: 'system',
           });
 
           if (!result.success) {
@@ -4953,6 +4958,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
               error: `Failed to receive item "${item.name}": ${result.error}`,
             });
           }
+          
+          // Create RECEIVE transaction for legacy compatibility
+          await storage.createInventoryTransaction({
+            itemId: line.itemId,
+            itemType,
+            type: 'RECEIVE',
+            location,
+            quantity: remaining,
+            notes: `Bulk confirm receipt for PO ${po.poNumber}`,
+            createdBy: 'system',
+          });
 
           // Update line received quantity
           await storage.updatePurchaseOrderLine(line.id, {
@@ -5483,8 +5499,9 @@ Generate only the email body text, no subject line.`;
           if (!item) continue;
 
           // Use InventoryMovement for consistent inventory updates and audit logging
+          // Returns typically go to PIVOT warehouse for inspection/restocking
           const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
-          const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
+          const location = item.type === 'finished_product' ? 'PIVOT' : 'N/A';
           
           // Apply inventory movement (updates stock and logs)
           const result = await inventoryMovement.apply({

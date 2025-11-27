@@ -77,7 +77,8 @@ export class InventoryMovement {
 
       const beforeState = this.getInventoryState(item);
       const isFinished = item.type === "finished_product";
-      const location = params.location || (isFinished ? "HILDALE" : "N/A");
+      // Default to PIVOT for finished products (warehouse where inventory is received)
+      const location = params.location || (isFinished ? "PIVOT" : "N/A");
       
       let updates: {
         hildaleQty?: number;
@@ -159,9 +160,13 @@ export class InventoryMovement {
         case "SALES_ORDER_CREATED":
         case "SALES_ORDER_CANCELLED":
         case "BACKORDER_FULFILLED":
+          // Lifecycle events - log audit only, no inventory change
+          quantityDelta = 0;
           break;
 
         case "TRANSFER":
+          // Transfer between locations - handled separately
+          quantityDelta = 0;
           break;
       }
 

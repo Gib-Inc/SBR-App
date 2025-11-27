@@ -1928,7 +1928,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const unmatchedSkus: string[] = [];
       const errors: string[] = [];
 
-      // Update Pivot quantities for matching SKUs
+      // Update Pivot quantities for matching SKUs using InventoryMovement for centralized updates
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(userId);
+      
       for (const extensivItem of extensivItems) {
         try {
           const item = await storage.getItemBySku(extensivItem.sku);
@@ -1938,28 +1941,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
 
-          // Calculate the difference to update
-          const oldQty = item.pivotQty;
-          const newQty = extensivItem.quantity;
-          const delta = newQty - oldQty;
+          // Use EXTENSIV_SYNC event to update both pivotQty and pivotProjectionQty
+          const result = await inventoryMovement.apply({
+            eventType: "EXTENSIV_SYNC",
+            itemId: item.id,
+            quantity: extensivItem.quantity, // New authoritative quantity from Extensiv
+            location: "PIVOT",
+            source: "SYSTEM",
+            userId: userId,
+            userName: user?.email,
+            notes: `Extensiv sync: ${item.pivotQty ?? 0} → ${extensivItem.quantity}`,
+          });
 
-          // Update pivotQty
-          await storage.updateItem(item.id, { pivotQty: newQty });
-
-          // Create audit trail transaction
-          if (delta !== 0) {
-            await storage.createInventoryTransaction({
-              itemId: item.id,
-              itemType: 'FINISHED',
-              type: 'INTEGRATION_SYNC',
-              quantity: delta,
-              location: 'Pivot',
-              notes: `Extensiv sync: ${oldQty} → ${newQty}`,
-              createdBy: userId,
-            });
+          if (result.success) {
+            syncedCount++;
+          } else {
+            errors.push(`${extensivItem.sku}: ${result.error}`);
           }
-
-          syncedCount++;
         } catch (error: any) {
           errors.push(`${extensivItem.sku}: ${error.message}`);
           console.error(`[Extensiv] Failed to sync ${extensivItem.sku}:`, error);
@@ -5499,9 +5497,10 @@ Generate only the email body text, no subject line.`;
           if (!item) continue;
 
           // Use InventoryMovement for consistent inventory updates and audit logging
-          // Returns typically go to PIVOT warehouse for inspection/restocking
+          // Returns ALWAYS go to HILDALE warehouse for finished products
+          // InventoryMovement handles both hildaleQty AND pivotProjectionQty updates
           const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
-          const location = item.type === 'finished_product' ? 'PIVOT' : 'N/A';
+          const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
           
           // Apply inventory movement (updates stock and logs)
           const result = await inventoryMovement.apply({
@@ -5511,6 +5510,7 @@ Generate only the email body text, no subject line.`;
             location: location as any,
             source: "USER",
             returnId: id,
+            channel: returnRequest.channel,
             userId,
             userName: user?.email,
             notes: `Restocked from return ${returnRequest.externalOrderId || id}`,
@@ -5947,17 +5947,21 @@ Generate only the email body text, no subject line.`;
         await storage.refreshProductForecastContext(productId);
       }
 
-      // Log SALES_ORDER_CREATED events for each line
+      // Log SALES_ORDER_CREATED events for each line and update pivotProjectionQty for Pivot-fulfilled orders
       const inventoryMovement = new InventoryMovement(storage);
       const user = await storage.getUser(req.session.userId!);
+      const isPivotOrder = validatedOrder.channel === 'SHOPIFY' || validatedOrder.channel === 'AMAZON';
+      
       for (const line of createdLines) {
         await inventoryMovement.apply({
           eventType: "SALES_ORDER_CREATED",
           itemId: line.productId,
           quantity: line.qtyOrdered,
+          location: isPivotOrder ? "PIVOT" : "HILDALE",
           source: "USER",
           orderId: createdOrder.id,
           salesOrderLineId: line.id,
+          channel: validatedOrder.channel,
           userId: req.session.userId,
           userName: user?.email,
           notes: `Order ${createdOrder.externalOrderId || createdOrder.id}: ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,
@@ -6087,13 +6091,14 @@ Generate only the email body text, no subject line.`;
 
         // Use InventoryMovement helper to update stock and log the movement
         const result = await inventoryMovement.apply({
-          eventType: "SALES_ORDER_FULFILLED",
+          eventType: "SALES_ORDER_SHIPPED",
           itemId: product.id,
           quantity: shipQty,
           location,
           source: "USER",
           orderId: order.id,
           salesOrderLineId: line.id,
+          channel: order.channel,
           userId,
           userName: user?.email,
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
@@ -6227,6 +6232,7 @@ Generate only the email body text, no subject line.`;
       const affectedProductIds = new Set<string>();
       const inventoryMovement = new InventoryMovement(storage);
       const user = await storage.getUser(req.session.userId!);
+      const isPivotOrder = order.channel === 'SHOPIFY' || order.channel === 'AMAZON';
 
       // Update each line: set qtyAllocated = 0, backorderQty = 0
       for (const line of lines) {
@@ -6236,14 +6242,16 @@ Generate only the email body text, no subject line.`;
         });
         affectedProductIds.add(line.productId);
 
-        // Log SALES_ORDER_CANCELLED event
+        // Log SALES_ORDER_CANCELLED event and restore pivotProjectionQty for Pivot orders
         await inventoryMovement.apply({
           eventType: "SALES_ORDER_CANCELLED",
           itemId: line.productId,
           quantity: line.qtyOrdered,
+          location: isPivotOrder ? "PIVOT" : "HILDALE",
           source: "USER",
           orderId: id,
           salesOrderLineId: line.id,
+          channel: order.channel,
           userId: req.session.userId,
           userName: user?.email,
           notes: `Order ${order.externalOrderId || order.id} cancelled: released ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,

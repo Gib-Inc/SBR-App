@@ -48,8 +48,20 @@ Preferred communication style: Simple, everyday language.
 
 ### System Design Choices
 
+*   **Inventory Location Fields for Finished Products**:
+    *   `hildaleQty`: Physical inventory at Hildale warehouse (receives returns, production output)
+    *   `pivotQty`: Authoritative mirror of Extensiv/3PL inventory (only updated by Extensiv sync)
+    *   `pivotProjectionQty`: Live projected 3PL stock that accounts for new Shopify/Amazon orders and returns in real-time, before Extensiv reflects changes. Used for AI risk calculations.
+*   **Inventory Movement Rules**:
+    *   Sales Order Created (Shopify/Amazon): Decrements `pivotProjectionQty` (can go negative to show shortage)
+    *   Sales Order Cancelled: Increments `pivotProjectionQty`
+    *   Sales Order Shipped (Hildale): Decrements `hildaleQty`; (Pivot): No change to projection (already decremented at create)
+    *   PO Received: Increments both `pivotQty` and `pivotProjectionQty`
+    *   Returns: Always go to HILDALE - increments `hildaleQty` AND `pivotProjectionQty`
+    *   Extensiv Sync: Sets `pivotQty` from Extensiv and adjusts `pivotProjectionQty` by the delta
+*   **InventoryMovement Helper**: Centralized service (`server/services/inventory-movement.ts`) for all order-related inventory changes with audit logging. Used by Sales Orders, Returns, PO receipts, and Extensiv sync.
 *   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.
-*   **Transaction Service**: Centralized logic for inventory movements, ensuring data consistency and validating quantity updates.
+*   **Transaction Service**: Centralized logic for production/transfer movements. Note: Uses legacy direct updates; future work to migrate to InventoryMovement helper.
 *   **Batch Forecasting**: LLM forecasts are generated in batches for efficiency, triggered by inventory transactions, rather than real-time per-transaction calls.
 *   **Multi-Channel Order Sync**: Shopify and Amazon orders sync with duplicate prevention using externalOrderId + channel combination, SKU-to-product mapping with graceful handling, and automatic backorder/forecast context refresh.
 *   **Integration Management**: All external integrations (Extensiv, Shopify, Amazon) managed through AI Agent → Data Sources tab with unified IntegrationSettings component, removing need for separate Integrations page.

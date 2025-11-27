@@ -411,9 +411,11 @@ export class InventoryDecisionEngine {
     const recommendations: SkuRecommendation[] = [];
 
     for (const item of items) {
-      // Compute on-hand stock (finished products use pivotQty, components use currentStock)
+      // Compute on-hand stock (finished products use pivotProjectionQty for 3PL risk, components use currentStock)
+      // pivotProjectionQty = live projected 3PL stock that accounts for new orders/returns in real-time
+      // pivotQty = authoritative mirror from Extensiv (not used for risk calculations)
       const onHand = item.type === "finished_product" 
-        ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+        ? (item.pivotProjectionQty ?? 0) + (item.hildaleQty ?? 0)
         : item.currentStock;
 
       // Compute sales velocity

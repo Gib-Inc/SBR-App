@@ -406,6 +406,7 @@ export class MemStorage implements IStorage {
       location: null,
       hildaleQty: 0,
       pivotQty: 0,
+      pivotProjectionQty: 0,
       productKind: "RAW",
       barcodeValue: "COMP-NUT-001",
       barcodeFormat: "CODE128",
@@ -431,6 +432,7 @@ export class MemStorage implements IStorage {
       location: null,
       hildaleQty: 0,
       pivotQty: 0,
+      pivotProjectionQty: 0,
       productKind: "RAW",
       barcodeValue: "COMP-BOLT-001",
       barcodeFormat: "CODE128",
@@ -456,6 +458,7 @@ export class MemStorage implements IStorage {
       location: null,
       hildaleQty: 0,
       pivotQty: 0,
+      pivotProjectionQty: 0,
       productKind: "RAW",
       barcodeValue: "COMP-SPR-001",
       barcodeFormat: "CODE128",
@@ -481,6 +484,7 @@ export class MemStorage implements IStorage {
       location: null,
       hildaleQty: 0,
       pivotQty: 0,
+      pivotProjectionQty: 0,
       productKind: "RAW",
       barcodeValue: "COMP-BAR-001",
       barcodeFormat: "CODE128",
@@ -508,6 +512,7 @@ export class MemStorage implements IStorage {
       location: "Spanish Fork",
       hildaleQty: 0,
       pivotQty: 25,
+      pivotProjectionQty: 25,
       productKind: "FINISHED",
       barcodeValue: "PROD-SBR-001",
       barcodeFormat: "CODE128",
@@ -730,6 +735,7 @@ export class MemStorage implements IStorage {
       location: insertItem.location ?? null,
       hildaleQty: insertItem.hildaleQty ?? 0,
       pivotQty: insertItem.pivotQty ?? 0,
+      pivotProjectionQty: insertItem.pivotProjectionQty ?? insertItem.pivotQty ?? 0,
       productKind: normalizedProductKind,
       barcodeValue: insertItem.barcodeValue ?? null,
       barcodeFormat: insertItem.barcodeFormat ?? null,
@@ -2277,6 +2283,9 @@ export class PostgresStorage implements IStorage {
       normalizedInsert.currentStock = 0;
       normalizedInsert.type = 'finished_product';
       normalizedInsert.productKind = 'FINISHED';
+      if (normalizedInsert.pivotProjectionQty === undefined || normalizedInsert.pivotProjectionQty === null) {
+        normalizedInsert.pivotProjectionQty = normalizedInsert.pivotQty ?? 0;
+      }
     }
     
     const results = await this.db.insert(schema.items).values(normalizedInsert).returning();

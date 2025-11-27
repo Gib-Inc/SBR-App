@@ -117,8 +117,7 @@ export class InventoryMovement {
         case "SALES_ORDER_CREATED":
           if (isFinished && isPivotFulfilled) {
             quantityDelta = -params.quantity;
-            const newProjection = beforeState.pivotProjectionQty - params.quantity;
-            updates.pivotProjectionQty = Math.max(0, newProjection);
+            updates.pivotProjectionQty = beforeState.pivotProjectionQty - params.quantity;
           }
           break;
 

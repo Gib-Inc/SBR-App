@@ -384,17 +384,17 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Pivot Projections Column (only for finished products) - Live projected 3PL stock */}
+      {/* Available for Sale Column (only for finished products) - Live projected 3PL stock */}
       {item.type === "finished_product" && (
-        <td className="px-3 align-middle whitespace-nowrap text-right" data-testid={`text-pivot-projection-${item.id}`}>
+        <td className="px-3 align-middle whitespace-nowrap text-right" data-testid={`text-available-for-sale-${item.id}`}>
           <span className={
-            (item.pivotProjectionQty ?? 0) < 0 
+            (item.availableForSaleQty ?? 0) < 0 
               ? "text-red-600 dark:text-red-400 font-bold"
-              : (item.pivotProjectionQty ?? 0) !== (item.pivotQty ?? 0) 
+              : (item.availableForSaleQty ?? 0) !== (item.pivotQty ?? 0) 
                 ? "text-blue-600 dark:text-blue-400 font-medium" 
                 : ""
           }>
-            {item.pivotProjectionQty ?? 0}
+            {item.availableForSaleQty ?? 0}
           </span>
         </td>
       )}
@@ -1407,7 +1407,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Projections</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Available for Sale</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorders</th>
                   <th className="p-3 text-center text-sm font-medium whitespace-nowrap">BOM</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>

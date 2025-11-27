@@ -1941,7 +1941,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             continue;
           }
 
-          // Use EXTENSIV_SYNC event to update both pivotQty and pivotProjectionQty
+          // Use EXTENSIV_SYNC event to update both pivotQty and availableForSaleQty
           const result = await inventoryMovement.apply({
             eventType: "EXTENSIV_SYNC",
             itemId: item.id,
@@ -5498,7 +5498,7 @@ Generate only the email body text, no subject line.`;
 
           // Use InventoryMovement for consistent inventory updates and audit logging
           // Returns ALWAYS go to HILDALE warehouse for finished products
-          // InventoryMovement handles both hildaleQty AND pivotProjectionQty updates
+          // InventoryMovement handles both hildaleQty AND availableForSaleQty updates
           const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
           const location = item.type === 'finished_product' ? 'HILDALE' : 'N/A';
           
@@ -5947,7 +5947,7 @@ Generate only the email body text, no subject line.`;
         await storage.refreshProductForecastContext(productId);
       }
 
-      // Log SALES_ORDER_CREATED events for each line and update pivotProjectionQty for Pivot-fulfilled orders
+      // Log SALES_ORDER_CREATED events for each line and update availableForSaleQty for Pivot-fulfilled orders
       const inventoryMovement = new InventoryMovement(storage);
       const user = await storage.getUser(req.session.userId!);
       const isPivotOrder = validatedOrder.channel === 'SHOPIFY' || validatedOrder.channel === 'AMAZON';
@@ -6242,7 +6242,7 @@ Generate only the email body text, no subject line.`;
         });
         affectedProductIds.add(line.productId);
 
-        // Log SALES_ORDER_CANCELLED event and restore pivotProjectionQty for Pivot orders
+        // Log SALES_ORDER_CANCELLED event and restore availableForSaleQty for Pivot orders
         await inventoryMovement.apply({
           eventType: "SALES_ORDER_CANCELLED",
           itemId: line.productId,

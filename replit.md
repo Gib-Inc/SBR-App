@@ -51,14 +51,14 @@ Preferred communication style: Simple, everyday language.
 *   **Inventory Location Fields for Finished Products**:
     *   `hildaleQty`: Physical inventory at Hildale warehouse (receives returns, production output)
     *   `pivotQty`: Authoritative mirror of Extensiv/3PL inventory (only updated by Extensiv sync)
-    *   `pivotProjectionQty`: Live projected 3PL stock that accounts for new Shopify/Amazon orders and returns in real-time, before Extensiv reflects changes. Used for AI risk calculations.
+    *   `availableForSaleQty`: Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns). Used for AI risk calculations.
 *   **Inventory Movement Rules**:
-    *   Sales Order Created (Shopify/Amazon): Decrements `pivotProjectionQty` (can go negative to show shortage)
-    *   Sales Order Cancelled: Increments `pivotProjectionQty`
+    *   Sales Order Created (Shopify/Amazon): Decrements `availableForSaleQty` (can go negative to show shortage)
+    *   Sales Order Cancelled: Increments `availableForSaleQty`
     *   Sales Order Shipped (Hildale): Decrements `hildaleQty`; (Pivot): No change to projection (already decremented at create)
-    *   PO Received: Increments both `pivotQty` and `pivotProjectionQty`
-    *   Returns: Always go to HILDALE - increments `hildaleQty` AND `pivotProjectionQty`
-    *   Extensiv Sync: Sets `pivotQty` from Extensiv and adjusts `pivotProjectionQty` by the delta
+    *   PO Received: Increments both `pivotQty` and `availableForSaleQty`
+    *   Returns: Always go to HILDALE - increments `hildaleQty` AND `availableForSaleQty`
+    *   Extensiv Sync: Sets `pivotQty` from Extensiv and adjusts `availableForSaleQty` by the delta
 *   **InventoryMovement Helper**: Centralized service (`server/services/inventory-movement.ts`) for all order-related inventory changes with audit logging. Used by Sales Orders, Returns, PO receipts, and Extensiv sync.
 *   **Audit Trail**: All inventory quantity changes are tracked via an `InventoryTransaction` table with types like TRANSFER, ADJUST, PRODUCE, RECEIVE, SHIP.
 *   **Transaction Service**: Centralized logic for production/transfer movements. Note: Uses legacy direct updates; future work to migrate to InventoryMovement helper.

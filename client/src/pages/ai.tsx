@@ -36,19 +36,37 @@ Provide a clear recommendation with reasoning.`;
 
 const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
   chatgpt: [
-    { value: "gpt-4", label: "GPT-4" },
+    { value: "gpt-4o", label: "GPT-4o (Latest)" },
+    { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+    { value: "o1-preview", label: "o1 Preview" },
+    { value: "o1-mini", label: "o1 Mini" },
     { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
     { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
   ],
   claude: [
-    { value: "claude-3-opus", label: "Claude 3 Opus" },
-    { value: "claude-3-sonnet", label: "Claude 3 Sonnet" },
+    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+    { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
+    { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
+    { value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
+  ],
+  google: [
+    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash" },
+    { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
+    { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
   ],
   grok: [
     { value: "grok-2", label: "Grok-2" },
     { value: "grok-1", label: "Grok-1" },
   ],
 };
+
+const PROVIDER_OPTIONS = [
+  { value: "chatgpt", label: "OpenAI (ChatGPT)" },
+  { value: "claude", label: "Anthropic (Claude)" },
+  { value: "google", label: "Google (Gemini)" },
+  { value: "grok", label: "X.AI (Grok)" },
+  { value: "custom", label: "Custom Endpoint" },
+];
 
 interface AIRules {
   velocityLookbackDays: number;
@@ -224,14 +242,63 @@ function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
 function LLMConfigTab({ settingsData }: { settingsData: any }) {
   const { toast } = useToast();
   const [promptTemplate, setPromptTemplate] = useState<string>(DEFAULT_PROMPT_TEMPLATE);
+  const [provider, setProvider] = useState<string>("");
+  const [model, setModel] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [customEndpoint, setCustomEndpoint] = useState<string>("");
+  const [temperature, setTemperature] = useState<number>(0.7);
+  const [maxTokens, setMaxTokens] = useState<number>(2048);
 
   useEffect(() => {
     if (settingsData) {
       setPromptTemplate(settingsData.llmPromptTemplate || DEFAULT_PROMPT_TEMPLATE);
+      setProvider(settingsData.llmProvider || "");
+      setModel(settingsData.llmModel || "");
+      setApiKey(settingsData.llmApiKey || "");
+      setCustomEndpoint(settingsData.llmCustomEndpoint || "");
+      setTemperature(settingsData.llmTemperature ?? 0.7);
+      setMaxTokens(settingsData.llmMaxTokens ?? 2048);
     }
   }, [settingsData]);
 
-  const saveMutation = useMutation({
+  const handleProviderChange = (newProvider: string) => {
+    setProvider(newProvider);
+    const models = MODEL_OPTIONS[newProvider];
+    if (models && models.length > 0) {
+      setModel(models[0].value);
+    } else {
+      setModel("");
+    }
+  };
+
+  const saveConfigMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("PATCH", "/api/settings", {
+        llmProvider: provider || null,
+        llmModel: model || null,
+        llmApiKey: apiKey || null,
+        llmCustomEndpoint: customEndpoint || null,
+        llmTemperature: temperature,
+        llmMaxTokens: maxTokens,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({
+        title: "Configuration Saved",
+        description: "LLM settings have been updated successfully",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Save Failed",
+        description: error.message || "Failed to save configuration",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const savePromptMutation = useMutation({
     mutationFn: async () => {
       return await apiRequest("PATCH", "/api/settings", {
         llmPromptTemplate: promptTemplate || null,
@@ -253,75 +320,137 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
     },
   });
 
-  const providerLabel = settingsData?.llmProvider === "chatgpt" ? "OpenAI (ChatGPT)" :
-    settingsData?.llmProvider === "claude" ? "Anthropic (Claude)" :
-    settingsData?.llmProvider === "grok" ? "X.AI (Grok)" :
-    settingsData?.llmProvider === "custom" ? "Custom Endpoint" : "Not configured";
-  
-  const modelLabel = MODEL_OPTIONS[settingsData?.llmProvider]?.find(
-    m => m.value === settingsData?.llmModel
-  )?.label || settingsData?.llmModel || "Not selected";
-
-  const hasProvider = !!settingsData?.llmProvider;
-  const hasApiKey = !!settingsData?.llmApiKey;
+  const availableModels = MODEL_OPTIONS[provider] || [];
 
   return (
     <div className="space-y-4">
-      {/* Active Provider Summary */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Zap className="h-5 w-5" />
-            Active LLM Provider
+            AI Provider Configuration
           </CardTitle>
           <CardDescription>
-            Manage provider, model, and API keys in Settings → LLM Configuration
+            Configure your AI provider to power intelligent inventory recommendations and analysis. You'll need an API key from your chosen provider.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-1">
-              <Label className="text-muted-foreground text-xs">Provider</Label>
-              <div className="flex items-center gap-2">
-                <span className="font-medium">{providerLabel}</span>
-                {hasProvider && hasApiKey && (
-                  <Badge variant="outline" className="text-xs">
-                    <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
-                    Connected
-                  </Badge>
-                )}
-                {hasProvider && !hasApiKey && (
-                  <Badge variant="outline" className="text-xs text-amber-600">
-                    <AlertTriangle className="mr-1 h-3 w-3" />
-                    No API Key
-                  </Badge>
-                )}
+        <CardContent className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="llm-provider">Provider</Label>
+              <Select value={provider} onValueChange={handleProviderChange}>
+                <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
+                  <SelectValue placeholder="Select a provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROVIDER_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="llm-model">Model</Label>
+              <Select 
+                value={model} 
+                onValueChange={setModel}
+                disabled={!provider || provider === "custom"}
+              >
+                <SelectTrigger id="llm-model" data-testid="select-llm-model">
+                  <SelectValue placeholder={provider === "custom" ? "N/A for custom" : "Select a model"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="llm-api-key">API Key</Label>
+            <Input
+              id="llm-api-key"
+              type="password"
+              placeholder="Enter your API key"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              data-testid="input-llm-api-key"
+            />
+            <p className="text-xs text-muted-foreground">
+              Your API key is stored securely and used only for AI-powered features.
+            </p>
+          </div>
+
+          {provider === "custom" && (
+            <div className="space-y-2">
+              <Label htmlFor="llm-endpoint">Custom Endpoint URL</Label>
+              <Input
+                id="llm-endpoint"
+                type="url"
+                placeholder="https://your-custom-endpoint.com/v1/chat"
+                value={customEndpoint}
+                onChange={(e) => setCustomEndpoint(e.target.value)}
+                data-testid="input-llm-endpoint"
+              />
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="llm-temperature">Temperature</Label>
+              <div className="flex items-center gap-3">
+                <Slider
+                  id="llm-temperature"
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={[temperature]}
+                  onValueChange={([val]) => setTemperature(val)}
+                  className="flex-1"
+                  data-testid="slider-llm-temperature"
+                />
+                <span className="w-12 text-right font-mono text-sm">{temperature.toFixed(1)}</span>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Lower values produce more focused responses, higher values increase creativity.
+              </p>
             </div>
-            <div className="space-y-1">
-              <Label className="text-muted-foreground text-xs">Model</Label>
-              <span className="font-medium">{modelLabel}</span>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-muted-foreground text-xs">Temperature / Max Tokens</Label>
-              <span className="font-medium">
-                {(settingsData?.llmTemperature ?? 0.7).toFixed(1)} / {settingsData?.llmMaxTokens ?? 2048}
-              </span>
+
+            <div className="space-y-2">
+              <Label htmlFor="llm-max-tokens">Max Tokens</Label>
+              <Input
+                id="llm-max-tokens"
+                type="number"
+                min={100}
+                max={8192}
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(parseInt(e.target.value) || 2048)}
+                data-testid="input-llm-max-tokens"
+              />
+              <p className="text-xs text-muted-foreground">
+                Maximum length of AI responses (100-8192).
+              </p>
             </div>
           </div>
-          
-          <div className="pt-2">
-            <Button variant="outline" size="sm" asChild data-testid="link-llm-settings">
-              <a href="/settings?tab=llm">
-                <Settings2 className="mr-2 h-4 w-4" />
-                Configure LLM Settings
-              </a>
-            </Button>
-          </div>
+
+          <Button
+            onClick={() => saveConfigMutation.mutate()}
+            disabled={saveConfigMutation.isPending || !provider}
+            className="w-full md:w-auto"
+            data-testid="button-save-llm-config"
+          >
+            {saveConfigMutation.isPending ? "Saving..." : "Save Configuration"}
+          </Button>
         </CardContent>
       </Card>
 
-      {/* Prompt Template */}
       <Card>
         <CardHeader>
           <CardTitle>AI Prompt Template</CardTitle>
@@ -346,11 +475,11 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
           </div>
 
           <Button
-            onClick={() => saveMutation.mutate()}
-            disabled={saveMutation.isPending}
+            onClick={() => savePromptMutation.mutate()}
+            disabled={savePromptMutation.isPending}
             data-testid="button-save-prompt-template"
           >
-            {saveMutation.isPending ? "Saving..." : "Save Prompt Template"}
+            {savePromptMutation.isPending ? "Saving..." : "Save Prompt Template"}
           </Button>
         </CardContent>
       </Card>

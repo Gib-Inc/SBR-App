@@ -4,13 +4,14 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
 
 export type InventoryEventType =
   | "SALES_ORDER_CREATED"
-  | "SALES_ORDER_FULFILLED"
+  | "SALES_ORDER_SHIPPED"
   | "SALES_ORDER_CANCELLED"
   | "PURCHASE_ORDER_RECEIVED"
   | "RETURN_RECEIVED"
   | "BACKORDER_FULFILLED"
   | "MANUAL_ADJUSTMENT"
   | "PRODUCTION_COMPLETED"
+  | "EXTENSIV_SYNC"
   | "TRANSFER";
 
 export interface InventoryMovementParams {
@@ -23,6 +24,7 @@ export interface InventoryMovementParams {
   returnId?: string;
   poId?: string;
   salesOrderLineId?: string;
+  channel?: string;
   userId?: string | number;
   userName?: string;
   notes?: string;
@@ -42,6 +44,7 @@ interface InventoryState {
   onHand: number;
   hildaleQty: number;
   pivotQty: number;
+  pivotProjectionQty: number;
   currentStock: number;
 }
 
@@ -51,13 +54,14 @@ export class InventoryMovement {
   private getInventoryState(item: Item): InventoryState {
     const hildaleQty = item.hildaleQty ?? 0;
     const pivotQty = item.pivotQty ?? 0;
+    const pivotProjectionQty = item.pivotProjectionQty ?? 0;
     const currentStock = item.currentStock ?? 0;
     
     const onHand = item.type === "finished_product"
-      ? hildaleQty + pivotQty
+      ? hildaleQty + pivotProjectionQty
       : currentStock;
     
-    return { onHand, hildaleQty, pivotQty, currentStock };
+    return { onHand, hildaleQty, pivotQty, pivotProjectionQty, currentStock };
   }
 
   async apply(params: InventoryMovementParams): Promise<InventoryMovementResult> {
@@ -77,12 +81,13 @@ export class InventoryMovement {
 
       const beforeState = this.getInventoryState(item);
       const isFinished = item.type === "finished_product";
-      // Default to PIVOT for finished products (warehouse where inventory is received)
       const location = params.location || (isFinished ? "PIVOT" : "N/A");
+      const isPivotFulfilled = location === "PIVOT";
       
       let updates: {
         hildaleQty?: number;
         pivotQty?: number;
+        pivotProjectionQty?: number;
         currentStock?: number;
         forecastDirty?: boolean;
       } = {};
@@ -90,39 +95,58 @@ export class InventoryMovement {
 
       switch (params.eventType) {
         case "PURCHASE_ORDER_RECEIVED":
-        case "RETURN_RECEIVED":
           quantityDelta = params.quantity;
           if (isFinished) {
-            if (location === "HILDALE") {
-              updates.hildaleQty = beforeState.hildaleQty + params.quantity;
-            } else {
-              updates.pivotQty = beforeState.pivotQty + params.quantity;
-            }
+            updates.pivotQty = beforeState.pivotQty + params.quantity;
+            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
           break;
 
-        case "SALES_ORDER_FULFILLED":
-          quantityDelta = -params.quantity;
+        case "RETURN_RECEIVED":
+          quantityDelta = params.quantity;
           if (isFinished) {
-            if (location === "PIVOT" && beforeState.pivotQty >= params.quantity) {
-              updates.pivotQty = beforeState.pivotQty - params.quantity;
-            } else if (beforeState.hildaleQty >= params.quantity) {
-              updates.hildaleQty = beforeState.hildaleQty - params.quantity;
+            updates.hildaleQty = beforeState.hildaleQty + params.quantity;
+            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
+          } else {
+            updates.currentStock = beforeState.currentStock + params.quantity;
+          }
+          break;
+
+        case "SALES_ORDER_CREATED":
+          if (isFinished && isPivotFulfilled) {
+            quantityDelta = -params.quantity;
+            const newProjection = beforeState.pivotProjectionQty - params.quantity;
+            updates.pivotProjectionQty = Math.max(0, newProjection);
+          }
+          break;
+
+        case "SALES_ORDER_SHIPPED":
+          if (isFinished) {
+            if (isPivotFulfilled) {
+              quantityDelta = 0;
             } else {
-              return {
-                success: false,
-                itemId: params.itemId,
-                sku: item.sku,
-                beforeQty: beforeState.onHand,
-                afterQty: beforeState.onHand,
-                quantityChanged: 0,
-                error: `Insufficient stock for ${item.sku}. Available: ${beforeState.onHand}, Requested: ${params.quantity}`,
-              };
+              quantityDelta = -params.quantity;
+              if (beforeState.hildaleQty >= params.quantity) {
+                updates.hildaleQty = beforeState.hildaleQty - params.quantity;
+              } else {
+                return {
+                  success: false,
+                  itemId: params.itemId,
+                  sku: item.sku,
+                  beforeQty: beforeState.onHand,
+                  afterQty: beforeState.onHand,
+                  quantityChanged: 0,
+                  error: `Insufficient Hildale stock for ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+                };
+              }
             }
           } else {
-            if (beforeState.currentStock < params.quantity) {
+            quantityDelta = -params.quantity;
+            if (beforeState.currentStock >= params.quantity) {
+              updates.currentStock = beforeState.currentStock - params.quantity;
+            } else {
               return {
                 success: false,
                 itemId: params.itemId,
@@ -133,7 +157,13 @@ export class InventoryMovement {
                 error: `Insufficient stock for ${item.sku}. Available: ${beforeState.currentStock}, Requested: ${params.quantity}`,
               };
             }
-            updates.currentStock = beforeState.currentStock - params.quantity;
+          }
+          break;
+
+        case "SALES_ORDER_CANCELLED":
+          if (isFinished && isPivotFulfilled) {
+            quantityDelta = params.quantity;
+            updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
           }
           break;
 
@@ -143,7 +173,7 @@ export class InventoryMovement {
             if (location === "HILDALE") {
               updates.hildaleQty = beforeState.hildaleQty + params.quantity;
             } else {
-              updates.pivotQty = beforeState.pivotQty + params.quantity;
+              updates.pivotProjectionQty = beforeState.pivotProjectionQty + params.quantity;
             }
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
@@ -157,15 +187,23 @@ export class InventoryMovement {
           }
           break;
 
-        case "SALES_ORDER_CREATED":
-        case "SALES_ORDER_CANCELLED":
+        case "EXTENSIV_SYNC":
+          if (isFinished) {
+            const oldPivotQty = beforeState.pivotQty;
+            const newPivotQty = params.quantity;
+            const delta = newPivotQty - oldPivotQty;
+            
+            updates.pivotQty = newPivotQty;
+            updates.pivotProjectionQty = beforeState.pivotProjectionQty + delta;
+            quantityDelta = delta;
+          }
+          break;
+
         case "BACKORDER_FULFILLED":
-          // Lifecycle events - log audit only, no inventory change
           quantityDelta = 0;
           break;
 
         case "TRANSFER":
-          // Transfer between locations - handled separately
           quantityDelta = 0;
           break;
       }
@@ -212,25 +250,27 @@ export class InventoryMovement {
     try {
       const eventTypeMap: Record<InventoryEventType, AuditEventTypeBase> = {
         SALES_ORDER_CREATED: "SALES_ORDER_CREATED",
-        SALES_ORDER_FULFILLED: "SALES_ORDER_FULFILLED",
+        SALES_ORDER_SHIPPED: "SALES_ORDER_FULFILLED",
         SALES_ORDER_CANCELLED: "SALES_ORDER_CANCELLED",
         PURCHASE_ORDER_RECEIVED: "PURCHASE_ORDER_RECEIVED",
         RETURN_RECEIVED: "RETURN_RECEIVED",
         BACKORDER_FULFILLED: "BACKORDER_FULFILLED",
         MANUAL_ADJUSTMENT: "INVENTORY_ADJUSTED",
         PRODUCTION_COMPLETED: "PRODUCTION_COMPLETED",
+        EXTENSIV_SYNC: "INTEGRATION_SYNC",
         TRANSFER: "INVENTORY_TRANSFERRED",
       };
 
       const entityTypeMap: Record<InventoryEventType, string> = {
         SALES_ORDER_CREATED: "SALES_ORDER",
-        SALES_ORDER_FULFILLED: "SALES_ORDER",
+        SALES_ORDER_SHIPPED: "SALES_ORDER",
         SALES_ORDER_CANCELLED: "SALES_ORDER",
         PURCHASE_ORDER_RECEIVED: "PURCHASE_ORDER",
         RETURN_RECEIVED: "RETURN",
         BACKORDER_FULFILLED: "SALES_ORDER",
         MANUAL_ADJUSTMENT: "ITEM",
         PRODUCTION_COMPLETED: "ITEM",
+        EXTENSIV_SYNC: "ITEM",
         TRANSFER: "ITEM",
       };
 
@@ -257,16 +297,19 @@ export class InventoryMovement {
           eventType: params.eventType,
           quantityChanged: quantityDelta,
           location: params.location,
+          channel: params.channel,
           before: {
             onHand: beforeState.onHand,
             hildaleQty: beforeState.hildaleQty,
             pivotQty: beforeState.pivotQty,
+            pivotProjectionQty: beforeState.pivotProjectionQty,
             currentStock: beforeState.currentStock,
           },
           after: {
             onHand: afterState.onHand,
             hildaleQty: afterState.hildaleQty,
             pivotQty: afterState.pivotQty,
+            pivotProjectionQty: afterState.pivotProjectionQty,
             currentStock: afterState.currentStock,
           },
           orderId: params.orderId,
@@ -294,43 +337,27 @@ export class InventoryMovement {
     
     switch (params.eventType) {
       case "SALES_ORDER_CREATED":
-        return `Sales order created for ${params.quantity} units of ${item.sku}`;
-      
-      case "SALES_ORDER_FULFILLED":
-        return `Shipped ${absQty} units of ${item.sku} from ${params.location}`;
-      
+        return `Sales order created: ${absQty} ${item.sku} allocated from ${params.location || 'PIVOT'}`;
+      case "SALES_ORDER_SHIPPED":
+        return `Sales order shipped: ${absQty} ${item.sku} ${direction} at ${params.location || 'warehouse'}`;
       case "SALES_ORDER_CANCELLED":
-        return `Sales order cancelled, released allocation for ${item.sku}`;
-      
+        return `Sales order cancelled: ${absQty} ${item.sku} restored to ${params.location || 'PIVOT'}`;
       case "PURCHASE_ORDER_RECEIVED":
-        return `Received ${absQty} units of ${item.sku} from PO into ${params.location}`;
-      
+        return `PO received: ${absQty} ${item.sku} added to inventory`;
       case "RETURN_RECEIVED":
-        return `Return received: ${absQty} units of ${item.sku} restocked to ${params.location}`;
-      
+        return `Return received: ${absQty} ${item.sku} restocked to Hildale`;
       case "BACKORDER_FULFILLED":
-        return `Backorder fulfilled: allocated ${absQty} units of ${item.sku} to pending order`;
-      
+        return `Backorder fulfilled: ${absQty} ${item.sku} allocated`;
       case "MANUAL_ADJUSTMENT":
-        return `Manual adjustment: ${item.sku} stock ${direction} by ${absQty} at ${params.location}`;
-      
+        return `Manual adjustment: ${item.sku} ${direction} by ${absQty} at ${params.location || 'warehouse'}`;
       case "PRODUCTION_COMPLETED":
-        return `Production completed: ${absQty} units of ${item.sku} added to Hildale`;
-      
+        return `Production completed: ${absQty} ${item.sku} added to Hildale`;
+      case "EXTENSIV_SYNC":
+        return `Extensiv sync: ${item.sku} pivot qty updated by ${quantityDelta}`;
       case "TRANSFER":
-        return `Transfer: ${absQty} units of ${item.sku} moved`;
-      
+        return `Transfer: ${absQty} ${item.sku} moved`;
       default:
-        return `Inventory movement: ${item.sku} ${direction} by ${absQty}`;
+        return `Inventory ${direction} by ${absQty} for ${item.sku}`;
     }
-  }
-
-  async applyBatch(movements: InventoryMovementParams[]): Promise<InventoryMovementResult[]> {
-    const results: InventoryMovementResult[] = [];
-    for (const movement of movements) {
-      const result = await this.apply(movement);
-      results.push(result);
-    }
-    return results;
   }
 }

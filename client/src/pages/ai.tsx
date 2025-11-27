@@ -17,7 +17,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { AdDemandSignals } from "@/components/ad-demand-signals";
 import { IntegrationSettings } from "@/components/integration-settings";
 import { CreatePOSheet } from "@/components/create-po-sheet";
 
@@ -1112,15 +1111,6 @@ function InsightsTab() {
       <div className="space-y-4">
         <Card>
           <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {[1, 2, 3, 4].map((i) => (
-                <Skeleton key={i} className="h-20 w-full" />
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
             <Skeleton className="h-64 w-full" />
           </CardContent>
         </Card>
@@ -1128,65 +1118,8 @@ function InsightsTab() {
     );
   }
   
-  const summary = recsData?.summary || { total: 0, new: 0, accepted: 0, dismissed: 0, highRisk: 0, actionRequired: 0 };
-  
   return (
     <div className="space-y-4">
-      {/* Ad Demand Signals */}
-      <AdDemandSignals variant="ai-agent" />
-      
-      {/* Summary Cards - Status-based counts */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold" data-testid="text-total-recs">{summary.total}</p>
-              <p className="text-sm text-muted-foreground">Total Active</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-primary">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-primary" data-testid="text-new-recs">{summary.new}</p>
-              <p className="text-sm text-muted-foreground">New</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-green-600" data-testid="text-accepted-recs">{summary.accepted}</p>
-              <p className="text-sm text-muted-foreground">Accepted</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-muted-foreground" data-testid="text-dismissed-recs">{summary.dismissed}</p>
-              <p className="text-sm text-muted-foreground">Dismissed</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-destructive">
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-destructive" data-testid="text-high-risk-recs">{summary.highRisk}</p>
-              <p className="text-sm text-muted-foreground">High Risk</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <p className="text-2xl font-bold text-orange-500" data-testid="text-action-required">{summary.actionRequired}</p>
-              <p className="text-sm text-muted-foreground">Needs Action</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-      
       {/* AI Recommendations Header */}
       <Card>
         <CardHeader>
@@ -1273,7 +1206,7 @@ function InsightsTab() {
                   <th className="px-3 text-right font-medium whitespace-nowrap">Rec Qty</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Velocity</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap">Status</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap sticky right-0 bg-muted/50 z-10">Actions</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1344,8 +1277,8 @@ function InsightsTab() {
                           {rec.status}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap sticky right-0 bg-background z-10">
-                        <div className="flex items-center justify-center gap-1">
+                      <td className="px-3 align-middle whitespace-nowrap sticky right-0 z-10 bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                        <div className="flex items-center justify-center gap-1" onClick={(e) => e.stopPropagation()}>
                           {rec.status === "NEW" && rec.recommendationType !== "OK" && (
                             <Tooltip>
                               <TooltipTrigger asChild>

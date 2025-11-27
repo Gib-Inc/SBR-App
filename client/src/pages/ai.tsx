@@ -1391,7 +1391,7 @@ function InsightsTab() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50">
                 <tr className="h-11 border-b">
-                  <th className="px-3 text-left font-medium whitespace-nowrap sticky left-0 bg-muted/50 z-10">SKU</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap">SKU</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap">Product</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap">Type</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap">Risk</th>
@@ -1423,7 +1423,7 @@ function InsightsTab() {
                       className={`h-11 border-b hover-elevate cursor-pointer ${rec.status === "DISMISSED" ? "opacity-50" : ""}`}
                       onClick={() => setSelectedItem(rec)}
                     >
-                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap sticky left-0 bg-background z-10">
+                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap">
                         {rec.sku}
                       </td>
                       <td className="px-3 align-middle whitespace-nowrap max-w-[180px] truncate" title={rec.productName}>

@@ -47,18 +47,37 @@ interface ItemWithCriticality extends Item {
   daysUntilStockout: number;
 }
 
+interface PrefilledItem {
+  itemId: string;
+  quantity: number;
+  unitCost?: number;
+  aiRecommendationId?: string;
+  sku?: string;
+  name?: string;
+}
+
 interface CreatePOSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  prefilledSupplierId?: string;
+  prefilledItems?: PrefilledItem[];
+  onPOCreated?: (poId: string) => void;
 }
 
 interface SelectedItem {
   itemId: string;
   quantity: number;
   unitCost?: number;
+  aiRecommendationId?: string;
 }
 
-export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
+export function CreatePOSheet({ 
+  open, 
+  onOpenChange,
+  prefilledSupplierId,
+  prefilledItems,
+  onPOCreated,
+}: CreatePOSheetProps) {
   const { toast } = useToast();
   const [step, setStep] = useState<"supplier" | "items" | "review">("supplier");
   const [isNewSupplier, setIsNewSupplier] = useState(false);
@@ -75,11 +94,38 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
     body: string;
     smsMessage: string;
   } | null>(null);
+  const [hasInitializedPrefill, setHasInitializedPrefill] = useState(false);
 
   const { data: suppliers = [] } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
     enabled: open,
   });
+  
+  // Initialize with prefilled data when sheet opens
+  const isPrefilled = !!(prefilledSupplierId || prefilledItems?.length);
+  if (open && isPrefilled && !hasInitializedPrefill && suppliers.length > 0) {
+    if (prefilledSupplierId) {
+      const supplier = suppliers.find(s => s.id === prefilledSupplierId);
+      if (supplier) {
+        setSelectedSupplierId(prefilledSupplierId);
+        setSupplierEmail(supplier.email || "");
+        setSupplierPhone(supplier.phone || "");
+      }
+    }
+    if (prefilledItems?.length) {
+      setSelectedItems(prefilledItems.map(item => ({
+        itemId: item.itemId,
+        quantity: item.quantity,
+        unitCost: item.unitCost,
+        aiRecommendationId: item.aiRecommendationId,
+      })));
+      // Skip to items step if we have prefilled items
+      if (prefilledSupplierId) {
+        setStep("items");
+      }
+    }
+    setHasInitializedPrefill(true);
+  }
 
   const { data: itemsWithCriticality = [], isLoading: isLoadingItems } = useQuery<ItemWithCriticality[]>({
     queryKey: ['/api/items/critical-order'],
@@ -119,6 +165,11 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
       }
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       queryClient.invalidateQueries({ queryKey: ['/api/suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/ai/recommendations'] });
+      // Notify parent if callback provided
+      if (onPOCreated && result.purchaseOrder?.id) {
+        onPOCreated(result.purchaseOrder.id);
+      }
       resetAndClose();
     },
     onError: (error: any) => {
@@ -142,6 +193,7 @@ export function CreatePOSheet({ open, onOpenChange }: CreatePOSheetProps) {
     setSendVia("EMAIL");
     setNotes("");
     setGeneratedContent(null);
+    setHasInitializedPrefill(false);
     onOpenChange(false);
   };
 

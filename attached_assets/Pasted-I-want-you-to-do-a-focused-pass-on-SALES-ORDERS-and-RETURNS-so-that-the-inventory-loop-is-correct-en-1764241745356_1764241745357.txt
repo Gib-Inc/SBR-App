@@ -1,0 +1,129 @@
+I want you to do a focused pass on SALES ORDERS and RETURNS so that the inventory loop is correct end-to-end and the AI is using clean, final data. Do NOT add any new pages. Fix and finish what already exists.
+
+Goals:
+- Sales always update inventory correctly (once, not twice).
+- Returns always update inventory correctly.
+- InventoryDecisionEngine + SKU Recommendations work off the true net movements.
+- The Returns UI behaves like the other main data tables (BOM, Barcodes, Suppliers).
+
+1) SALES ORDERS → INVENTORY + AI
+
+- Review how Sales Orders currently affect inventory.
+- Pick ONE clear pattern and implement it consistently (document this choice in comments near the core logic):
+
+  Pattern A (external-driven):
+    • Shopify/Amazon (and other channels) are the ONLY things that actually move stock.
+    • Sales Orders in this app are just a view/record of those external orders.
+  
+  Pattern B (internal-driven):
+    • Sales Orders in this app are the canonical internal source of stock movements.
+    • Shopify/Amazon feed order data into our Sales Orders, but do not move stock directly.
+
+- Implement the chosen pattern so that:
+  • Every sale results in exactly ONE inventory movement record in the transaction system (no double decrements).
+  • Pivot qty and AvailableForSale stay in sync with those transaction records.
+  • If Shopify/Amazon are also connected, make sure we are NOT double-counting sales.
+
+- Ensure InventoryDecisionEngine reads from the same canonical transaction source for sales (not from duplicated/stale fields).
+
+2) RETURNS → INVENTORY + AI
+
+- Review the existing Returns module:
+  • “Create Return” flow.
+  • Current statuses (Created / Shipped / Received / Cancelled, etc.).
+  • How it currently affects inventory (if at all).
+
+- Define and enforce a simple V1 return state machine (names can be adjusted, but logic must be clear), for example:
+
+  • CREATED      → Return requested/opened, NO stock movement yet.
+  • IN_TRANSIT   → Label created / item shipped back, NO stock movement yet.
+  • RECEIVED     → Item physically received at Hildale or Pivot → this is where stock increases.
+  • CANCELLED    → Return cancelled/closed without any stock movement.
+
+- Implement the inventory impact as follows:
+
+  • On transition TO RECEIVED:
+      – Create proper inventory movement(s) to increase stock at the chosen location (Hildale or Pivot).
+      – If returned to Pivot and the item is re-sellable, also update AvailableForSale accordingly.
+  
+  • On CANCELLED or failed returns:
+      – Ensure NO inventory adjustment is made.
+
+- Ensure returns appear as their own transaction type in the inventory transaction system (e.g. RETURN_RECEIVED or similar).
+
+- Confirm InventoryDecisionEngine uses net effect for each SKU:
+  Sales – Returns + PO receipts + BOM consumption/production
+  when computing velocity, coverage, risk, and recommendations.
+
+3) RETURNS UI / UX CLEANUP
+
+- Clean up the Returns page so it matches the style and behavior of the other data tables:
+
+  • The Returns section should have:
+      – A clear heading (e.g. “Returns”) and any filters at the top.
+      – A Returns data table inside a card/container below that heading.
+  
+  • The table must be scrollable INSIDE its container (vertical and horizontal) WITHOUT making the entire page horizontally scroll:
+      – Page itself must not scroll sideways.
+      – Only the table content should scroll inside a fixed-width container.
+
+  • All actions on the right (Create Label, Ship, Mark Received, Cancel, etc.) must:
+      – Be visible for each row.
+      – Behave consistently regardless of exactly where in the icon you click (no different modal/behavior for slightly different click regions).
+
+- Fix the “Create Return” / “Ship” / “Cancel” / “Mark Received” modals/side panels so that:
+  • Fields do not overflow outside the modal/panel horizontally.
+  • Buttons/actions are consistent for all entry paths.
+  • The user always sees a clear, single flow that matches the state machine described above.
+
+- Ensure the visible status badges in the Returns table always reflect the underlying state (CREATED, IN_TRANSIT, RECEIVED, CANCELLED).
+
+4) AI + LOGS ALIGNMENT
+
+- For every inventory-impacting event in SALES ORDERS and RETURNS (the actual stock movement, not just the request):
+
+  • Write exactly ONE transaction record into the inventory transaction system with:
+      – sku
+      – quantity
+      – direction: "OUT" for sales, "IN" for returns
+      – location (Pivot, Hildale, etc.)
+      – reference: salesOrderId or returnId
+
+  • Write an AI Log / Audit entry with something like:
+      – source: "SALES_ORDERS" or "RETURNS"
+      – type: "INVENTORY_MOVEMENT"
+      – metadata: { sku, qty, direction, location, eventType: "SALE" or "RETURN", orderId/returnId }
+
+- Confirm that when InventoryDecisionEngine runs it is reading from this canonical transaction source for:
+  • Sales
+  • Returns
+  • PO receipts
+  • BOM consumption/production
+
+- Confirm that SKU Recommendations (in the rebuilt SKU Recommendations section) reflect these net movements correctly:
+  • Risk level
+  • Days until stockout
+  • Recommended quantity
+  • % off target
+  adjust as expected after sales and after returns.
+
+5) GUARDRAILS
+
+- Do NOT introduce any new external integrations in this step (no Shippo or new carriers).
+- Do NOT redesign the entire Sales Orders or Returns modules. Keep this pass focused on:
+  • Correct, single-source inventory movements.
+  • Clean, consistent Returns UI.
+  • Accurate states.
+  • AI using the true inventory picture.
+
+After implementing this:
+
+- I should be able to:
+  • Pick one SKU and trace a sale:
+      – See exactly where stock decreased (transaction record).
+      – See the AI Log entry for that movement.
+      – See how the SKU’s recommendation changes in SKU Recommendations.
+  • Pick one SKU and trace a return:
+      – See exactly where stock increased.
+      – See the AI Log entry for that movement.
+      – See how the SKU’s risk, days until stockout, and recommended quantity change in SKU Recommendations after the return is received.

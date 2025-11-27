@@ -14,12 +14,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, Eye, RotateCcw, Receipt, LogOut, ExternalLink, Send } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
 import { IntegrationSettings } from "@/components/integration-settings";
 import { IntegrationHealth } from "@/components/integration-health";
+import { CreatePOSheet } from "@/components/create-po-sheet";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
 
@@ -139,6 +140,86 @@ interface PersistedRecommendationsResponse {
     actionRequired: number;
   };
   fetchedAt: string;
+}
+
+interface LinkedPO {
+  poId: string;
+  poNumber: string;
+  status: string;
+  orderDate: string;
+  qtyOrdered: number;
+  qtyReceived: number;
+  supplierName?: string;
+}
+
+function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
+  const { data, isLoading } = useQuery<{ linkedPOs: LinkedPO[] }>({
+    queryKey: ["/api/ai/recommendations", recommendationId, "linked-pos"],
+    enabled: !!recommendationId,
+  });
+  
+  if (isLoading) {
+    return (
+      <div className="border-t pt-4">
+        <Skeleton className="h-4 w-32 mb-2" />
+        <Skeleton className="h-8 w-full" />
+      </div>
+    );
+  }
+  
+  const linkedPOs = data?.linkedPOs || [];
+  
+  if (linkedPOs.length === 0) {
+    return null;
+  }
+  
+  const getPOStatusBadge = (status: string) => {
+    const variants: Record<string, string> = {
+      DRAFT: "bg-gray-100 text-gray-800",
+      SENT: "bg-blue-100 text-blue-800",
+      CONFIRMED: "bg-purple-100 text-purple-800",
+      PARTIALLY_RECEIVED: "bg-yellow-100 text-yellow-800",
+      RECEIVED: "bg-green-100 text-green-800",
+      CANCELLED: "bg-red-100 text-red-800",
+    };
+    return variants[status] || "bg-gray-100 text-gray-800";
+  };
+  
+  return (
+    <div className="border-t pt-4">
+      <p className="text-sm font-medium mb-2 flex items-center gap-2">
+        <FileText className="h-4 w-4" />
+        Linked Purchase Orders ({linkedPOs.length})
+      </p>
+      <div className="space-y-2">
+        {linkedPOs.map((po) => (
+          <div 
+            key={po.poId} 
+            className="flex items-center justify-between p-2 bg-muted rounded-lg text-sm"
+            data-testid={`linked-po-${po.poId}`}
+          >
+            <div className="flex items-center gap-3">
+              <span className="font-mono font-medium">{po.poNumber}</span>
+              <Badge className={getPOStatusBadge(po.status)}>
+                {po.status}
+              </Badge>
+              {po.supplierName && (
+                <span className="text-muted-foreground">{po.supplierName}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <span>
+                {po.qtyReceived}/{po.qtyOrdered} received
+              </span>
+              <span className="text-muted-foreground">
+                {new Date(po.orderDate).toLocaleDateString()}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function LLMConfigTab({ settingsData }: { settingsData: any }) {
@@ -580,6 +661,17 @@ function InsightsTab() {
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [selectedItem, setSelectedItem] = useState<PersistedRecommendation | null>(null);
+  const [createPOOpen, setCreatePOOpen] = useState(false);
+  const [createPOData, setCreatePOData] = useState<{
+    supplierId?: string;
+    items: Array<{
+      itemId: string;
+      quantity: number;
+      aiRecommendationId: string;
+      sku?: string;
+      name?: string;
+    }>;
+  } | null>(null);
   
   // Fetch persisted recommendations from database
   // Map frontend status filter to API query parameter
@@ -639,6 +731,59 @@ function InsightsTab() {
       });
     },
   });
+  
+  // Handler to create PO from recommendation
+  const handleCreatePO = async (rec: PersistedRecommendation) => {
+    // Create item data with sku/name defaults
+    const itemData = {
+      itemId: rec.itemId,
+      quantity: rec.recommendedQty || 1,
+      aiRecommendationId: rec.id,
+      sku: rec.sku,
+      name: rec.productName,
+    };
+    
+    try {
+      // Fetch designated supplier for this item
+      const response = await fetch(`/api/items/${rec.itemId}/designated-supplier`, {
+        credentials: "include",
+      });
+      
+      // Check if response is OK before parsing
+      if (response.ok) {
+        const data = await response.json();
+        // Set up PO data with pre-filled values including supplier
+        setCreatePOData({
+          supplierId: data.supplier?.id,
+          items: [itemData],
+        });
+      } else {
+        // Supplier not found or error - still open sheet without supplier
+        console.warn("No designated supplier found for item:", rec.itemId);
+        setCreatePOData({
+          items: [itemData],
+        });
+      }
+      setCreatePOOpen(true);
+    } catch (error) {
+      console.error("Failed to get supplier info:", error);
+      // Still open the PO sheet, just without pre-filled supplier
+      setCreatePOData({
+        items: [itemData],
+      });
+      setCreatePOOpen(true);
+    }
+  };
+  
+  // Callback when PO is successfully created
+  const handlePOCreated = (poId: string) => {
+    toast({
+      title: "PO Created",
+      description: "Purchase order created from recommendation. Status updated to Accepted.",
+    });
+    setCreatePOOpen(false);
+    setCreatePOData(null);
+  };
   
   // Filter recommendations based on status and risk
   const filteredRecommendations = (recsData?.recommendations || []).filter(rec => {
@@ -941,6 +1086,22 @@ function InsightsTab() {
                             </TooltipTrigger>
                             <TooltipContent>View details</TooltipContent>
                           </Tooltip>
+                          {rec.status === "NEW" && rec.recommendationType !== "OK" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-primary"
+                                  onClick={() => handleCreatePO(rec)}
+                                  data-testid={`button-create-po-${rec.id}`}
+                                >
+                                  <Send className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Create Purchase Order</TooltipContent>
+                            </Tooltip>
+                          )}
                           {rec.status === "NEW" && (
                             <>
                               <Tooltip>
@@ -1093,6 +1254,9 @@ function InsightsTab() {
                 </div>
               )}
               
+              {/* Linked POs section */}
+              <LinkedPOsSection recommendationId={selectedItem.id} />
+              
               {/* Action buttons */}
               <div className="flex items-center justify-end gap-2 pt-4 border-t">
                 {selectedItem.status === "NEW" && (
@@ -1141,6 +1305,18 @@ function InsightsTab() {
           )}
         </DialogContent>
       </Dialog>
+      
+      {/* Create PO Sheet */}
+      <CreatePOSheet
+        open={createPOOpen}
+        onOpenChange={(open) => {
+          setCreatePOOpen(open);
+          if (!open) setCreatePOData(null);
+        }}
+        prefilledSupplierId={createPOData?.supplierId}
+        prefilledItems={createPOData?.items}
+        onPOCreated={handlePOCreated}
+      />
     </div>
   );
 }

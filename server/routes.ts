@@ -494,6 +494,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // GET /api/ai/recommendations/:id/linked-pos - Get POs linked to a recommendation
+  app.get("/api/ai/recommendations/:id/linked-pos", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      // Get PO lines that reference this recommendation
+      const allPOs = await storage.getAllPurchaseOrders();
+      const linkedPOs: Array<{
+        poId: string;
+        poNumber: string;
+        status: string;
+        orderDate: Date;
+        qtyOrdered: number;
+        qtyReceived: number;
+        supplierName?: string;
+      }> = [];
+      
+      for (const po of allPOs) {
+        const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+        for (const line of lines) {
+          if (line.aiRecommendationId === id) {
+            const supplier = await storage.getSupplier(po.supplierId);
+            linkedPOs.push({
+              poId: po.id,
+              poNumber: po.poNumber,
+              status: po.status,
+              orderDate: po.orderDate,
+              qtyOrdered: line.qtyOrdered,
+              qtyReceived: line.qtyReceived,
+              supplierName: supplier?.name,
+            });
+          }
+        }
+      }
+      
+      res.json({ linkedPOs });
+    } catch (error: any) {
+      console.error("[AI Recommendations] Error fetching linked POs:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch linked POs" });
+    }
+  });
+
   // GET /api/ai/at-risk - Get top at-risk items for dashboard widget
   app.get("/api/ai/at-risk", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -1591,6 +1633,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete supplier item" });
+    }
+  });
+
+  // Get designated supplier for an item
+  app.get("/api/items/:itemId/designated-supplier", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId } = req.params;
+      const supplierItems = await storage.getAllSupplierItems();
+      const designatedSupplierItem = supplierItems.find(
+        si => si.itemId === itemId && si.isDesignatedSupplier
+      );
+      
+      if (!designatedSupplierItem) {
+        return res.json({ supplier: null });
+      }
+      
+      const supplier = await storage.getSupplier(designatedSupplierItem.supplierId);
+      res.json({ 
+        supplier,
+        supplierItem: designatedSupplierItem,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get designated supplier" });
     }
   });
 
@@ -4530,23 +4595,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
       createdPOId = purchaseOrder.id;
 
+      // Track linked AI recommendations for status updates
+      const linkedRecommendations: Array<{
+        recommendationId: string;
+        itemId: string;
+        sku: string;
+        recommendedQty: number;
+        orderedQty: number;
+        riskLevel?: string;
+        daysUntilStockout?: number;
+        stockGapPercent?: number;
+      }> = [];
+      
       if (lines && Array.isArray(lines)) {
         for (const line of lines) {
-          // Determine location based on item type for proper AI recommendation lookup
           const item = await storage.getItem(line.itemId);
           const location = item?.type === 'finished_product' ? 'PIVOT' : null;
           
-          // Find the latest AI recommendation for this item using the storage helper
-          const latestRecommendation = await storage.getLatestAIRecommendationForItem(
-            line.itemId,
-            location
-          );
+          // Use explicitly passed aiRecommendationId or fall back to latest recommendation
+          let recommendationId = line.aiRecommendationId;
+          let recommendedQty = null;
+          
+          if (recommendationId) {
+            // Use the passed recommendation ID
+            const rec = await storage.getAIRecommendation(recommendationId);
+            if (rec) {
+              recommendedQty = rec.recommendedQty;
+              // Track for logging and status update
+              linkedRecommendations.push({
+                recommendationId,
+                itemId: line.itemId,
+                sku: item?.sku || 'N/A',
+                recommendedQty: rec.recommendedQty || line.quantity,
+                orderedQty: line.quantity,
+                riskLevel: rec.riskLevel ?? undefined,
+                daysUntilStockout: rec.daysUntilStockout ?? undefined,
+                stockGapPercent: rec.stockGapPercent ?? undefined,
+              });
+            }
+          } else {
+            // Fall back to latest recommendation lookup
+            const latestRecommendation = await storage.getLatestAIRecommendationForItem(
+              line.itemId,
+              location
+            );
+            if (latestRecommendation) {
+              recommendationId = latestRecommendation.id;
+              recommendedQty = latestRecommendation.recommendedQty;
+            }
+          }
           
           const validatedLine = insertPurchaseOrderLineSchema.parse({
             ...line,
             purchaseOrderId: purchaseOrder.id,
-            aiRecommendationId: latestRecommendation?.id || null,
-            recommendedQtyAtOrderTime: latestRecommendation?.recommendedQty || null,
+            aiRecommendationId: recommendationId || null,
+            recommendedQtyAtOrderTime: recommendedQty || null,
             finalOrderedQty: line.quantity,
           });
           await storage.createPurchaseOrderLine(validatedLine);
@@ -4554,10 +4657,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
+      
+      // Update linked recommendations to ACCEPTED and log AI events
+      const supplier = validatedPO.supplierId ? await storage.getSupplier(validatedPO.supplierId) : null;
+      for (const linked of linkedRecommendations) {
+        try {
+          // Update recommendation status to ACCEPTED
+          await storage.updateAIRecommendation(linked.recommendationId, { status: 'ACCEPTED' });
+          
+          // Log AI_RECOMMENDATION_PO_CREATED event
+          await AuditLogger.logEvent({
+            source: 'USER',
+            eventType: 'AI_RECOMMENDATION_PO_CREATED',
+            entityType: 'PURCHASE_ORDER',
+            entityId: purchaseOrder.id,
+            entityLabel: purchaseOrder.poNumber,
+            description: `PO created from AI recommendation for ${linked.sku}`,
+            purchaseOrderId: purchaseOrder.id,
+            supplierId: validatedPO.supplierId || '',
+            details: {
+              sku: linked.sku,
+              recommendedQty: linked.recommendedQty,
+              orderedQty: linked.orderedQty,
+              supplierName: supplier?.name || 'Unknown Supplier',
+              recommendationId: linked.recommendationId,
+              riskLevel: linked.riskLevel,
+              daysUntilStockout: linked.daysUntilStockout,
+              stockGapPercent: linked.stockGapPercent,
+            },
+          });
+        } catch (recError) {
+          console.warn('[PurchaseOrder] Failed to update recommendation status:', recError);
+        }
+      }
 
       // Log PO creation
       try {
-        const supplier = validatedPO.supplierId ? await storage.getSupplier(validatedPO.supplierId) : null;
         const user = await storage.getUser(req.session.userId!);
         await AuditLogger.logPOCreated({
           poId: purchaseOrder.id,
@@ -4651,21 +4786,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       createdPOId = purchaseOrder.id;
 
-      // Create PO lines
+      // Create PO lines and track linked recommendations
+      const linkedRecommendations: Array<{
+        recommendationId: string;
+        itemId: string;
+        sku: string;
+        recommendedQty: number;
+        orderedQty: number;
+        riskLevel?: string;
+        daysUntilStockout?: number;
+        stockGapPercent?: number;
+      }> = [];
+      
       for (const item of items) {
         const itemRecord = await storage.getItem(item.itemId);
         const location = itemRecord?.type === 'finished_product' ? 'PIVOT' : null;
-        const latestRecommendation = await storage.getLatestAIRecommendationForItem(item.itemId, location);
+        
+        // Use explicitly passed aiRecommendationId or fall back to latest recommendation
+        let recommendationId = item.aiRecommendationId;
+        let recommendedQty = null;
+        
+        if (recommendationId) {
+          // Use the passed recommendation ID
+          const rec = await storage.getAIRecommendation(recommendationId);
+          if (rec) {
+            recommendedQty = rec.recommendedQty;
+            // Track for logging and status update
+            linkedRecommendations.push({
+              recommendationId,
+              itemId: item.itemId,
+              sku: itemRecord?.sku || 'N/A',
+              recommendedQty: rec.recommendedQty || item.quantity,
+              orderedQty: item.quantity,
+              riskLevel: rec.riskLevel ?? undefined,
+              daysUntilStockout: rec.daysUntilStockout ?? undefined,
+              stockGapPercent: rec.stockGapPercent ?? undefined,
+            });
+          }
+        } else {
+          // Fall back to latest recommendation lookup
+          const recommendations = await storage.getAIRecommendationsByItem(item.itemId);
+          const latestRecommendation = recommendations.find(r => r.status === 'NEW') || recommendations[0];
+          if (latestRecommendation) {
+            recommendationId = latestRecommendation.id;
+            recommendedQty = latestRecommendation.recommendedQty;
+          }
+        }
         
         await storage.createPurchaseOrderLine({
           purchaseOrderId: purchaseOrder.id,
           itemId: item.itemId,
           qtyOrdered: item.quantity,
           unitCost: item.unitCost || null,
-          aiRecommendationId: latestRecommendation?.id || null,
-          recommendedQtyAtOrderTime: latestRecommendation?.recommendedQty || null,
+          aiRecommendationId: recommendationId || null,
+          recommendedQtyAtOrderTime: recommendedQty,
           finalOrderedQty: item.quantity,
         });
+      }
+      
+      // Update linked recommendations to ACCEPTED and log AI events
+      for (const linked of linkedRecommendations) {
+        try {
+          // Update recommendation status to ACCEPTED
+          await storage.updateAIRecommendation(linked.recommendationId, { status: 'ACCEPTED' });
+          
+          // Log AI_RECOMMENDATION_PO_CREATED event
+          await AuditLogger.logEvent({
+            source: 'USER',
+            eventType: 'AI_RECOMMENDATION_PO_CREATED',
+            entityType: 'PURCHASE_ORDER',
+            entityId: purchaseOrder.id,
+            entityLabel: poNumber,
+            description: `PO created from AI recommendation for ${linked.sku}`,
+            purchaseOrderId: purchaseOrder.id,
+            supplierId: finalSupplierId,
+            details: {
+              sku: linked.sku,
+              recommendedQty: linked.recommendedQty,
+              orderedQty: linked.orderedQty,
+              supplierName: supplier.name,
+              recommendationId: linked.recommendationId,
+              riskLevel: linked.riskLevel,
+              daysUntilStockout: linked.daysUntilStockout,
+              stockGapPercent: linked.stockGapPercent,
+            },
+          });
+        } catch (recError) {
+          console.warn('[PurchaseOrder] Failed to update recommendation status:', recError);
+        }
       }
 
       // Log PO creation

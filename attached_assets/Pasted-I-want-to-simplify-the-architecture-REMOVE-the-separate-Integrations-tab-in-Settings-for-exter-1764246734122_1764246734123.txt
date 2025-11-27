@@ -1,0 +1,72 @@
+I want to simplify the architecture:
+
+- REMOVE the separate “Integrations” tab in Settings for external APIs.
+- KEEP all third-party integrations configured from **AI Agent → Data Sources**.
+- KEEP/UPGRADE **Settings → LLM Configuration** for LLM providers + active LLM.
+
+Please implement the following changes.
+
+1) REMOVE / DEPRECATE SETTINGS → INTEGRATIONS
+- Remove the “Integrations” tab in Settings from the UI and routing.
+- Any existing credentials that were entered there (GHL, Shopify, Amazon, QuickBooks, etc.) should continue to be stored in the same secure backend tables (e.g. IntegrationConfigs), but the only way to edit them going forward will be via the Data Sources “Configure” dialogs.
+- Make sure no dead code paths or unused forms remain. Clean up any Settings→Integrations-specific components that are now orphaned.
+
+2) DATA SOURCES = SINGLE PLACE TO CONFIGURE EXTERNAL INTEGRATIONS
+- On AI Agent → Data Sources, each card (GoHighLevel, Shopify, Amazon Seller Central, Extensiv/Pivot, QuickBooks, PhantomBuster, Meta Ads, Google Ads, etc.) should own its configuration dialog:
+  - API key / OAuth connect / account ID / location ID / warehouse identifiers, etc.
+  - “Test Connection” button that validates credentials.
+  - “Save Configuration” button that persists to the same secure backend table(s) we already use.
+- Ensure all backend services (sync jobs, importers, PO senders, audit logging) read credentials ONLY from this central config store, not from hidden settings elsewhere.
+- Confirm that no raw API keys are returned to the frontend after save; inputs should be write-only/masked and never logged.
+
+3) SETTINGS → LLM CONFIGURATION (LLM CONNECTIONS + ACTIVE PROVIDER)
+I want this tab to handle only LLM providers and the “running point” model.
+
+Backend:
+- Define/extend an LlmSettings model that includes:
+  - activeProvider: enum 'OPENAI' | 'ANTHROPIC' | 'OTHER'
+  - defaultModel: string (e.g. 'gpt-4.1' or 'claude-3-opus')
+  - temperature: number
+  - maxTokens: number
+- For secrets, either:
+  - Use environment variables for keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.), OR
+  - Use the existing encrypted-secret pattern in the DB, but never expose keys to the frontend.
+- Implement a single LlmService that:
+  - Reads activeProvider + defaultModel from LlmSettings,
+  - Selects the appropriate client (OpenAI, Anthropic, etc.),
+  - Is used everywhere we call the LLM (PO emails, SKU recommendations, weekly audits, AI dashboard suggestions, etc.).
+
+UI:
+- In Settings → LLM Configuration:
+  - Add an “Active Provider” dropdown bound to LlmSettings.activeProvider.
+  - Add “Default Model”, “Temperature”, and “Max Tokens” fields bound to LlmSettings.
+  - For each provider (at least OpenAI + Anthropic/Claude):
+    - API key input (write-only/masked, using secure storage),
+    - Optional model preset selector,
+    - “Test Connection” button that calls a small health-check via LlmService and shows success/error.
+- When I change the active provider + save:
+  - All LLM usage in the app should switch to that provider.
+  - Write a System Log entry with source='LLM', event='PROVIDER_CHANGED', old/new provider, timestamp.
+
+4) AI AGENT → LLM CONFIG TAB
+- Keep this tab focused on **behavior**, not credentials:
+  - Show read-only summary of Active Provider + Default Model from LlmSettings.
+  - Allow tuning of decision-engine specific knobs (risk thresholds, audit frequency, etc.).
+  - Include a “Run LLM Health Check” button that:
+    - Calls LlmService health-check using the active provider,
+    - Logs result as System Log event (source='LLM', event='HEALTH_CHECK', status='SUCCESS'|'ERROR').
+
+5) SECURITY + VALIDATION
+- Verify:
+  - No API keys or secrets appear in System Logs, console logs, or Insights data.
+  - Data Sources “Configure” dialogs never echo back full keys; show only masked indicators like “Key saved”.
+  - The app still fully supports: GHL, Shopify, Amazon, Extensiv, QuickBooks, PhantomBuster, Meta Ads, Google Ads, etc., all configured from AI Agent → Data Sources.
+- Finally, summarize for me:
+  - Where each integration’s credentials now live in the backend,
+  - How to configure a new integration end-to-end using the Data Sources cards,
+  - How to connect OpenAI/Anthropic and choose which LLM is currently “running point”.
+
+The final state I want:
+- No separate Settings→Integrations UI.
+- All external integrations configured and tested from AI Agent → Data Sources.
+- LLM Configuration tab dedicated to connecting LLM providers and choosing the primary active LLM for the whole app.

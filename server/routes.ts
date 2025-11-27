@@ -4392,6 +4392,112 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ============================================================================
+  // LABEL FORMATS (Custom label sizes)
+  // ============================================================================
+
+  app.get("/api/label-formats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const formats = await storage.getLabelFormatsByUserId(userId);
+      res.json(formats);
+    } catch (error) {
+      console.error("[Label Formats] Error fetching formats:", error);
+      res.status(500).json({ error: "Failed to fetch label formats" });
+    }
+  });
+
+  app.get("/api/label-formats/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const format = await storage.getLabelFormat(req.params.id);
+      if (!format) {
+        return res.status(404).json({ error: "Label format not found" });
+      }
+      res.json(format);
+    } catch (error) {
+      console.error("[Label Formats] Error fetching format:", error);
+      res.status(500).json({ error: "Failed to fetch label format" });
+    }
+  });
+
+  app.post("/api/label-formats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const { name, layoutType, labelWidth, labelHeight, pageWidth, pageHeight, columns, rows, marginTop, marginLeft, gapX, gapY, isDefault } = req.body;
+      
+      if (!name || !layoutType || labelWidth === undefined || labelHeight === undefined) {
+        return res.status(400).json({ error: "Missing required fields: name, layoutType, labelWidth, labelHeight" });
+      }
+
+      const format = await storage.createLabelFormat({
+        userId,
+        name,
+        layoutType,
+        labelWidth: Number(labelWidth),
+        labelHeight: Number(labelHeight),
+        pageWidth: pageWidth !== undefined ? Number(pageWidth) : 8.5,
+        pageHeight: pageHeight !== undefined ? Number(pageHeight) : 11,
+        columns: columns !== undefined ? Number(columns) : 1,
+        rows: rows !== undefined ? Number(rows) : 1,
+        marginTop: marginTop !== undefined ? Number(marginTop) : 0,
+        marginLeft: marginLeft !== undefined ? Number(marginLeft) : 0,
+        gapX: gapX !== undefined ? Number(gapX) : 0,
+        gapY: gapY !== undefined ? Number(gapY) : 0,
+        isDefault: isDefault || false,
+      });
+      res.status(201).json(format);
+    } catch (error: any) {
+      console.error("[Label Formats] Error creating format:", error);
+      res.status(400).json({ error: error.message || "Failed to create label format" });
+    }
+  });
+
+  app.patch("/api/label-formats/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const format = await storage.updateLabelFormat(req.params.id, req.body);
+      if (!format) {
+        return res.status(404).json({ error: "Label format not found" });
+      }
+      res.json(format);
+    } catch (error: any) {
+      console.error("[Label Formats] Error updating format:", error);
+      res.status(400).json({ error: error.message || "Failed to update label format" });
+    }
+  });
+
+  app.delete("/api/label-formats/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteLabelFormat(req.params.id);
+      if (!success) {
+        return res.status(404).json({ error: "Label format not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("[Label Formats] Error deleting format:", error);
+      res.status(500).json({ error: "Failed to delete label format" });
+    }
+  });
+
+  app.post("/api/label-formats/:id/set-default", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      await storage.setDefaultLabelFormat(userId, req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[Label Formats] Error setting default:", error);
+      res.status(500).json({ error: "Failed to set default label format" });
+    }
+  });
+
+  // ============================================================================
   // BARCODE GENERATION
   // ============================================================================
 

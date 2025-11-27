@@ -1236,3 +1236,42 @@ export const insertAiSystemRecommendationSchema = createInsertSchema(aiSystemRec
 });
 export type InsertAiSystemRecommendation = z.infer<typeof insertAiSystemRecommendationSchema>;
 export type AiSystemRecommendation = typeof aiSystemRecommendations.$inferSelect;
+
+// ============================================================================
+// CUSTOM LABEL FORMATS
+// ============================================================================
+
+export const labelFormats = pgTable("label_formats", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(), // User-friendly name like "Small Product Tags"
+  layoutType: text("layout_type").notNull().default("thermal"), // 'thermal' (single label) or 'sheet' (multiple per page)
+  // Label dimensions (stored in inches)
+  labelWidth: real("label_width").notNull(), // Width of single label in inches
+  labelHeight: real("label_height").notNull(), // Height of single label in inches
+  // Page dimensions (for sheet layouts)
+  pageWidth: real("page_width").default(8.5), // Page width in inches
+  pageHeight: real("page_height").default(11), // Page height in inches
+  // Grid layout (for sheet layouts)
+  columns: integer("columns").default(1), // Number of columns
+  rows: integer("rows").default(1), // Number of rows
+  // Margins and gaps (for sheet layouts, in inches)
+  marginTop: real("margin_top").default(0),
+  marginLeft: real("margin_left").default(0),
+  gapX: real("gap_x").default(0), // Horizontal gap between labels
+  gapY: real("gap_y").default(0), // Vertical gap between labels
+  // Metadata
+  isDefault: boolean("is_default").default(false), // User's preferred format
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: index("label_formats_user_id_idx").on(table.userId),
+}));
+
+export const insertLabelFormatSchema = createInsertSchema(labelFormats).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true 
+});
+export type InsertLabelFormat = z.infer<typeof insertLabelFormatSchema>;
+export type LabelFormat = typeof labelFormats.$inferSelect;

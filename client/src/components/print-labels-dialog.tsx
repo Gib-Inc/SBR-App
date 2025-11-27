@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -14,9 +14,23 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Printer, Search, AlertCircle, CheckCircle2, HelpCircle, ChevronLeft, ChevronRight, Package } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Printer, Search, AlertCircle, CheckCircle2, HelpCircle, ChevronLeft, ChevronRight, Package, Save, Trash2, ChevronDown, Settings2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { apiRequest } from "@/lib/queryClient";
 
 interface PrintLabelsDialogProps {
   isOpen: boolean;
@@ -25,12 +39,27 @@ interface PrintLabelsDialogProps {
 
 type PrinterStatus = "checking" | "ready" | "unknown" | "error";
 
+interface LabelFormat {
+  id: string;
+  userId: string;
+  name: string;
+  layoutType: string;
+  labelWidth: number;
+  labelHeight: number;
+  pageWidth: number | null;
+  pageHeight: number | null;
+  columns: number | null;
+  rows: number | null;
+  marginTop: number | null;
+  marginLeft: number | null;
+  gapX: number | null;
+  gapY: number | null;
+  isDefault: boolean | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface LabelFormatConfig {
-  value: string;
-  label: string;
-  shortLabel: string;
-  description: string;
-  icon: string;
   pageWidth: string;
   pageHeight: string;
   labelWidth: string;
@@ -42,94 +71,6 @@ interface LabelFormatConfig {
   gapX: string;
   gapY: string;
 }
-
-const LABEL_FORMATS: LabelFormatConfig[] = [
-  {
-    value: "4x6-thermal",
-    label: "4x6 Thermal",
-    shortLabel: "4x6",
-    description: "Shipping labels",
-    icon: "4×6",
-    pageWidth: "4in",
-    pageHeight: "6in",
-    labelWidth: "4in",
-    labelHeight: "6in",
-    columns: 1,
-    rows: 1,
-    marginTop: "0",
-    marginLeft: "0",
-    gapX: "0",
-    gapY: "0",
-  },
-  {
-    value: "2x1-thermal",
-    label: "2x1 Thermal",
-    shortLabel: "2x1",
-    description: "Small product labels",
-    icon: "2×1",
-    pageWidth: "2in",
-    pageHeight: "1in",
-    labelWidth: "2in",
-    labelHeight: "1in",
-    columns: 1,
-    rows: 1,
-    marginTop: "0",
-    marginLeft: "0",
-    gapX: "0",
-    gapY: "0",
-  },
-  {
-    value: "0.5x2-thermal",
-    label: "½×2 Thermal",
-    shortLabel: "½×2",
-    description: "Tiny product tags",
-    icon: "½×2",
-    pageWidth: "2in",
-    pageHeight: "0.5in",
-    labelWidth: "2in",
-    labelHeight: "0.5in",
-    columns: 1,
-    rows: 1,
-    marginTop: "0",
-    marginLeft: "0",
-    gapX: "0",
-    gapY: "0",
-  },
-  {
-    value: "avery5160",
-    label: "Avery 5160",
-    shortLabel: "5160",
-    description: '30/sheet (1" × 2⅝")',
-    icon: "30",
-    pageWidth: "8.5in",
-    pageHeight: "11in",
-    labelWidth: "2.625in",
-    labelHeight: "1in",
-    columns: 3,
-    rows: 10,
-    marginTop: "0.5in",
-    marginLeft: "0.1875in",
-    gapX: "0.125in",
-    gapY: "0in",
-  },
-  {
-    value: "avery5163",
-    label: "Avery 5163",
-    shortLabel: "5163",
-    description: '10/sheet (2" × 4")',
-    icon: "10",
-    pageWidth: "8.5in",
-    pageHeight: "11in",
-    labelWidth: "4in",
-    labelHeight: "2in",
-    columns: 2,
-    rows: 5,
-    marginTop: "0.5in",
-    marginLeft: "0.15625in",
-    gapX: "0.1875in",
-    gapY: "0in",
-  },
-];
 
 interface SelectedItem {
   id: string;
@@ -147,23 +88,117 @@ interface LabelData {
   internalCode?: string;
 }
 
-const STORAGE_KEY_FORMAT = "printLabels_lastFormat";
+const STORAGE_KEY_DIMENSIONS = "printLabels_customDimensions";
 const STORAGE_KEY_QUANTITIES = "printLabels_quantities";
 
 export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItems, setSelectedItems] = useState<Map<string, SelectedItem>>(new Map());
-  const [labelFormat, setLabelFormat] = useState<string>(() => {
-    return sessionStorage.getItem(STORAGE_KEY_FORMAT) || "4x6-thermal";
-  });
   const [printerStatus, setPrinterStatus] = useState<PrinterStatus>("checking");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
+  // Custom label dimensions
+  const [labelWidth, setLabelWidth] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_DIMENSIONS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.labelWidth || "4";
+      }
+    } catch {}
+    return "4";
+  });
+  const [labelHeight, setLabelHeight] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_DIMENSIONS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.labelHeight || "6";
+      }
+    } catch {}
+    return "6";
+  });
+  const [layoutType, setLayoutType] = useState<"thermal" | "sheet">(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_DIMENSIONS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.layoutType || "thermal";
+      }
+    } catch {}
+    return "thermal";
+  });
+
+  // Sheet layout options
+  const [columns, setColumns] = useState<string>("3");
+  const [rows, setRows] = useState<string>("10");
+  const [marginTop, setMarginTop] = useState<string>("0.5");
+  const [marginLeft, setMarginLeft] = useState<string>("0.19");
+  const [gapX, setGapX] = useState<string>("0.13");
+  const [gapY, setGapY] = useState<string>("0");
+  const [pageWidth, setPageWidth] = useState<string>("8.5");
+  const [pageHeight, setPageHeight] = useState<string>("11");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Saved format selection
+  const [selectedSavedFormat, setSelectedSavedFormat] = useState<string>("custom");
+  const [saveFormatName, setSaveFormatName] = useState("");
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+
+  // Fetch saved formats
+  const { data: savedFormats = [] } = useQuery<LabelFormat[]>({
+    queryKey: ["/api/label-formats"],
+    enabled: isOpen,
+  });
+
+  // Fetch items
   const { data: items } = useQuery<any[]>({
     queryKey: ["/api/items"],
   });
+
+  // Save format mutation
+  const saveFormatMutation = useMutation({
+    mutationFn: async (formatData: any) => {
+      return await apiRequest("/api/label-formats", {
+        method: "POST",
+        body: JSON.stringify(formatData),
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/label-formats"] });
+      toast({ title: "Format saved", description: "Your label format has been saved." });
+      setShowSaveDialog(false);
+      setSaveFormatName("");
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to save format.", variant: "destructive" });
+    },
+  });
+
+  // Delete format mutation
+  const deleteFormatMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return await apiRequest(`/api/label-formats/${id}`, { method: "DELETE" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/label-formats"] });
+      setSelectedSavedFormat("custom");
+      toast({ title: "Format deleted" });
+    },
+  });
+
+  // Save dimensions to localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_DIMENSIONS, JSON.stringify({
+      labelWidth,
+      labelHeight,
+      layoutType,
+    }));
+  }, [labelWidth, labelHeight, layoutType]);
 
   useEffect(() => {
     if (isOpen) {
@@ -171,10 +206,6 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
       loadSavedQuantities();
     }
   }, [isOpen]);
-
-  useEffect(() => {
-    sessionStorage.setItem(STORAGE_KEY_FORMAT, labelFormat);
-  }, [labelFormat]);
 
   useEffect(() => {
     if (selectedItems.size > 0) {
@@ -185,6 +216,28 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
       sessionStorage.setItem(STORAGE_KEY_QUANTITIES, JSON.stringify(quantities));
     }
   }, [selectedItems]);
+
+  // Load saved format when selected
+  useEffect(() => {
+    if (selectedSavedFormat !== "custom" && savedFormats.length > 0) {
+      const format = savedFormats.find(f => f.id === selectedSavedFormat);
+      if (format) {
+        setLabelWidth(String(format.labelWidth));
+        setLabelHeight(String(format.labelHeight));
+        setLayoutType(format.layoutType as "thermal" | "sheet");
+        if (format.layoutType === "sheet") {
+          setColumns(String(format.columns || 1));
+          setRows(String(format.rows || 1));
+          setMarginTop(String(format.marginTop || 0));
+          setMarginLeft(String(format.marginLeft || 0));
+          setGapX(String(format.gapX || 0));
+          setGapY(String(format.gapY || 0));
+          setPageWidth(String(format.pageWidth || 8.5));
+          setPageHeight(String(format.pageHeight || 11));
+        }
+      }
+    }
+  }, [selectedSavedFormat, savedFormats]);
 
   const loadSavedQuantities = () => {
     try {
@@ -270,7 +323,19 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     }
   };
 
-  const formatConfig = LABEL_FORMATS.find(f => f.value === labelFormat) || LABEL_FORMATS[0];
+  // Build format config from current inputs
+  const formatConfig: LabelFormatConfig = {
+    labelWidth: `${labelWidth}in`,
+    labelHeight: `${labelHeight}in`,
+    pageWidth: layoutType === "thermal" ? `${labelWidth}in` : `${pageWidth}in`,
+    pageHeight: layoutType === "thermal" ? `${labelHeight}in` : `${pageHeight}in`,
+    columns: layoutType === "thermal" ? 1 : parseInt(columns) || 1,
+    rows: layoutType === "thermal" ? 1 : parseInt(rows) || 1,
+    marginTop: layoutType === "thermal" ? "0" : `${marginTop}in`,
+    marginLeft: layoutType === "thermal" ? "0" : `${marginLeft}in`,
+    gapX: layoutType === "thermal" ? "0" : `${gapX}in`,
+    gapY: layoutType === "thermal" ? "0" : `${gapY}in`,
+  };
 
   const generateLabels = useCallback((): LabelData[] => {
     const labels: LabelData[] = [];
@@ -296,6 +361,28 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     }
   }, [selectedItems, generateLabels, previewIndex]);
 
+  const handleSaveFormat = () => {
+    if (!saveFormatName.trim()) {
+      toast({ title: "Please enter a name for your format", variant: "destructive" });
+      return;
+    }
+
+    saveFormatMutation.mutate({
+      name: saveFormatName.trim(),
+      layoutType,
+      labelWidth: parseFloat(labelWidth),
+      labelHeight: parseFloat(labelHeight),
+      pageWidth: layoutType === "sheet" ? parseFloat(pageWidth) : null,
+      pageHeight: layoutType === "sheet" ? parseFloat(pageHeight) : null,
+      columns: layoutType === "sheet" ? parseInt(columns) : null,
+      rows: layoutType === "sheet" ? parseInt(rows) : null,
+      marginTop: layoutType === "sheet" ? parseFloat(marginTop) : null,
+      marginLeft: layoutType === "sheet" ? parseFloat(marginLeft) : null,
+      gapX: layoutType === "sheet" ? parseFloat(gapX) : null,
+      gapY: layoutType === "sheet" ? parseFloat(gapY) : null,
+    });
+  };
+
   const handlePrint = () => {
     if (selectedItems.size === 0) {
       setValidationError("Select at least one item to print.");
@@ -317,11 +404,14 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     if (!printWindow) {
       toast({
         title: "Popup Blocked",
-        description: "Please allow popups to print labels.",
+        description: "Allow popups for this site to use the print feature.",
         variant: "destructive",
       });
       return;
     }
+
+    const isSheetLayout = config.columns > 1 || config.rows > 1;
+    const labelsPerPage = config.columns * config.rows;
 
     const labelHTML = labels.map((label, idx) => `
       <div class="label" data-label-index="${idx}">
@@ -336,40 +426,36 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
       </div>
     `).join('');
 
-    const isSheetLayout = config.columns > 1 || config.rows > 1;
-    const labelsPerPage = config.columns * config.rows;
-
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
       <head>
         <title>Print Labels</title>
-        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"><\/script>
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; }
-          body { font-family: 'Arial', sans-serif; background: white; }
           .page {
             width: ${config.pageWidth};
             height: ${config.pageHeight};
             padding-top: ${config.marginTop};
             padding-left: ${config.marginLeft};
-            display: ${isSheetLayout ? 'flex' : 'block'};
-            flex-wrap: wrap;
-            align-content: flex-start;
+            display: ${isSheetLayout ? 'grid' : 'flex'};
+            ${isSheetLayout ? `
+              grid-template-columns: repeat(${config.columns}, ${config.labelWidth});
+              grid-template-rows: repeat(${config.rows}, ${config.labelHeight});
+              gap: ${config.gapY} ${config.gapX};
+            ` : 'align-items: center; justify-content: center;'}
             page-break-after: always;
           }
           .page:last-child { page-break-after: auto; }
           .label {
             width: ${config.labelWidth};
             height: ${config.labelHeight};
-            ${isSheetLayout ? `margin-right: ${config.gapX}; margin-bottom: ${config.gapY};` : ''}
             display: flex;
             align-items: center;
             justify-content: center;
             overflow: hidden;
-            ${!isSheetLayout ? 'page-break-after: always;' : ''}
           }
-          .label:last-child { page-break-after: auto; }
           .label-content {
             display: flex;
             flex-direction: column;
@@ -472,6 +558,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
     setSelectedItems(new Map());
     setValidationError(null);
     setPreviewIndex(0);
+    setShowSaveDialog(false);
     onClose();
   };
 
@@ -525,7 +612,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
             <div>
               <DialogTitle>Print Labels</DialogTitle>
               <DialogDescription>
-                Select items, choose format, and print barcode labels
+                Configure label size, select items, and print
               </DialogDescription>
             </div>
             <div className="flex items-center gap-2">
@@ -536,53 +623,256 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
         </DialogHeader>
 
         <div className="flex-1 flex flex-col min-h-0 gap-4">
-          {/* Label Format Cards */}
-          <div className="flex-shrink-0" role="radiogroup" aria-label="Label Format">
-            <Label className="mb-2 block text-sm font-medium">Label Format</Label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {LABEL_FORMATS.map((format, idx) => (
-                <button
-                  key={format.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={labelFormat === format.value}
-                  tabIndex={labelFormat === format.value ? 0 : -1}
-                  onClick={() => setLabelFormat(format.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      const nextIdx = (idx + 1) % LABEL_FORMATS.length;
-                      setLabelFormat(LABEL_FORMATS[nextIdx].value);
-                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      const prevIdx = (idx - 1 + LABEL_FORMATS.length) % LABEL_FORMATS.length;
-                      setLabelFormat(LABEL_FORMATS[prevIdx].value);
-                    }
-                  }}
-                  className={cn(
-                    "relative flex flex-col items-center p-3 rounded-lg border-2 transition-all text-left focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
-                    labelFormat === format.value
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover-elevate"
-                  )}
-                  data-testid={`format-card-${format.value}`}
-                >
-                  <div className={cn(
-                    "text-lg font-bold",
-                    labelFormat === format.value ? "text-primary" : "text-muted-foreground"
-                  )}>
-                    {format.icon}
-                  </div>
-                  <div className="text-sm font-medium mt-1">{format.label}</div>
-                  <div className="text-xs text-muted-foreground text-center">{format.description}</div>
-                  {labelFormat === format.value && (
-                    <div className="absolute top-1 right-1">
-                      <CheckCircle2 className="h-4 w-4 text-primary" />
-                    </div>
-                  )}
-                </button>
-              ))}
+          {/* Label Size Configuration */}
+          <div className="flex-shrink-0 p-4 border rounded-lg bg-muted/30">
+            <div className="flex items-center justify-between mb-3">
+              <Label className="text-sm font-medium">Label Size</Label>
+              <div className="flex items-center gap-2">
+                {savedFormats.length > 0 && (
+                  <Select value={selectedSavedFormat} onValueChange={setSelectedSavedFormat}>
+                    <SelectTrigger className="w-[180px] h-8" data-testid="select-saved-format">
+                      <SelectValue placeholder="Load saved format" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">Custom</SelectItem>
+                      {savedFormats.map((format) => (
+                        <SelectItem key={format.id} value={format.id}>
+                          {format.name} ({format.labelWidth}" × {format.labelHeight}")
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
             </div>
+
+            <div className="flex flex-wrap items-end gap-4">
+              {/* Width & Height */}
+              <div className="flex items-end gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Width (in)</Label>
+                  <Input
+                    type="number"
+                    step="0.125"
+                    min="0.25"
+                    max="12"
+                    value={labelWidth}
+                    onChange={(e) => {
+                      setLabelWidth(e.target.value);
+                      setSelectedSavedFormat("custom");
+                    }}
+                    className="w-20 h-9"
+                    data-testid="input-label-width"
+                  />
+                </div>
+                <span className="text-muted-foreground pb-2">×</span>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Height (in)</Label>
+                  <Input
+                    type="number"
+                    step="0.125"
+                    min="0.25"
+                    max="12"
+                    value={labelHeight}
+                    onChange={(e) => {
+                      setLabelHeight(e.target.value);
+                      setSelectedSavedFormat("custom");
+                    }}
+                    className="w-20 h-9"
+                    data-testid="input-label-height"
+                  />
+                </div>
+              </div>
+
+              {/* Layout Type Toggle */}
+              <div className="flex items-center gap-3 px-3 py-2 border rounded-md bg-background">
+                <Label className="text-sm">Thermal</Label>
+                <Switch
+                  checked={layoutType === "sheet"}
+                  onCheckedChange={(checked) => {
+                    setLayoutType(checked ? "sheet" : "thermal");
+                    setSelectedSavedFormat("custom");
+                  }}
+                  data-testid="switch-layout-type"
+                />
+                <Label className="text-sm">Sheet</Label>
+              </div>
+
+              {/* Save Button */}
+              {!showSaveDialog ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSaveDialog(true)}
+                  className="gap-1"
+                  data-testid="button-save-format"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  Save
+                </Button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Format name..."
+                    value={saveFormatName}
+                    onChange={(e) => setSaveFormatName(e.target.value)}
+                    className="w-36 h-9"
+                    data-testid="input-format-name"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleSaveFormat}
+                    disabled={saveFormatMutation.isPending}
+                    data-testid="button-confirm-save"
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setShowSaveDialog(false);
+                      setSaveFormatName("");
+                    }}
+                    data-testid="button-cancel-save"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+
+              {/* Delete saved format */}
+              {selectedSavedFormat !== "custom" && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 text-destructive hover:text-destructive"
+                  onClick={() => deleteFormatMutation.mutate(selectedSavedFormat)}
+                  data-testid="button-delete-format"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+
+            {/* Sheet Layout Options (Collapsible) */}
+            {layoutType === "sheet" && (
+              <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced} className="mt-4">
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" data-testid="button-toggle-advanced">
+                    <Settings2 className="h-3.5 w-3.5" />
+                    Advanced Options
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAdvanced && "rotate-180")} />
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 border rounded-md bg-background">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Page Width (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="24"
+                        value={pageWidth}
+                        onChange={(e) => setPageWidth(e.target.value)}
+                        className="h-8"
+                        data-testid="input-page-width"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Page Height (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="24"
+                        value={pageHeight}
+                        onChange={(e) => setPageHeight(e.target.value)}
+                        className="h-8"
+                        data-testid="input-page-height"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Columns</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={columns}
+                        onChange={(e) => setColumns(e.target.value)}
+                        className="h-8"
+                        data-testid="input-columns"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Rows</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="20"
+                        value={rows}
+                        onChange={(e) => setRows(e.target.value)}
+                        className="h-8"
+                        data-testid="input-rows"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Margin Top (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="2"
+                        value={marginTop}
+                        onChange={(e) => setMarginTop(e.target.value)}
+                        className="h-8"
+                        data-testid="input-margin-top"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Margin Left (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="2"
+                        value={marginLeft}
+                        onChange={(e) => setMarginLeft(e.target.value)}
+                        className="h-8"
+                        data-testid="input-margin-left"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Gap X (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={gapX}
+                        onChange={(e) => setGapX(e.target.value)}
+                        className="h-8"
+                        data-testid="input-gap-x"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Gap Y (in)</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={gapY}
+                        onChange={(e) => setGapY(e.target.value)}
+                        className="h-8"
+                        data-testid="input-gap-y"
+                      />
+                    </div>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
 
           {/* Main Content: Items Selection + Preview Side by Side */}
@@ -611,7 +901,7 @@ export function PrintLabelsDialog({ isOpen, onClose }: PrintLabelsDialogProps) {
 
               <Card className="flex-1 min-h-0">
                 <CardContent className="p-0 h-full">
-                  <ScrollArea className="h-[280px]">
+                  <ScrollArea className="h-[220px]">
                     {allItems.length === 0 ? (
                       <div className="flex flex-col items-center justify-center p-8 text-muted-foreground">
                         <Package className="h-8 w-8 mb-2 opacity-50" />

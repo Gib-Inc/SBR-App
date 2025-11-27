@@ -83,6 +83,8 @@ import {
   type InsertAdMetricsDaily,
   type AiSystemRecommendation,
   type InsertAiSystemRecommendation,
+  type LabelFormat,
+  type InsertLabelFormat,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -407,6 +409,14 @@ export interface IStorage {
   getAdMetricsByPlatformDateRange(platform: string, startDate: Date, endDate: Date): Promise<AdMetricsDaily[]>;
   getAdMetricsBySkuAndDateRange(sku: string, startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
   upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily>;
+
+  // Label Formats (Custom label sizes)
+  getLabelFormatsByUserId(userId: string): Promise<LabelFormat[]>;
+  getLabelFormat(id: string): Promise<LabelFormat | undefined>;
+  createLabelFormat(format: InsertLabelFormat): Promise<LabelFormat>;
+  updateLabelFormat(id: string, format: Partial<InsertLabelFormat>): Promise<LabelFormat | undefined>;
+  deleteLabelFormat(id: string): Promise<boolean>;
+  setDefaultLabelFormat(userId: string, formatId: string): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -441,6 +451,7 @@ export class MemStorage implements IStorage {
   private adPlatformConfigs: Map<string, AdPlatformConfig>;
   private adSkuMappings: Map<string, AdSkuMapping>;
   private adMetricsDaily: Map<string, AdMetricsDaily>;
+  private labelFormats: Map<string, LabelFormat>;
 
   constructor() {
     this.users = new Map();
@@ -474,6 +485,7 @@ export class MemStorage implements IStorage {
     this.adPlatformConfigs = new Map();
     this.adSkuMappings = new Map();
     this.adMetricsDaily = new Map();
+    this.labelFormats = new Map();
     this.seedData();
   }
 
@@ -2588,6 +2600,57 @@ export class MemStorage implements IStorage {
     this.adMetricsDaily.set(id, newMetrics);
     return newMetrics;
   }
+
+  // Label Formats
+  async getLabelFormatsByUserId(userId: string): Promise<LabelFormat[]> {
+    return Array.from(this.labelFormats.values()).filter(f => f.userId === userId);
+  }
+
+  async getLabelFormat(id: string): Promise<LabelFormat | undefined> {
+    return this.labelFormats.get(id);
+  }
+
+  async createLabelFormat(format: InsertLabelFormat): Promise<LabelFormat> {
+    const id = randomUUID();
+    const now = new Date();
+    const newFormat: LabelFormat = {
+      id,
+      ...format,
+      pageWidth: format.pageWidth ?? 8.5,
+      pageHeight: format.pageHeight ?? 11,
+      columns: format.columns ?? 1,
+      rows: format.rows ?? 1,
+      marginTop: format.marginTop ?? 0,
+      marginLeft: format.marginLeft ?? 0,
+      gapX: format.gapX ?? 0,
+      gapY: format.gapY ?? 0,
+      isDefault: format.isDefault ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.labelFormats.set(id, newFormat);
+    return newFormat;
+  }
+
+  async updateLabelFormat(id: string, updates: Partial<InsertLabelFormat>): Promise<LabelFormat | undefined> {
+    const existing = this.labelFormats.get(id);
+    if (!existing) return undefined;
+    const updated: LabelFormat = { ...existing, ...updates, updatedAt: new Date() };
+    this.labelFormats.set(id, updated);
+    return updated;
+  }
+
+  async deleteLabelFormat(id: string): Promise<boolean> {
+    return this.labelFormats.delete(id);
+  }
+
+  async setDefaultLabelFormat(userId: string, formatId: string): Promise<void> {
+    for (const [id, format] of this.labelFormats) {
+      if (format.userId === userId) {
+        this.labelFormats.set(id, { ...format, isDefault: id === formatId });
+      }
+    }
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -4507,6 +4570,61 @@ export class PostgresStorage implements IStorage {
       updatedAt: now,
     }).returning();
     return result[0];
+  }
+
+  // Label Formats
+  async getLabelFormatsByUserId(userId: string): Promise<LabelFormat[]> {
+    return await this.db.select().from(schema.labelFormats)
+      .where(eq(schema.labelFormats.userId, userId));
+  }
+
+  async getLabelFormat(id: string): Promise<LabelFormat | undefined> {
+    const results = await this.db.select().from(schema.labelFormats)
+      .where(eq(schema.labelFormats.id, id));
+    return results[0];
+  }
+
+  async createLabelFormat(format: InsertLabelFormat): Promise<LabelFormat> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.labelFormats).values({
+      ...format,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateLabelFormat(id: string, updates: Partial<InsertLabelFormat>): Promise<LabelFormat | undefined> {
+    const now = new Date();
+    const results = await this.db.update(schema.labelFormats)
+      .set({ ...updates, updatedAt: now })
+      .where(eq(schema.labelFormats.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deleteLabelFormat(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.labelFormats)
+      .where(eq(schema.labelFormats.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  async setDefaultLabelFormat(userId: string, formatId: string): Promise<void> {
+    // First, unset any existing defaults for this user
+    await this.db.update(schema.labelFormats)
+      .set({ isDefault: false })
+      .where(eq(schema.labelFormats.userId, userId));
+    
+    // Then set the new default
+    await this.db.update(schema.labelFormats)
+      .set({ isDefault: true })
+      .where(and(
+        eq(schema.labelFormats.id, formatId),
+        eq(schema.labelFormats.userId, userId)
+      ));
   }
 }
 

@@ -28,7 +28,7 @@ Preferred communication style: Simple, everyday language.
 ### Data Architecture
 
 *   **Database**: PostgreSQL (via Neon serverless driver) with Drizzle Kit for migrations.
-*   **Core Entities**: Users, Items, Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders, BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes.
+*   **Core Entities**: Users, Items, Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders, BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes, LabelFormats.
 *   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers, SalesOrders to Items via line items with SKU mapping.
 *   **Integration Data**: SalesOrders include rawPayload JSONB field.
 
@@ -52,6 +52,7 @@ Preferred communication style: Simple, everyday language.
 *   **System of Record Principles**: Inventory App is the system of record for quantities; Shopify/Amazon are order sources only; Extensiv/Pivot are read-only; QuickBooks is financial-only; GoHighLevel is messaging-only; PhantomBuster is discovery-only.
 *   **Idempotency Guarantees**: Unique constraints prevent duplicate order imports.
 *   **Extensiv Variance Tracking**: `extensivOnHandSnapshot` and `extensivLastSyncAt` track variance with Extensiv.
+*   **Customizable Label Printing**: Print Labels dialog supports custom label dimensions (width × height in inches), thermal/sheet layout toggle, saved format presets, and advanced sheet options (columns, rows, margins, gaps). Formats are saved per-user in the `label_formats` table.
 
 ## External Dependencies
 

@@ -30,6 +30,7 @@ Preferred communication style: Simple, everyday language.
     *   AmazonClient (order sync via SP-API with OAuth)
     *   ExtensivClient (inventory sync via API)
     *   GoHighLevelClient (CRM integration, SMS/email to suppliers)
+    *   QuickBooksClient (OAuth 2.0 sales history sync, PO-to-Bill creation)
     *   Storage Layer (abstracted data access)
 *   **Production**: Static assets served via Express.
 
@@ -84,7 +85,7 @@ Preferred communication style: Simple, everyday language.
 1.  **Inventory App is System of Record for Quantities**: currentStock (raw materials), hildaleQty, pivotQty, availableForSaleQty are managed locally. All changes MUST go through InventoryMovement helper for audit trail.
 2.  **Shopify + Amazon are Order Sources Only**: We import orders → SalesOrders table + InventoryMovement(SALES_ORDER_CREATED). We do NOT push inventory quantities back to channels (stay compliant, no fake stock levels).
 3.  **Extensiv/Pivot is Read-Only**: We pull inventory snapshots for 3PL reconciliation. Store Extensiv quantities in `extensivOnHandSnapshot` for variance display. EXTENSIV_SYNC updates pivotQty and adjusts availableForSaleQty by delta.
-4.  **QuickBooks is Financial-Only** (future): Store mapping IDs for products/customers if needed. We do NOT create SalesOrders or inventory movements from QuickBooks to prevent double-counting orders that came from Shopify/Amazon.
+4.  **QuickBooks is Financial-Only (V1 Implemented)**: Read-only sales history sync + PO-to-Bill creation. QuickBooks serves as source of truth for historical revenue data. We do NOT create/modify QuickBooks sales documents (Invoices, SalesReceipts, Payments) and do NOT create SalesOrders from QuickBooks to prevent double-counting orders from Shopify/Amazon. Monthly sales snapshots supplement AI velocity calculations when local data is sparse.
 5.  **GoHighLevel is Messaging-Only**: Used for PO contact creation + email/SMS sending. Does NOT drive inventory quantities.
 
 **Idempotency Guarantees:**

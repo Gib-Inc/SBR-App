@@ -692,12 +692,15 @@ Analyze this inventory situation and reason through the following:
         
         // Create AIRecommendation record for audit trail
         const riskLevel = parsedData.urgency === 'critical' ? 'HIGH' : parsedData.urgency === 'high' ? 'MEDIUM' : 'LOW';
+        const recommendedAction = parsedData.urgency === 'critical' || parsedData.urgency === 'high' ? 'ORDER' : 'MONITOR';
         await storage.createAIRecommendation({
+          type: 'INVENTORY',
           sku: item.sku,
           itemId: item.id,
           productName: item.name,
           recommendationType: 'REORDER',
           riskLevel,
+          recommendedAction,
           daysUntilStockout: parsedData.daysUntilStockout || Math.floor(stockForCalculation / Math.max(item.dailyUsage, 0.01)),
           availableForSale: stockForCalculation,
           recommendedQty: parsedData.recommendedOrderQty,
@@ -790,12 +793,15 @@ Analyze this inventory situation and reason through the following:
     
     // Create AIRecommendation record for fallback path
     const riskLevel = urgency === 'critical' ? 'HIGH' : urgency === 'high' ? 'MEDIUM' : 'LOW';
+    const recommendedAction = urgency === 'critical' || urgency === 'high' ? 'ORDER' : 'MONITOR';
     await storage.createAIRecommendation({
+      type: 'INVENTORY',
       sku: item.sku,
       itemId: item.id,
       productName: item.name,
       recommendationType: 'REORDER',
       riskLevel,
+      recommendedAction,
       daysUntilStockout: Math.floor(daysUntilStockout),
       availableForSale: stockForCalculation,
       recommendedQty,

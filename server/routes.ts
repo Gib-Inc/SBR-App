@@ -821,12 +821,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      const recommendations = await storage.getAISystemRecommendations(options);
+      const result = await storage.getAiSystemRecommendations(options);
+      const recommendations = result.recommendations;
       
-      // Calculate summary counts
-      const allRecs = await storage.getAISystemRecommendations({});
+      // Calculate summary counts (fetch all without limit)
+      const allResult = await storage.getAiSystemRecommendations({});
+      const allRecs = allResult.recommendations;
       const summary = {
-        total: allRecs.length,
+        total: allResult.total,
         new: allRecs.filter(r => r.status === "NEW").length,
         accepted: allRecs.filter(r => r.status === "ACCEPTED").length,
         dismissed: allRecs.filter(r => r.status === "DISMISSED").length,
@@ -916,7 +918,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (status) updates.status = status;
       if (notes !== undefined) updates.notes = notes;
       
-      const recommendation = await storage.updateAISystemRecommendation(id, updates);
+      const recommendation = await storage.updateAiSystemRecommendation(id, updates);
       
       if (!recommendation) {
         return res.status(404).json({ error: "Recommendation not found" });
@@ -925,20 +927,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Log the status change
       try {
         const user = await storage.getUser(req.session.userId!);
-        await AuditLogger.log({
-          eventType: 'AI_SYSTEM_RECOMMENDATION_STATUS_CHANGED',
-          source: 'AI_SYSTEM',
-          message: `Recommendation ${id} status changed to ${status}`,
-          entityType: 'ai_system_recommendation',
+        await AuditLogger.logEvent({
+          eventType: 'AI_RECOMMENDATION_ACKNOWLEDGED',
+          source: 'USER',
+          entityType: 'AI_RECOMMENDATION',
           entityId: id,
-          status: 'success',
-          metadata: {
+          entityLabel: recommendation.title,
+          performedByUserId: req.session.userId,
+          performedByName: user?.email,
+          status: 'INFO',
+          description: `AI System Recommendation "${recommendation.title}" status changed to ${status}`,
+          details: {
             recommendationId: id,
-            oldStatus: recommendation.status,
             newStatus: status,
-            title: recommendation.title,
-            userId: req.session.userId,
-            userName: user?.email,
+            category: recommendation.category,
+            severity: recommendation.severity,
           },
         });
       } catch (logError) {

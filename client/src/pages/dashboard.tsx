@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap } from "lucide-react";
+import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, Link } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +23,28 @@ interface AIAtRiskItem {
   recommendedQty: number;
   recommendedAction: "ORDER" | "MONITOR" | "OK";
   explanation: string;
+}
+
+interface AISystemRecommendation {
+  id: string;
+  title: string;
+  description: string;
+  suggestedChange: string | null;
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+  category: "INTEGRATION" | "PERFORMANCE" | "DATA_QUALITY" | "SECURITY" | "CONFIGURATION" | "OTHER";
+  status: "NEW" | "ACCEPTED" | "DISMISSED" | "IMPLEMENTED";
+  createdAt: string;
+}
+
+interface AISystemRecommendationsResponse {
+  recommendations: AISystemRecommendation[];
+  summary: {
+    total: number;
+    new: number;
+    accepted: number;
+    dismissed: number;
+    bySeverity: { critical: number; high: number; medium: number; low: number };
+  };
 }
 
 export default function Dashboard() {
@@ -55,6 +77,12 @@ export default function Dashboard() {
   const { data: aiAtRiskItems, isLoading: isLoadingAIAtRisk } = useQuery<AIAtRiskItem[]>({
     queryKey: ["/api/ai/at-risk"],
     staleTime: 60000, // Cache for 1 minute
+  });
+
+  // Fetch AI System Recommendations (weekly LLM review suggestions)
+  const { data: systemRecommendationsData, isLoading: isLoadingSystemRecs } = useQuery<AISystemRecommendationsResponse>({
+    queryKey: ["/api/ai/system-recommendations?status=NEW&limit=5"],
+    staleTime: 300000, // Cache for 5 minutes
   });
 
   // Sync mutation - must be before early return to avoid hooks violation
@@ -683,6 +711,82 @@ export default function Dashboard() {
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* AI System Suggestions (Weekly LLM Review) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Lightbulb className="h-5 w-5 text-primary" />
+              <CardTitle className="text-lg">System Suggestions</CardTitle>
+            </div>
+            {systemRecommendationsData?.summary && systemRecommendationsData.summary.new > 0 && (
+              <Badge variant="default" data-testid="badge-new-suggestions">
+                {systemRecommendationsData.summary.new} new
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground">AI-generated improvement recommendations from weekly system review</p>
+        </CardHeader>
+        <CardContent>
+          {isLoadingSystemRecs ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading suggestions...</p>
+          ) : !systemRecommendationsData?.recommendations || systemRecommendationsData.recommendations.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-sm text-muted-foreground mb-2">No new suggestions</p>
+              <p className="text-xs text-muted-foreground">
+                The AI reviews system logs weekly and will suggest improvements when issues are detected.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {systemRecommendationsData.recommendations.slice(0, 5).map((rec) => (
+                <div 
+                  key={rec.id} 
+                  className="flex items-start gap-3 p-3 rounded-md border"
+                  data-testid={`system-suggestion-${rec.id}`}
+                >
+                  <div className="mt-0.5">
+                    {rec.severity === "CRITICAL" ? (
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                    ) : rec.severity === "HIGH" ? (
+                      <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                    ) : rec.severity === "MEDIUM" ? (
+                      <Info className="h-4 w-4 text-blue-500" />
+                    ) : (
+                      <Lightbulb className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="font-medium text-sm truncate">{rec.title}</p>
+                      <Badge 
+                        variant={
+                          rec.severity === "CRITICAL" ? "destructive" :
+                          rec.severity === "HIGH" ? "default" : 
+                          "secondary"
+                        }
+                        className="shrink-0"
+                      >
+                        {rec.severity.toLowerCase()}
+                      </Badge>
+                      <Badge variant="outline" className="shrink-0">
+                        {rec.category.toLowerCase().replace("_", " ")}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2">{rec.description}</p>
+                  </div>
+                </div>
+              ))}
+              {systemRecommendationsData.summary.new > 5 && (
+                <p className="text-xs text-muted-foreground text-center pt-2">
+                  +{systemRecommendationsData.summary.new - 5} more suggestions. View all in AI Agent Insights.
+                </p>
+              )}
             </div>
           )}
         </CardContent>

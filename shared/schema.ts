@@ -474,24 +474,35 @@ export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
 
 export const aiRecommendations = pgTable("ai_recommendations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  sku: text("sku").notNull(),
+  // Required columns (NOT NULL in DB)
+  type: text("type").notNull().default("INVENTORY"), // 'INVENTORY', 'PRODUCTION', etc.
   itemId: varchar("item_id").notNull().references(() => items.id),
-  productName: text("product_name").notNull(),
-  recommendationType: text("recommendation_type").notNull(), // 'REORDER', 'HOLD', 'CHECK_VARIANCE', 'INVESTIGATE_ADS', 'MONITOR'
-  riskLevel: text("risk_level").notNull(), // 'HIGH', 'MEDIUM', 'LOW'
-  daysUntilStockout: integer("days_until_stockout"),
-  availableForSale: integer("available_for_sale").notNull().default(0),
   recommendedQty: integer("recommended_qty").notNull().default(0),
+  recommendedAction: text("recommended_action").notNull().default("MONITOR"), // 'ORDER', 'MONITOR', 'OK', 'HOLD'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  // Optional columns (nullable in DB)
+  sku: text("sku"),
+  productName: text("product_name"),
+  recommendationType: text("recommendation_type"), // 'REORDER', 'HOLD', 'CHECK_VARIANCE', 'INVESTIGATE_ADS', 'MONITOR'
+  riskLevel: text("risk_level"), // 'HIGH', 'MEDIUM', 'LOW'
+  daysUntilStockout: integer("days_until_stockout"),
+  availableForSale: integer("available_for_sale").default(0),
   stockGapPercent: real("stock_gap_percent"), // Percent difference from target coverage
-  qtyOnPo: integer("qty_on_po").notNull().default(0), // Total open PO qty for this SKU
-  status: text("status").notNull().default("NEW"), // 'NEW', 'ACCEPTED', 'DISMISSED'
+  qtyOnPo: integer("qty_on_po").default(0), // Total open PO qty for this SKU
+  status: text("status").default("NEW"), // 'NEW', 'ACCEPTED', 'DISMISSED'
   reasonSummary: text("reason_summary"), // Short explanation
   sourceSignals: jsonb("source_signals"), // {velocity, ads, quickbooks, extensiv, shopify, amazon, returns}
   adMultiplier: real("ad_multiplier").default(1.0), // Ad demand multiplier
   baseVelocity: real("base_velocity"), // Raw sales velocity before ad adjustment
   adjustedVelocity: real("adjusted_velocity"), // Velocity after ad multiplier
-  createdAt: timestamp("created_at").notNull().default(sql`now()`),
-  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").default(sql`now()`),
+  // Additional LLM-related columns (from DB)
+  location: text("location"), // Physical location or context
+  horizonDays: integer("horizon_days"), // Forecast horizon
+  contextSnapshot: jsonb("context_snapshot"), // Snapshot of context data
+  llmResponseTimeMs: integer("llm_response_time_ms"), // LLM response time for metrics
+  outcomeStatus: text("outcome_status"), // Tracking outcome of recommendation
+  outcomeDetails: jsonb("outcome_details"), // Details about outcome
 }, (table) => ({
   itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
   createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),

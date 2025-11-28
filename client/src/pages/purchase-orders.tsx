@@ -251,6 +251,55 @@ export default function PurchaseOrders() {
     sendPOMutation.mutate(poId);
   };
 
+  const receiveLinesMutation = useMutation({
+    mutationFn: async ({ poId, lineReceipts }: { poId: string; lineReceipts: { lineId: string; qtyReceived: number }[] }) => {
+      if (!poId) {
+        throw new Error("Purchase order ID is required");
+      }
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/receive`, { lineReceipts });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to receive items");
+      }
+      return { ...await res.json(), poId };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      if (data.poId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", data.poId, "composite"] });
+      }
+      toast({ title: "Items received successfully" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleAcceptLine = (poId: string, lineId: string, qtyOrdered: number, qtyReceived: number) => {
+    const remaining = qtyOrdered - (qtyReceived || 0);
+    if (remaining > 0) {
+      receiveLinesMutation.mutate({ 
+        poId, 
+        lineReceipts: [{ lineId, qtyReceived: remaining }] 
+      });
+    }
+  };
+
+  const handleAcceptAllLines = (poId: string, lines: any[]) => {
+    if (!poId || !lines?.length) return;
+    
+    const lineReceipts = lines
+      .filter((line: any) => line?.id && (line.qtyOrdered - (line.qtyReceived || 0)) > 0)
+      .map((line: any) => ({
+        lineId: line.id,
+        qtyReceived: line.qtyOrdered - (line.qtyReceived || 0)
+      }));
+    
+    if (lineReceipts.length > 0) {
+      receiveLinesMutation.mutate({ poId, lineReceipts });
+    }
+  };
+
   const supplierMap = new Map(suppliers?.map(s => [s.id, s]) || []);
 
   const enrichedPOs = purchaseOrders?.map(po => ({
@@ -410,14 +459,14 @@ export default function PurchaseOrders() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="sticky left-0 bg-background z-10 min-w-[120px]">PO Number</TableHead>
+                  <TableHead className="sticky left-0 bg-background z-20 min-w-[120px]">PO Number</TableHead>
                   <TableHead className="min-w-[180px]">Supplier</TableHead>
                   <TableHead className="min-w-[100px]">Status</TableHead>
                   <TableHead className="min-w-[90px]">Email</TableHead>
                   <TableHead className="min-w-[100px]">Order Date</TableHead>
                   <TableHead className="min-w-[100px]">Expected</TableHead>
                   <TableHead className="min-w-[100px] text-right">Total</TableHead>
-                  <TableHead className="w-12"></TableHead>
+                  <TableHead className="sticky right-0 z-20 bg-background w-12 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -463,7 +512,7 @@ export default function PurchaseOrders() {
                       <TableCell className="text-right font-medium">
                         {formatCurrency(po.total)}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="sticky right-0 z-10 bg-background shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                             <Button variant="ghost" size="icon" data-testid={`button-po-actions-${po.id}`}>
@@ -471,10 +520,6 @@ export default function PurchaseOrders() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleViewDetails(po); }}>
-                              <Eye className="h-4 w-4 mr-2" />
-                              View Details
-                            </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -625,38 +670,77 @@ export default function PurchaseOrders() {
               <div>
                 <h4 className="font-medium mb-2">Line Items ({poDetails.lines?.length || 0})</h4>
                 {poDetails.lines && poDetails.lines.length > 0 ? (
-                  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Item</TableHead>
-                          <TableHead className="text-right">Qty Ordered</TableHead>
-                          <TableHead className="text-right">Qty Received</TableHead>
-                          <TableHead className="text-right">Unit Cost</TableHead>
-                          <TableHead className="text-right">Line Total</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {poDetails.lines.map((line: any) => (
-                          <TableRow key={line.id}>
-                            <TableCell>
-                              <div>
-                                <p className="font-medium">{line.item?.name || line.itemName || "-"}</p>
-                                <p className="text-xs text-muted-foreground">{line.item?.sku || line.sku || "-"}</p>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right">{line.qtyOrdered}</TableCell>
-                            <TableCell className="text-right">
-                              <span className={line.qtyReceived >= line.qtyOrdered ? "text-green-600" : ""}>
-                                {line.qtyReceived || 0}
-                              </span>
-                            </TableCell>
-                            <TableCell className="text-right">{formatCurrency(line.unitCost)}</TableCell>
-                            <TableCell className="text-right font-medium">{formatCurrency(line.lineTotal)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                  <div className="overflow-x-auto rounded-md border">
+                    <table className="w-full min-w-[700px]">
+                      <thead className="bg-muted/50">
+                        <tr className="border-b">
+                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Item</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Ordered</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Received</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Unit Cost</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Line Total</th>
+                          <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {poDetails.lines.map((line: any) => {
+                          const remaining = line.qtyOrdered - (line.qtyReceived || 0);
+                          const isFullyReceived = remaining <= 0;
+                          const canAccept = poDetails?.id && 
+                            line?.id && 
+                            ['SENT', 'PARTIAL_RECEIVED'].includes(poDetails.status) && 
+                            remaining > 0;
+                          
+                          return (
+                            <tr key={line.id} className="border-b last:border-b-0" data-testid={`row-line-${line.id}`}>
+                              <td className="p-3 whitespace-nowrap">
+                                <div>
+                                  <p className="font-medium">{line.item?.name || line.itemName || "-"}</p>
+                                  <p className="text-xs text-muted-foreground">{line.item?.sku || line.sku || "-"}</p>
+                                </div>
+                              </td>
+                              <td className="p-3 text-right whitespace-nowrap">{line.qtyOrdered}</td>
+                              <td className="p-3 text-right whitespace-nowrap">
+                                <span className={isFullyReceived ? "text-green-600" : ""}>
+                                  {line.qtyReceived || 0}
+                                </span>
+                              </td>
+                              <td className="p-3 text-right whitespace-nowrap">{formatCurrency(line.unitCost)}</td>
+                              <td className="p-3 text-right font-medium whitespace-nowrap">{formatCurrency(line.lineTotal)}</td>
+                              <td className="sticky right-0 z-10 bg-background p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                                <div className="flex justify-end">
+                                  {canAccept ? (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleAcceptLine(poDetails.id, line.id, line.qtyOrdered, line.qtyReceived)}
+                                      disabled={receiveLinesMutation.isPending}
+                                      data-testid={`button-accept-line-${line.id}`}
+                                    >
+                                      {receiveLinesMutation.isPending ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <>
+                                          <CheckCircle className="h-4 w-4 mr-1" />
+                                          Accept
+                                        </>
+                                      )}
+                                    </Button>
+                                  ) : isFullyReceived ? (
+                                    <Badge variant="outline" className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                                      <CheckCircle className="h-3 w-3 mr-1" />
+                                      Received
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">-</span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">No line items</p>
@@ -709,8 +793,30 @@ export default function PurchaseOrders() {
             <p className="text-center text-muted-foreground py-8">Failed to load details</p>
           )}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
+          <DialogFooter className="gap-2">
+            {poDetails?.id && 
+             poDetails.lines?.length > 0 &&
+             ['SENT', 'PARTIAL_RECEIVED'].includes(poDetails.status) && 
+             poDetails.lines.some((line: any) => line?.id && (line.qtyOrdered - (line.qtyReceived || 0)) > 0) && (
+              <Button
+                onClick={() => handleAcceptAllLines(poDetails.id, poDetails.lines)}
+                disabled={receiveLinesMutation.isPending}
+                data-testid="button-accept-all-lines"
+              >
+                {receiveLinesMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Accepting...
+                  </>
+                ) : (
+                  <>
+                    <PackageCheck className="h-4 w-4 mr-2" />
+                    Accept All
+                  </>
+                )}
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setIsDetailOpen(false)} data-testid="button-close-dialog">
               Close
             </Button>
           </DialogFooter>

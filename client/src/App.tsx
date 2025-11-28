@@ -24,6 +24,7 @@ import AIAgent from "@/pages/ai";
 import Settings from "@/pages/settings";
 import Suppliers from "@/pages/suppliers";
 import SalesOrders from "@/pages/sales-orders";
+import PurchaseOrders from "@/pages/purchase-orders";
 import Returns from "@/pages/returns";
 import Login from "@/pages/login";
 import NotFound from "@/pages/not-found";
@@ -105,6 +106,7 @@ function AuthenticatedApp() {
                     <Route path="/products" component={Products} />
                     <Route path="/barcodes" component={Barcodes} />
                     <Route path="/suppliers" component={Suppliers} />
+                    <Route path="/purchase-orders" component={PurchaseOrders} />
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />

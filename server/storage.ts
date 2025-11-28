@@ -1661,6 +1661,77 @@ export class MemStorage implements IStorage {
     return this.purchaseOrderLines.delete(id);
   }
 
+  async getPurchaseOrderLine(id: string): Promise<PurchaseOrderLine | undefined> {
+    return this.purchaseOrderLines.get(id);
+  }
+
+  async deletePurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<boolean> {
+    const linesToDelete = Array.from(this.purchaseOrderLines.entries())
+      .filter(([, line]) => line.purchaseOrderId === purchaseOrderId);
+    linesToDelete.forEach(([id]) => this.purchaseOrderLines.delete(id));
+    return linesToDelete.length > 0;
+  }
+
+  // Purchase Order Receipts (stub implementations - MemStorage not used in production)
+  async getAllPurchaseOrderReceipts(): Promise<PurchaseOrderReceipt[]> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async getPurchaseOrderReceiptsByPOId(_purchaseOrderId: string): Promise<PurchaseOrderReceipt[]> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async getPurchaseOrderReceipt(_id: string): Promise<PurchaseOrderReceipt | undefined> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async createPurchaseOrderReceipt(_receipt: InsertPurchaseOrderReceipt): Promise<PurchaseOrderReceipt> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async updatePurchaseOrderReceipt(_id: string, _updates: Partial<InsertPurchaseOrderReceipt>): Promise<PurchaseOrderReceipt | undefined> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async deletePurchaseOrderReceipt(_id: string): Promise<boolean> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  // Purchase Order Receipt Lines (stub implementations)
+  async getPurchaseOrderReceiptLinesByReceiptId(_receiptId: string): Promise<PurchaseOrderReceiptLine[]> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async getPurchaseOrderReceiptLinesByPOLineId(_purchaseOrderLineId: string): Promise<PurchaseOrderReceiptLine[]> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async createPurchaseOrderReceiptLine(_line: InsertPurchaseOrderReceiptLine): Promise<PurchaseOrderReceiptLine> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async updatePurchaseOrderReceiptLine(_id: string, _updates: Partial<InsertPurchaseOrderReceiptLine>): Promise<PurchaseOrderReceiptLine | undefined> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async deletePurchaseOrderReceiptLine(_id: string): Promise<boolean> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  // PO Helper Methods (stub implementations)
+  async getNextPONumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    return `PO-${year}-0001`;
+  }
+
+  async recalculatePOTotals(_purchaseOrderId: string): Promise<PurchaseOrder | undefined> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async updatePOLineReceivedQty(_purchaseOrderLineId: string): Promise<PurchaseOrderLine | undefined> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
   // Supplier Leads
   async getAllSupplierLeads(): Promise<SupplierLead[]> {
     return Array.from(this.supplierLeads.values());

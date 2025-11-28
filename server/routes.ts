@@ -6585,6 +6585,91 @@ SUBTOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Get all receipts for a PO
+  app.get("/api/purchase-orders/:id/receipts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const receipts = await storage.getPurchaseOrderReceiptsByPOId(id);
+      
+      // Fetch receipt lines for each receipt
+      const receiptsWithLines = await Promise.all(
+        receipts.map(async (receipt) => {
+          const lines = await storage.getPurchaseOrderReceiptLinesByReceiptId(receipt.id);
+          return { ...receipt, lines };
+        })
+      );
+
+      res.json(receiptsWithLines);
+    } catch (error: any) {
+      console.error("[PurchaseOrderReceipt] Error fetching receipts:", error);
+      res.status(500).json({ error: "Failed to fetch purchase order receipts" });
+    }
+  });
+
+  // Get composite PO view (PO + lines + receipts)
+  app.get("/api/purchase-orders/:id/composite", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const [lines, supplier, receipts] = await Promise.all([
+        storage.getPurchaseOrderLinesByPOId(id),
+        po.supplierId ? storage.getSupplier(po.supplierId) : Promise.resolve(null),
+        storage.getPurchaseOrderReceiptsByPOId(id),
+      ]);
+
+      // Enrich lines with item details
+      const enrichedLines = await Promise.all(
+        lines.map(async (line) => {
+          const item = await storage.getItem(line.itemId);
+          return {
+            ...line,
+            item: item ? { id: item.id, name: item.name, sku: item.sku, type: item.type } : null,
+          };
+        })
+      );
+
+      // Enrich receipts with their lines
+      const enrichedReceipts = await Promise.all(
+        receipts.map(async (receipt) => {
+          const receiptLines = await storage.getPurchaseOrderReceiptLinesByReceiptId(receipt.id);
+          return { ...receipt, lines: receiptLines };
+        })
+      );
+
+      res.json({
+        ...po,
+        supplier,
+        lines: enrichedLines,
+        receipts: enrichedReceipts,
+      });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching composite view:", error);
+      res.status(500).json({ error: "Failed to fetch purchase order details" });
+    }
+  });
+
+  // Get next PO number (for preview)
+  app.get("/api/purchase-orders/next-number", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const poNumber = await storage.getNextPONumber();
+      res.json({ poNumber });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error getting next PO number:", error);
+      res.status(500).json({ error: "Failed to get next PO number" });
+    }
+  });
+
   app.get("/api/supplier-leads", requireAuth, async (req: Request, res: Response) => {
     try {
       const { status } = req.query;

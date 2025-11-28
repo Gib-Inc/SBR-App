@@ -455,124 +455,126 @@ export default function PurchaseOrders() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="sticky left-0 bg-background z-20 min-w-[120px]">PO Number</TableHead>
-                  <TableHead className="min-w-[180px]">Supplier</TableHead>
-                  <TableHead className="min-w-[100px]">Status</TableHead>
-                  <TableHead className="min-w-[90px]">Email</TableHead>
-                  <TableHead className="min-w-[100px]">Order Date</TableHead>
-                  <TableHead className="min-w-[100px]">Expected</TableHead>
-                  <TableHead className="min-w-[100px] text-right">Total</TableHead>
-                  <TableHead className="sticky right-0 z-20 bg-background w-12 shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+          <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
+            <table className="w-full min-w-[900px]">
+              <thead className="bg-muted sticky top-0 z-10">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">PO Number</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Email</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total</th>
+                  <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
                 {sortedPOs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                  <tr>
+                    <td colSpan={8} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ) : (
                   sortedPOs.map((po) => (
-                    <TableRow 
+                    <tr 
                       key={po.id} 
-                      className="cursor-pointer hover-elevate"
+                      className="border-b last:border-b-0 cursor-pointer hover-elevate"
                       onClick={() => handleViewDetails(po)}
                       data-testid={`row-po-${po.id}`}
                     >
-                      <TableCell className="sticky left-0 bg-background z-10 font-medium">
+                      <td className="p-3 whitespace-nowrap font-medium">
                         {po.poNumber}
-                      </TableCell>
-                      <TableCell>
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
                         <div className="flex flex-col">
                           <span className="font-medium">{po.supplier?.name || po.supplierName || "-"}</span>
                           {po.supplier?.email && (
                             <span className="text-xs text-muted-foreground">{po.supplier.email}</span>
                           )}
                         </div>
-                      </TableCell>
-                      <TableCell>
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
                         <StatusBadge status={po.status} />
-                      </TableCell>
-                      <TableCell>
+                      </td>
+                      <td className="p-3 whitespace-nowrap">
                         <EmailStatusBadge 
                           status={(po as any).lastEmailStatus} 
                           sentAt={(po as any).lastEmailSentAt}
                           emailTo={(po as any).emailTo}
                         />
-                      </TableCell>
-                      <TableCell>{formatDate(po.orderDate)}</TableCell>
-                      <TableCell>{formatDate(po.expectedDate)}</TableCell>
-                      <TableCell className="text-right font-medium">
+                      </td>
+                      <td className="p-3 whitespace-nowrap">{formatDate(po.orderDate)}</td>
+                      <td className="p-3 whitespace-nowrap">{formatDate(po.expectedDate)}</td>
+                      <td className="p-3 whitespace-nowrap text-right font-medium">
                         {formatCurrency(po.total)}
-                      </TableCell>
-                      <TableCell className="sticky right-0 z-10 bg-background shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                            <Button variant="ghost" size="icon" data-testid={`button-po-actions-${po.id}`}>
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                window.open(`/api/purchase-orders/${po.id}/pdf`, '_blank');
-                              }}
-                            >
-                              <FileDown className="h-4 w-4 mr-2" />
-                              Download PDF
-                            </DropdownMenuItem>
-                            {(po.status === "DRAFT" || po.status === "APPROVED") && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem 
-                                  onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    handleSendPO(po.id); 
-                                  }}
-                                  disabled={sendPOMutation.isPending}
-                                >
-                                  <Mail className="h-4 w-4 mr-2" />
-                                  {sendPOMutation.isPending ? "Sending..." : "Send PO"}
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                            {(po.status === "SENT" || po.status === "PARTIAL_RECEIVED") && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleAction(po.id, "bulk-confirm-receipt"); }}>
-                                  <PackageCheck className="h-4 w-4 mr-2" />
-                                  Confirm Full Receipt
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                            {!["CLOSED", "CANCELLED", "RECEIVED", "PARTIAL_RECEIVED"].includes(po.status) && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="text-destructive"
-                                  onClick={(e) => { e.stopPropagation(); handleAction(po.id, "cancel"); }}
-                                >
-                                  <XCircle className="h-4 w-4 mr-2" />
-                                  Cancel PO
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
+                      </td>
+                      <td className="sticky right-0 z-10 bg-background p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                        <div className="flex justify-end">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                              <Button variant="ghost" size="icon" data-testid={`button-po-actions-${po.id}`}>
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.open(`/api/purchase-orders/${po.id}/pdf`, '_blank');
+                                }}
+                              >
+                                <FileDown className="h-4 w-4 mr-2" />
+                                Download PDF
+                              </DropdownMenuItem>
+                              {(po.status === "DRAFT" || po.status === "APPROVED") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem 
+                                    onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      handleSendPO(po.id); 
+                                    }}
+                                    disabled={sendPOMutation.isPending}
+                                  >
+                                    <Mail className="h-4 w-4 mr-2" />
+                                    {sendPOMutation.isPending ? "Sending..." : "Send PO"}
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                              {(po.status === "SENT" || po.status === "PARTIAL_RECEIVED") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleAction(po.id, "bulk-confirm-receipt"); }}>
+                                    <PackageCheck className="h-4 w-4 mr-2" />
+                                    Confirm Full Receipt
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                              {!["CLOSED", "CANCELLED", "RECEIVED", "PARTIAL_RECEIVED"].includes(po.status) && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    className="text-destructive"
+                                    onClick={(e) => { e.stopPropagation(); handleAction(po.id, "cancel"); }}
+                                  >
+                                    <XCircle className="h-4 w-4 mr-2" />
+                                    Cancel PO
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </td>
+                    </tr>
                   ))
                 )}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
         </CardContent>
       </Card>

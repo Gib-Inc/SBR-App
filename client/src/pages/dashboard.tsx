@@ -5,12 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AlertCircle, TrendingUp, Package, Clock, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, Link } from "lucide-react";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TrendingUp, TrendingDown, Package, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, AlertCircle, DollarSign, Users, Target, ShoppingCart, Clock, Megaphone } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
+import { formatDistanceToNow } from "date-fns";
 
 interface AIAtRiskItem {
   id: string;
@@ -23,6 +22,7 @@ interface AIAtRiskItem {
   recommendedQty: number;
   recommendedAction: "ORDER" | "MONITOR" | "OK";
   explanation: string;
+  capacity?: number;
 }
 
 interface AISystemRecommendation {
@@ -47,10 +47,43 @@ interface AISystemRecommendationsResponse {
   };
 }
 
+interface ForecastContext {
+  id: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  currentStock: number;
+  daysOfStock: number;
+  inboundUnits: number;
+  salesVelocity: number;
+  adSpendTotal: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  roas: number;
+  lastUpdated: string;
+}
+
+interface AdPerformanceSnapshot {
+  id: string;
+  platform: string;
+  campaignId: string;
+  campaignName: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  roas: number;
+  cpc: number;
+  ctr: number;
+  conversionRate: number;
+  snapshotDate: string;
+  createdAt: string;
+}
+
 export default function Dashboard() {
   const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
-  const [llmRecommendation, setLlmRecommendation] = useState<string | null>(null);
-  const [isGeneratingForecast, setIsGeneratingForecast] = useState(false);
   const { toast } = useToast();
 
   // Fetch dashboard data
@@ -76,16 +109,28 @@ export default function Dashboard() {
   // Fetch AI-powered at-risk items from decision engine
   const { data: aiAtRiskItems, isLoading: isLoadingAIAtRisk } = useQuery<AIAtRiskItem[]>({
     queryKey: ["/api/ai/at-risk"],
-    staleTime: 60000, // Cache for 1 minute
+    staleTime: 60000,
   });
 
   // Fetch AI System Recommendations (weekly LLM review suggestions)
   const { data: systemRecommendationsData, isLoading: isLoadingSystemRecs } = useQuery<AISystemRecommendationsResponse>({
     queryKey: ["/api/ai/system-recommendations?status=NEW&limit=5"],
-    staleTime: 300000, // Cache for 5 minutes
+    staleTime: 300000,
   });
 
-  // Sync mutation - must be before early return to avoid hooks violation
+  // Fetch automated forecast context (6-hour batch cycle)
+  const { data: forecastContexts, isLoading: isLoadingForecastContexts } = useQuery<ForecastContext[]>({
+    queryKey: ["/api/forecast-context"],
+    staleTime: 60000,
+  });
+
+  // Fetch ad performance snapshots for Ad Display
+  const { data: adSnapshots, isLoading: isLoadingAdSnapshots } = useQuery<AdPerformanceSnapshot[]>({
+    queryKey: ["/api/ad-performance-snapshots"],
+    staleTime: 60000,
+  });
+
+  // Sync mutation
   const syncMutation = useMutation({
     mutationFn: async ({ id, name }: { id: string; name: string }) => {
       const res = await apiRequest("POST", `/api/integrations/${id}/sync`, {});
@@ -127,59 +172,6 @@ export default function Dashboard() {
     syncMutation.mutate({ id: integration.id, name: integration.name });
   };
 
-  const generateLLMForecast = async () => {
-    if (!settingsData) {
-      toast({
-        title: "Configuration Required",
-        description: "Please configure an LLM provider in Settings first.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!settingsData.llmProvider || !settingsData.llmApiKey) {
-      toast({
-        title: "LLM Not Configured",
-        description: "Please add your LLM provider and API key in Settings.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsGeneratingForecast(true);
-    try {
-      const payload = {
-        atRiskItems: atRiskItems.slice(0, 5),
-        inventoryValue: metrics.inventoryValue,
-        daysUntilStockout: metrics.daysUntilStockout,
-        productionCapacity: metrics.productionCapacity,
-      };
-
-      const res = await apiRequest("POST", "/api/llm/ask", {
-        provider: settingsData.llmProvider,
-        apiKey: settingsData.llmApiKey,
-        customEndpoint: settingsData.llmCustomEndpoint,
-        taskType: "forecast",
-        payload,
-      });
-
-      const data = await res.json();
-      setLlmRecommendation(data.answer || data.result || "No recommendation generated");
-      toast({
-        title: "Forecast Generated",
-        description: "AI-powered recommendations are ready",
-      });
-    } catch (error: any) {
-      toast({
-        title: "Forecast Failed",
-        description: error.message || "Failed to generate AI forecast",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGeneratingForecast(false);
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -191,19 +183,6 @@ export default function Dashboard() {
     );
   }
 
-  const metrics = dashboardData?.metrics ?? {
-    inventoryValue: 0,
-    daysUntilStockout: 0,
-    productionCapacity: 0,
-    activeAlerts: 0
-  };
-
-  const forecast = dashboardData?.forecast ?? {
-    constraint: "No data available",
-    daysRemaining: 0
-  };
-
-  const atRiskItems = (dashboardData?.atRiskItems ?? []) as any[];
   const productionCapacity = dashboardData?.productionCapacity ?? {
     maxUnits: 0,
     constraints: []
@@ -218,6 +197,29 @@ export default function Dashboard() {
     return !!(apiKey && apiKey.trim());
   };
 
+  // Calculate aggregate ad metrics from snapshots
+  const adMetrics = adSnapshots?.reduce((acc, snap) => {
+    return {
+      totalBudget: acc.totalBudget + (snap.spend || 0),
+      totalReach: acc.totalReach + (snap.impressions || 0),
+      totalClicks: acc.totalClicks + (snap.clicks || 0),
+      totalConversions: acc.totalConversions + (snap.conversions || 0),
+      totalRevenue: acc.totalRevenue + (snap.revenue || 0),
+    };
+  }, { totalBudget: 0, totalReach: 0, totalClicks: 0, totalConversions: 0, totalRevenue: 0 }) ?? { totalBudget: 0, totalReach: 0, totalClicks: 0, totalConversions: 0, totalRevenue: 0 };
+
+  const conversionRate = adMetrics.totalClicks > 0 
+    ? ((adMetrics.totalConversions / adMetrics.totalClicks) * 100).toFixed(2) 
+    : "0.00";
+
+  // Get latest forecast update time
+  const latestForecastUpdate = forecastContexts?.length 
+    ? forecastContexts.reduce((latest, ctx) => {
+        const ctxDate = new Date(ctx.lastUpdated);
+        return ctxDate > new Date(latest) ? ctx.lastUpdated : latest;
+      }, forecastContexts[0].lastUpdated)
+    : null;
+
   return (
     <div className="flex flex-col gap-6 p-6">
       {/* Page Header */}
@@ -226,287 +228,237 @@ export default function Dashboard() {
         <p className="text-sm text-muted-foreground">Operational overview and inventory forecasting</p>
       </div>
 
-      {/* Metrics Panel */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Inventory Value</CardTitle>
-            <Package className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-inventory-value">
-              ${metrics.inventoryValue.toLocaleString()}
-            </div>
-            <p className="text-xs text-muted-foreground">Current stock value</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Days Until Stockout</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-stockout-days">
-              {metrics.daysUntilStockout}
-            </div>
-            <p className="text-xs text-muted-foreground">Based on current usage</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Production Capacity</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-production-capacity">
-              {metrics.productionCapacity}
-            </div>
-            <p className="text-xs text-muted-foreground">Units can be produced</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-1 space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Alerts</CardTitle>
-            <AlertCircle className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold" data-testid="text-active-alerts">
-              {metrics.activeAlerts}
-            </div>
-            <p className="text-xs text-muted-foreground">Items need attention</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Forecast Section */}
-      <Card className="border-destructive/50 bg-destructive/5">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-destructive" />
-            <CardTitle className="text-lg">Inventory Forecast</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-base" data-testid="text-forecast">
-            <span className="font-semibold">You will stock out in {forecast.daysRemaining} days</span>
-            {forecast.constraint && (
-              <>
-                , constraint = <span className="font-mono">{forecast.constraint}</span>
-              </>
-            )}
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* AI-Powered Recommendations */}
+      {/* Forecast Section (Automated 6-hour batch) */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-2">
-          <div>
-            <CardTitle className="text-lg">AI-Powered Recommendations</CardTitle>
-            <p className="text-sm text-muted-foreground">Get intelligent inventory insights</p>
-          </div>
-          <Button
-            onClick={generateLLMForecast}
-            disabled={isGeneratingForecast}
-            size="sm"
-            data-testid="button-generate-forecast"
-          >
-            {isGeneratingForecast ? (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                Generating...
-              </>
-            ) : (
-              <>Generate Forecast</>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              <CardTitle className="text-lg">Forecast</CardTitle>
+            </div>
+            {latestForecastUpdate && (
+              <Badge variant="outline" className="text-xs">
+                <Clock className="mr-1 h-3 w-3" />
+                Updated {formatDistanceToNow(new Date(latestForecastUpdate), { addSuffix: true })}
+              </Badge>
             )}
-          </Button>
+          </div>
+          <p className="text-sm text-muted-foreground">AI-powered inventory insights (auto-refreshed every 6 hours)</p>
         </CardHeader>
         <CardContent>
-          {llmRecommendation ? (
-            <div className="rounded-md bg-muted p-4" data-testid="text-llm-recommendation">
-              <p className="whitespace-pre-wrap text-sm">{llmRecommendation}</p>
+          {isLoadingForecastContexts ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading forecast data...</span>
+            </div>
+          ) : !forecastContexts || forecastContexts.length === 0 ? (
+            <div className="py-8 text-center">
+              <Brain className="mx-auto h-10 w-10 text-muted-foreground mb-3" />
+              <p className="text-sm text-muted-foreground mb-2">No forecast data available yet</p>
+              <p className="text-xs text-muted-foreground">
+                Forecasts are generated automatically every 6 hours based on sales velocity, ad performance, and inventory levels.
+              </p>
             </div>
           ) : (
-            <p className="py-4 text-center text-sm text-muted-foreground">
-              Click "Generate Forecast" to get AI-powered inventory recommendations based on your current stock levels and usage patterns.
-            </p>
+            <div className="rounded-md border overflow-auto max-h-64">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr>
+                    <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Product</th>
+                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Stock</th>
+                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Days Left</th>
+                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Velocity/day</th>
+                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Inbound</th>
+                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">ROAS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecastContexts.slice(0, 10).map((ctx) => (
+                    <tr key={ctx.id} className="h-10 border-b hover-elevate">
+                      <td className="px-3 whitespace-nowrap">
+                        <div>
+                          <p className="font-medium">{ctx.productName}</p>
+                          <p className="text-xs font-mono text-muted-foreground">{ctx.sku}</p>
+                        </div>
+                      </td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.currentStock}</td>
+                      <td className="px-3 text-right whitespace-nowrap">
+                        <Badge variant={ctx.daysOfStock <= 7 ? "destructive" : ctx.daysOfStock <= 14 ? "secondary" : "outline"}>
+                          {ctx.daysOfStock} days
+                        </Badge>
+                      </td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.salesVelocity.toFixed(1)}</td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.inboundUnits}</td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">
+                        {ctx.roas > 0 ? `${ctx.roas.toFixed(2)}x` : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Smart Analytics */}
+      {/* Ad Display Section */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Brain className="h-5 w-5 text-primary" />
-            <CardTitle className="text-lg">Smart Analytics</CardTitle>
+            <Megaphone className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Ad Display</CardTitle>
           </div>
-          <p className="text-sm text-muted-foreground">AI-powered insights based on usage patterns and sales data</p>
+          <p className="text-sm text-muted-foreground">Advertising performance metrics with trend tracking</p>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="recommendations" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="recommendations" data-testid="tab-recommendations">
-                Reorder Recommendations
-              </TabsTrigger>
-              <TabsTrigger value="forecasts" data-testid="tab-forecasts">
-                Demand Forecasts
-              </TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="recommendations" className="space-y-4">
-              {isLoadingRecommendations ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">Loading recommendations...</p>
-              ) : !reorderRecommendations || reorderRecommendations.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center">
-                  <Package className="h-8 w-8 text-muted-foreground" />
-                  <p className="font-medium text-muted-foreground">No reorder recommendations</p>
-                  <p className="text-sm text-muted-foreground">Your inventory levels look good. Check back after more sales activity.</p>
+          {isLoadingAdSnapshots ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading ad data...</span>
+            </div>
+          ) : !adSnapshots || adSnapshots.length === 0 ? (
+            <div className="py-8 text-center">
+              <Megaphone className="mx-auto h-10 w-10 text-muted-foreground mb-3" />
+              <p className="text-sm text-muted-foreground mb-2">No ad performance data available</p>
+              <p className="text-xs text-muted-foreground">
+                Connect Google Ads or Meta Ads via Data Sources to see performance metrics here.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Summary Metrics */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-4 rounded-lg border bg-muted/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Budget Spent</span>
+                  </div>
+                  <p className="text-2xl font-bold" data-testid="text-ad-budget">
+                    ${adMetrics.totalBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  {reorderRecommendations.slice(0, 5).map((rec: any) => (
-                    <Card key={rec.itemId}>
-                      <CardContent className="pt-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <p className="font-medium">{rec.itemName}</p>
-                              <Badge 
-                                variant={
-                                  rec.urgencyLevel === 'critical' ? 'destructive' :
-                                  rec.urgencyLevel === 'high' ? 'default' : 'secondary'
-                                }
-                                data-testid={`urgency-${rec.itemId}`}
-                              >
-                                {rec.urgencyLevel}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground mb-2">{rec.reason}</p>
-                            <div className="flex gap-4 text-xs">
-                              <span>Current: {rec.currentStock}</span>
-                              <span>Suggested: {rec.suggestedOrderQty}</span>
-                              <span>Days until stockout: {rec.daysUntilStockout}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                <div className="p-4 rounded-lg border bg-muted/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Reach</span>
+                  </div>
+                  <p className="text-2xl font-bold" data-testid="text-ad-reach">
+                    {adMetrics.totalReach.toLocaleString()}
+                  </p>
                 </div>
-              )}
-            </TabsContent>
-            
-            <TabsContent value="forecasts" className="space-y-4">
-              {isLoadingForecasts ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">Loading forecasts...</p>
-              ) : !demandForecasts || demandForecasts.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center">
-                  <TrendingUp className="h-8 w-8 text-muted-foreground" />
-                  <p className="font-medium text-muted-foreground">No demand forecasts yet</p>
-                  <p className="text-sm text-muted-foreground">Forecasts appear once there's enough sales history to analyze trends.</p>
+                <div className="p-4 rounded-lg border bg-muted/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Target className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Conversion Rate</span>
+                  </div>
+                  <p className="text-2xl font-bold" data-testid="text-ad-conversion-rate">
+                    {conversionRate}%
+                  </p>
                 </div>
-              ) : (
-                <div className="rounded-md border overflow-auto">
+                <div className="p-4 rounded-lg border bg-muted/30">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Total Sales</span>
+                  </div>
+                  <p className="text-2xl font-bold" data-testid="text-ad-total-sales">
+                    ${adMetrics.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+
+              {/* Campaign Details with Timestamps */}
+              <div className="rounded-md border overflow-auto max-h-64">
                 <table className="w-full text-sm">
                   <thead className="bg-muted/50 sticky top-0 z-10">
                     <tr>
-                      <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
-                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Current Usage</th>
-                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Forecast</th>
-                      <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Confidence</th>
-                      <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
+                      <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Campaign</th>
+                      <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Platform</th>
+                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Spend</th>
+                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Reach</th>
+                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Conv. Rate</th>
+                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Revenue</th>
+                      <th className="h-10 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
+                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Updated</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {demandForecasts.slice(0, 10).map((forecast: any) => (
-                      <tr key={forecast.itemId} className="h-11 border-b hover-elevate">
-                        <td className="px-3 font-medium whitespace-nowrap">{forecast.itemName}</td>
-                        <td className="px-3 text-right font-mono text-sm whitespace-nowrap">
-                          {forecast.currentDailyUsage}/day
-                        </td>
-                        <td className="px-3 text-right whitespace-nowrap">
-                          <div className="flex flex-col items-end">
-                            <span className="font-mono text-sm font-semibold">
-                              {forecast.forecastedDailyUsage}/day
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              ({forecast.confidenceInterval.low}–{forecast.confidenceInterval.high})
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-3 text-right whitespace-nowrap">
-                          <Badge 
-                            variant={
-                              forecast.confidence === 'high' ? 'default' :
-                              forecast.confidence === 'medium' ? 'secondary' : 'outline'
-                            }
-                            data-testid={`confidence-${forecast.itemId}`}
-                          >
-                            {forecast.confidence}
-                          </Badge>
-                        </td>
-                        <td className="px-3 text-center whitespace-nowrap">
-                          {forecast.trend === 'increasing' ? (
-                            <ArrowUp className="h-4 w-4 text-green-600 inline" data-testid={`trend-${forecast.itemId}`} />
-                          ) : forecast.trend === 'decreasing' ? (
-                            <ArrowDown className="h-4 w-4 text-red-600 inline" data-testid={`trend-${forecast.itemId}`} />
-                          ) : (
-                            <Minus className="h-4 w-4 text-muted-foreground inline" data-testid={`trend-${forecast.itemId}`} />
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {adSnapshots.slice(0, 10).map((snap) => {
+                      const snapConvRate = snap.clicks > 0 ? (snap.conversions / snap.clicks) * 100 : 0;
+                      return (
+                        <tr key={snap.id} className="h-10 border-b hover-elevate" data-testid={`row-ad-${snap.id}`}>
+                          <td className="px-3 whitespace-nowrap font-medium">{snap.campaignName || "Unknown Campaign"}</td>
+                          <td className="px-3 whitespace-nowrap">
+                            <Badge variant="outline">{snap.platform}</Badge>
+                          </td>
+                          <td className="px-3 text-right font-mono whitespace-nowrap">
+                            ${snap.spend.toFixed(2)}
+                          </td>
+                          <td className="px-3 text-right font-mono whitespace-nowrap">
+                            {snap.impressions.toLocaleString()}
+                          </td>
+                          <td className="px-3 text-right font-mono whitespace-nowrap">
+                            {snapConvRate.toFixed(2)}%
+                          </td>
+                          <td className="px-3 text-right font-mono whitespace-nowrap">
+                            ${snap.revenue.toFixed(2)}
+                          </td>
+                          <td className="px-3 text-center whitespace-nowrap">
+                            {snap.roas >= 2 ? (
+                              <TrendingUp className="h-4 w-4 text-green-600 inline" />
+                            ) : snap.roas >= 1 ? (
+                              <Minus className="h-4 w-4 text-muted-foreground inline" />
+                            ) : (
+                              <TrendingDown className="h-4 w-4 text-red-600 inline" />
+                            )}
+                          </td>
+                          <td className="px-3 text-right text-xs text-muted-foreground whitespace-nowrap">
+                            {formatDistanceToNow(new Date(snap.createdAt), { addSuffix: true })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-              )}
-            </TabsContent>
-          </Tabs>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Ad & Demand Signals */}
-      <AdDemandSignals variant="dashboard" />
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* AI-Powered At-Risk Items */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-primary" />
-                  Top 5 At-Risk Items
-                </CardTitle>
-                <p className="text-sm text-muted-foreground">AI-powered risk analysis</p>
-              </div>
-              {isLoadingAIAtRisk && (
-                <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+      {/* Top 15 At-Risk Items */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Zap className="h-4 w-4 text-primary" />
+                Top 15 At-Risk Items
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">AI-powered risk analysis with production capacity</p>
+            </div>
+            {isLoadingAIAtRisk && (
+              <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!aiAtRiskItems || aiAtRiskItems.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              {isLoadingAIAtRisk ? (
+                <>
+                  <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
+                  <p className="text-sm text-muted-foreground">Analyzing inventory...</p>
+                </>
+              ) : (
+                <>
+                  <Zap className="h-8 w-8 text-muted-foreground" />
+                  <p className="font-medium text-muted-foreground">All items healthy</p>
+                  <p className="text-sm text-muted-foreground">No stock shortages or risk alerts detected.</p>
+                </>
               )}
             </div>
-          </CardHeader>
-          <CardContent>
-            {!aiAtRiskItems || aiAtRiskItems.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 py-8 text-center">
-                {isLoadingAIAtRisk ? (
-                  <>
-                    <RefreshCw className="h-8 w-8 text-muted-foreground animate-spin" />
-                    <p className="text-sm text-muted-foreground">Analyzing inventory...</p>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="h-8 w-8 text-muted-foreground" />
-                    <p className="font-medium text-muted-foreground">All items healthy</p>
-                    <p className="text-sm text-muted-foreground">No stock shortages or risk alerts detected.</p>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="rounded-md border overflow-auto">
+          ) : (
+            <div className="rounded-md border overflow-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50 sticky top-0 z-10">
                   <tr>
@@ -514,12 +466,13 @@ export default function Dashboard() {
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Risk</th>
                     <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Stock</th>
                     <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Days Left</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Capacity</th>
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Action</th>
                     <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Why</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aiAtRiskItems.map((item: AIAtRiskItem) => (
+                  {aiAtRiskItems.slice(0, 15).map((item: AIAtRiskItem) => (
                     <tr key={item.id} className="h-11 border-b hover-elevate" data-testid={`row-at-risk-${item.id}`}>
                       <td className="px-3 whitespace-nowrap">
                         <div>
@@ -544,6 +497,9 @@ export default function Dashboard() {
                         <Badge variant={item.daysOfCover <= 0 ? "destructive" : item.daysOfCover < 7 ? "secondary" : "outline"}>
                           {item.daysOfCover} days
                         </Badge>
+                      </td>
+                      <td className="px-3 text-right whitespace-nowrap font-mono">
+                        {item.capacity !== undefined ? item.capacity : "-"}
                       </td>
                       <td className="px-3 whitespace-nowrap">
                         {item.recommendedAction === "ORDER" && item.recommendedQty > 0 ? (
@@ -578,10 +534,143 @@ export default function Dashboard() {
                 </tbody>
               </table>
             </div>
-            )}
-          </CardContent>
-        </Card>
+          )}
+        </CardContent>
+      </Card>
 
+      {/* Reorder Recommendations (standalone) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Package className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Reorder Recommendations</CardTitle>
+          </div>
+          <p className="text-sm text-muted-foreground">AI-suggested reorder quantities based on usage patterns</p>
+        </CardHeader>
+        <CardContent>
+          {isLoadingRecommendations ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading recommendations...</p>
+          ) : !reorderRecommendations || reorderRecommendations.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <Package className="h-8 w-8 text-muted-foreground" />
+              <p className="font-medium text-muted-foreground">No reorder recommendations</p>
+              <p className="text-sm text-muted-foreground">Your inventory levels look good. Check back after more sales activity.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {reorderRecommendations.slice(0, 10).map((rec: any) => (
+                <Card key={rec.itemId}>
+                  <CardContent className="pt-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <p className="font-medium">{rec.itemName}</p>
+                          <Badge 
+                            variant={
+                              rec.urgencyLevel === 'critical' ? 'destructive' :
+                              rec.urgencyLevel === 'high' ? 'default' : 'secondary'
+                            }
+                            data-testid={`urgency-${rec.itemId}`}
+                          >
+                            {rec.urgencyLevel}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">{rec.reason}</p>
+                        <div className="flex gap-4 text-xs">
+                          <span>Current: {rec.currentStock}</span>
+                          <span>Suggested: {rec.suggestedOrderQty}</span>
+                          <span>Days until stockout: {rec.daysUntilStockout}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Demand Forecasts (standalone) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Demand Forecasts</CardTitle>
+          </div>
+          <p className="text-sm text-muted-foreground">Predicted usage based on historical patterns</p>
+        </CardHeader>
+        <CardContent>
+          {isLoadingForecasts ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading forecasts...</p>
+          ) : !demandForecasts || demandForecasts.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              <TrendingUp className="h-8 w-8 text-muted-foreground" />
+              <p className="font-medium text-muted-foreground">No demand forecasts yet</p>
+              <p className="text-sm text-muted-foreground">Forecasts appear once there's enough sales history to analyze trends.</p>
+            </div>
+          ) : (
+            <div className="rounded-md border overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 sticky top-0 z-10">
+                  <tr>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Current Usage</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Forecast</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Confidence</th>
+                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {demandForecasts.slice(0, 15).map((forecast: any) => (
+                    <tr key={forecast.itemId} className="h-11 border-b hover-elevate">
+                      <td className="px-3 font-medium whitespace-nowrap">{forecast.itemName}</td>
+                      <td className="px-3 text-right font-mono text-sm whitespace-nowrap">
+                        {forecast.currentDailyUsage}/day
+                      </td>
+                      <td className="px-3 text-right whitespace-nowrap">
+                        <div className="flex flex-col items-end">
+                          <span className="font-mono text-sm font-semibold">
+                            {forecast.forecastedDailyUsage}/day
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            ({forecast.confidenceInterval.low}–{forecast.confidenceInterval.high})
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 text-right whitespace-nowrap">
+                        <Badge 
+                          variant={
+                            forecast.confidence === 'high' ? 'default' :
+                            forecast.confidence === 'medium' ? 'secondary' : 'outline'
+                          }
+                          data-testid={`confidence-${forecast.itemId}`}
+                        >
+                          {forecast.confidence}
+                        </Badge>
+                      </td>
+                      <td className="px-3 text-center whitespace-nowrap">
+                        {forecast.trend === 'increasing' ? (
+                          <ArrowUp className="h-4 w-4 text-green-600 inline" data-testid={`trend-${forecast.itemId}`} />
+                        ) : forecast.trend === 'decreasing' ? (
+                          <ArrowDown className="h-4 w-4 text-red-600 inline" data-testid={`trend-${forecast.itemId}`} />
+                        ) : (
+                          <Minus className="h-4 w-4 text-muted-foreground inline" data-testid={`trend-${forecast.itemId}`} />
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Ad & Demand Signals */}
+      <AdDemandSignals variant="dashboard" />
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Production Capacity Calculator */}
         <Card>
           <CardHeader>
@@ -618,50 +707,50 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
-      </div>
 
-      {/* Supplier Quick-Order Panel */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Supplier Quick-Order</CardTitle>
-          <p className="text-sm text-muted-foreground">Open supplier catalogs</p>
-        </CardHeader>
-        <CardContent>
-          {suppliers.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <Package className="h-8 w-8 text-muted-foreground" />
-              <p className="font-medium text-muted-foreground">No suppliers yet</p>
-              <p className="text-sm text-muted-foreground">Add suppliers with catalog URLs to enable quick ordering.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {suppliers.map((supplier: any) => (
-                <Card key={supplier.id}>
-                  <CardContent className="flex flex-col items-center gap-4 pt-6">
-                    <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-muted">
-                      <Package className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <div className="text-center">
-                      <p className="font-medium">{supplier.name}</p>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => supplier.catalogUrl && window.open(supplier.catalogUrl, '_blank')}
-                      disabled={!supplier.catalogUrl}
-                      data-testid={`button-supplier-${supplier.id}`}
-                    >
-                      <ExternalLink className="mr-2 h-4 w-4" />
-                      Open Catalog
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {/* Supplier Quick-Order Panel */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Supplier Quick-Order</CardTitle>
+            <p className="text-sm text-muted-foreground">Open supplier catalogs</p>
+          </CardHeader>
+          <CardContent>
+            {suppliers.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                <Package className="h-8 w-8 text-muted-foreground" />
+                <p className="font-medium text-muted-foreground">No suppliers yet</p>
+                <p className="text-sm text-muted-foreground">Add suppliers with catalog URLs to enable quick ordering.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {suppliers.slice(0, 4).map((supplier: any) => (
+                  <Card key={supplier.id}>
+                    <CardContent className="flex flex-col items-center gap-3 pt-4">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted">
+                        <Package className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div className="text-center">
+                        <p className="font-medium text-sm">{supplier.name}</p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => supplier.catalogUrl && window.open(supplier.catalogUrl, '_blank')}
+                        disabled={!supplier.catalogUrl}
+                        data-testid={`button-supplier-${supplier.id}`}
+                      >
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Open Catalog
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Integration Health Status */}
       <Card>

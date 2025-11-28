@@ -17,6 +17,10 @@ import {
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
   type InsertPurchaseOrderLine,
+  type PurchaseOrderReceipt,
+  type InsertPurchaseOrderReceipt,
+  type PurchaseOrderReceiptLine,
+  type InsertPurchaseOrderReceiptLine,
   type SupplierLead,
   type InsertSupplierLead,
   type SalesHistory,
@@ -226,9 +230,31 @@ export interface IStorage {
   // Purchase Order Lines
   getAllPurchaseOrderLines(): Promise<PurchaseOrderLine[]>;
   getPurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<PurchaseOrderLine[]>;
+  getPurchaseOrderLine(id: string): Promise<PurchaseOrderLine | undefined>;
   createPurchaseOrderLine(line: InsertPurchaseOrderLine): Promise<PurchaseOrderLine>;
   updatePurchaseOrderLine(id: string, line: Partial<InsertPurchaseOrderLine>): Promise<PurchaseOrderLine | undefined>;
   deletePurchaseOrderLine(id: string): Promise<boolean>;
+  deletePurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<boolean>;
+
+  // Purchase Order Receipts
+  getAllPurchaseOrderReceipts(): Promise<PurchaseOrderReceipt[]>;
+  getPurchaseOrderReceiptsByPOId(purchaseOrderId: string): Promise<PurchaseOrderReceipt[]>;
+  getPurchaseOrderReceipt(id: string): Promise<PurchaseOrderReceipt | undefined>;
+  createPurchaseOrderReceipt(receipt: InsertPurchaseOrderReceipt): Promise<PurchaseOrderReceipt>;
+  updatePurchaseOrderReceipt(id: string, receipt: Partial<InsertPurchaseOrderReceipt>): Promise<PurchaseOrderReceipt | undefined>;
+  deletePurchaseOrderReceipt(id: string): Promise<boolean>;
+
+  // Purchase Order Receipt Lines
+  getPurchaseOrderReceiptLinesByReceiptId(receiptId: string): Promise<PurchaseOrderReceiptLine[]>;
+  getPurchaseOrderReceiptLinesByPOLineId(purchaseOrderLineId: string): Promise<PurchaseOrderReceiptLine[]>;
+  createPurchaseOrderReceiptLine(line: InsertPurchaseOrderReceiptLine): Promise<PurchaseOrderReceiptLine>;
+  updatePurchaseOrderReceiptLine(id: string, line: Partial<InsertPurchaseOrderReceiptLine>): Promise<PurchaseOrderReceiptLine | undefined>;
+  deletePurchaseOrderReceiptLine(id: string): Promise<boolean>;
+
+  // PO Helper Methods
+  getNextPONumber(): Promise<string>;
+  recalculatePOTotals(purchaseOrderId: string): Promise<PurchaseOrder | undefined>;
+  updatePOLineReceivedQty(purchaseOrderLineId: string): Promise<PurchaseOrderLine | undefined>;
 
   // Supplier Leads
   getAllSupplierLeads(): Promise<SupplierLead[]>;
@@ -3478,6 +3504,137 @@ export class PostgresStorage implements IStorage {
   async deletePurchaseOrderLine(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getPurchaseOrderLine(id: string): Promise<PurchaseOrderLine | undefined> {
+    const results = await this.db.select().from(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.id, id));
+    return results[0];
+  }
+
+  async deletePurchaseOrderLinesByPOId(purchaseOrderId: string): Promise<boolean> {
+    const results = await this.db.delete(schema.purchaseOrderLines).where(eq(schema.purchaseOrderLines.purchaseOrderId, purchaseOrderId)).returning();
+    return results.length > 0;
+  }
+
+  // Purchase Order Receipts
+  async getAllPurchaseOrderReceipts(): Promise<PurchaseOrderReceipt[]> {
+    return await this.db.select().from(schema.purchaseOrderReceipts);
+  }
+
+  async getPurchaseOrderReceiptsByPOId(purchaseOrderId: string): Promise<PurchaseOrderReceipt[]> {
+    return await this.db.select().from(schema.purchaseOrderReceipts).where(eq(schema.purchaseOrderReceipts.purchaseOrderId, purchaseOrderId));
+  }
+
+  async getPurchaseOrderReceipt(id: string): Promise<PurchaseOrderReceipt | undefined> {
+    const results = await this.db.select().from(schema.purchaseOrderReceipts).where(eq(schema.purchaseOrderReceipts.id, id));
+    return results[0];
+  }
+
+  async createPurchaseOrderReceipt(receipt: InsertPurchaseOrderReceipt): Promise<PurchaseOrderReceipt> {
+    const results = await this.db.insert(schema.purchaseOrderReceipts).values(receipt).returning();
+    return results[0];
+  }
+
+  async updatePurchaseOrderReceipt(id: string, updates: Partial<InsertPurchaseOrderReceipt>): Promise<PurchaseOrderReceipt | undefined> {
+    const results = await this.db.update(schema.purchaseOrderReceipts)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.purchaseOrderReceipts.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deletePurchaseOrderReceipt(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.purchaseOrderReceipts).where(eq(schema.purchaseOrderReceipts.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Purchase Order Receipt Lines
+  async getPurchaseOrderReceiptLinesByReceiptId(receiptId: string): Promise<PurchaseOrderReceiptLine[]> {
+    return await this.db.select().from(schema.purchaseOrderReceiptLines).where(eq(schema.purchaseOrderReceiptLines.receiptId, receiptId));
+  }
+
+  async getPurchaseOrderReceiptLinesByPOLineId(purchaseOrderLineId: string): Promise<PurchaseOrderReceiptLine[]> {
+    return await this.db.select().from(schema.purchaseOrderReceiptLines).where(eq(schema.purchaseOrderReceiptLines.purchaseOrderLineId, purchaseOrderLineId));
+  }
+
+  async createPurchaseOrderReceiptLine(line: InsertPurchaseOrderReceiptLine): Promise<PurchaseOrderReceiptLine> {
+    const results = await this.db.insert(schema.purchaseOrderReceiptLines).values(line).returning();
+    return results[0];
+  }
+
+  async updatePurchaseOrderReceiptLine(id: string, updates: Partial<InsertPurchaseOrderReceiptLine>): Promise<PurchaseOrderReceiptLine | undefined> {
+    const results = await this.db.update(schema.purchaseOrderReceiptLines)
+      .set(updates)
+      .where(eq(schema.purchaseOrderReceiptLines.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async deletePurchaseOrderReceiptLine(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.purchaseOrderReceiptLines).where(eq(schema.purchaseOrderReceiptLines.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // PO Helper Methods
+  async getNextPONumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefix = `PO-${year}-`;
+    
+    // Get the highest existing PO number for this year
+    const results = await this.db.select({ poNumber: schema.purchaseOrders.poNumber })
+      .from(schema.purchaseOrders)
+      .where(drizzleSql`${schema.purchaseOrders.poNumber} LIKE ${prefix + '%'}`)
+      .orderBy(drizzleSql`${schema.purchaseOrders.poNumber} DESC`)
+      .limit(1);
+    
+    let nextNum = 1;
+    if (results.length > 0 && results[0].poNumber) {
+      const lastNum = parseInt(results[0].poNumber.replace(prefix, ''), 10);
+      if (!isNaN(lastNum)) {
+        nextNum = lastNum + 1;
+      }
+    }
+    
+    return `${prefix}${String(nextNum).padStart(4, '0')}`;
+  }
+
+  async recalculatePOTotals(purchaseOrderId: string): Promise<PurchaseOrder | undefined> {
+    // Get all lines for this PO
+    const lines = await this.getPurchaseOrderLinesByPOId(purchaseOrderId);
+    
+    // Calculate subtotal from line totals
+    const subtotal = lines.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
+    
+    // Get current PO to get shipping and other fees
+    const po = await this.getPurchaseOrder(purchaseOrderId);
+    if (!po) return undefined;
+    
+    const total = subtotal + (po.shippingCost || 0) + (po.otherFees || 0);
+    
+    // Update PO with new totals
+    return this.updatePurchaseOrder(purchaseOrderId, {
+      subtotal,
+      total,
+      updatedAt: new Date(),
+    });
+  }
+
+  async updatePOLineReceivedQty(purchaseOrderLineId: string): Promise<PurchaseOrderLine | undefined> {
+    // Sum all receipt lines for this PO line
+    const receiptLines = await this.getPurchaseOrderReceiptLinesByPOLineId(purchaseOrderLineId);
+    const totalReceived = receiptLines.reduce((sum, rl) => sum + rl.receivedQty, 0);
+    
+    // Get the line to check against qtyOrdered
+    const line = await this.getPurchaseOrderLine(purchaseOrderLineId);
+    if (!line) return undefined;
+    
+    // Cap at qtyOrdered
+    const qtyReceived = Math.min(totalReceived, line.qtyOrdered);
+    
+    return this.updatePurchaseOrderLine(purchaseOrderLineId, {
+      qtyReceived,
+      updatedAt: new Date(),
+    });
   }
 
   // Supplier Leads

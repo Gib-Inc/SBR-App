@@ -106,7 +106,7 @@ export default function Dashboard() {
       } else {
         toast({
           title: "No Critical Items",
-          description: "No high or critical priority items require immediate action.",
+          description: "No HIGH risk items require immediate action.",
         });
       }
       setIsFixingInGhl(false);

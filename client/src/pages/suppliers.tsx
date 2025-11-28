@@ -178,20 +178,36 @@ export default function Suppliers() {
     enabled: showRiskPickerDialog,
   });
   
+  // SupplierItem type for proper typing
+  interface SupplierItemSelect {
+    id: string;
+    supplierId: string;
+    itemId: string;
+    supplierSku: string | null;
+    price: number | null;
+    minimumOrderQuantity: number | null;
+    availableQuantity: number | null;
+    leadTimeDays: number | null;
+    isDesignatedSupplier: boolean;
+  }
+  
   // Get all supplier items for finding designated suppliers
-  const { data: allSupplierItems = [] } = useQuery<any[]>({
+  const { data: allSupplierItems = [] } = useQuery<SupplierItemSelect[]>({
     queryKey: ['/api/supplier-items'],
     enabled: showRiskPickerDialog && atRiskItems.length > 0,
   });
 
+  // Extended at-risk item with supplier info
+  type AtRiskItemWithSupplier = AtRiskItem & { supplierItem?: SupplierItemSelect };
+  
   // Group at-risk items by supplier for the risk picker dialog
   const atRiskBySupplier = useMemo(() => {
-    const grouped: Map<string, { supplier: Supplier | null; items: Array<AtRiskItem & { supplierItem?: any }> }> = new Map();
+    const grouped: Map<string, { supplier: Supplier | null; items: AtRiskItemWithSupplier[] }> = new Map();
     
     for (const item of atRiskItems) {
-      // Find designated supplier from supplierItems
+      // Find designated supplier from supplierItems (prefer designated, fallback to any)
       const supplierItem = allSupplierItems.find(
-        si => si.itemId === item.id && si.isDesignatedSupplier
+        si => si.itemId === item.id && si.isDesignatedSupplier === true
       ) || allSupplierItems.find(si => si.itemId === item.id);
       
       const supplierId = supplierItem?.supplierId || 'UNKNOWN';
@@ -201,9 +217,6 @@ export default function Suppliers() {
       }
       grouped.get(supplierId)!.items.push({ ...item, supplierItem });
     }
-    
-    // Sort by most critical items first (HIGH = 3, MEDIUM = 2, LOW = 1, UNKNOWN = 0)
-    const riskScore = (level: string) => level === 'HIGH' ? 3 : level === 'MEDIUM' ? 2 : level === 'LOW' ? 1 : 0;
     
     return Array.from(grouped.entries())
       .map(([supplierId, data]) => ({
@@ -218,14 +231,31 @@ export default function Suppliers() {
   }, [atRiskItems, allSupplierItems, suppliers]);
 
   // Handle generating PO from at-risk supplier group
-  const handleGenerateFromRisk = (supplierId: string, supplierItemsList: Array<AtRiskItem & { supplierItem?: any }>) => {
-    const prefilled = supplierItemsList.map(item => ({
-      itemId: item.id,
-      quantity: item.recommendedQty > 0 ? item.recommendedQty : Math.ceil(30 * (item.dailyUsage || 1) - item.currentStock),
-      unitCost: item.supplierItem?.price,
-      sku: item.sku,
-      name: item.name,
-    })).filter(item => item.quantity > 0);
+  const handleGenerateFromRisk = (supplierId: string, supplierItemsList: AtRiskItemWithSupplier[]) => {
+    const prefilled = supplierItemsList.map(item => {
+      // Use AI recommendedQty if available and positive, otherwise calculate from dailyUsage
+      const moq = item.supplierItem?.minimumOrderQuantity ?? 1;
+      const leadTimeDays = item.supplierItem?.leadTimeDays ?? 7;
+      
+      // Calculate recommended quantity: enough to cover lead time + safety buffer (7 days)
+      let quantity = item.recommendedQty;
+      if (quantity <= 0) {
+        const dailyUsage = item.dailyUsage || 1;
+        const neededForLeadTime = Math.ceil(dailyUsage * (leadTimeDays + 7));
+        quantity = Math.max(neededForLeadTime - item.currentStock, moq);
+      }
+      
+      // Ensure quantity is at least MOQ and positive
+      quantity = Math.max(quantity, moq, 1);
+      
+      return {
+        itemId: item.id,
+        quantity,
+        unitCost: item.supplierItem?.price ?? undefined,
+        sku: item.sku,
+        name: item.name,
+      };
+    });
     
     if (prefilled.length === 0) {
       toast({

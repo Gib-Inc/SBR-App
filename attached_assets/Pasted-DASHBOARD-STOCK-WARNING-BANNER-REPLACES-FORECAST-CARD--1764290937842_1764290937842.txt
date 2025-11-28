@@ -1,0 +1,95 @@
+DASHBOARD – STOCK WARNING BANNER (REPLACES FORECAST CARD)
+---------------------------------------------------------
+On the Dashboard page (left sidebar item “Dashboard”):
+
+1) Remove the large “Forecast” card (the one with columns Product / Stock / Days Left / Velocity/day / Inbound / ROAS).
+2) In its place, add a single-line banner at the very top of the main content area, directly under the app header (above “Top 15 At-Risk Items”).
+3) Banner text format:
+   - “Stock warning: {atRiskCount} items at risk, earliest stockout in {daysToStockout} days.”
+   - `atRiskCount` = count of SKUs currently at risk based on the same logic that powers “Top 15 At-Risk Items”.
+   - `daysToStockout` = minimum days left until stockout among all at-risk SKUs.
+4) Priority + color:
+   - Compute a `priority` for the most urgent SKU:
+     - medium: 7 < daysToStockout <= 21
+     - high: 3 < daysToStockout <= 7
+     - critical: daysToStockout <= 3
+   - If `atRiskCount === 0`, hide the banner.
+   - If priority is medium, use a yellow background with dark text.
+   - If priority is high or critical, use a red background with white text.
+5) Add a right-aligned button inside the banner:
+   - Label: “Fix in GHL”.
+   - Clicking this button should call a backend endpoint (see PO builder section below) and then open the returned GHL URL in a new tab.
+
+PO BUILDER – GHL “FIX” FLOW AND INTELLIGENT REORDERING
+------------------------------------------------------
+On the Purchase Order builder screen (the page where users create/edit POs under the “Suppliers” / purchasing flow):
+
+DATA & FIELDS
+1) Extend supplier and item data:
+   - Supplier fields:
+     - `leadTimeDays`
+     - `defaultMinOrderQty` (MOQ per item or supplier default)
+   - Item fields:
+     - `avgDailyDemand`
+     - `safetyStock`
+2) Derived per item (can be returned via API):
+   - `projectedStockoutDate`
+   - `recommendedReorderQty` = (targetCoverageDays * avgDailyDemand) − onHand − onOrder, floored at 0 and raised to MOQ if below.
+
+“FIX IN GHL” ENDPOINT
+3) Implement a backend endpoint, e.g. POST `/api/dashboard/stock/fix-in-ghl`:
+   - Input: none (it uses current inventory/forecast data).
+   - Logic:
+     - Collect all SKUs in high or critical priority (same thresholds as the banner).
+     - Group SKUs by supplier.
+     - For each supplier, build a draft PO object with:
+       - Supplier details.
+       - Line items: SKU, Name, current stock, `projectedStockoutDate`, `recommendedReorderQty`, unit cost, line total.
+       - PO subtotal and estimated arrival date (`today + leadTimeDays`).
+     - For each supplier draft PO, create or update a GHL Opportunity:
+       - Use env config:
+         - `GHL_LOCATION_ID`
+         - `GHL_PURCHASE_PIPELINE_ID`
+         - `GHL_PURCHASE_STAGE_DRAFT_ID`
+       - Opportunity name: “PO Draft – {SupplierName} – {YYYY-MM-DD}”.
+       - Store PO data in:
+         - Custom fields (supplier, subtotal, earliest stockout date).
+         - Opportunity notes as a human-readable PO summary (one line per SKU).
+   - Response:
+     - Return a single URL `primaryGhlOpportunityUrl` that links directly to the most urgent supplier’s Opportunity (deep link into GHL).
+
+4) Wire the Dashboard banner’s “Fix in GHL” button:
+   - On click:
+     - Call `/api/dashboard/stock/fix-in-ghl`.
+     - If `primaryGhlOpportunityUrl` is returned, open it in a new tab (`window.open(url, "_blank", "noopener,noreferrer")`).
+     - If no high/critical items exist, disable the button and show a tooltip “No critical items to fix”.
+
+PO BUILDER UI UPGRADES
+5) On the PO builder page, add a “Generate draft from risk” button:
+   - When clicked, it:
+     - Uses the same logic as `/api/dashboard/stock/fix-in-ghl` but builds the POs locally in the UI:
+       - Group at-risk items by supplier.
+       - Pre-fill a draft PO table for each supplier with:
+         - Columns: SKU, Item Name, Current Stock, On-order, Projected stockout date, Days left, Recommended order qty (editable), Unit cost, Line total.
+         - Footer row: PO subtotal and estimated arrival date.
+6) Allow the user to:
+   - Edit `recommendedReorderQty` directly in the PO builder table.
+   - Remove individual line items from the draft before saving.
+7) When the user saves a PO from this screen:
+   - Persist it in your existing PO storage.
+   - Optionally sync/update the corresponding GHL Opportunity:
+     - Move it to a configured stage (e.g. `GHL_PURCHASE_STAGE_APPROVED_ID`).
+     - Update totals and notes to match the final PO.
+
+AI EXPLANATION (OPTIONAL BUT SUPPORTED)
+8) On each supplier PO card/table, add a “Explain recommendation” link:
+   - When clicked, call your existing LLM/AI endpoint with:
+     - Supplier name.
+     - SKUs, recent sales, stock, projected stockout dates, recommended quantities.
+   - Display the returned explanation text just below the PO table (2–3 sentences max).
+   - Do not block the PO builder if this call fails; just show a small error or fallback explanation.
+
+RISK / SAFETY COMMENTS (IN CODE, NOT UI)
+9) In comments near the new endpoints and GHL integration, note:
+   - Draft POs generated by the system should be reviewed by a human before sending to suppliers.
+   - External ordering and messaging via GHL must follow supplier agreements and communication laws.

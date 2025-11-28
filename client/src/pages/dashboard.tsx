@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TrendingUp, TrendingDown, Package, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, AlertCircle, Clock } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, ExternalLink, Activity, RefreshCw, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, AlertCircle, Wrench } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -47,22 +47,6 @@ interface AISystemRecommendationsResponse {
   };
 }
 
-interface ForecastContext {
-  id: string;
-  productId: string;
-  productName: string;
-  sku: string;
-  currentStock: number;
-  daysOfStock: number;
-  inboundUnits: number;
-  salesVelocity: number;
-  adSpendTotal: number;
-  impressions: number;
-  clicks: number;
-  conversions: number;
-  roas: number;
-  lastUpdated: string;
-}
 
 
 export default function Dashboard() {
@@ -101,12 +85,46 @@ export default function Dashboard() {
     staleTime: 300000,
   });
 
-  // Fetch automated forecast context (6-hour batch cycle)
-  const { data: forecastContexts, isLoading: isLoadingForecastContexts } = useQuery<ForecastContext[]>({
-    queryKey: ["/api/forecast-context"],
-    staleTime: 60000,
+  // Fix in GHL mutation
+  const [isFixingInGhl, setIsFixingInGhl] = useState(false);
+  const fixInGhlMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/dashboard/stock/fix-in-ghl", {});
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create GHL opportunity");
+      }
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      if (data.primaryGhlOpportunityUrl) {
+        window.open(data.primaryGhlOpportunityUrl, "_blank", "noopener,noreferrer");
+        toast({
+          title: "Draft PO Created",
+          description: "Opening GoHighLevel to review the purchase order draft.",
+        });
+      } else {
+        toast({
+          title: "No Critical Items",
+          description: "No high or critical priority items require immediate action.",
+        });
+      }
+      setIsFixingInGhl(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create GHL opportunity. Please check your GHL configuration.",
+        variant: "destructive",
+      });
+      setIsFixingInGhl(false);
+    },
   });
 
+  const handleFixInGhl = () => {
+    setIsFixingInGhl(true);
+    fixInGhlMutation.mutate();
+  };
 
   // Sync mutation
   const syncMutation = useMutation({
@@ -176,94 +194,76 @@ export default function Dashboard() {
   };
 
 
-  // Get latest forecast update time
-  const latestForecastUpdate = forecastContexts?.length 
-    ? forecastContexts.reduce((latest, ctx) => {
-        const ctxDate = new Date(ctx.lastUpdated);
-        return ctxDate > new Date(latest) ? ctx.lastUpdated : latest;
-      }, forecastContexts[0].lastUpdated)
-    : null;
+  // Calculate stock warning banner data from at-risk items
+  const atRiskCount = aiAtRiskItems?.length ?? 0;
+  const minDaysToStockout = aiAtRiskItems?.length 
+    ? Math.min(...aiAtRiskItems.map(item => item.daysOfCover ?? Infinity))
+    : Infinity;
+  
+  // Determine priority based on minimum days to stockout
+  const getStockPriority = (days: number): 'critical' | 'high' | 'medium' | null => {
+    if (days <= 3) return 'critical';
+    if (days <= 7) return 'high';
+    if (days <= 21) return 'medium';
+    return null;
+  };
+  const stockPriority = getStockPriority(minDaysToStockout);
+  
+  // Check if there are high/critical items for the Fix in GHL button
+  const hasHighCriticalItems = aiAtRiskItems?.some(item => {
+    const days = item.daysOfCover ?? Infinity;
+    return days <= 7; // high or critical
+  }) ?? false;
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      {/* Stock Warning Banner */}
+      {atRiskCount > 0 && stockPriority && (
+        <div 
+          className={`flex items-center justify-between gap-4 px-4 py-3 rounded-lg ${
+            stockPriority === 'critical' || stockPriority === 'high'
+              ? 'bg-red-600 text-white'
+              : 'bg-yellow-400 text-yellow-900'
+          }`}
+          data-testid="banner-stock-warning"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+            <span className="font-medium">
+              Stock warning: {atRiskCount} item{atRiskCount !== 1 ? 's' : ''} at risk, earliest stockout in {minDaysToStockout} day{minDaysToStockout !== 1 ? 's' : ''}.
+            </span>
+          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                size="sm"
+                variant={stockPriority === 'critical' || stockPriority === 'high' ? 'secondary' : 'default'}
+                onClick={handleFixInGhl}
+                disabled={!hasHighCriticalItems || isFixingInGhl}
+                data-testid="button-fix-in-ghl"
+              >
+                {isFixingInGhl ? (
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4 mr-2" />
+                )}
+                Fix in GHL
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {hasHighCriticalItems 
+                ? "Create draft purchase orders in GoHighLevel for critical items" 
+                : "No critical items to fix"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
       {/* Page Header */}
       <div>
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Operational overview and inventory forecasting</p>
       </div>
-
-      {/* Forecast Section (Automated 6-hour batch) */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Brain className="h-5 w-5 text-primary" />
-              <CardTitle className="text-lg">Forecast</CardTitle>
-            </div>
-            {latestForecastUpdate && (
-              <Badge variant="outline" className="text-xs">
-                <Clock className="mr-1 h-3 w-3" />
-                Updated {formatDistanceToNow(new Date(latestForecastUpdate), { addSuffix: true })}
-              </Badge>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground">AI-powered inventory insights (auto-refreshed every 6 hours)</p>
-        </CardHeader>
-        <CardContent>
-          {isLoadingForecastContexts ? (
-            <div className="flex items-center justify-center py-8">
-              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">Loading forecast data...</span>
-            </div>
-          ) : !forecastContexts || forecastContexts.length === 0 ? (
-            <div className="py-8 text-center">
-              <Brain className="mx-auto h-10 w-10 text-muted-foreground mb-3" />
-              <p className="text-sm text-muted-foreground mb-2">No forecast data available yet</p>
-              <p className="text-xs text-muted-foreground">
-                Forecasts are generated automatically every 6 hours based on sales velocity, ad performance, and inventory levels.
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-md border overflow-auto max-h-64">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 sticky top-0 z-10">
-                  <tr>
-                    <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Product</th>
-                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Stock</th>
-                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Days Left</th>
-                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Velocity/day</th>
-                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Inbound</th>
-                    <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">ROAS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecastContexts.slice(0, 10).map((ctx) => (
-                    <tr key={ctx.id} className="h-10 border-b hover-elevate">
-                      <td className="px-3 whitespace-nowrap">
-                        <div>
-                          <p className="font-medium">{ctx.productName}</p>
-                          <p className="text-xs font-mono text-muted-foreground">{ctx.sku}</p>
-                        </div>
-                      </td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.currentStock}</td>
-                      <td className="px-3 text-right whitespace-nowrap">
-                        <Badge variant={(ctx.daysOfStock ?? 0) <= 7 ? "destructive" : (ctx.daysOfStock ?? 0) <= 14 ? "secondary" : "outline"}>
-                          {ctx.daysOfStock ?? 0} days
-                        </Badge>
-                      </td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">{(ctx.salesVelocity ?? 0).toFixed(1)}</td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.inboundUnits ?? 0}</td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">
-                        {(ctx.roas ?? 0) > 0 ? `${(ctx.roas ?? 0).toFixed(2)}x` : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Top 15 At-Risk Items */}
       <Card>

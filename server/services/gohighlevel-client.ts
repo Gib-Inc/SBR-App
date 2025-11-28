@@ -335,6 +335,74 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Create or update an opportunity in a pipeline
+   * Used for draft PO creation from stock warnings
+   */
+  async createOpportunity(
+    pipelineId: string,
+    stageId: string,
+    name: string,
+    monetaryValue: number,
+    notes: string,
+    customFields?: Record<string, any>
+  ): Promise<{ success: boolean; opportunityId?: string; opportunityUrl?: string; error?: string }> {
+    try {
+      const opportunityData: any = {
+        pipelineId,
+        pipelineStageId: stageId,
+        name,
+        monetaryValue,
+        status: 'open',
+        locationId: this.locationId,
+      };
+
+      // Add notes to the opportunity
+      if (notes) {
+        opportunityData.notes = notes;
+      }
+
+      // Add custom fields if provided
+      if (customFields) {
+        opportunityData.customFields = customFields;
+      }
+
+      const response = await fetch(`${this.baseUrl}/opportunities`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(opportunityData),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Failed to create opportunity:', errorText);
+        return {
+          success: false,
+          error: `Failed to create opportunity: ${response.status} ${response.statusText}`,
+        };
+      }
+
+      const data = await response.json();
+      const opportunityId = data.opportunity?.id || data.id;
+      
+      // Build deep link URL to the opportunity
+      // GHL opportunity URL format: https://app.gohighlevel.com/v2/location/{locationId}/opportunities/{opportunityId}
+      const opportunityUrl = `https://app.gohighlevel.com/v2/location/${this.locationId}/opportunities/${opportunityId}`;
+
+      return {
+        success: true,
+        opportunityId,
+        opportunityUrl,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error creating opportunity:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to create opportunity',
+      };
+    }
+  }
+
+  /**
    * Sync data (placeholder for future implementation)
    */
   async sync(): Promise<{ success: boolean; message: string }> {

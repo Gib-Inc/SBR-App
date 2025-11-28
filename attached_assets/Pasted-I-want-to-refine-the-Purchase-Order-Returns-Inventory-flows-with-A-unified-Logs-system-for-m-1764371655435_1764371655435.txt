@@ -1,0 +1,328 @@
+I want to refine the Purchase Order / Returns / Inventory flows with:
+
+- A unified Logs system for mismatches and external integration events.
+- AI Agent “Rules” settings for auto-sending critical POs.
+- Inventory sync such that:
+  - Shopify is TWO-WAY (we push availability back to Shopify).
+  - Amazon + Extensiv are READ-ONLY for inventory (we only pull from them).
+
+Extend the existing codebase (PO + Returns + Dashboard + AI) instead of rewriting.
+
+==================================================
+A) LOGGING SYSTEM – TABLE + SERVICE + UI
+==================================================
+1) DATA MODEL – system_logs
+Create a new table/model, e.g. `system_logs`:
+
+Fields:
+- id (PK)
+- type (string), examples:
+  - "SKU_MISMATCH"
+  - "UPC_MISMATCH"
+  - "PO_EMAIL_SENT"
+  - "PO_EMAIL_FAILED"
+  - "SHOPIFY_SYNC_ERROR"
+  - "SHOPIFY_SYNC_INFO"
+  - "SHIPPO_ERROR"
+  - "GHL_SYNC_ERROR"
+  - "PO_AUTO_SENT"
+  - "INFO"
+- entityType (string, nullable), e.g. "PO", "RETURN", "ORDER", "PRODUCT"
+- entityId (string, nullable)          // reference (poId, returnId, sku, orderId, etc.)
+- severity enum: "INFO" | "WARNING" | "ERROR"
+- code (string, nullable)              // short machine code, e.g. "SKU_NOT_FOUND"
+- message (string)                     // human-readable summary
+- details (JSON, nullable)             // structured payload (sku, external source, error payload, etc.)
+- createdAt (DateTime)
+
+2) LOG SERVICE
+Create a helper, e.g. `logSystemEvent({ type, entityType, entityId, severity, code, message, details })` that:
+- Inserts into `system_logs`.
+- Never throws in a way that breaks the main business logic (log failures should not crash primary flows).
+
+3) LOGS UI PAGE
+Add a "Logs" page in the UI, accessible from the sidebar (e.g. under an “Admin/System” section):
+
+- Route: /logs
+- Table columns:
+  - Timestamp
+  - Severity (badge)
+  - Type
+  - Entity (entityType + entityId, clickable if we can deep-link)
+  - Message
+- Filters:
+  - Severity
+  - Type
+  - Date range
+- Clicking a row:
+  - Shows a details panel with the full `details` JSON pretty-printed.
+
+==================================================
+B) SKU / UPC MISMATCH HANDLING
+==================================================
+Wherever we map external data into internal SKUs/UPCs, add explicit mismatch detection and logging.
+
+1) SALES ORDERS IMPORT / SYNC
+- When importing/syncing orders from Amazon/Shopify/Extensiv:
+  - For each line item, attempt to map to an internal SKU/product.
+  - If mapping fails:
+    - Do NOT silently ignore.
+    - Call logSystemEvent with:
+      - type: "SKU_MISMATCH" or "UPC_MISMATCH" (depending on which key failed).
+      - entityType: "ORDER"
+      - entityId: orderId
+      - severity: "WARNING"
+      - code: "SKU_NOT_FOUND" or "UPC_NOT_FOUND"
+      - message: e.g. `No internal SKU match for external SKU ${externalSku} from ${source} order ${orderId}.`
+      - details: { source: "shopify" | "amazon" | "extensiv", orderId, externalSku, externalUpc, lineItemData }
+
+- Optionally show a small warning icon next to affected orders in the Sales Orders UI that links to Logs filtered for that order.
+
+2) RETURNS / SCANNING
+- When processing warehouse scans (tracking, barcode, or RMA) and tying to SKUs/UPCs:
+  - If the scanned value cannot be mapped to a known SKU/UPC:
+    - logSystemEvent with:
+      - type: "SKU_MISMATCH" or "UPC_MISMATCH"
+      - entityType: "RETURN" or "PRODUCT"
+      - entityId: returnId or sku
+      - severity: "WARNING"
+      - code: "SCAN_SKU_NOT_FOUND"
+      - message: short description
+      - details: include scanned value and any context.
+  - Show a small toast/warning directing the user to Logs to fix mapping.
+
+3) BOM / PRODUCT PAGE HINT (optional but helpful)
+- On BOM/Product detail, if unresolved SKU/UPC mismatches exist for that SKU:
+  - Show a small banner: “There are unresolved SKU/UPC mismatches for this product. See Logs.”
+  - Link to /logs with filters entityType="PRODUCT" & entityId=this sku/productId.
+
+==================================================
+C) PO EMAIL LOGGING (SENDGRID)
+==================================================
+Integrate Logs with the existing PO email sending logic (SendGrid via Twilio).
+
+In the send service (e.g. `purchaseOrderEmailService.sendPurchaseOrderEmail`):
+
+1) On successful SendGrid response:
+   - Continue updating the PO as already designed (emailTo, lastEmailStatus="SENT", lastEmailSentAt, lastEmailProviderMessageId).
+   - Also call logSystemEvent:
+     - type: "PO_EMAIL_SENT"
+     - entityType: "PO"
+     - entityId: po.id
+     - severity: "INFO"
+     - code: "PO_EMAIL_SENT"
+     - message: `PO ${po.poNumber} email sent to ${recipientEmail}.`
+     - details: { poNumber, recipientEmail, messageId }
+
+2) On SendGrid error:
+   - Set lastEmailStatus="FAILED" on the PO.
+   - Call logSystemEvent:
+     - type: "PO_EMAIL_FAILED"
+     - entityType: "PO"
+     - entityId: po.id
+     - severity: "ERROR"
+     - code: "PO_EMAIL_FAILED"
+     - message: short description of failure
+     - details: include sanitized error payload, poNumber, recipientEmail.
+   - Return a clear error message back to the client so UI can show a toast.
+
+==================================================
+D) AI AGENT “RULES” TAB – AUTO-SEND CRITICAL POs
+==================================================
+We already have an inventory/PO brain that can flag at-risk SKUs and propose POs. Extend it with explicit AI rules:
+
+1) SETTINGS MODEL
+Add persistent settings for the Inventory AI Agent:
+
+- autoSendCriticalPos (boolean, default false)
+- criticalRescueDays (integer, default 7)
+
+Store in an appropriate settings table/model (e.g. `ai_agent_settings` or a global `settings` model).
+
+2) UI – RULES TAB
+In the AI Agent configuration UI (“Rules” tab):
+
+- Add a toggle:
+  - Label: “Auto-send POs for critical stock”
+  - Bound to settings.autoSendCriticalPos
+- Add numeric input:
+  - Label: “Days of coverage to buy on auto-send”
+  - Bound to settings.criticalRescueDays
+
+3) LOGIC – GENERATING AI-SUGGESTED POs
+Where the system currently generates POs from risk/forecast (AI or rules-based), update the logic:
+
+We assume for each SKU we have:
+- daysToStockout
+- priority: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+- avgDailyDemand
+- currentAvailableStock
+- onOrder
+
+Define a helper to compute a “rescue quantity”:
+
+- rescueDays = settings.criticalRescueDays
+- targetUnits = rescueDays * avgDailyDemand
+- rescueQty = max(0, targetUnits - currentAvailableStock - onOrder)
+- Adjust to MOQ where needed; never negative.
+
+CASE A – Auto-send ON and priority HIGH/CRITICAL:
+- Condition:
+  - settings.autoSendCriticalPos === true AND
+  - priority in ["HIGH", "CRITICAL"]
+- Behavior:
+  - Create a PO in this app with:
+    - status per existing state machine (initially DRAFT/APPROVED as appropriate).
+    - source = "AI"
+    - lines using rescueQty.
+  - Immediately call the existing `Send PO` endpoint for this PO:
+    - This sends email via SendGrid and updates GHL (“Replit POs” pipeline).
+  - Log a `PO_AUTO_SENT` event:
+    - type: "PO_AUTO_SENT"
+    - entityType: "PO"
+    - entityId: po.id
+    - severity: "INFO"
+    - code: "PO_AUTO_SENT"
+    - message: `AI auto-sent PO ${po.poNumber} for critical stock risk.`
+    - details: { poNumber, skus: [...], rescueDays, rescueQuantities }
+
+CASE B – Auto-send OFF or priority MEDIUM/LOW:
+- Condition:
+  - settings.autoSendCriticalPos === false OR
+  - priority in ["MEDIUM", "LOW"]
+- Behavior:
+  - Create a PO with:
+    - status = "DRAFT"
+    - source = "AI"
+    - aiSuggested = true
+  - Do NOT send email automatically.
+  - In the Purchase Orders table:
+    - Show AI-suggested draft POs with:
+      - “✓ Send” action:
+        - Calls POST /api/purchase-orders/:id/send, then refresh.
+      - “X Delete” action:
+        - Deletes the draft after a confirmation.
+    - Clicking the row opens PO detail with:
+      - Primary “Send PO” button.
+      - “Edit” button/icon to adjust lines.
+
+==================================================
+E) INVENTORY SYNC – SHOPIFY TWO-WAY, AMAZON + EXTENSIV READ-ONLY
+==================================================
+Adjust inventory integrations as follows:
+
+- Shopify: two-way for inventory (read + write).
+- Amazon + Extensiv: read-only for inventory (no writes/pushes).
+
+1) SHOPIFY CONFIG
+If not already present, ensure env vars for Shopify:
+
+- SHOPIFY_API_KEY
+- SHOPIFY_API_SECRET (if needed)
+- SHOPIFY_STORE_URL
+- SHOPIFY_ACCESS_TOKEN
+- SHOPIFY_LOCATION_ID (default location ID where we manage inventory)
+
+2) PRODUCT/SKU ↔ SHOPIFY MAPPING
+Extend the internal product/SKU model to store Shopify IDs:
+
+- shopifyProductId (string, nullable)
+- shopifyVariantId (string, nullable)
+- shopifyLocationId (string, nullable; default to SHOPIFY_LOCATION_ID if unset)
+
+We must be able to map an internal SKU → Shopify variant + location to push inventory.
+
+3) SERVICE – ShopifyInventorySyncService
+Create a service module, e.g. `shopifyInventorySyncService`, with:
+
+- async syncInventoryForSkus(skus: string[]): Promise<void>
+
+Behavior:
+- For each SKU in the list:
+  - Load internal inventory metrics (on-hand, reserved, etc.) from existing inventory tables.
+  - Compute `availableToSell`, for example:
+
+    availableToSell = max(0, onHandWarehouse - reserved - safetyBuffer)
+
+    where `safetyBuffer` can be 0 or a small constant for V1.
+
+  - If the SKU lacks Shopify mapping (no variantId or locationId):
+    - logSystemEvent:
+      - type: "SKU_MISMATCH"
+      - entityType: "PRODUCT"
+      - entityId: sku or productId
+      - severity: "WARNING"
+      - code: "SHOPIFY_VARIANT_NOT_MAPPED"
+      - message: `No Shopify variant mapping for SKU ${sku}.`
+      - details: { sku }
+    - Skip this SKU (do not throw).
+
+  - If mapping exists:
+    - Call Shopify’s Inventory API to set `availableToSell` for that variant at the mapped location.
+    - On success (optional):
+      - logSystemEvent:
+        - type: "SHOPIFY_SYNC_INFO"
+        - entityType: "PRODUCT"
+        - entityId: sku or productId
+        - severity: "INFO"
+        - code: "SHOPIFY_INVENTORY_UPDATED"
+        - message: `Updated Shopify availability for SKU ${sku} to ${availableToSell}.`
+        - details: { sku, availableToSell, variantId, locationId }
+    - On error:
+      - logSystemEvent:
+        - type: "SHOPIFY_SYNC_ERROR"
+        - entityType: "PRODUCT"
+        - entityId: sku or productId
+        - severity: "ERROR"
+        - code: "SHOPIFY_INVENTORY_UPDATE_FAILED"
+        - message: short description
+        - details: sanitized error payload + { sku, variantId, locationId }
+
+4) WHEN TO CALL syncInventoryForSkus
+Trigger Shopify sync at logical inventory events (not every tiny change):
+
+- After PO receipts that increase on-hand inventory for some SKUs:
+  - Once receipts are recorded and internal stock updated, call `syncInventoryForSkus` with those SKUs.
+
+- After returns are processed and items are restocked to sellable inventory:
+  - When a return status transition actually increases sellable stock, call `syncInventoryForSkus` with the affected SKUs.
+
+- After a manual stock adjustment (if you have such an admin UI):
+  - On save, call `syncInventoryForSkus` for the adjusted SKUs.
+
+All these calls should be best-effort:
+- If Shopify update fails, log via `SHOPIFY_SYNC_ERROR` and do NOT roll back internal inventory changes.
+
+5) AMAZON + EXTENSIV – READ-ONLY
+In the Amazon and Extensiv integration modules:
+
+- Ensure we ONLY:
+  - Pull orders, fulfillment data, and on-hand stock (for reference/calculation).
+- Remove or disable any existing code that tries to:
+  - Push or update stock levels in Amazon or Extensiv based on this app’s numbers.
+
+Add comments in those modules:
+
+- “Inventory integration for this source is READ-ONLY. We import stock and order data to power this app’s planning, but we do NOT push stock levels back. Shopify is the only channel we push availability to.”
+
+==================================================
+F) SAFETY & TESTING
+==================================================
+- Ensure:
+  - PO email events and AI auto-send events appear in Logs with correct types.
+  - SKU/UPC mismatches and Shopify sync failures appear in Logs and are visible on the Logs page.
+- Ensure:
+  - Enabling/disabling the “Auto-send POs for critical stock” toggle correctly changes behavior (auto-send vs draft-only).
+- Make sure none of these changes break:
+  - Existing PO send flow (SendGrid + GHL).
+  - Returns + Shippo flow.
+  - Sales Orders and BOM/Product views.
+
+Keep the overall architecture:
+
+- This app = inventory/PO/returns “brain” and ledger.
+- SendGrid = PO email transport.
+- Shippo = label/tracking engine for returns.
+- GHL = communication + task dashboard (no money movement).
+- Shopify = storefront with two-way inventory (we push availability).
+- Amazon + Extensiv = read-only data sources for orders/stock.

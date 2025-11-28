@@ -91,6 +91,10 @@ import {
   type InsertAiSystemRecommendation,
   type LabelFormat,
   type InsertLabelFormat,
+  type SystemLog,
+  type InsertSystemLog,
+  type AiAgentSettings,
+  type InsertAiAgentSettings,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -454,6 +458,16 @@ export interface IStorage {
   updateLabelFormat(id: string, format: Partial<InsertLabelFormat>): Promise<LabelFormat | undefined>;
   deleteLabelFormat(id: string): Promise<boolean>;
   setDefaultLabelFormat(userId: string, formatId: string): Promise<void>;
+
+  // System Logs (Unified logging for mismatches and external events)
+  getAllSystemLogs(filters?: { type?: string; severity?: string; entityType?: string; startDate?: Date; endDate?: Date }): Promise<SystemLog[]>;
+  getSystemLog(id: string): Promise<SystemLog | undefined>;
+  createSystemLog(log: InsertSystemLog): Promise<SystemLog>;
+
+  // AI Agent Settings
+  getAiAgentSettingsByUserId(userId: string): Promise<AiAgentSettings | undefined>;
+  createAiAgentSettings(settings: InsertAiAgentSettings): Promise<AiAgentSettings>;
+  updateAiAgentSettings(userId: string, settings: Partial<InsertAiAgentSettings>): Promise<AiAgentSettings | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -2804,6 +2818,69 @@ export class MemStorage implements IStorage {
       }
     }
   }
+
+  // System Logs
+  private systemLogs: Map<string, SystemLog> = new Map();
+
+  async getAllSystemLogs(filters?: { type?: string; severity?: string; entityType?: string; startDate?: Date; endDate?: Date }): Promise<SystemLog[]> {
+    let logs = Array.from(this.systemLogs.values());
+    if (filters?.type) logs = logs.filter(l => l.type === filters.type);
+    if (filters?.severity) logs = logs.filter(l => l.severity === filters.severity);
+    if (filters?.entityType) logs = logs.filter(l => l.entityType === filters.entityType);
+    if (filters?.startDate) logs = logs.filter(l => new Date(l.createdAt) >= filters.startDate!);
+    if (filters?.endDate) logs = logs.filter(l => new Date(l.createdAt) <= filters.endDate!);
+    return logs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async getSystemLog(id: string): Promise<SystemLog | undefined> {
+    return this.systemLogs.get(id);
+  }
+
+  async createSystemLog(log: InsertSystemLog): Promise<SystemLog> {
+    const id = randomUUID();
+    const newLog: SystemLog = {
+      ...log,
+      id,
+      createdAt: new Date(),
+    };
+    this.systemLogs.set(id, newLog);
+    return newLog;
+  }
+
+  // AI Agent Settings
+  private aiAgentSettings: Map<string, AiAgentSettings> = new Map();
+
+  async getAiAgentSettingsByUserId(userId: string): Promise<AiAgentSettings | undefined> {
+    return Array.from(this.aiAgentSettings.values()).find(s => s.userId === userId);
+  }
+
+  async createAiAgentSettings(settings: InsertAiAgentSettings): Promise<AiAgentSettings> {
+    const id = randomUUID();
+    const now = new Date();
+    const newSettings: AiAgentSettings = {
+      ...settings,
+      id,
+      autoSendCriticalPos: settings.autoSendCriticalPos ?? false,
+      criticalRescueDays: settings.criticalRescueDays ?? 7,
+      criticalThresholdDays: settings.criticalThresholdDays ?? 3,
+      highThresholdDays: settings.highThresholdDays ?? 7,
+      mediumThresholdDays: settings.mediumThresholdDays ?? 14,
+      shopifyTwoWaySync: settings.shopifyTwoWaySync ?? false,
+      shopifySafetyBuffer: settings.shopifySafetyBuffer ?? 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.aiAgentSettings.set(id, newSettings);
+    return newSettings;
+  }
+
+  async updateAiAgentSettings(userId: string, settings: Partial<InsertAiAgentSettings>): Promise<AiAgentSettings | undefined> {
+    const existing = await this.getAiAgentSettingsByUserId(userId);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...settings, updatedAt: new Date() };
+    this.aiAgentSettings.set(existing.id, updated);
+    return updated;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -4957,6 +5034,78 @@ export class PostgresStorage implements IStorage {
         eq(schema.labelFormats.id, formatId),
         eq(schema.labelFormats.userId, userId)
       ));
+  }
+
+  // System Logs
+  async getAllSystemLogs(filters?: { type?: string; severity?: string; entityType?: string; startDate?: Date; endDate?: Date }): Promise<SystemLog[]> {
+    let query = this.db.select().from(schema.systemLogs);
+    
+    const conditions = [];
+    if (filters?.type) {
+      conditions.push(eq(schema.systemLogs.type, filters.type));
+    }
+    if (filters?.severity) {
+      conditions.push(eq(schema.systemLogs.severity, filters.severity));
+    }
+    if (filters?.entityType) {
+      conditions.push(eq(schema.systemLogs.entityType, filters.entityType));
+    }
+    if (filters?.startDate) {
+      conditions.push(gte(schema.systemLogs.createdAt, filters.startDate));
+    }
+    if (filters?.endDate) {
+      conditions.push(lte(schema.systemLogs.createdAt, filters.endDate));
+    }
+    
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+    
+    const results = await query.orderBy(drizzleSql`${schema.systemLogs.createdAt} DESC`);
+    return results;
+  }
+
+  async getSystemLog(id: string): Promise<SystemLog | undefined> {
+    const results = await this.db.select().from(schema.systemLogs)
+      .where(eq(schema.systemLogs.id, id));
+    return results[0];
+  }
+
+  async createSystemLog(log: InsertSystemLog): Promise<SystemLog> {
+    const id = randomUUID();
+    const result = await this.db.insert(schema.systemLogs).values({
+      ...log,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  // AI Agent Settings
+  async getAiAgentSettingsByUserId(userId: string): Promise<AiAgentSettings | undefined> {
+    const results = await this.db.select().from(schema.aiAgentSettings)
+      .where(eq(schema.aiAgentSettings.userId, userId));
+    return results[0];
+  }
+
+  async createAiAgentSettings(settings: InsertAiAgentSettings): Promise<AiAgentSettings> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.aiAgentSettings).values({
+      ...settings,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateAiAgentSettings(userId: string, settings: Partial<InsertAiAgentSettings>): Promise<AiAgentSettings | undefined> {
+    const now = new Date();
+    const result = await this.db.update(schema.aiAgentSettings)
+      .set({ ...settings, updatedAt: now })
+      .where(eq(schema.aiAgentSettings.userId, userId))
+      .returning();
+    return result[0];
   }
 }
 

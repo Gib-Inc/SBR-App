@@ -50,6 +50,10 @@ export const items = pgTable("items", {
   // Sales channel and marketplace fields
   salesChannels: text("sales_channels").array(), // Array of channels: 'amazon', 'shopify', 'internal'
   amazonAsin: text("amazon_asin"), // Amazon ASIN for marketplace-linked products
+  // Shopify integration fields (for two-way inventory sync)
+  shopifyProductId: text("shopify_product_id"), // Shopify product ID
+  shopifyVariantId: text("shopify_variant_id"), // Shopify variant ID for inventory updates
+  shopifyLocationId: text("shopify_location_id"), // Shopify inventory location ID (defaults to env SHOPIFY_LOCATION_ID)
   updatedAt: timestamp("updated_at").defaultNow(), // Last modification timestamp
   // AI Forecast tracking fields
   forecastDirty: boolean("forecast_dirty").notNull().default(true), // Indicates forecast needs refresh
@@ -1552,3 +1556,101 @@ export const insertLabelFormatSchema = createInsertSchema(labelFormats).omit({
 });
 export type InsertLabelFormat = z.infer<typeof insertLabelFormatSchema>;
 export type LabelFormat = typeof labelFormats.$inferSelect;
+
+// ============================================================================
+// SYSTEM LOGS (Unified logging for mismatches and external events)
+// ============================================================================
+
+export const SystemLogType = {
+  SKU_MISMATCH: "SKU_MISMATCH",
+  UPC_MISMATCH: "UPC_MISMATCH",
+  PO_EMAIL_SENT: "PO_EMAIL_SENT",
+  PO_EMAIL_FAILED: "PO_EMAIL_FAILED",
+  PO_AUTO_SENT: "PO_AUTO_SENT",
+  SHOPIFY_SYNC_ERROR: "SHOPIFY_SYNC_ERROR",
+  SHOPIFY_SYNC_INFO: "SHOPIFY_SYNC_INFO",
+  AMAZON_SYNC_ERROR: "AMAZON_SYNC_ERROR",
+  EXTENSIV_SYNC_ERROR: "EXTENSIV_SYNC_ERROR",
+  SHIPPO_ERROR: "SHIPPO_ERROR",
+  GHL_SYNC_ERROR: "GHL_SYNC_ERROR",
+  GHL_SYNC_INFO: "GHL_SYNC_INFO",
+  RETURN_EVENT: "RETURN_EVENT",
+  INVENTORY_ADJUSTMENT: "INVENTORY_ADJUSTMENT",
+  INFO: "INFO",
+  WARNING: "WARNING",
+  ERROR: "ERROR",
+} as const;
+export type SystemLogType = typeof SystemLogType[keyof typeof SystemLogType];
+
+export const SystemLogSeverity = {
+  INFO: "INFO",
+  WARNING: "WARNING",
+  ERROR: "ERROR",
+} as const;
+export type SystemLogSeverity = typeof SystemLogSeverity[keyof typeof SystemLogSeverity];
+
+export const SystemLogEntityType = {
+  PO: "PO",
+  RETURN: "RETURN",
+  ORDER: "ORDER",
+  PRODUCT: "PRODUCT",
+  SUPPLIER: "SUPPLIER",
+  INTEGRATION: "INTEGRATION",
+} as const;
+export type SystemLogEntityType = typeof SystemLogEntityType[keyof typeof SystemLogEntityType];
+
+export const systemLogs = pgTable("system_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull(), // SystemLogType
+  entityType: text("entity_type"), // SystemLogEntityType
+  entityId: text("entity_id"), // Reference to PO ID, return ID, SKU, order ID, etc.
+  severity: text("severity").notNull().default("INFO"), // INFO, WARNING, ERROR
+  code: text("code"), // Short machine-readable code, e.g. "SKU_NOT_FOUND"
+  message: text("message").notNull(), // Human-readable summary
+  details: jsonb("details"), // Structured payload with additional context
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  typeIdx: index("system_logs_type_idx").on(table.type),
+  severityIdx: index("system_logs_severity_idx").on(table.severity),
+  entityTypeIdx: index("system_logs_entity_type_idx").on(table.entityType),
+  createdAtIdx: index("system_logs_created_at_idx").on(table.createdAt),
+}));
+
+export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ 
+  id: true, 
+  createdAt: true,
+});
+export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
+export type SystemLog = typeof systemLogs.$inferSelect;
+
+// ============================================================================
+// AI AGENT SETTINGS (Rules for auto-send POs and inventory management)
+// ============================================================================
+
+export const aiAgentSettings = pgTable("ai_agent_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // Auto-send PO settings
+  autoSendCriticalPos: boolean("auto_send_critical_pos").notNull().default(false),
+  criticalRescueDays: integer("critical_rescue_days").notNull().default(7),
+  // Priority thresholds (days until stockout)
+  criticalThresholdDays: integer("critical_threshold_days").notNull().default(3),
+  highThresholdDays: integer("high_threshold_days").notNull().default(7),
+  mediumThresholdDays: integer("medium_threshold_days").notNull().default(14),
+  // Shopify sync settings
+  shopifyTwoWaySync: boolean("shopify_two_way_sync").notNull().default(false),
+  shopifySafetyBuffer: integer("shopify_safety_buffer").notNull().default(0), // Safety buffer for availability calculation
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: uniqueIndex("ai_agent_settings_user_id_idx").on(table.userId),
+}));
+
+export const insertAiAgentSettingsSchema = createInsertSchema(aiAgentSettings).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true,
+});
+export type InsertAiAgentSettings = z.infer<typeof insertAiAgentSettingsSchema>;
+export type AiAgentSettings = typeof aiAgentSettings.$inferSelect;

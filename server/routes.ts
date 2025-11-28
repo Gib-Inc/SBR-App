@@ -8983,6 +8983,110 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // SYSTEM LOGS (Unified logging for mismatches and external events)
+  // ============================================================================
+
+  app.get("/api/system-logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { type, severity, entityType, startDate, endDate } = req.query;
+      const filters: { type?: string; severity?: string; entityType?: string; startDate?: Date; endDate?: Date } = {};
+      
+      if (type && typeof type === 'string') filters.type = type;
+      if (severity && typeof severity === 'string') filters.severity = severity;
+      if (entityType && typeof entityType === 'string') filters.entityType = entityType;
+      if (startDate && typeof startDate === 'string') filters.startDate = new Date(startDate);
+      if (endDate && typeof endDate === 'string') filters.endDate = new Date(endDate);
+      
+      const logs = await storage.getAllSystemLogs(filters);
+      res.json(logs);
+    } catch (error: any) {
+      console.error('[System Logs] Error fetching logs:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch system logs' });
+    }
+  });
+
+  app.get("/api/system-logs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const log = await storage.getSystemLog(req.params.id);
+      if (!log) {
+        return res.status(404).json({ error: 'System log not found' });
+      }
+      res.json(log);
+    } catch (error: any) {
+      console.error('[System Logs] Error fetching log:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch system log' });
+    }
+  });
+
+  // ============================================================================
+  // AI AGENT SETTINGS
+  // ============================================================================
+
+  app.get("/api/ai-agent-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      let settings = await storage.getAiAgentSettingsByUserId(userId);
+      
+      // If no settings exist, create default settings
+      if (!settings) {
+        settings = await storage.createAiAgentSettings({ userId });
+      }
+      
+      res.json(settings);
+    } catch (error: any) {
+      console.error('[AI Agent Settings] Error fetching settings:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch AI agent settings' });
+    }
+  });
+
+  app.patch("/api/ai-agent-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      // Check if settings exist, create if not
+      let existing = await storage.getAiAgentSettingsByUserId(userId);
+      if (!existing) {
+        existing = await storage.createAiAgentSettings({ userId });
+      }
+      
+      // Filter to only include valid fields that are defined
+      const validFields = [
+        'autoSendCriticalPos', 'criticalRescueDays', 'criticalThresholdDays',
+        'highThresholdDays', 'mediumThresholdDays', 'shopifyTwoWaySync', 'shopifySafetyBuffer'
+      ];
+      const updateData: Record<string, any> = {};
+      for (const field of validFields) {
+        if (req.body[field] !== undefined) {
+          updateData[field] = req.body[field];
+        }
+      }
+      
+      // Only update if there are valid fields to update
+      if (Object.keys(updateData).length === 0) {
+        return res.json(existing);
+      }
+      
+      // Update settings
+      const updated = await storage.updateAiAgentSettings(userId, updateData);
+      if (!updated) {
+        return res.status(404).json({ error: 'Failed to update settings' });
+      }
+      
+      res.json(updated);
+    } catch (error: any) {
+      console.error('[AI Agent Settings] Error updating settings:', error);
+      res.status(500).json({ error: error.message || 'Failed to update AI agent settings' });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

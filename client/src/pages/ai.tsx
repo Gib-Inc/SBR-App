@@ -619,6 +619,20 @@ function LLMConfigTab({ settingsData }: { settingsData: any }) {
   );
 }
 
+interface AiAgentSettings {
+  id: string;
+  userId: string;
+  autoSendCriticalPos: boolean;
+  criticalRescueDays: number;
+  criticalThresholdDays: number;
+  highThresholdDays: number;
+  mediumThresholdDays: number;
+  shopifyTwoWaySync: boolean;
+  shopifySafetyBuffer: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 function RulesTab() {
   const { toast } = useToast();
   
@@ -630,6 +644,11 @@ function RulesTab() {
   // Fetch settings for LLM features
   const { data: settingsData } = useQuery<any>({
     queryKey: ["/api/settings"],
+  });
+  
+  // Fetch AI Agent settings
+  const { data: aiAgentSettings } = useQuery<AiAgentSettings>({
+    queryKey: ["/api/ai-agent-settings"],
   });
   
   // Local state for form
@@ -651,6 +670,12 @@ function RulesTab() {
   const [enableForecasting, setEnableForecasting] = useState(false);
   const [enableVisionCapture, setEnableVisionCapture] = useState(false);
   
+  // AI Agent auto-send settings
+  const [autoSendCriticalPos, setAutoSendCriticalPos] = useState(false);
+  const [criticalRescueDays, setCriticalRescueDays] = useState(7);
+  const [shopifyTwoWaySync, setShopifyTwoWaySync] = useState(false);
+  const [shopifySafetyBuffer, setShopifySafetyBuffer] = useState(0);
+  
   // Sync form with fetched rules
   useEffect(() => {
     if (rules) {
@@ -668,13 +693,28 @@ function RulesTab() {
     }
   }, [settingsData]);
   
-  // Save mutation for rules (also saves AI features)
+  // Sync AI Agent settings
+  useEffect(() => {
+    if (aiAgentSettings) {
+      setAutoSendCriticalPos(aiAgentSettings.autoSendCriticalPos || false);
+      setCriticalRescueDays(aiAgentSettings.criticalRescueDays || 7);
+      setShopifyTwoWaySync(aiAgentSettings.shopifyTwoWaySync || false);
+      setShopifySafetyBuffer(aiAgentSettings.shopifySafetyBuffer || 0);
+    }
+  }, [aiAgentSettings]);
+  
+  // Save mutation for rules (also saves AI features and agent settings)
   const saveMutation = useMutation({
-    mutationFn: async (data: { rules: Partial<AIRules>; features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean } }) => {
-      // Save both rules and features in parallel
+    mutationFn: async (data: { 
+      rules: Partial<AIRules>; 
+      features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number };
+    }) => {
+      // Save rules, features, and agent settings in parallel
       await Promise.all([
         apiRequest("PATCH", "/api/ai/rules", data.rules),
         apiRequest("PATCH", "/api/settings", data.features),
+        apiRequest("PATCH", "/api/ai-agent-settings", data.agentSettings),
       ]);
     },
     onSuccess: () => {
@@ -682,9 +722,10 @@ function RulesTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/insights"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/at-risk"] });
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-agent-settings"] });
       toast({
         title: "Rules Updated",
-        description: "AI decision rules and features have been saved.",
+        description: "AI decision rules, features, and agent settings have been saved.",
       });
     },
     onError: (error: any) => {
@@ -704,6 +745,12 @@ function RulesTab() {
         enableLlmSupplierRanking: enableSupplierRanking,
         enableLlmForecasting: enableForecasting,
         enableVisionCapture: enableVisionCapture,
+      },
+      agentSettings: {
+        autoSendCriticalPos,
+        criticalRescueDays,
+        shopifyTwoWaySync,
+        shopifySafetyBuffer,
       },
     });
   };
@@ -1100,6 +1147,121 @@ function RulesTab() {
                   />
                   <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
                 </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* AI Agent Automation */}
+          <div className="space-y-4 pt-4 border-t">
+            <h3 className="font-semibold flex items-center gap-2">
+              <Send className="h-4 w-4" />
+              AI Agent Automation
+            </h3>
+            <CardDescription className="mb-4">
+              Configure automatic actions the AI Agent can take without human approval.
+            </CardDescription>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Auto-Send Critical POs */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="auto-send-critical-pos">Auto-Send Critical POs</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-auto-send-pos-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>When enabled, the AI Agent will automatically generate and send purchase orders for items at critical stock levels. POs are sent via GoHighLevel to designated suppliers.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Switch
+                    id="auto-send-critical-pos"
+                    checked={autoSendCriticalPos}
+                    onCheckedChange={setAutoSendCriticalPos}
+                    data-testid="switch-auto-send-pos"
+                  />
+                </div>
+                
+                {autoSendCriticalPos && (
+                  <div className="space-y-2 pl-2 border-l-2 border-primary/20">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="critical-rescue-days">Rescue Window</Label>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-rescue-days-info" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs">
+                            <p>Auto-send PO when an item has this many days or fewer until stockout. A lower number means less aggressive auto-ordering.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <span className="text-sm text-muted-foreground">{criticalRescueDays} days</span>
+                    </div>
+                    <Slider
+                      id="critical-rescue-days"
+                      min={1}
+                      max={14}
+                      step={1}
+                      value={[criticalRescueDays]}
+                      onValueChange={([val]) => setCriticalRescueDays(val)}
+                      data-testid="slider-rescue-days"
+                    />
+                  </div>
+                )}
+              </div>
+              
+              {/* Shopify Two-Way Sync */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="shopify-two-way-sync">Shopify Two-Way Sync</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-shopify-sync-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Push inventory levels back to Shopify when stock changes. This keeps your Shopify store in sync with actual availability.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Switch
+                    id="shopify-two-way-sync"
+                    checked={shopifyTwoWaySync}
+                    onCheckedChange={setShopifyTwoWaySync}
+                    data-testid="switch-shopify-sync"
+                  />
+                </div>
+                
+                {shopifyTwoWaySync && (
+                  <div className="space-y-2 pl-2 border-l-2 border-primary/20">
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="shopify-safety-buffer">Safety Buffer</Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-safety-buffer-info" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p>Subtract this amount from available stock when syncing to Shopify. Prevents overselling by keeping a reserve.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="shopify-safety-buffer"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={shopifySafetyBuffer}
+                        onChange={(e) => setShopifySafetyBuffer(parseInt(e.target.value) || 0)}
+                        data-testid="input-safety-buffer"
+                      />
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

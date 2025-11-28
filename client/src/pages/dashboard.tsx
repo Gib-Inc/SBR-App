@@ -85,28 +85,38 @@ export default function Dashboard() {
     staleTime: 300000,
   });
 
-  // Fix in GHL mutation
+  // Fix in GHL mutation - Creates Draft POs and optionally links to GHL
   const [isFixingInGhl, setIsFixingInGhl] = useState(false);
   const fixInGhlMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/dashboard/stock/fix-in-ghl", {});
       if (!res.ok) {
         const errorData = await res.json();
-        throw new Error(errorData.error || "Failed to create GHL opportunity");
+        throw new Error(errorData.error || "Failed to create purchase orders");
       }
       return await res.json();
     },
     onSuccess: (data) => {
-      if (data.primaryGhlOpportunityUrl) {
-        window.open(data.primaryGhlOpportunityUrl, "_blank", "noopener,noreferrer");
-        toast({
-          title: "Draft PO Created",
-          description: "Opening GoHighLevel to review the purchase order draft.",
-        });
+      if (data.purchaseOrdersCreated > 0) {
+        const poNumbers = data.purchaseOrders?.map((po: any) => po.poNumber).join(", ") || "";
+        
+        if (data.primaryGhlOpportunityUrl) {
+          window.open(data.primaryGhlOpportunityUrl, "_blank", "noopener,noreferrer");
+          toast({
+            title: "Purchase Orders Created",
+            description: `Created ${data.purchaseOrdersCreated} PO(s): ${poNumbers}. Opening GoHighLevel for approval workflow.`,
+          });
+        } else {
+          toast({
+            title: "Purchase Orders Created",
+            description: `Created ${data.purchaseOrdersCreated} draft PO(s): ${poNumbers}. Review in Purchase Orders page.`,
+          });
+        }
+        queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       } else {
         toast({
-          title: "No Critical Items",
-          description: "No HIGH risk items require immediate action.",
+          title: "No Action Needed",
+          description: data.message || "No items require immediate action.",
         });
       }
       setIsFixingInGhl(false);
@@ -114,7 +124,7 @@ export default function Dashboard() {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to create GHL opportunity. Please check your GHL configuration.",
+        description: error.message || "Failed to create purchase orders. Please try again.",
         variant: "destructive",
       });
       setIsFixingInGhl(false);

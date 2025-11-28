@@ -16,7 +16,7 @@ const VALID_TRANSITIONS: Record<POStatus, POStatus[]> = {
   APPROVAL_PENDING: ["APPROVED", "DRAFT", "CANCELLED"],
   APPROVED: ["SENT", "DRAFT", "CANCELLED"],
   SENT: ["PARTIAL_RECEIVED", "RECEIVED", "CANCELLED"],
-  PARTIAL_RECEIVED: ["PARTIAL_RECEIVED", "RECEIVED", "CANCELLED"],
+  PARTIAL_RECEIVED: ["PARTIAL_RECEIVED", "RECEIVED", "CLOSED"],
   RECEIVED: ["CLOSED"],
   CLOSED: [],
   CANCELLED: [],
@@ -91,7 +91,7 @@ export class POStateMachine {
       allowedTransitions: this.getValidTransitions(status),
       isEditable: ["DRAFT", "APPROVAL_PENDING"].includes(status),
       canReceive: ["SENT", "PARTIAL_RECEIVED"].includes(status),
-      canCancel: !["CLOSED", "CANCELLED"].includes(status),
+      canCancel: ["DRAFT", "APPROVAL_PENDING", "APPROVED", "SENT"].includes(status),
     };
   }
 

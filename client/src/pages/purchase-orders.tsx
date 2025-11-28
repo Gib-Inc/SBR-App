@@ -420,7 +420,7 @@ export default function PurchaseOrders() {
                                 </DropdownMenuItem>
                               </>
                             )}
-                            {!["CLOSED", "CANCELLED", "RECEIVED"].includes(po.status) && (
+                            {!["CLOSED", "CANCELLED", "RECEIVED", "PARTIAL_RECEIVED"].includes(po.status) && (
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem

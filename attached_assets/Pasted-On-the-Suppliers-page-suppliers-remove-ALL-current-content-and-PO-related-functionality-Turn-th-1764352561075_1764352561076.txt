@@ -1,0 +1,48 @@
+On the Suppliers page (/suppliers), remove ALL current content and PO-related functionality. Turn this page into a simple “V2 coming soon” stub.
+
+==================================================
+SUPPLIERS PAGE – STRIP DOWN TO V2 STUB
+==================================================
+1) In the Suppliers page component (the route rendered when clicking “Suppliers” in the left navigation):
+   - Remove the tab bar entirely:
+     - Remove the “PO History & Issues” tab.
+     - Remove the “Discovery & Creation v2” tab.
+   - Remove all cards and tiles showing PO metrics:
+     - Needs Review
+     - Draft
+     - Pending Approval
+     - Active/Open
+     - POs Sent
+     - POs Paid
+     - POs Delivered
+     - Avg Delivery
+   - Remove the entire “Purchase Orders” section:
+     - Section title “Purchase Orders – Track and manage supplier purchase orders”.
+     - Search field (“Search by PO# or supplier…”).
+     - Status and supplier filters.
+     - The PO table (rows, status badges, actions).
+   - Remove the “Generate from Risk” and “Create PO” buttons.
+   - Remove any imports, hooks, and API calls on this page that fetch or manipulate purchase order data.
+
+2) The Suppliers page must no longer read or write any PO data at all.
+   - The canonical PO system remains on the “Purchase Orders” page (/purchase-orders); do not modify that page.
+
+==================================================
+SUPPLIERS PAGE – NEW STATIC CONTENT
+==================================================
+3) Replace the entire main content area with a simple V2 stub:
+
+   - Keep the page title: “Suppliers”.
+   - Directly beneath the title, add a subtitle line:
+     - “Supplier discovery and relationship management (coming in V2).”
+   - In the main body, center a single info card or panel that:
+     - Heading: “Supplier tools are coming soon”
+     - Body text (one short paragraph), for example:
+       - “In V2, this page will help you discover, organize, and manage suppliers. For now, manage purchase orders and receipts from the Purchase Orders section.”
+   - No tables, no metrics tiles, no action buttons.
+
+4) Ensure that:
+   - Clicking “Suppliers” in the left navigation only shows this stub page.
+   - There are no leftover PO-related side effects, console errors, or unused components imported from this page.
+
+Implement these changes so that the Suppliers page is a clean, static V2 placeholder with no purchase order UI or logic.

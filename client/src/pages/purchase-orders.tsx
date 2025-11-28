@@ -9,6 +9,7 @@ import {
   ChevronDown,
   MoreHorizontal,
   FileText,
+  FileDown,
   Truck,
   CheckCircle,
   XCircle,
@@ -382,6 +383,15 @@ export default function PurchaseOrders() {
                             <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleViewDetails(po); }}>
                               <Eye className="h-4 w-4 mr-2" />
                               View Details
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(`/api/purchase-orders/${po.id}/pdf`, '_blank');
+                              }}
+                            >
+                              <FileDown className="h-4 w-4 mr-2" />
+                              Download PDF
                             </DropdownMenuItem>
                             {po.status === "DRAFT" && (
                               <>

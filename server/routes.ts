@@ -6670,6 +6670,33 @@ SUBTOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Generate PDF for purchase order
+  app.get("/api/purchase-orders/:id/pdf", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const [lines, supplier] = await Promise.all([
+        storage.getPurchaseOrderLinesByPOId(id),
+        po.supplierId ? storage.getSupplier(po.supplierId) : Promise.resolve(null),
+      ]);
+
+      const { poPdfService } = await import("./services/po-pdf-service");
+      const pdfBuffer = await poPdfService.generatePOPdf({ po, lines, supplier });
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${po.poNumber}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error generating PDF:", error);
+      res.status(500).json({ error: "Failed to generate PDF" });
+    }
+  });
+
   app.get("/api/supplier-leads", requireAuth, async (req: Request, res: Response) => {
     try {
       const { status } = req.query;

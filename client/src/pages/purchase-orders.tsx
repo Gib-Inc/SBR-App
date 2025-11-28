@@ -482,37 +482,32 @@ export default function PurchaseOrders() {
                   sortedPOs.map((po) => (
                     <tr 
                       key={po.id} 
-                      className="border-b last:border-b-0 cursor-pointer hover-elevate"
+                      className="border-b last:border-b-0 cursor-pointer hover-elevate h-12"
                       onClick={() => handleViewDetails(po)}
                       data-testid={`row-po-${po.id}`}
                     >
-                      <td className="p-3 whitespace-nowrap font-medium">
+                      <td className="p-3 align-middle whitespace-nowrap font-medium">
                         {po.poNumber}
                       </td>
-                      <td className="p-3 whitespace-nowrap">
-                        <div className="flex flex-col">
-                          <span className="font-medium">{po.supplier?.name || po.supplierName || "-"}</span>
-                          {po.supplier?.email && (
-                            <span className="text-xs text-muted-foreground">{po.supplier.email}</span>
-                          )}
-                        </div>
+                      <td className="p-3 align-middle whitespace-nowrap">
+                        <span className="font-medium">{po.supplier?.name || po.supplierName || "-"}</span>
                       </td>
-                      <td className="p-3 whitespace-nowrap">
+                      <td className="p-3 align-middle whitespace-nowrap">
                         <StatusBadge status={po.status} />
                       </td>
-                      <td className="p-3 whitespace-nowrap">
+                      <td className="p-3 align-middle whitespace-nowrap">
                         <EmailStatusBadge 
                           status={(po as any).lastEmailStatus} 
                           sentAt={(po as any).lastEmailSentAt}
                           emailTo={(po as any).emailTo}
                         />
                       </td>
-                      <td className="p-3 whitespace-nowrap">{formatDate(po.orderDate)}</td>
-                      <td className="p-3 whitespace-nowrap">{formatDate(po.expectedDate)}</td>
-                      <td className="p-3 whitespace-nowrap text-right font-medium">
+                      <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.orderDate)}</td>
+                      <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.expectedDate)}</td>
+                      <td className="p-3 align-middle whitespace-nowrap text-right font-medium">
                         {formatCurrency(po.total)}
                       </td>
-                      <td className="sticky right-0 z-10 bg-background p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                      <td className="sticky right-0 z-10 bg-background p-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                         <div className="flex justify-end">
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>

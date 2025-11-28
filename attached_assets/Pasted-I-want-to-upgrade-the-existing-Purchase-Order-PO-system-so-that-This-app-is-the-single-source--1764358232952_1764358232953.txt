@@ -1,0 +1,241 @@
+I want to upgrade the existing Purchase Order (PO) system so that:
+
+- This app is the single source of truth for POs.
+- POs are emailed directly to suppliers as PDFs using Twilio SendGrid.
+- After a successful send, the PO status is updated and a GHL Opportunity in a dedicated “Replit POs” pipeline is kept in sync.
+- Users send POs with ONE click inside this app. No manual sending inside GHL.
+
+Please implement the following changes, extending the current PO implementation instead of rebuilding it.
+
+==================================================
+A) CONFIG & ENVIRONMENT
+==================================================
+Add configuration support for:
+
+1) SendGrid (email)
+   - Environment variables:
+     - SENDGRID_API_KEY
+     - SENDGRID_FROM_EMAIL (e.g. purchasing@stickerburrroller.com)
+     - SENDGRID_FROM_NAME (e.g. Sticker Burr Roller Purchasing)
+   - Assume these will be set in the Replit environment; do not hardcode values.
+
+2) GHL PO pipeline
+   - Keep using the existing GHL configuration you already wired for POs if present, or add (if missing):
+     - GHL_API_KEY
+     - GHL_LOCATION_ID
+     - GHL_PO_PIPELINE_ID           // dedicated pipeline for Replit POs
+     - GHL_PO_STAGE_SENT_ID         // stage for “PO sent”
+     - GHL_PO_STAGE_PAID_ID         // stage for “PO paid” (reserve for later)
+     - GHL_PO_STAGE_SCANNED_ID      // stage for “PO scanned into Replit” (reserve for later)
+   - Use these IDs in the sync logic below.
+
+==================================================
+B) DATA MODEL EXTENSIONS (PURCHASE ORDERS)
+==================================================
+Extend the existing purchase_order model/table (do NOT create a new table) with email-related fields:
+
+- emailTo: string | null           // actual email address used when sending the PO
+- emailSubject: string | null      // last subject used
+- emailBodyText: string | null     // plain-text body (for audit)
+- lastEmailStatus: enum:
+    - "NOT_SENT"
+    - "SENT"
+    - "FAILED"
+- lastEmailSentAt: DateTime | null
+- lastEmailProviderMessageId: string | null   // Set from SendGrid’s response when available
+
+Implementation notes:
+- When a PO is first created, initialize:
+  - lastEmailStatus = "NOT_SENT"
+  - others = null
+- Do not break existing PO state machine (Draft, Sent, Partially Received, etc.). We will tie `status` updates to email sending in section D.
+
+If a supplier entity already has an email field, we will use that as the default `emailTo` but still snapshot the actual email onto each PO when sending.
+
+==================================================
+C) SENDGRID EMAIL SERVICE
+==================================================
+Create a reusable email service for Purchase Orders using Twilio SendGrid.
+
+1) Implement a class or module, e.g. purchaseOrderEmailService, with a method:
+
+   - sendPurchaseOrderEmail(poId: string): Promise<{ success: boolean; messageId?: string; error?: string }>
+
+2) Logic for sendPurchaseOrderEmail:
+
+   - Load the PO by id, including:
+     - supplier (for name + supplier email)
+     - line items
+     - totals, dates, terms
+   - Determine the recipient:
+     - Prefer:
+       - PO.emailTo if already set.
+       - Else, supplier.email if available.
+     - If no email is available, return a clear error and do NOT call SendGrid.
+
+   - Generate the PO PDF:
+     - Reuse the existing PDF export helper you already implemented (the one used for “Export PDF”).
+     - Get a Buffer or base64 representation to attach in the email.
+
+   - Build email content:
+     - Subject: `Purchase Order ${po.poNumber} – ${supplier.name}`
+     - Plain text body (short, professional, no marketing):
+       - Include:
+         - Greeting
+         - PO number
+         - Order date
+         - Summary of key items and totals
+         - A note that the full PO is attached as PDF.
+     - From: SENDGRID_FROM_EMAIL / SENDGRID_FROM_NAME.
+     - To: chosen recipient email.
+     - Attach the generated PDF with a filename like `PO-${po.poNumber}.pdf`.
+
+   - Call SendGrid API:
+     - Use Twilio SendGrid’s official Node client or direct HTTP call.
+     - On success:
+       - Extract the provider message id if available.
+       - Return { success: true, messageId }.
+     - On error:
+       - Log the error.
+       - Return { success: false, error: "...details..." }.
+
+3) DO NOT let SendGrid talk to GHL directly. All GHL updates are handled in the backend, described next.
+
+==================================================
+D) “SEND PO” API ENDPOINT + STATE MACHINE HOOK
+==================================================
+Add a new endpoint to send a PO via email:
+
+- POST /api/purchase-orders/:id/send
+
+Behavior:
+
+1) Validate state:
+   - Only allow sending when PO.status is either:
+     - "DRAFT" or
+     - "APPROVED"
+   - If status is "SENT" or later, return a 400 with a clear message like:
+     - “This PO has already been sent. Use ‘Resend’ if you want to send it again.” (Resend can be a future enhancement.)
+
+2) Call purchaseOrderEmailService.sendPurchaseOrderEmail(id):
+   - If it returns success:
+     - Update the purchase_orders row:
+       - emailTo = actual recipient email.
+       - emailSubject = subject used.
+       - emailBodyText = text body used.
+       - lastEmailStatus = "SENT".
+       - lastEmailSentAt = now.
+       - lastEmailProviderMessageId = messageId (if any).
+
+     - Update PO.status:
+       - If status was DRAFT, set to "SENT" directly OR to "APPROVED" then "SENT" as per your existing state machine rules.
+       - If status was APPROVED, set to "SENT".
+       - Do not modify if it is already "SENT" or beyond.
+
+     - Call a helper to sync this PO to GHL (see section E).
+     - Return 200 with the updated PO data (including email status).
+
+   - If it fails:
+     - Update lastEmailStatus = "FAILED".
+     - Keep PO.status unchanged.
+     - Return 500 or 400 with an error message that the UI can show.
+
+==================================================
+E) GHL SYNC – “REPLIT POs” PIPELINE
+==================================================
+Implement a helper function, e.g. syncPurchaseOrderToGhl(po):
+
+- Goal:
+  - Ensure there is an Opportunity in the dedicated “Replit POs” pipeline representing this PO.
+  - Update stage and fields whenever we send or update the PO.
+
+Logic:
+
+1) Identify or create the Opportunity:
+   - If po.ghlOpportunityId exists:
+     - Update that Opportunity.
+   - Else:
+     - Create a new Opportunity in pipeline GHL_PO_PIPELINE_ID for location GHL_LOCATION_ID.
+     - Save the resulting Opportunity id back onto the PO (ghlOpportunityId).
+
+2) Opportunity fields:
+   - Name: `PO ${po.poNumber} – ${supplier.name}`
+   - Pipeline: GHL_PO_PIPELINE_ID.
+   - Stage:
+     - If po.status is "SENT" → use GHL_PO_STAGE_SENT_ID.
+     - If po.status is "RECEIVED" and you have a stage for that → assign later when you hook receipts.
+   - Custom fields (use existing field ids or add new ones as appropriate):
+     - po_number
+     - po_total
+     - po_status
+     - supplier_name
+     - last_email_sent_at
+
+3) Notes (optional but recommended):
+   - Append or set a note summarizing:
+     - That the PO was emailed via Replit.
+     - To whom.
+     - When.
+     - Link back into this app (e.g. https://<your-app>/purchase-orders/:id).
+
+4) Call syncPurchaseOrderToGhl(po) at minimum:
+   - At the end of /purchase-orders/:id/send (after successful email).
+   - Optionally inside existing flows where PO status changes to RECEIVED or CLOSED.
+
+==================================================
+F) UI CHANGES – PURCHASE ORDERS
+==================================================
+On the Purchase Orders pages:
+
+1) Purchase Orders list (/purchase-orders):
+   - Add a new column, “Email”, or embed in the Status column, showing:
+     - For each PO:
+       - lastEmailStatus (NOT_SENT / SENT / FAILED) with a small badge.
+       - lastEmailSentAt (short format, e.g. 11/27/2025 14:32) as a tooltip or subtext.
+   - Add a row-level action:
+     - “Send PO” button/icon for POs with lastEmailStatus = NOT_SENT.
+     - Disabled or replaced by “Resend” (for future) when SENT/FAILED.
+
+2) PO Detail view (/purchase-orders/:id):
+   - In the header or actions area, add:
+     - A primary button: “Send PO”.
+   - Show a summary block with:
+     - Email To: (emailTo or supplier.email).
+     - Last Email Status badge.
+     - Last Sent At timestamp.
+   - On clicking “Send PO”:
+     - Call POST /api/purchase-orders/:id/send.
+     - While pending, show loading state.
+     - On success:
+       - Refresh PO data.
+       - Show toast “PO emailed to {emailTo}”.
+     - On failure:
+       - Show toast with the error message from backend.
+
+3) Make sure the UI respects the state rules:
+   - Only show enabled “Send PO” for POs in DRAFT or APPROVED.
+   - For SENT or later, either disable or change label to “Resend” (but for now you can just disable).
+
+==================================================
+G) SAFETY & LOGGING
+==================================================
+1) Logging:
+   - Log send attempts and outcomes (success/failure) on the server side.
+   - Include PO id, supplier id, recipient email, and SendGrid message id (if any).
+
+2) Security:
+   - Never log the full SendGrid API key.
+   - Pull all sensitive values from environment variables.
+
+3) Legal / compliance note (comments only):
+   - In code comments near the email send logic and PO PDF template, note that:
+     - POs sent from the system are contractual documents and the template should be reviewed by counsel.
+     - Emails are transactional (not marketing) and should comply with applicable email laws.
+     - SPF/DKIM/DMARC should be configured for the sending domain to ensure deliverability.
+
+Implement all of this by extending the existing PO system, reusing your current PDF generator and GHL integration where possible. The end result should be:
+
+- One-click “Send PO” inside this app.
+- Supplier receives a real email with a PDF PO from SendGrid.
+- PO email status and PO status are updated in this app.
+- A GHL Opportunity in the Replit POs pipeline is kept in sync for reporting.

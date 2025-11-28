@@ -161,53 +161,79 @@ export default function Suppliers() {
   });
 
   // At-risk items for generating draft POs from risk
-  interface AtRiskItem extends Item {
+  interface AtRiskItem {
+    id: string;
+    name: string;
+    sku: string;
+    currentStock: number;
+    dailyUsage: number;
     daysOfCover: number;
-    priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
-    primarySupplier?: {
-      supplierId: string;
-      price?: number;
-    };
+    riskLevel: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
+    recommendedQty: number;
+    recommendedAction: 'ORDER' | 'MONITOR' | 'OK';
+    explanation: string;
   }
   const { data: atRiskItems = [] } = useQuery<AtRiskItem[]>({
     queryKey: ['/api/ai/at-risk'],
     enabled: showRiskPickerDialog,
   });
+  
+  // Get all supplier items for finding designated suppliers
+  const { data: allSupplierItems = [] } = useQuery<any[]>({
+    queryKey: ['/api/supplier-items'],
+    enabled: showRiskPickerDialog && atRiskItems.length > 0,
+  });
 
   // Group at-risk items by supplier for the risk picker dialog
   const atRiskBySupplier = useMemo(() => {
-    const grouped: Map<string, { supplier: Supplier | null; items: AtRiskItem[] }> = new Map();
+    const grouped: Map<string, { supplier: Supplier | null; items: Array<AtRiskItem & { supplierItem?: any }> }> = new Map();
     
     for (const item of atRiskItems) {
-      const supplierId = item.primarySupplier?.supplierId || 'UNKNOWN';
+      // Find designated supplier from supplierItems
+      const supplierItem = allSupplierItems.find(
+        si => si.itemId === item.id && si.isDesignatedSupplier
+      ) || allSupplierItems.find(si => si.itemId === item.id);
+      
+      const supplierId = supplierItem?.supplierId || 'UNKNOWN';
       if (!grouped.has(supplierId)) {
         const supplier = suppliers.find(s => s.id === supplierId) || null;
         grouped.set(supplierId, { supplier, items: [] });
       }
-      grouped.get(supplierId)!.items.push(item);
+      grouped.get(supplierId)!.items.push({ ...item, supplierItem });
     }
     
-    // Sort by most critical items first
+    // Sort by most critical items first (HIGH = 3, MEDIUM = 2, LOW = 1, UNKNOWN = 0)
+    const riskScore = (level: string) => level === 'HIGH' ? 3 : level === 'MEDIUM' ? 2 : level === 'LOW' ? 1 : 0;
+    
     return Array.from(grouped.entries())
       .map(([supplierId, data]) => ({
         supplierId,
         supplier: data.supplier,
         items: data.items.sort((a, b) => a.daysOfCover - b.daysOfCover),
-        criticalCount: data.items.filter(i => i.priority === 'CRITICAL').length,
-        highCount: data.items.filter(i => i.priority === 'HIGH').length,
+        highCount: data.items.filter(i => i.riskLevel === 'HIGH').length,
+        mediumCount: data.items.filter(i => i.riskLevel === 'MEDIUM').length,
       }))
-      .sort((a, b) => (b.criticalCount + b.highCount) - (a.criticalCount + a.highCount));
-  }, [atRiskItems, suppliers]);
+      .filter(group => group.items.length > 0)
+      .sort((a, b) => (b.highCount * 3 + b.mediumCount) - (a.highCount * 3 + a.mediumCount));
+  }, [atRiskItems, allSupplierItems, suppliers]);
 
   // Handle generating PO from at-risk supplier group
-  const handleGenerateFromRisk = (supplierId: string, supplierItems: AtRiskItem[]) => {
-    const prefilled = supplierItems.map(item => ({
+  const handleGenerateFromRisk = (supplierId: string, supplierItemsList: Array<AtRiskItem & { supplierItem?: any }>) => {
+    const prefilled = supplierItemsList.map(item => ({
       itemId: item.id,
-      quantity: Math.ceil(30 * (item.dailyUsage || 1) - item.currentStock),
-      unitCost: item.primarySupplier?.price,
+      quantity: item.recommendedQty > 0 ? item.recommendedQty : Math.ceil(30 * (item.dailyUsage || 1) - item.currentStock),
+      unitCost: item.supplierItem?.price,
       sku: item.sku,
       name: item.name,
-    }));
+    })).filter(item => item.quantity > 0);
+    
+    if (prefilled.length === 0) {
+      toast({
+        title: "No Items to Order",
+        description: "All items have sufficient stock levels.",
+      });
+      return;
+    }
     
     setPrefilledSupplierId(supplierId !== 'UNKNOWN' ? supplierId : undefined);
     setPrefilledItems(prefilled);
@@ -1731,7 +1757,7 @@ export default function Suppliers() {
             </div>
           ) : (
             <div className="space-y-4">
-              {atRiskBySupplier.map(({ supplierId, supplier, items, criticalCount, highCount }) => (
+              {atRiskBySupplier.map(({ supplierId, supplier, items, highCount, mediumCount }) => (
                 <Card key={supplierId} className="overflow-hidden">
                   <CardHeader className="py-3">
                     <div className="flex items-center justify-between">
@@ -1744,11 +1770,11 @@ export default function Suppliers() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        {criticalCount > 0 && (
-                          <Badge variant="destructive">{criticalCount} Critical</Badge>
-                        )}
                         {highCount > 0 && (
-                          <Badge className="bg-orange-500">{highCount} High</Badge>
+                          <Badge variant="destructive">{highCount} High</Badge>
+                        )}
+                        {mediumCount > 0 && (
+                          <Badge variant="secondary">{mediumCount} Medium</Badge>
                         )}
                         <Button 
                           size="sm" 
@@ -1766,8 +1792,8 @@ export default function Suppliers() {
                         <div key={item.id} className="flex items-center justify-between">
                           <span>{item.sku} - {item.name}</span>
                           <span className={
-                            item.priority === 'CRITICAL' ? 'text-red-500' : 
-                            item.priority === 'HIGH' ? 'text-orange-500' : 
+                            item.riskLevel === 'HIGH' ? 'text-red-500' : 
+                            item.riskLevel === 'MEDIUM' ? 'text-orange-500' : 
                             'text-yellow-500'
                           }>
                             {Math.floor(item.daysOfCover)} days

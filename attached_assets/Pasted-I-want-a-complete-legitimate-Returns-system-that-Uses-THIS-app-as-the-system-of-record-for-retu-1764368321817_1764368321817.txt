@@ -1,0 +1,208 @@
+I want a complete, legitimate Returns system that:
+
+- Uses THIS app as the system of record for returns.
+- Uses Shippo as the shipping/label engine.
+- Integrates with GHL AI agents (front-end).
+- Keeps Sales Orders and BOM/Product views in sync with return activity.
+- Uses GHL only to:
+  - Talk to customers.
+  - Create an “Issue refund” Opportunity for humans to move money in Amazon/Shopify.
+- Does NOT move money in Replit or GHL; humans perform the actual refund and then update status.
+
+Extend the existing codebase (no rewrites) as follows.
+
+==================================================
+A) CONFIG & ENVIRONMENT
+==================================================
+Add configuration for Shippo and GHL (if not already present):
+
+1) Shippo
+   - Env vars:
+     - SHIPPO_API_TOKEN
+     - SHIPPO_DEFAULT_CARRIER (optional, e.g. "usps")
+     - SHIPPO_DEFAULT_SERVICE (optional)
+   - Add a config object for the warehouse “ship-from” address (Sticker Burr Roller’s warehouse):
+     - name, street1, city, state, zip, country, phone.
+
+2) GHL (Returns / Refund tasks)
+   - Env vars (some may already exist):
+     - GHL_API_KEY
+     - GHL_LOCATION_ID
+     - GHL_RETURNS_PIPELINE_ID          // pipeline used to track refund tasks
+     - GHL_RETURNS_STAGE_ISSUE_REFUND_ID // stage “Issue refund”
+     - GHL_RETURNS_STAGE_REFUNDED_ID     // stage “Refund completed”
+   - We will use this pipeline to create Opportunities the team uses to move money manually in Amazon/Shopify.
+
+==================================================
+B) DATA MODEL – RETURNS, SALES ORDERS LINK, REFUND STATUS
+==================================================
+Extend / create tables as needed. Use existing ORM conventions.
+
+1) RETURNS (table: returns)
+   Fields (add or confirm):
+   - id (PK)
+   - rmaNumber (string, unique, e.g. RMA-2025-000123)
+   - customerId (string or FK)
+   - customerName (string)
+   - customerEmail (string)
+   - customerPhone (string, nullable)
+   - channel enum: "amazon" | "shopify" | "direct" | "other"
+   - orderId (string)               // MUST match the order id used in Sales Orders table
+   - reasonCode (string)
+   - reasonText (string, nullable)
+   - status enum:
+       - REQUESTED
+       - APPROVED
+       - LABEL_CREATED
+       - IN_TRANSIT
+       - RETURNED      // physically in warehouse
+       - REFUND_ISSUE_PENDING  // waiting for team to move money
+       - REFUNDED
+       - REPLACEMENT_SENT
+       - CLOSED
+       - REJECTED
+   - resolution enum:
+       - REFUND
+       - REPLACEMENT
+       - STORE_CREDIT
+       - NONE
+   - shippoShipmentId (string, nullable)
+   - shippoTransactionId (string, nullable)
+   - carrier (string, nullable)
+   - trackingNumber (string, nullable)
+   - labelUrl (string, nullable)
+   - labelCost (numeric, nullable)
+   - labelCurrency (string, nullable)
+   - requestedAt (DateTime)
+   - approvedAt (DateTime, nullable)
+   - labelCreatedAt (DateTime, nullable)
+   - inTransitAt (DateTime, nullable)
+   - receivedAt (DateTime, nullable)
+   - refundIssuedAt (DateTime, nullable)
+   - refundedAt (DateTime, nullable)
+   - closedAt (DateTime, nullable)
+   - ghlRefundOpportunityId (string, nullable)
+   - createdAt
+   - updatedAt
+
+2) RETURN LINE ITEMS (table: return_items)
+   Fields:
+   - id (PK)
+   - returnId (FK to returns)
+   - sku (string)
+   - productName (string)
+   - quantity (integer)
+   - unitPrice (numeric, nullable)
+   - orderLineId (string, nullable)  // to tie to specific line in Sales Orders if available
+   - notes (string, nullable)
+
+3) RETURN EVENTS (table: return_events)
+   Fields:
+   - id (PK)
+   - returnId (FK)
+   - type (string)    // "GHL_REQUEST", "LABEL_CREATED", "SHIPPO_WEBHOOK", "WAREHOUSE_SCAN", "STATUS_CHANGE", "REFUND_TASK_CREATED"
+   - fromStatus (string, nullable)
+   - toStatus (string, nullable)
+   - payload (JSON, nullable)
+   - createdAt
+
+4) SALES ORDERS LINK
+   - In the Sales Orders model/table, add fields:
+     - returnStatus enum:
+         - "NONE"
+         - "REQUESTED"
+         - "IN_PROGRESS"
+         - "PARTIAL_REFUNDED"
+         - "REFUNDED"
+     - totalReturnQty (integer, default 0)
+     - totalRefundAmount (numeric, default 0) // optional for later when we integrate amounts
+   - Ensure Sales Orders have `orderId` that matches returns.orderId.
+
+==================================================
+C) RETURNS SERVICE – CORE LOGIC
+==================================================
+Create or extend a ReturnsService with methods:
+
+1) requestReturn(payload)
+   Input (from GHL agent):
+   - customerId / customerName / customerEmail
+   - channel
+   - orderId
+   - items: [{ sku, productName, quantity }]
+   - reasonCode
+   - reasonText
+   - desiredResolution ("REFUND" or "REPLACEMENT" etc.) if provided; default REFUND for V1.
+
+   Behavior:
+   - Validate inputs; ensure orderId exists in Sales Orders.
+   - Create RETURNS row with:
+     - status = REQUESTED
+     - resolution set as passed or default REFUND.
+     - timestamps: requestedAt = now.
+   - Create RETURN_ITEMS rows.
+   - Log RETURN_EVENT type="GHL_REQUEST".
+   - For V1, auto-approve most returns:
+     - Set status = APPROVED
+     - approvedAt = now.
+   - Call createReturnLabel(returnId) immediately if resolution requires physical return (REFUND/REPLACEMENT).
+   - Update linked Sales Order:
+     - If no existing returns: set returnStatus = "IN_PROGRESS".
+     - Increase totalReturnQty by sum of return_items.quantity for this return.
+
+   ReturnsService.requestReturn should return:
+   - { returnId, rmaNumber, status, resolution, orderId }
+
+2) createReturnLabel(returnId)
+   Behavior:
+   - Load return + items + customer shipping address (from order data).
+   - If status is not APPROVED, throw.
+   - Build Shippo Shipment and purchase a RETURN label:
+     - address_from = warehouse address.
+     - address_to = customer’s shipping address.
+     - Mark shipment as return (use Shippo’s return flag/field).
+   - On success:
+     - Store shippoShipmentId, shippoTransactionId, carrier, trackingNumber, labelUrl, labelCost, labelCurrency.
+     - Set status = LABEL_CREATED.
+     - labelCreatedAt = now.
+     - Log RETURN_EVENT type="LABEL_CREATED" with payload.
+   - Return:
+     - rmaNumber, labelUrl, trackingNumber, carrier.
+
+3) updateStatusFromTracking(returnId, newStatus, payload)
+   - Map carrier/Shippo statuses to our internal:
+     - PRE_TRANSIT / TRANSIT → IN_TRANSIT (set inTransitAt).
+     - DELIVERED → RETURNED (set receivedAt).
+   - Update returns.status, relevant timestamps.
+   - Log RETURN_EVENT type="SHIPPO_WEBHOOK".
+
+4) markRefundIssuePending(returnId)
+   - Called when the system decides a refund is needed (for REFUND resolution) and label is created or package is returned.
+   - Set status = REFUND_ISSUE_PENDING.
+   - Log RETURN_EVENT type="STATUS_CHANGE".
+   - Call syncReturnRefundTaskToGhl(returnId) (section D) to create/update the “Issue refund” Opportunity.
+
+5) markRefundCompleted(returnId)
+   - Called by an internal UI action AFTER a team member actually moves money in Amazon/Shopify.
+   - Set status = REFUNDED.
+   - refundedAt = now.
+   - Update linked Sales Order:
+     - If all return quantity for that order is refunded, returnStatus = "REFUNDED".
+     - If partial, returnStatus = "PARTIAL_REFUNDED".
+   - Log RETURN_EVENT type="STATUS_CHANGE".
+   - Call syncReturnRefundTaskToGhl(returnId) to move Opportunity stage to REFUNDED.
+
+==================================================
+D) GHL REFUND TASK – “ISSUE REFUND” OPPORTUNITY
+==================================================
+Implement syncReturnRefundTaskToGhl(returnId):
+
+- Load return + order + customer data.
+- If returns.ghlRefundOpportunityId is null:
+  - Create new Opportunity in GHL_RETURNS_PIPELINE_ID for location GHL_LOCATION_ID:
+    - Name: `Issue refund – Order ${orderId} – ${customerName}`
+    - Stage:
+      - If status is REFUND_ISSUE_PENDING → GHL_RETURNS_STAGE_ISSUE_REFUND_ID.
+      - If status is REFUNDED → GHL_RETURNS_STAGE_REFUNDED_ID.
+    - Custom fields (mapped to your existing GHL custom fields):
+      - order_id
+      - rma_numbe_

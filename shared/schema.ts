@@ -726,8 +726,40 @@ export type ItemWithComputedQuantities = Item & {
 // This app tracks return status, generates shipping labels (via pluggable service),
 // and updates inventory when returns are received.
 
+// Return Status Lifecycle:
+// REQUESTED → APPROVED → LABEL_CREATED → IN_TRANSIT → RETURNED → REFUND_ISSUE_PENDING → REFUNDED → CLOSED
+// Alternative paths: REJECTED, CANCELLED, REPLACEMENT_SENT
+export const ReturnStatus = {
+  REQUESTED: "REQUESTED",
+  APPROVED: "APPROVED", 
+  LABEL_CREATED: "LABEL_CREATED",
+  IN_TRANSIT: "IN_TRANSIT",
+  RETURNED: "RETURNED", // Physically received at warehouse
+  REFUND_ISSUE_PENDING: "REFUND_ISSUE_PENDING", // Waiting for team to move money in Amazon/Shopify
+  REFUNDED: "REFUNDED",
+  REPLACEMENT_SENT: "REPLACEMENT_SENT",
+  CLOSED: "CLOSED",
+  REJECTED: "REJECTED",
+  CANCELLED: "CANCELLED",
+  // Legacy statuses for backwards compatibility
+  OPEN: "OPEN",
+  RECEIVED_AT_WAREHOUSE: "RECEIVED_AT_WAREHOUSE",
+  COMPLETED: "COMPLETED",
+} as const;
+export type ReturnStatus = typeof ReturnStatus[keyof typeof ReturnStatus];
+
+export const ReturnResolution = {
+  REFUND: "REFUND",
+  REPLACEMENT: "REPLACEMENT",
+  STORE_CREDIT: "STORE_CREDIT",
+  NONE: "NONE",
+  TROUBLESHOOT: "TROUBLESHOOT",
+} as const;
+export type ReturnResolution = typeof ReturnResolution[keyof typeof ReturnResolution];
+
 export const returnRequests = pgTable("return_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  rmaNumber: text("rma_number").unique(), // Unique RMA number e.g. RMA-2025-000123
   salesOrderId: varchar("sales_order_id").references(() => salesOrders.id), // Link to SalesOrder
   orderNumber: text("order_number"), // Denormalized from SalesOrder for quick lookup
   externalOrderId: text("external_order_id").notNull(), // Upstream order ID from Shopify/Amazon/etc.
@@ -738,14 +770,39 @@ export const returnRequests = pgTable("return_requests", {
   customerPhone: text("customer_phone"),
   shippingAddress: jsonb("shipping_address"), // JSON object with address details
   ghlContactId: text("ghl_contact_id"), // Link back to GHL contact for workflows
-  status: text("status").notNull().default('OPEN'), // 'OPEN', 'LABEL_CREATED', 'IN_TRANSIT', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED', 'CANCELLED'
-  resolutionRequested: text("resolution_requested").notNull(), // 'REFUND', 'REPLACEMENT', 'STORE_CREDIT', 'TROUBLESHOOT'
+  status: text("status").notNull().default('REQUESTED'), // See ReturnStatus enum
+  resolutionRequested: text("resolution_requested").notNull(), // See ReturnResolution enum
   resolutionFinal: text("resolution_final"), // What actually happened (nullable)
   resolutionNotes: text("resolution_notes"), // Additional notes about resolution outcome
   labelProvider: text("label_provider"), // 'SHIPPO', 'EASYPOST', 'STUB', etc.
   initiatedVia: text("initiated_via").notNull().default('MANUAL_UI'), // 'GHL_BOT' or 'MANUAL_UI' (deprecated, use 'source' instead)
   warehouseLocationCode: text("warehouse_location_code"), // Extensiv location or similar
   reason: text("reason"), // High-level reason from GHL bot
+  reasonCode: text("reason_code"), // Structured reason code (DEFECTIVE, WRONG_ITEM, etc.)
+  // Shippo shipping label fields
+  shippoShipmentId: text("shippo_shipment_id"), // Shippo shipment object ID
+  shippoTransactionId: text("shippo_transaction_id"), // Shippo transaction/label ID
+  carrier: text("carrier"), // 'USPS', 'UPS', 'FEDEX', etc.
+  trackingNumber: text("tracking_number"),
+  labelUrl: text("label_url"), // URL to label PDF
+  labelCost: real("label_cost"), // Cost of the label
+  labelCurrency: text("label_currency").default('USD'),
+  // GHL refund opportunity integration
+  ghlRefundOpportunityId: text("ghl_refund_opportunity_id"), // GHL opportunity for "Issue refund" task
+  ghlRefundOpportunityUrl: text("ghl_refund_opportunity_url"), // Deep link to GHL opportunity
+  // Lifecycle timestamps
+  requestedAt: timestamp("requested_at").default(sql`now()`),
+  approvedAt: timestamp("approved_at"),
+  labelCreatedAt: timestamp("label_created_at"),
+  inTransitAt: timestamp("in_transit_at"),
+  receivedAt: timestamp("received_at"), // When warehouse received the return
+  refundIssuedAt: timestamp("refund_issued_at"), // When team was tasked to issue refund
+  refundedAt: timestamp("refunded_at"), // When refund was actually completed
+  replacementSentAt: timestamp("replacement_sent_at"),
+  closedAt: timestamp("closed_at"),
+  rejectedAt: timestamp("rejected_at"),
+  cancelledAt: timestamp("cancelled_at"),
+  // Legacy fields (kept for backwards compatibility)
   receiptPrintedAt: timestamp("receipt_printed_at"), // First successful print timestamp
   receiptPrintCount: integer("receipt_print_count").notNull().default(0), // Total number of prints
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
@@ -755,6 +812,8 @@ export const returnRequests = pgTable("return_requests", {
   externalOrderIdIdx: index("return_requests_external_order_id_idx").on(table.externalOrderId),
   statusIdx: index("return_requests_status_idx").on(table.status),
   createdAtIdx: index("return_requests_created_at_idx").on(table.createdAt),
+  rmaNumberIdx: index("return_requests_rma_number_idx").on(table.rmaNumber),
+  ghlRefundOpportunityIdIdx: index("return_requests_ghl_refund_opportunity_id_idx").on(table.ghlRefundOpportunityId),
 }));
 
 export const insertReturnRequestSchema = createInsertSchema(returnRequests).omit({ 
@@ -767,10 +826,12 @@ export type ReturnRequest = typeof returnRequests.$inferSelect;
 
 export const returnItems = pgTable("return_items", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id),
+  returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id, { onDelete: 'cascade' }),
   salesOrderLineId: varchar("sales_order_line_id"), // Link to SalesOrderLine if available
-  inventoryItemId: varchar("inventory_item_id").notNull().references(() => items.id),
+  inventoryItemId: varchar("inventory_item_id").references(() => items.id), // Nullable for flexibility
   sku: text("sku").notNull(), // Denormalized for quick viewing
+  productName: text("product_name"), // Denormalized product name
+  unitPrice: real("unit_price"), // Unit price at time of return
   qtyOrdered: integer("qty_ordered").notNull(), // Original qty from order
   qtyRequested: integer("qty_requested").notNull(), // What customer wants to return
   qtyApproved: integer("qty_approved").notNull().default(0), // What we allow to be returned
@@ -796,11 +857,21 @@ export const returnShipments = pgTable("return_shipments", {
   trackingNumber: text("tracking_number").notNull(),
   labelUrl: text("label_url").notNull(), // URL to PDF/label image
   status: text("status").notNull().default('LABEL_CREATED'), // 'LABEL_CREATED', 'IN_TRANSIT', 'DELIVERED', 'LOST', 'CANCELLED'
+  // Shippo integration fields
+  shippoShipmentId: text("shippo_shipment_id"), // Shippo shipment object ID
+  shippoTransactionId: text("shippo_transaction_id"), // Shippo transaction/label ID
+  shippoRateId: text("shippo_rate_id"), // Selected rate ID
+  labelCost: real("label_cost"), // Cost of the label
+  labelCurrency: text("label_currency").default('USD'),
+  estimatedDeliveryDate: timestamp("estimated_delivery_date"),
+  lastTrackingUpdate: timestamp("last_tracking_update"),
+  trackingHistory: jsonb("tracking_history"), // Array of tracking events from Shippo
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
   returnRequestIdIdx: index("return_shipments_return_request_id_idx").on(table.returnRequestId),
   trackingNumberIdx: index("return_shipments_tracking_number_idx").on(table.trackingNumber),
+  shippoShipmentIdIdx: index("return_shipments_shippo_shipment_id_idx").on(table.shippoShipmentId),
 }));
 
 export const insertReturnShipmentSchema = createInsertSchema(returnShipments).omit({ 
@@ -810,6 +881,52 @@ export const insertReturnShipmentSchema = createInsertSchema(returnShipments).om
 });
 export type InsertReturnShipment = z.infer<typeof insertReturnShipmentSchema>;
 export type ReturnShipment = typeof returnShipments.$inferSelect;
+
+// ============================================================================
+// RETURN EVENTS (Audit Log)
+// ============================================================================
+// Audit trail for all return-related events and status changes.
+// Used for debugging, compliance, and customer service.
+
+export const ReturnEventType = {
+  GHL_REQUEST: "GHL_REQUEST", // Return initiated via GHL agent
+  MANUAL_REQUEST: "MANUAL_REQUEST", // Return initiated via UI
+  STATUS_CHANGE: "STATUS_CHANGE", // Status transitioned
+  LABEL_CREATED: "LABEL_CREATED", // Shipping label generated
+  SHIPPO_WEBHOOK: "SHIPPO_WEBHOOK", // Tracking update from Shippo
+  WAREHOUSE_SCAN: "WAREHOUSE_SCAN", // Package scanned at warehouse
+  REFUND_TASK_CREATED: "REFUND_TASK_CREATED", // GHL opportunity created
+  REFUND_COMPLETED: "REFUND_COMPLETED", // Refund marked as done
+  REPLACEMENT_SHIPPED: "REPLACEMENT_SHIPPED", // Replacement sent
+  ITEM_RECEIVED: "ITEM_RECEIVED", // Individual item received
+  ITEM_INSPECTED: "ITEM_INSPECTED", // Item condition assessed
+  NOTE_ADDED: "NOTE_ADDED", // Note/comment added
+  ERROR: "ERROR", // Something went wrong
+} as const;
+export type ReturnEventType = typeof ReturnEventType[keyof typeof ReturnEventType];
+
+export const returnEvents = pgTable("return_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  returnRequestId: varchar("return_request_id").notNull().references(() => returnRequests.id, { onDelete: 'cascade' }),
+  type: text("type").notNull(), // See ReturnEventType enum
+  fromStatus: text("from_status"), // Previous status (for STATUS_CHANGE events)
+  toStatus: text("to_status"), // New status (for STATUS_CHANGE events)
+  actor: text("actor"), // Who/what triggered: 'system', 'user:UUID', 'ghl:agent_id', 'shippo:webhook'
+  message: text("message"), // Human-readable description
+  payload: jsonb("payload"), // Additional data (varies by event type)
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  returnRequestIdIdx: index("return_events_return_request_id_idx").on(table.returnRequestId),
+  typeIdx: index("return_events_type_idx").on(table.type),
+  createdAtIdx: index("return_events_created_at_idx").on(table.createdAt),
+}));
+
+export const insertReturnEventSchema = createInsertSchema(returnEvents).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertReturnEvent = z.infer<typeof insertReturnEventSchema>;
+export type ReturnEvent = typeof returnEvents.$inferSelect;
 
 // ============================================================================
 // CHANNELS (Marketing & Sales Channels)
@@ -988,6 +1105,16 @@ export type ProductForecastContext = typeof productForecastContext.$inferSelect;
 // SALES ORDERS & BACKORDERS
 // ============================================================================
 
+// Sales Order Return Status
+export const SalesOrderReturnStatus = {
+  NONE: "NONE",
+  REQUESTED: "REQUESTED",
+  IN_PROGRESS: "IN_PROGRESS",
+  PARTIAL_REFUNDED: "PARTIAL_REFUNDED",
+  REFUNDED: "REFUNDED",
+} as const;
+export type SalesOrderReturnStatus = typeof SalesOrderReturnStatus[keyof typeof SalesOrderReturnStatus];
+
 export const salesOrders = pgTable("sales_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
@@ -1010,6 +1137,10 @@ export const salesOrders = pgTable("sales_orders", {
   ghlConversationUrl: text("ghl_conversation_url"), // Deep link to GHL conversations for this contact
   notes: text("notes"),
   rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
+  // Return tracking fields
+  returnStatus: text("return_status").notNull().default('NONE'), // See SalesOrderReturnStatus
+  totalReturnQty: integer("total_return_qty").notNull().default(0), // Sum of all return item quantities
+  totalRefundAmount: real("total_refund_amount").notNull().default(0), // Sum of refunded amounts
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -1018,6 +1149,7 @@ export const salesOrders = pgTable("sales_orders", {
   orderDateIdx: index("sales_orders_order_date_idx").on(table.orderDate),
   externalOrderIdIdx: index("sales_orders_external_order_id_idx").on(table.externalOrderId),
   productionStatusIdx: index("sales_orders_production_status_idx").on(table.productionStatus),
+  returnStatusIdx: index("sales_orders_return_status_idx").on(table.returnStatus),
   // V1: Unique constraint for idempotent order imports - prevents duplicate Shopify/Amazon orders
   channelExternalOrderUniqueIdx: uniqueIndex("sales_orders_channel_external_order_unique_idx")
     .on(table.channel, table.externalOrderId)

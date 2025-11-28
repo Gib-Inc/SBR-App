@@ -211,11 +211,22 @@ export const purchaseOrders = pgTable("purchase_orders", {
   notes: text("notes"),
   internalNotes: text("internal_notes"), // Not shown on PDF/emails
   
+  // Email Sending (SendGrid) - Primary channel for sending POs to suppliers
+  // LEGAL NOTICE: POs sent via email are transactional documents. Ensure SPF/DKIM/DMARC
+  // are configured for sending domain. Content should be reviewed for compliance.
+  emailTo: text("email_to"), // Actual email address used when sending the PO
+  emailSubject: text("email_subject"), // Last subject used
+  emailBodyText: text("email_body_text"), // Plain-text body (for audit)
+  lastEmailStatus: text("last_email_status").notNull().default('NOT_SENT'), // NOT_SENT, SENT, FAILED
+  lastEmailSentAt: timestamp("last_email_sent_at"),
+  lastEmailProviderMessageId: text("last_email_provider_message_id"), // SendGrid message ID
+  lastEmailError: text("last_email_error"), // Error message if send failed
+  
   // GHL Integration (Communication/Approval Layer Only)
-  ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity
+  ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity in Replit POs pipeline
   ghlRepName: text("ghl_rep_name"), // GoHighLevel rep who issued the PO
-  lastSendChannel: text("last_send_channel"), // EMAIL, SMS
-  lastSendStatus: text("last_send_status"), // SUCCESS, FAILED
+  lastSendChannel: text("last_send_channel"), // EMAIL, SMS (legacy, for GHL sends)
+  lastSendStatus: text("last_send_status"), // SUCCESS, FAILED (legacy)
   lastSendTimestamp: timestamp("last_send_timestamp"),
   lastSendMessageId: text("last_send_message_id"), // GHL message ID for audit/tracking
   lastSendError: text("last_send_error"), // Error message if send failed
@@ -239,6 +250,14 @@ export const PO_STATUS = {
   CANCELLED: 'CANCELLED',
 } as const;
 export type POStatus = typeof PO_STATUS[keyof typeof PO_STATUS];
+
+// PO Email Status enum for type safety
+export const PO_EMAIL_STATUS = {
+  NOT_SENT: 'NOT_SENT',
+  SENT: 'SENT',
+  FAILED: 'FAILED',
+} as const;
+export type POEmailStatus = typeof PO_EMAIL_STATUS[keyof typeof PO_EMAIL_STATUS];
 
 export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true, createdAt: true, updatedAt: true });
 export const updatePurchaseOrderSchema = insertPurchaseOrderSchema.partial();

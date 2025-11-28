@@ -86,6 +86,15 @@ export default function Suppliers() {
   const [disputeReason, setDisputeReason] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [showCreatePOSheet, setShowCreatePOSheet] = useState(false);
+  const [prefilledSupplierId, setPrefilledSupplierId] = useState<string | undefined>(undefined);
+  const [prefilledItems, setPrefilledItems] = useState<Array<{
+    itemId: string;
+    quantity: number;
+    unitCost?: number;
+    sku?: string;
+    name?: string;
+  }> | undefined>(undefined);
+  const [showRiskPickerDialog, setShowRiskPickerDialog] = useState(false);
   
   // Discovery state
   const [discoveryKeywords, setDiscoveryKeywords] = useState("");
@@ -150,6 +159,61 @@ export default function Suppliers() {
     queryKey: ['/api/supplier-leads'],
     enabled: activeTab === 'discovery',
   });
+
+  // At-risk items for generating draft POs from risk
+  interface AtRiskItem extends Item {
+    daysOfCover: number;
+    priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+    primarySupplier?: {
+      supplierId: string;
+      price?: number;
+    };
+  }
+  const { data: atRiskItems = [] } = useQuery<AtRiskItem[]>({
+    queryKey: ['/api/ai/at-risk'],
+    enabled: showRiskPickerDialog,
+  });
+
+  // Group at-risk items by supplier for the risk picker dialog
+  const atRiskBySupplier = useMemo(() => {
+    const grouped: Map<string, { supplier: Supplier | null; items: AtRiskItem[] }> = new Map();
+    
+    for (const item of atRiskItems) {
+      const supplierId = item.primarySupplier?.supplierId || 'UNKNOWN';
+      if (!grouped.has(supplierId)) {
+        const supplier = suppliers.find(s => s.id === supplierId) || null;
+        grouped.set(supplierId, { supplier, items: [] });
+      }
+      grouped.get(supplierId)!.items.push(item);
+    }
+    
+    // Sort by most critical items first
+    return Array.from(grouped.entries())
+      .map(([supplierId, data]) => ({
+        supplierId,
+        supplier: data.supplier,
+        items: data.items.sort((a, b) => a.daysOfCover - b.daysOfCover),
+        criticalCount: data.items.filter(i => i.priority === 'CRITICAL').length,
+        highCount: data.items.filter(i => i.priority === 'HIGH').length,
+      }))
+      .sort((a, b) => (b.criticalCount + b.highCount) - (a.criticalCount + a.highCount));
+  }, [atRiskItems, suppliers]);
+
+  // Handle generating PO from at-risk supplier group
+  const handleGenerateFromRisk = (supplierId: string, supplierItems: AtRiskItem[]) => {
+    const prefilled = supplierItems.map(item => ({
+      itemId: item.id,
+      quantity: Math.ceil(30 * (item.dailyUsage || 1) - item.currentStock),
+      unitCost: item.primarySupplier?.price,
+      sku: item.sku,
+      name: item.name,
+    }));
+    
+    setPrefilledSupplierId(supplierId !== 'UNKNOWN' ? supplierId : undefined);
+    setPrefilledItems(prefilled);
+    setShowRiskPickerDialog(false);
+    setShowCreatePOSheet(true);
+  };
 
   // Run discovery mutation
   const runDiscoveryMutation = useMutation({
@@ -624,10 +688,25 @@ export default function Suppliers() {
                 <h2 className="text-lg font-semibold">Purchase Orders</h2>
                 <p className="text-sm text-muted-foreground">Track and manage supplier purchase orders</p>
               </div>
-              <Button size="sm" onClick={() => setShowCreatePOSheet(true)} data-testid="button-create-po">
-                <Plus className="h-4 w-4 mr-2" />
-                Create PO
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => setShowRiskPickerDialog(true)} 
+                  data-testid="button-generate-from-risk"
+                >
+                  <AlertCircle className="h-4 w-4 mr-2" />
+                  Generate from Risk
+                </Button>
+                <Button size="sm" onClick={() => {
+                  setPrefilledSupplierId(undefined);
+                  setPrefilledItems(undefined);
+                  setShowCreatePOSheet(true);
+                }} data-testid="button-create-po">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create PO
+                </Button>
+              </div>
             </div>
 
             {/* Search and Filters */}
@@ -1623,8 +1702,97 @@ export default function Suppliers() {
       {/* Create PO Sheet */}
       <CreatePOSheet
         open={showCreatePOSheet}
-        onOpenChange={setShowCreatePOSheet}
+        onOpenChange={(open) => {
+          setShowCreatePOSheet(open);
+          if (!open) {
+            setPrefilledSupplierId(undefined);
+            setPrefilledItems(undefined);
+          }
+        }}
+        prefilledSupplierId={prefilledSupplierId}
+        prefilledItems={prefilledItems}
       />
+
+      {/* Risk Picker Dialog */}
+      <Dialog open={showRiskPickerDialog} onOpenChange={setShowRiskPickerDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Generate PO from At-Risk Items</DialogTitle>
+            <DialogDescription>
+              Select a supplier to create a draft purchase order for their at-risk items
+            </DialogDescription>
+          </DialogHeader>
+          
+          {atRiskBySupplier.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <CheckCircle className="h-12 w-12 text-green-500 mb-4" />
+              <p className="text-lg font-medium">No At-Risk Items</p>
+              <p className="text-sm text-muted-foreground">All inventory levels are healthy</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {atRiskBySupplier.map(({ supplierId, supplier, items, criticalCount, highCount }) => (
+                <Card key={supplierId} className="overflow-hidden">
+                  <CardHeader className="py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-base">
+                          {supplier?.name || 'Unknown Supplier'}
+                        </CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                          {items.length} item{items.length !== 1 ? 's' : ''} at risk
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {criticalCount > 0 && (
+                          <Badge variant="destructive">{criticalCount} Critical</Badge>
+                        )}
+                        {highCount > 0 && (
+                          <Badge className="bg-orange-500">{highCount} High</Badge>
+                        )}
+                        <Button 
+                          size="sm" 
+                          onClick={() => handleGenerateFromRisk(supplierId, items)}
+                          data-testid={`button-generate-po-${supplierId}`}
+                        >
+                          Generate PO
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="py-0 pb-3">
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      {items.slice(0, 3).map(item => (
+                        <div key={item.id} className="flex items-center justify-between">
+                          <span>{item.sku} - {item.name}</span>
+                          <span className={
+                            item.priority === 'CRITICAL' ? 'text-red-500' : 
+                            item.priority === 'HIGH' ? 'text-orange-500' : 
+                            'text-yellow-500'
+                          }>
+                            {Math.floor(item.daysOfCover)} days
+                          </span>
+                        </div>
+                      ))}
+                      {items.length > 3 && (
+                        <div className="text-muted-foreground">
+                          +{items.length - 3} more items
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRiskPickerDialog(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

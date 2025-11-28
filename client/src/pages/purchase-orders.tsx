@@ -20,6 +20,9 @@ import {
   Loader2,
   ClipboardList,
   RefreshCw,
+  Mail,
+  MailX,
+  MailCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -110,6 +113,57 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+type EmailStatus = "NOT_SENT" | "SENT" | "FAILED";
+
+const EMAIL_STATUS_CONFIG: Record<EmailStatus, { label: string; icon: any; colorClass: string }> = {
+  NOT_SENT: { 
+    label: "Not Sent", 
+    icon: Mail, 
+    colorClass: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" 
+  },
+  SENT: { 
+    label: "Sent", 
+    icon: MailCheck, 
+    colorClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" 
+  },
+  FAILED: { 
+    label: "Failed", 
+    icon: MailX, 
+    colorClass: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" 
+  },
+};
+
+function EmailStatusBadge({ 
+  status, 
+  sentAt, 
+  emailTo 
+}: { 
+  status: string | null | undefined; 
+  sentAt?: Date | string | null;
+  emailTo?: string | null;
+}) {
+  const emailStatus = (status || "NOT_SENT") as EmailStatus;
+  const config = EMAIL_STATUS_CONFIG[emailStatus] || EMAIL_STATUS_CONFIG.NOT_SENT;
+  const Icon = config.icon;
+  
+  const tooltipContent = emailStatus === "SENT" && sentAt 
+    ? `Sent to ${emailTo || "supplier"} on ${format(new Date(sentAt), "MM/dd/yyyy HH:mm")}`
+    : emailStatus === "FAILED" 
+    ? "Email delivery failed"
+    : "Not yet emailed";
+  
+  return (
+    <Badge 
+      className={`${config.colorClass} font-medium`} 
+      title={tooltipContent}
+      data-testid={`badge-email-${emailStatus.toLowerCase()}`}
+    >
+      <Icon className="w-3 h-3 mr-1" />
+      {config.label}
+    </Badge>
+  );
+}
+
 function formatCurrency(value: number | null | undefined): string {
   if (value == null) return "$0.00";
   return new Intl.NumberFormat("en-US", {
@@ -167,6 +221,35 @@ export default function PurchaseOrders() {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const sendPOMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${id}/send`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to send PO");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      toast({ 
+        title: "PO Sent Successfully", 
+        description: `Email sent to ${data.emailTo || "supplier"}` 
+      });
+    },
+    onError: (error: Error) => {
+      toast({ 
+        title: "Failed to Send PO", 
+        description: error.message, 
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const handleSendPO = (poId: string) => {
+    sendPOMutation.mutate(poId);
+  };
 
   const supplierMap = new Map(suppliers?.map(s => [s.id, s]) || []);
 
@@ -330,6 +413,7 @@ export default function PurchaseOrders() {
                   <TableHead className="sticky left-0 bg-background z-10 min-w-[120px]">PO Number</TableHead>
                   <TableHead className="min-w-[180px]">Supplier</TableHead>
                   <TableHead className="min-w-[100px]">Status</TableHead>
+                  <TableHead className="min-w-[90px]">Email</TableHead>
                   <TableHead className="min-w-[100px]">Order Date</TableHead>
                   <TableHead className="min-w-[100px]">Expected</TableHead>
                   <TableHead className="min-w-[100px] text-right">Total</TableHead>
@@ -339,7 +423,7 @@ export default function PurchaseOrders() {
               <TableBody>
                 {sortedPOs.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -367,6 +451,13 @@ export default function PurchaseOrders() {
                       <TableCell>
                         <StatusBadge status={po.status} />
                       </TableCell>
+                      <TableCell>
+                        <EmailStatusBadge 
+                          status={(po as any).lastEmailStatus} 
+                          sentAt={(po as any).lastEmailSentAt}
+                          emailTo={(po as any).emailTo}
+                        />
+                      </TableCell>
                       <TableCell>{formatDate(po.orderDate)}</TableCell>
                       <TableCell>{formatDate(po.expectedDate)}</TableCell>
                       <TableCell className="text-right font-medium">
@@ -393,21 +484,18 @@ export default function PurchaseOrders() {
                               <FileDown className="h-4 w-4 mr-2" />
                               Download PDF
                             </DropdownMenuItem>
-                            {po.status === "DRAFT" && (
+                            {(po.status === "DRAFT" || po.status === "APPROVED") && (
                               <>
                                 <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleAction(po.id, "approve"); }}>
-                                  <CheckCircle className="h-4 w-4 mr-2" />
-                                  Submit for Approval
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                            {po.status === "APPROVED" && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleAction(po.id, "send"); }}>
-                                  <Send className="h-4 w-4 mr-2" />
-                                  Mark as Sent
+                                <DropdownMenuItem 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    handleSendPO(po.id); 
+                                  }}
+                                  disabled={sendPOMutation.isPending}
+                                >
+                                  <Mail className="h-4 w-4 mr-2" />
+                                  {sendPOMutation.isPending ? "Sending..." : "Send PO"}
                                 </DropdownMenuItem>
                               </>
                             )}
@@ -479,6 +567,52 @@ export default function PurchaseOrders() {
                   <p className="text-sm text-muted-foreground">Total</p>
                   <p className="font-medium text-lg">{formatCurrency(poDetails.total)}</p>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
+                <div className="flex items-center gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Email Status</p>
+                    <EmailStatusBadge 
+                      status={poDetails.lastEmailStatus} 
+                      sentAt={poDetails.lastEmailSentAt}
+                      emailTo={poDetails.emailTo}
+                    />
+                  </div>
+                  {poDetails.lastEmailSentAt && (
+                    <div>
+                      <p className="text-sm text-muted-foreground">Sent At</p>
+                      <p className="text-sm font-medium">
+                        {format(new Date(poDetails.lastEmailSentAt), "MM/dd/yyyy HH:mm")}
+                      </p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-sm text-muted-foreground">Email To</p>
+                    <p className="text-sm font-medium">
+                      {poDetails.emailTo || poDetails.supplierEmail || selectedPO?.supplier?.email || "-"}
+                    </p>
+                  </div>
+                </div>
+                {(poDetails.status === "DRAFT" || poDetails.status === "APPROVED") && (
+                  <Button
+                    onClick={() => handleSendPO(poDetails.id)}
+                    disabled={sendPOMutation.isPending}
+                    data-testid="button-send-po-detail"
+                  >
+                    {sendPOMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="h-4 w-4 mr-2" />
+                        Send PO
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
 
               {poDetails.notes && (

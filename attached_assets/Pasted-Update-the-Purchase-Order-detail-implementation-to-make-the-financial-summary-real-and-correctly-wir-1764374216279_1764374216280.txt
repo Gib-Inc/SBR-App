@@ -1,0 +1,55 @@
+Update the Purchase Order detail implementation to make the financial summary real and correctly wired.
+
+1) DATA MODEL
+- On the PurchaseOrder header, ensure we have numeric fields:
+  - subtotal
+  - shippingCost
+  - otherFees
+  - total
+  - currency (string, e.g. "USD")
+- On each PurchaseOrderLine, ensure we have:
+  - qtyOrdered (number)
+  - qtyReceived (number, already present)
+  - unitCost (number)
+  - lineTotal (number)
+
+2) CALCULATION LOGIC
+Implement server-side helpers so the numbers are always consistent:
+
+- For each line:
+  - lineTotal = qtyOrdered * unitCost
+- For the PO header:
+  - subtotal = sum(lineTotal for all lines)
+  - total = subtotal + (shippingCost || 0) + (otherFees || 0)
+
+Any time a PO is created or updated (qtyOrdered, unitCost, shippingCost, otherFees, add/remove line):
+- Recalculate lineTotal for affected lines.
+- Recalculate subtotal and total.
+- Save these values on the PurchaseOrder.
+
+Use qtyOrdered for cost math. qtyReceived is used only for operational status (“Partial”, etc.), not for header cost totals.
+
+3) UI – PO DETAIL MODAL
+In the Purchase Order detail modal:
+
+- For each line item:
+  - Show lineTotal as currency, calculated from qtyOrdered * unitCost.
+- At the bottom:
+  - Show “Subtotal”, “Shipping”, “Other Fees” and “Total”.
+  - Subtotal: read-only, bound to PurchaseOrder.subtotal.
+  - Shipping: editable numeric input bound to PurchaseOrder.shippingCost.
+  - Other Fees: editable numeric input bound to PurchaseOrder.otherFees.
+  - Total: read-only, bound to PurchaseOrder.total.
+
+As the user edits qtyOrdered, unitCost, shippingCost, or otherFees:
+- Update lineTotal and subtotal/total reactively on the client for UX.
+- On save, validate and recompute the same values on the server to avoid trusting the client.
+
+4) OPTIONAL – PARTIAL RECEIPTS DISPLAY
+Do not change status logic, but in the detail view you can also display:
+- “Value ordered”: subtotal (current behavior).
+- “Value received”: sum(qtyReceived * unitCost) – computed on the fly, not stored.
+
+5) SAFETY
+- Make sure all amounts are treated as numbers, not strings, and are consistently formatted with the PO currency.
+- Existing POs with null shippingCost/otherFees should default to 0 when computing total.

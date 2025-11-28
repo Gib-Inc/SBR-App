@@ -6715,6 +6715,56 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Recalculate PO status based on current line quantities
+  // This endpoint fixes POs where status doesn't match the actual received quantities
+  app.post("/api/purchase-orders/:id/recalculate-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      // Only allow recalculation for SENT, PARTIAL_RECEIVED, or RECEIVED status
+      if (!['SENT', 'PARTIAL_RECEIVED', 'RECEIVED'].includes(po.status)) {
+        return res.status(409).json({ error: `Cannot recalculate status for PO in ${po.status} status` });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      if (!lines || lines.length === 0) {
+        return res.status(400).json({ error: "No line items found for this PO" });
+      }
+
+      // Calculate actual status based on line quantities
+      const hasAnyReceived = lines.some(l => l.qtyReceived > 0);
+      const allFullyReceived = lines.every(l => l.qtyReceived >= l.qtyOrdered);
+
+      let newStatus: string;
+      if (allFullyReceived) {
+        newStatus = 'RECEIVED';
+      } else if (hasAnyReceived) {
+        newStatus = 'PARTIAL_RECEIVED';
+      } else {
+        newStatus = po.status; // Keep current status if nothing received
+      }
+
+      if (newStatus !== po.status) {
+        const updated = await storage.updatePurchaseOrder(id, {
+          status: newStatus,
+          receivedAt: newStatus === 'RECEIVED' ? (po.receivedAt || new Date()) : po.receivedAt,
+        });
+        console.log(`[PurchaseOrder] Recalculated status for PO ${po.poNumber}: ${po.status} -> ${newStatus}`);
+        res.json({ success: true, previousStatus: po.status, newStatus, purchaseOrder: updated });
+      } else {
+        res.json({ success: true, message: "Status is already correct", status: po.status, purchaseOrder: po });
+      }
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error recalculating status:", error);
+      res.status(500).json({ error: error.message || "Failed to recalculate status" });
+    }
+  });
+
   // Add lines to an existing draft PO
   app.post("/api/purchase-orders/:id/lines", requireAuth, async (req: Request, res: Response) => {
     try {

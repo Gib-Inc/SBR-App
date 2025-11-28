@@ -300,6 +300,28 @@ export default function PurchaseOrders() {
     }
   };
 
+  const recalculateStatusMutation = useMutation({
+    mutationFn: async (poId: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/recalculate-status`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to recalculate status");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      if (data.previousStatus && data.newStatus && data.previousStatus !== data.newStatus) {
+        toast({ title: `Status updated from ${data.previousStatus} to ${data.newStatus}` });
+      } else {
+        toast({ title: "Status is already correct" });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const supplierMap = new Map(suppliers?.map(s => [s.id, s]) || []);
 
   const enrichedPOs = purchaseOrders?.map(po => ({
@@ -809,6 +831,28 @@ export default function PurchaseOrders() {
                   <>
                     <PackageCheck className="h-4 w-4 mr-2" />
                     Accept All
+                  </>
+                )}
+              </Button>
+            )}
+            {poDetails?.id && 
+             poDetails.status === 'PARTIAL_RECEIVED' &&
+             poDetails.lines?.length > 0 &&
+             poDetails.lines.every((line: any) => (line.qtyReceived || 0) >= line.qtyOrdered) && (
+              <Button
+                onClick={() => recalculateStatusMutation.mutate(poDetails.id)}
+                disabled={recalculateStatusMutation.isPending}
+                data-testid="button-recalculate-status"
+              >
+                {recalculateStatusMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Update Status to Received
                   </>
                 )}
               </Button>

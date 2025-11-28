@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TrendingUp, TrendingDown, Package, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, AlertCircle, DollarSign, Users, Target, ShoppingCart, Clock, Megaphone } from "lucide-react";
+import { TrendingUp, TrendingDown, Package, ExternalLink, Activity, RefreshCw, Brain, ArrowUp, ArrowDown, Minus, HelpCircle, Zap, Lightbulb, AlertTriangle, Info, AlertCircle, Clock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { AdDemandSignals } from "@/components/ad-demand-signals";
@@ -64,23 +64,6 @@ interface ForecastContext {
   lastUpdated: string;
 }
 
-interface AdPerformanceSnapshot {
-  id: string;
-  platform: string;
-  campaignId: string;
-  campaignName: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  conversions: number;
-  revenue: number;
-  roas: number;
-  cpc: number;
-  ctr: number;
-  conversionRate: number;
-  snapshotDate: string;
-  createdAt: string;
-}
 
 export default function Dashboard() {
   const [syncingIntegration, setSyncingIntegration] = useState<string | null>(null);
@@ -124,11 +107,6 @@ export default function Dashboard() {
     staleTime: 60000,
   });
 
-  // Fetch ad performance snapshots for Ad Display
-  const { data: adSnapshots, isLoading: isLoadingAdSnapshots } = useQuery<AdPerformanceSnapshot[]>({
-    queryKey: ["/api/ad-performance-snapshots"],
-    staleTime: 60000,
-  });
 
   // Sync mutation
   const syncMutation = useMutation({
@@ -197,20 +175,6 @@ export default function Dashboard() {
     return !!(apiKey && apiKey.trim());
   };
 
-  // Calculate aggregate ad metrics from snapshots
-  const adMetrics = adSnapshots?.reduce((acc, snap) => {
-    return {
-      totalBudget: acc.totalBudget + (snap.spend || 0),
-      totalReach: acc.totalReach + (snap.impressions || 0),
-      totalClicks: acc.totalClicks + (snap.clicks || 0),
-      totalConversions: acc.totalConversions + (snap.conversions || 0),
-      totalRevenue: acc.totalRevenue + (snap.revenue || 0),
-    };
-  }, { totalBudget: 0, totalReach: 0, totalClicks: 0, totalConversions: 0, totalRevenue: 0 }) ?? { totalBudget: 0, totalReach: 0, totalClicks: 0, totalConversions: 0, totalRevenue: 0 };
-
-  const conversionRate = adMetrics.totalClicks > 0 
-    ? ((adMetrics.totalConversions / adMetrics.totalClicks) * 100).toFixed(2) 
-    : "0.00";
 
   // Get latest forecast update time
   const latestForecastUpdate = forecastContexts?.length 
@@ -296,133 +260,6 @@ export default function Dashboard() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Ad Display Section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Megaphone className="h-5 w-5 text-primary" />
-            <CardTitle className="text-lg">Ad Display</CardTitle>
-          </div>
-          <p className="text-sm text-muted-foreground">Advertising performance metrics with trend tracking</p>
-        </CardHeader>
-        <CardContent>
-          {isLoadingAdSnapshots ? (
-            <div className="flex items-center justify-center py-8">
-              <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-              <span className="ml-2 text-sm text-muted-foreground">Loading ad data...</span>
-            </div>
-          ) : !adSnapshots || adSnapshots.length === 0 ? (
-            <div className="py-8 text-center">
-              <Megaphone className="mx-auto h-10 w-10 text-muted-foreground mb-3" />
-              <p className="text-sm text-muted-foreground mb-2">No ad performance data available</p>
-              <p className="text-xs text-muted-foreground">
-                Connect Google Ads or Meta Ads via Data Sources to see performance metrics here.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {/* Summary Metrics */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 rounded-lg border bg-muted/30">
-                  <div className="flex items-center gap-2 mb-2">
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Budget Spent</span>
-                  </div>
-                  <p className="text-2xl font-bold" data-testid="text-ad-budget">
-                    ${adMetrics.totalBudget.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
-                </div>
-                <div className="p-4 rounded-lg border bg-muted/30">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Users className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Reach</span>
-                  </div>
-                  <p className="text-2xl font-bold" data-testid="text-ad-reach">
-                    {adMetrics.totalReach.toLocaleString()}
-                  </p>
-                </div>
-                <div className="p-4 rounded-lg border bg-muted/30">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Target className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Conversion Rate</span>
-                  </div>
-                  <p className="text-2xl font-bold" data-testid="text-ad-conversion-rate">
-                    {conversionRate}%
-                  </p>
-                </div>
-                <div className="p-4 rounded-lg border bg-muted/30">
-                  <div className="flex items-center gap-2 mb-2">
-                    <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Total Sales</span>
-                  </div>
-                  <p className="text-2xl font-bold" data-testid="text-ad-total-sales">
-                    ${adMetrics.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
-                </div>
-              </div>
-
-              {/* Campaign Details with Timestamps */}
-              <div className="rounded-md border overflow-auto max-h-64">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 sticky top-0 z-10">
-                    <tr>
-                      <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Campaign</th>
-                      <th className="h-10 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Platform</th>
-                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Spend</th>
-                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Reach</th>
-                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Conv. Rate</th>
-                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Revenue</th>
-                      <th className="h-10 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
-                      <th className="h-10 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Updated</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {adSnapshots.slice(0, 10).map((snap) => {
-                      const clicks = snap.clicks ?? 0;
-                      const conversions = snap.conversions ?? 0;
-                      const snapConvRate = clicks > 0 ? (conversions / clicks) * 100 : 0;
-                      const roas = snap.roas ?? 0;
-                      return (
-                        <tr key={snap.id} className="h-10 border-b hover-elevate" data-testid={`row-ad-${snap.id}`}>
-                          <td className="px-3 whitespace-nowrap font-medium">{snap.campaignName || "Unknown Campaign"}</td>
-                          <td className="px-3 whitespace-nowrap">
-                            <Badge variant="outline">{snap.platform || "Unknown"}</Badge>
-                          </td>
-                          <td className="px-3 text-right font-mono whitespace-nowrap">
-                            ${(snap.spend ?? 0).toFixed(2)}
-                          </td>
-                          <td className="px-3 text-right font-mono whitespace-nowrap">
-                            {(snap.impressions ?? 0).toLocaleString()}
-                          </td>
-                          <td className="px-3 text-right font-mono whitespace-nowrap">
-                            {snapConvRate.toFixed(2)}%
-                          </td>
-                          <td className="px-3 text-right font-mono whitespace-nowrap">
-                            ${(snap.revenue ?? 0).toFixed(2)}
-                          </td>
-                          <td className="px-3 text-center whitespace-nowrap">
-                            {roas >= 2 ? (
-                              <TrendingUp className="h-4 w-4 text-green-600 inline" />
-                            ) : roas >= 1 ? (
-                              <Minus className="h-4 w-4 text-muted-foreground inline" />
-                            ) : (
-                              <TrendingDown className="h-4 w-4 text-red-600 inline" />
-                            )}
-                          </td>
-                          <td className="px-3 text-right text-xs text-muted-foreground whitespace-nowrap">
-                            {snap.createdAt ? formatDistanceToNow(new Date(snap.createdAt), { addSuffix: true }) : "-"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
             </div>
           )}
         </CardContent>

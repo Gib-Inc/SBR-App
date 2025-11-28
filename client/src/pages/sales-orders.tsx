@@ -579,11 +579,7 @@ export default function SalesOrders() {
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
-              <h2 className="text-lg font-semibold">All Orders</h2>
-              <p className="text-sm text-muted-foreground">View and manage sales orders</p>
-            </div>
+          <div className="flex items-center justify-end gap-4 flex-wrap">
             <div className="flex items-center gap-2">
               <input
                 type="file"

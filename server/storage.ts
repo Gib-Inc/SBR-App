@@ -51,6 +51,8 @@ import {
   type InsertReturnItem,
   type ReturnShipment,
   type InsertReturnShipment,
+  type ReturnEvent,
+  type InsertReturnEvent,
   type Channel,
   type InsertChannel,
   type ProductChannelMapping,
@@ -284,6 +286,15 @@ export interface IStorage {
   createReturnShipment(shipment: InsertReturnShipment): Promise<ReturnShipment>;
   updateReturnShipment(id: string, shipment: Partial<InsertReturnShipment>): Promise<ReturnShipment | undefined>;
 
+  // Return Events
+  getReturnEventsByRequestId(returnRequestId: string): Promise<ReturnEvent[]>;
+  createReturnEvent(event: InsertReturnEvent): Promise<ReturnEvent>;
+
+  // Return Helper Methods
+  getNextRMANumber(): Promise<string>;
+  getReturnRequestByRMANumber(rmaNumber: string): Promise<ReturnRequest | undefined>;
+  getReturnRequestByExternalOrderId(externalOrderId: string): Promise<ReturnRequest[]>;
+
   // Channels
   getAllChannels(): Promise<Channel[]>;
   getChannel(id: string): Promise<Channel | undefined>;
@@ -470,6 +481,7 @@ export class MemStorage implements IStorage {
   private returnRequests: Map<string, ReturnRequest>;
   private returnItems: Map<string, ReturnItem>;
   private returnShipments: Map<string, ReturnShipment>;
+  private returnEvents: Map<string, ReturnEvent>;
   private salesOrders: Map<string, SalesOrder>;
   private salesOrderLines: Map<string, SalesOrderLine>;
   private backorderSnapshots: Map<string, BackorderSnapshot>;
@@ -504,6 +516,7 @@ export class MemStorage implements IStorage {
     this.returnRequests = new Map();
     this.returnItems = new Map();
     this.returnShipments = new Map();
+    this.returnEvents = new Map();
     this.salesOrders = new Map();
     this.salesOrderLines = new Map();
     this.backorderSnapshots = new Map();
@@ -1976,6 +1989,49 @@ export class MemStorage implements IStorage {
     const updated = { ...shipment, ...updates, updatedAt: new Date() };
     this.returnShipments.set(id, updated);
     return updated;
+  }
+
+  // Return Events
+  async getReturnEventsByRequestId(returnRequestId: string): Promise<ReturnEvent[]> {
+    return Array.from(this.returnEvents.values())
+      .filter(e => e.returnRequestId === returnRequestId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async createReturnEvent(insertEvent: InsertReturnEvent): Promise<ReturnEvent> {
+    const id = randomUUID();
+    const event: ReturnEvent = {
+      ...insertEvent,
+      id,
+      createdAt: new Date(),
+    };
+    this.returnEvents.set(id, event);
+    return event;
+  }
+
+  // Return Helper Methods
+  async getNextRMANumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefix = `RMA-${year}-`;
+    const allReturns = Array.from(this.returnRequests.values());
+    const yearReturns = allReturns.filter(r => r.rmaNumber?.startsWith(prefix));
+    let maxNum = 0;
+    for (const r of yearReturns) {
+      const match = r.rmaNumber?.match(/RMA-\d{4}-(\d+)/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+    return `${prefix}${String(maxNum + 1).padStart(6, '0')}`;
+  }
+
+  async getReturnRequestByRMANumber(rmaNumber: string): Promise<ReturnRequest | undefined> {
+    return Array.from(this.returnRequests.values()).find(r => r.rmaNumber === rmaNumber);
+  }
+
+  async getReturnRequestByExternalOrderId(externalOrderId: string): Promise<ReturnRequest[]> {
+    return Array.from(this.returnRequests.values()).filter(r => r.externalOrderId === externalOrderId);
   }
 
   // Channels (Stubs - MemStorage not used in production)
@@ -3884,6 +3940,54 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.returnShipments.id, id))
       .returning();
     return results[0];
+  }
+
+  // Return Events
+  async getReturnEventsByRequestId(returnRequestId: string): Promise<ReturnEvent[]> {
+    return await this.db.select()
+      .from(schema.returnEvents)
+      .where(eq(schema.returnEvents.returnRequestId, returnRequestId))
+      .orderBy(drizzleSql`created_at DESC`);
+  }
+
+  async createReturnEvent(event: InsertReturnEvent): Promise<ReturnEvent> {
+    const results = await this.db.insert(schema.returnEvents).values(event).returning();
+    return results[0];
+  }
+
+  // Return Helper Methods
+  async getNextRMANumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefix = `RMA-${year}-`;
+    
+    const results = await this.db.select({ rmaNumber: schema.returnRequests.rmaNumber })
+      .from(schema.returnRequests)
+      .where(drizzleSql`rma_number LIKE ${prefix + '%'}`)
+      .orderBy(drizzleSql`rma_number DESC`)
+      .limit(1);
+    
+    let nextNum = 1;
+    if (results.length > 0 && results[0].rmaNumber) {
+      const match = results[0].rmaNumber.match(/RMA-\d{4}-(\d+)/);
+      if (match) {
+        nextNum = parseInt(match[1], 10) + 1;
+      }
+    }
+    
+    return `${prefix}${String(nextNum).padStart(6, '0')}`;
+  }
+
+  async getReturnRequestByRMANumber(rmaNumber: string): Promise<ReturnRequest | undefined> {
+    const results = await this.db.select()
+      .from(schema.returnRequests)
+      .where(eq(schema.returnRequests.rmaNumber, rmaNumber));
+    return results[0];
+  }
+
+  async getReturnRequestByExternalOrderId(externalOrderId: string): Promise<ReturnRequest[]> {
+    return await this.db.select()
+      .from(schema.returnRequests)
+      .where(eq(schema.returnRequests.externalOrderId, externalOrderId));
   }
 
   // Channels

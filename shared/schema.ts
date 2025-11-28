@@ -453,6 +453,9 @@ export const settings = pgTable("settings", {
   gohighlevelApiKey: text("gohighlevel_api_key"),
   gohighlevelLocationId: text("gohighlevel_location_id"), // GHL Location/Sub-Account ID
   gohighlevelBaseUrl: text("gohighlevel_base_url"), // GHL API base URL (defaults to leadconnectorhq)
+  gohighlevelReturnsPipelineId: text("gohighlevel_returns_pipeline_id"), // GHL pipeline for returns
+  gohighlevelReturnsStageIssueRefundId: text("gohighlevel_returns_stage_issue_refund_id"), // Stage for "Issue refund" task
+  gohighlevelReturnsStageRefundedId: text("gohighlevel_returns_stage_refunded_id"), // Stage for completed refunds
   shopifyApiKey: text("shopify_api_key"),
   extensivApiKey: text("extensiv_api_key"),
   phantombusterApiKey: text("phantombuster_api_key"),

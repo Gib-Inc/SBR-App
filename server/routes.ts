@@ -52,8 +52,11 @@ import {
   updateSalesOrderSchema,
   type Item,
   type SalesOrderLine,
+  type ReturnItem,
+  type ReturnRequest,
 } from "@shared/schema";
 import { createReturnLabelService } from "./return-label-service";
+import { returnsService } from "./services/returns-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
 
@@ -7789,6 +7792,163 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Returns] Error creating return from GHL:", error);
       res.status(400).json({ error: error.message || "Failed to create return from GHL" });
+    }
+  });
+
+  // Submit return request via ReturnsService (with auto-approval and label generation)
+  // POST /api/returns/request
+  const requestReturnSchema = z.object({
+    customerId: z.string().optional(),
+    customerName: z.string().min(1, "Customer name is required"),
+    customerEmail: z.string().email().optional(),
+    customerPhone: z.string().optional(),
+    channel: z.string().min(1, "Channel is required"),
+    orderId: z.string().min(1, "Order ID is required"),
+    externalOrderId: z.string().optional(),
+    items: z.array(z.object({
+      sku: z.string().min(1, "SKU is required"),
+      productName: z.string().optional(),
+      quantity: z.number().int().positive("Quantity must be positive"),
+      unitPrice: z.number().optional(),
+      orderLineId: z.string().optional(),
+    })).min(1, "At least one item is required"),
+    reasonCode: z.string().optional(),
+    reasonText: z.string().optional(),
+    desiredResolution: z.enum(['REFUND', 'REPLACEMENT', 'EXCHANGE', 'STORE_CREDIT']).optional(),
+    shippingAddress: z.any().optional(),
+    ghlContactId: z.string().optional(),
+    source: z.string().optional(),
+  });
+
+  app.post("/api/returns/request", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const validatedData = requestReturnSchema.parse(req.body);
+      const result = await returnsService.requestReturn(validatedData);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.status(201).json(result);
+    } catch (error: any) {
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ error: "Validation error", details: error.errors });
+      }
+      console.error("[Returns] Error submitting return request:", error);
+      res.status(500).json({ error: error.message || "Failed to submit return request" });
+    }
+  });
+
+  // Create return label via Shippo
+  // POST /api/returns/:id/create-label
+  app.post("/api/returns/:id/create-label", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const result = await returnsService.createReturnLabel(id);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Returns] Error creating return label:", error);
+      res.status(500).json({ error: error.message || "Failed to create return label" });
+    }
+  });
+
+  // Mark return as refund pending (creates GHL opportunity)
+  // POST /api/returns/:id/mark-refund-pending
+  app.post("/api/returns/:id/mark-refund-pending", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const success = await returnsService.markRefundIssuePending(id);
+      
+      if (!success) {
+        return res.status(400).json({ error: "Cannot mark refund pending from current status" });
+      }
+      
+      const returnDetails = await returnsService.getReturnWithDetails(id);
+      res.json(returnDetails);
+    } catch (error: any) {
+      console.error("[Returns] Error marking refund pending:", error);
+      res.status(500).json({ error: error.message || "Failed to mark refund pending" });
+    }
+  });
+
+  // Mark return refund as completed
+  // POST /api/returns/:id/mark-refund-completed
+  app.post("/api/returns/:id/mark-refund-completed", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { refundAmount } = req.body;
+      
+      const success = await returnsService.markRefundCompleted(id, refundAmount);
+      
+      if (!success) {
+        return res.status(400).json({ error: "Cannot mark refund completed from current status" });
+      }
+      
+      const returnDetails = await returnsService.getReturnWithDetails(id);
+      res.json(returnDetails);
+    } catch (error: any) {
+      console.error("[Returns] Error marking refund completed:", error);
+      res.status(500).json({ error: error.message || "Failed to mark refund completed" });
+    }
+  });
+
+  // Close return
+  // POST /api/returns/:id/close
+  app.post("/api/returns/:id/close", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const success = await returnsService.closeReturn(id);
+      
+      if (!success) {
+        return res.status(400).json({ error: "Cannot close return from current status" });
+      }
+      
+      const returnDetails = await returnsService.getReturnWithDetails(id);
+      res.json(returnDetails);
+    } catch (error: any) {
+      console.error("[Returns] Error closing return:", error);
+      res.status(500).json({ error: error.message || "Failed to close return" });
+    }
+  });
+
+  // Get return events (audit log)
+  // GET /api/returns/:id/events
+  app.get("/api/returns/:id/events", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const events = await storage.getReturnEventsByRequestId(id);
+      res.json(events);
+    } catch (error: any) {
+      console.error("[Returns] Error fetching return events:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch return events" });
+    }
+  });
+
+  // Get return details with full info
+  // GET /api/returns/:id/details
+  app.get("/api/returns/:id/details", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      
+      const details = await returnsService.getReturnWithDetails(id);
+      
+      if (!details) {
+        return res.status(404).json({ error: "Return not found" });
+      }
+      
+      res.json(details);
+    } catch (error: any) {
+      console.error("[Returns] Error fetching return details:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch return details" });
     }
   });
 

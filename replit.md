@@ -57,6 +57,9 @@ Preferred communication style: Simple, everyday language.
 *   **Idempotency Guarantees**: Unique constraints prevent duplicate order imports.
 *   **Extensiv Variance Tracking**: `extensivOnHandSnapshot` and `extensivLastSyncAt` track variance with Extensiv.
 *   **Customizable Label Printing**: Print Labels dialog supports custom label dimensions (width × height in inches), thermal/sheet layout toggle, saved format presets, and advanced sheet options (columns, rows, margins, gaps). Formats are saved per-user in the `label_formats` table.
+*   **Returns System**: Complete return lifecycle management with state machine (REQUESTED → APPROVED → LABEL_CREATED → IN_TRANSIT → RETURNED → REFUND_ISSUE_PENDING → REFUNDED → CLOSED), RMA number generation (format: RMA-YYYY-000001), Shippo integration for return label generation, and GHL refund opportunity sync. Supports both manual UI returns and GHL bot-initiated returns.
+*   **Returns Service Architecture**: ReturnsService (server/services/returns-service.ts) manages return lifecycle, ShippoReturnsService (server/services/shippo-returns-service.ts) handles label generation via Shippo API, ReturnGHLSyncService (server/services/return-ghl-sync-service.ts) syncs refund tasks to GoHighLevel pipeline. Return events are tracked in return_events table for full audit trail.
+*   **Returns Environment Variables**: SHIPPO_API_KEY (for Shippo return labels), SHIPPO_WAREHOUSE_* (warehouse address), and GHL returns pipeline IDs in settings (gohighlevelReturnsPipelineId, gohighlevelReturnsStageIssueRefundId, gohighlevelReturnsStageRefundedId).
 
 ## External Dependencies
 

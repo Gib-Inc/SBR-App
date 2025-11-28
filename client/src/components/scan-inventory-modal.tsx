@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CheckCircle2, X, AlertTriangle, Package, Camera, Keyboard, Loader2 } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Package, Camera, Keyboard, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { CameraBarcodeScanner } from "./camera-barcode-scanner";
@@ -285,17 +285,7 @@ export function ScanInventoryModal({
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <div className="flex items-center justify-between">
-            <DialogTitle>Scan Inventory</DialogTitle>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleClose}
-              data-testid="button-close-scan-modal"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+          <DialogTitle>Scan Inventory</DialogTitle>
         </DialogHeader>
 
         <div className="flex-1 overflow-auto space-y-4">

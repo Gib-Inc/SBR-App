@@ -7852,6 +7852,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Get all ad performance snapshots
+  // GET /api/ad-performance-snapshots
+  app.get("/api/ad-performance-snapshots", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const snapshots = await storage.getAllAdPerformanceSnapshots();
+      res.json(snapshots);
+    } catch (error: any) {
+      console.error("[Ad Performance] Error fetching ad performance snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ad performance snapshots" });
+    }
+  });
+
   // ============================================================================
   // MULTI-CHANNEL MARKETING & SALES INTEGRATION
   // ============================================================================

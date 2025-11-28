@@ -283,14 +283,14 @@ export default function Dashboard() {
                       </td>
                       <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.currentStock}</td>
                       <td className="px-3 text-right whitespace-nowrap">
-                        <Badge variant={ctx.daysOfStock <= 7 ? "destructive" : ctx.daysOfStock <= 14 ? "secondary" : "outline"}>
-                          {ctx.daysOfStock} days
+                        <Badge variant={(ctx.daysOfStock ?? 0) <= 7 ? "destructive" : (ctx.daysOfStock ?? 0) <= 14 ? "secondary" : "outline"}>
+                          {ctx.daysOfStock ?? 0} days
                         </Badge>
                       </td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.salesVelocity.toFixed(1)}</td>
-                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.inboundUnits}</td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">{(ctx.salesVelocity ?? 0).toFixed(1)}</td>
+                      <td className="px-3 text-right font-mono whitespace-nowrap">{ctx.inboundUnits ?? 0}</td>
                       <td className="px-3 text-right font-mono whitespace-nowrap">
-                        {ctx.roas > 0 ? `${ctx.roas.toFixed(2)}x` : "-"}
+                        {(ctx.roas ?? 0) > 0 ? `${(ctx.roas ?? 0).toFixed(2)}x` : "-"}
                       </td>
                     </tr>
                   ))}
@@ -383,36 +383,39 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {adSnapshots.slice(0, 10).map((snap) => {
-                      const snapConvRate = snap.clicks > 0 ? (snap.conversions / snap.clicks) * 100 : 0;
+                      const clicks = snap.clicks ?? 0;
+                      const conversions = snap.conversions ?? 0;
+                      const snapConvRate = clicks > 0 ? (conversions / clicks) * 100 : 0;
+                      const roas = snap.roas ?? 0;
                       return (
                         <tr key={snap.id} className="h-10 border-b hover-elevate" data-testid={`row-ad-${snap.id}`}>
                           <td className="px-3 whitespace-nowrap font-medium">{snap.campaignName || "Unknown Campaign"}</td>
                           <td className="px-3 whitespace-nowrap">
-                            <Badge variant="outline">{snap.platform}</Badge>
+                            <Badge variant="outline">{snap.platform || "Unknown"}</Badge>
                           </td>
                           <td className="px-3 text-right font-mono whitespace-nowrap">
-                            ${snap.spend.toFixed(2)}
+                            ${(snap.spend ?? 0).toFixed(2)}
                           </td>
                           <td className="px-3 text-right font-mono whitespace-nowrap">
-                            {snap.impressions.toLocaleString()}
+                            {(snap.impressions ?? 0).toLocaleString()}
                           </td>
                           <td className="px-3 text-right font-mono whitespace-nowrap">
                             {snapConvRate.toFixed(2)}%
                           </td>
                           <td className="px-3 text-right font-mono whitespace-nowrap">
-                            ${snap.revenue.toFixed(2)}
+                            ${(snap.revenue ?? 0).toFixed(2)}
                           </td>
                           <td className="px-3 text-center whitespace-nowrap">
-                            {snap.roas >= 2 ? (
+                            {roas >= 2 ? (
                               <TrendingUp className="h-4 w-4 text-green-600 inline" />
-                            ) : snap.roas >= 1 ? (
+                            ) : roas >= 1 ? (
                               <Minus className="h-4 w-4 text-muted-foreground inline" />
                             ) : (
                               <TrendingDown className="h-4 w-4 text-red-600 inline" />
                             )}
                           </td>
                           <td className="px-3 text-right text-xs text-muted-foreground whitespace-nowrap">
-                            {formatDistanceToNow(new Date(snap.createdAt), { addSuffix: true })}
+                            {snap.createdAt ? formatDistanceToNow(new Date(snap.createdAt), { addSuffix: true }) : "-"}
                           </td>
                         </tr>
                       );

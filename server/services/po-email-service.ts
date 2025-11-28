@@ -131,8 +131,8 @@ export class PurchaseOrderEmailService {
     const po = await storage.getPurchaseOrder(poId);
     if (!po) return null;
 
-    const lines = await storage.getPurchaseOrderLines(poId);
-    const supplier = po.supplierId ? await storage.getSupplier(po.supplierId) : null;
+    const lines = await storage.getPurchaseOrderLinesByPOId(poId);
+    const supplier = po.supplierId ? (await storage.getSupplier(po.supplierId)) || null : null;
 
     return { po, lines, supplier };
   }

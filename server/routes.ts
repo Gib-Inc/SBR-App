@@ -6103,7 +6103,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // Send PO
+  // Send PO (email to supplier via SendGrid + sync to GHL)
   app.post("/api/purchase-orders/:id/send", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -6113,16 +6113,74 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(404).json({ error: "Purchase order not found" });
       }
 
-      if (po.status !== 'APPROVED') {
-        return res.status(409).json({ error: `Cannot send PO in ${po.status} status. Must be APPROVED.` });
+      // Only allow sending from DRAFT or APPROVED status
+      if (!['DRAFT', 'APPROVED'].includes(po.status)) {
+        if (po.status === 'SENT' || ['PARTIAL_RECEIVED', 'RECEIVED', 'CLOSED'].includes(po.status)) {
+          return res.status(400).json({ 
+            error: "This PO has already been sent. Use 'Resend' if you want to send it again.",
+            currentStatus: po.status,
+          });
+        }
+        return res.status(409).json({ 
+          error: `Cannot send PO in ${po.status} status. Must be DRAFT or APPROVED.`,
+          currentStatus: po.status,
+        });
       }
 
-      const updated = await storage.updatePurchaseOrder(id, {
+      // Import email service dynamically to avoid circular dependencies
+      const { purchaseOrderEmailService } = await import("./services/po-email-service");
+      const { poGHLSyncService } = await import("./services/po-ghl-sync-service");
+
+      // Send the PO via email
+      const emailResult = await purchaseOrderEmailService.sendPurchaseOrderEmail(id);
+      
+      if (!emailResult.success) {
+        // Update PO with failed email status
+        await storage.updatePurchaseOrder(id, {
+          lastEmailStatus: 'FAILED',
+          lastEmailError: emailResult.error || 'Unknown error',
+        });
+        
+        return res.status(400).json({ 
+          error: emailResult.error || "Failed to send email",
+          emailStatus: 'FAILED',
+        });
+      }
+
+      // Email sent successfully - update PO
+      const updateData: any = {
         status: 'SENT',
         sentAt: new Date(),
-      });
+        emailTo: emailResult.recipientEmail,
+        emailSubject: emailResult.subject,
+        emailBodyText: emailResult.bodyText,
+        lastEmailStatus: 'SENT',
+        lastEmailSentAt: new Date(),
+        lastEmailProviderMessageId: emailResult.messageId,
+        lastEmailError: null,
+      };
 
-      res.json(updated);
+      const updated = await storage.updatePurchaseOrder(id, updateData);
+      
+      console.log(`[PurchaseOrder] PO ${po.poNumber} sent via email to ${emailResult.recipientEmail}`);
+
+      // Sync to GHL (non-blocking, log errors but don't fail the request)
+      try {
+        const ghlResult = await poGHLSyncService.syncPurchaseOrderToGHL(id);
+        if (ghlResult.success) {
+          console.log(`[PurchaseOrder] PO ${po.poNumber} synced to GHL: ${ghlResult.opportunityId}`);
+        } else {
+          console.warn(`[PurchaseOrder] GHL sync skipped or failed for PO ${po.poNumber}: ${ghlResult.error}`);
+        }
+      } catch (ghlError: any) {
+        console.error(`[PurchaseOrder] GHL sync error for PO ${po.poNumber}:`, ghlError.message);
+      }
+
+      res.json({
+        ...updated,
+        emailSent: true,
+        emailTo: emailResult.recipientEmail,
+      });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error sending PO:", error);
       res.status(500).json({ error: "Failed to send purchase order" });

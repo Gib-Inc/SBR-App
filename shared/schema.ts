@@ -148,20 +148,56 @@ export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
 
 // ============================================================================
-// PURCHASE ORDERS (with Issue & Refund Tracking)
+// PURCHASE ORDERS (Full PO System - This App is System of Record)
 // ============================================================================
+// LEGAL NOTICE: Purchase orders created here are official purchasing documents.
+// They should be reviewed before sending to suppliers. Supplier terms and email
+// content must comply with actual contracts and local laws. Any automated sending
+// should include internal approvals (e.g. GHL approvals) before emailing suppliers.
 
 export const purchaseOrders = pgTable("purchase_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   poNumber: text("po_number").notNull().unique(), // e.g., PO-2025-0001
+  
+  // Buyer Information
+  buyerCompanyName: text("buyer_company_name"),
+  buyerAddress: text("buyer_address"),
+  
+  // Supplier Information (denormalized for historical record)
   supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  supplierName: text("supplier_name"), // Snapshot at PO creation
+  supplierEmail: text("supplier_email"), // Snapshot at PO creation
+  supplierAddress: text("supplier_address"), // Snapshot at PO creation
+  
+  // Shipping & Terms
+  shipToLocation: text("ship_to_location"), // Where goods should be delivered
+  currency: text("currency").notNull().default('USD'),
+  paymentTerms: text("payment_terms"), // e.g., "Net 30", "Due on Receipt"
+  incoterms: text("incoterms"), // e.g., "FOB", "CIF", "EXW"
+  
+  // Dates
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   approvedAt: timestamp("approved_at"),
   sentAt: timestamp("sent_at"),
   expectedDate: timestamp("expected_date"),
   receivedAt: timestamp("received_at"),
   paidAt: timestamp("paid_at"),
-  status: text("status").notNull().default('DRAFT'), // DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED, CANCELLED
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  
+  // Status (State Machine enforced)
+  // Valid transitions: DRAFT → APPROVED → SENT → PARTIALLY_RECEIVED/RECEIVED → CLOSED
+  // Any open state → CANCELLED (with cancellationReason)
+  status: text("status").notNull().default('DRAFT'),
+  cancellationReason: text("cancellation_reason"),
+  
+  // Financial Summary
+  subtotal: real("subtotal").notNull().default(0),
+  shippingCost: real("shipping_cost").notNull().default(0),
+  otherFees: real("other_fees").notNull().default(0),
+  total: real("total").notNull().default(0),
+  
+  // Issue & Refund Tracking
   hasIssue: boolean("has_issue").notNull().default(false),
   issueStatus: text("issue_status").notNull().default('NONE'), // NONE, OPEN, IN_PROGRESS, RESOLVED
   issueOpenedAt: timestamp("issue_opened_at"),
@@ -170,17 +206,41 @@ export const purchaseOrders = pgTable("purchase_orders", {
   issueNotes: text("issue_notes"),
   refundStatus: text("refund_status").notNull().default('NONE'), // NONE, REQUESTED, PARTIAL_REFUND, FULL_REFUND
   refundAmount: real("refund_amount").default(0),
+  
+  // Notes & Comments
   notes: text("notes"),
+  internalNotes: text("internal_notes"), // Not shown on PDF/emails
+  
+  // GHL Integration (Communication/Approval Layer Only)
+  ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity
   ghlRepName: text("ghl_rep_name"), // GoHighLevel rep who issued the PO
-  // GHL Send tracking fields (V1 Direct API)
   lastSendChannel: text("last_send_channel"), // EMAIL, SMS
   lastSendStatus: text("last_send_status"), // SUCCESS, FAILED
   lastSendTimestamp: timestamp("last_send_timestamp"),
   lastSendMessageId: text("last_send_message_id"), // GHL message ID for audit/tracking
   lastSendError: text("last_send_error"), // Error message if send failed
-});
+  
+  // External Integrations (Reserved for future)
+  externalAccountingId: text("external_accounting_id"), // e.g., QuickBooks PO ID
+}, (table) => ({
+  statusIdx: index("purchase_orders_status_idx").on(table.status),
+  supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),
+  createdAtIdx: index("purchase_orders_created_at_idx").on(table.createdAt),
+}));
 
-export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true });
+// PO Status enum for type safety
+export const PO_STATUS = {
+  DRAFT: 'DRAFT',
+  APPROVED: 'APPROVED',
+  SENT: 'SENT',
+  PARTIALLY_RECEIVED: 'PARTIALLY_RECEIVED',
+  RECEIVED: 'RECEIVED',
+  CLOSED: 'CLOSED',
+  CANCELLED: 'CANCELLED',
+} as const;
+export type POStatus = typeof PO_STATUS[keyof typeof PO_STATUS];
+
+export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true, createdAt: true, updatedAt: true });
 export const updatePurchaseOrderSchema = insertPurchaseOrderSchema.partial();
 export type InsertPurchaseOrder = z.infer<typeof insertPurchaseOrderSchema>;
 export type PurchaseOrder = typeof purchaseOrders.$inferSelect;
@@ -193,21 +253,84 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   purchaseOrderId: varchar("purchase_order_id").notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
   itemId: varchar("item_id").notNull().references(() => items.id),
+  
+  // Item Details (denormalized for historical record)
+  sku: text("sku"), // Snapshot at line creation
+  itemName: text("item_name"), // Snapshot at line creation
+  unitOfMeasure: text("unit_of_measure").notNull().default('EA'), // EA, CS, PK, etc.
+  
+  // Quantities
   qtyOrdered: integer("qty_ordered").notNull(),
   qtyReceived: integer("qty_received").notNull().default(0),
-  unitCost: real("unit_cost"),
+  
+  // Pricing
+  unitCost: real("unit_cost").notNull().default(0),
+  lineTotal: real("line_total").notNull().default(0), // qtyOrdered * unitCost
+  
+  // Per-line dates
+  expectedArrivalDate: timestamp("expected_arrival_date"),
+  
   // AI Recommendation tracking
   aiRecommendationId: varchar("ai_recommendation_id").references(() => aiRecommendations.id),
   recommendedQtyAtOrderTime: integer("recommended_qty_at_order_time"), // AI suggested quantity when PO was created
   finalOrderedQty: integer("final_ordered_qty"), // What user actually ordered (may differ from recommendedQty)
+  
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
   purchaseOrderIdIdx: index("purchase_order_lines_purchase_order_id_idx").on(table.purchaseOrderId),
   aiRecommendationIdIdx: index("purchase_order_lines_ai_recommendation_id_idx").on(table.aiRecommendationId),
+  itemIdIdx: index("purchase_order_lines_item_id_idx").on(table.itemId),
 }));
 
-export const insertPurchaseOrderLineSchema = createInsertSchema(purchaseOrderLines).omit({ id: true });
+export const insertPurchaseOrderLineSchema = createInsertSchema(purchaseOrderLines).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertPurchaseOrderLine = z.infer<typeof insertPurchaseOrderLineSchema>;
 export type PurchaseOrderLine = typeof purchaseOrderLines.$inferSelect;
+
+// ============================================================================
+// PURCHASE ORDER RECEIPTS (Receiving Events)
+// ============================================================================
+
+export const purchaseOrderReceipts = pgTable("purchase_order_receipts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  purchaseOrderId: varchar("purchase_order_id").notNull().references(() => purchaseOrders.id, { onDelete: 'cascade' }),
+  dateReceived: timestamp("date_received").notNull().default(sql`now()`),
+  warehouseLocation: text("warehouse_location"), // e.g., "HILDALE", "PIVOT"
+  receivedBy: text("received_by"), // User who recorded the receipt
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  purchaseOrderIdIdx: index("purchase_order_receipts_purchase_order_id_idx").on(table.purchaseOrderId),
+  dateReceivedIdx: index("purchase_order_receipts_date_received_idx").on(table.dateReceived),
+}));
+
+export const insertPurchaseOrderReceiptSchema = createInsertSchema(purchaseOrderReceipts).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPurchaseOrderReceipt = z.infer<typeof insertPurchaseOrderReceiptSchema>;
+export type PurchaseOrderReceipt = typeof purchaseOrderReceipts.$inferSelect;
+
+// ============================================================================
+// PURCHASE ORDER RECEIPT LINES (Per-item Receiving Details)
+// ============================================================================
+
+export const purchaseOrderReceiptLines = pgTable("purchase_order_receipt_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  receiptId: varchar("receipt_id").notNull().references(() => purchaseOrderReceipts.id, { onDelete: 'cascade' }),
+  purchaseOrderLineId: varchar("purchase_order_line_id").notNull().references(() => purchaseOrderLines.id, { onDelete: 'cascade' }),
+  sku: text("sku"), // Denormalized for quick reference
+  receivedQty: integer("received_qty").notNull(),
+  condition: text("condition").notNull().default('GOOD'), // GOOD, DAMAGED, DEFECTIVE
+  conditionNotes: text("condition_notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  receiptIdIdx: index("purchase_order_receipt_lines_receipt_id_idx").on(table.receiptId),
+  purchaseOrderLineIdIdx: index("purchase_order_receipt_lines_po_line_id_idx").on(table.purchaseOrderLineId),
+}));
+
+export const insertPurchaseOrderReceiptLineSchema = createInsertSchema(purchaseOrderReceiptLines).omit({ id: true, createdAt: true });
+export type InsertPurchaseOrderReceiptLine = z.infer<typeof insertPurchaseOrderReceiptLineSchema>;
+export type PurchaseOrderReceiptLine = typeof purchaseOrderReceiptLines.$inferSelect;
 
 // ============================================================================
 // SUPPLIER LEADS (Discovery & Qualification)

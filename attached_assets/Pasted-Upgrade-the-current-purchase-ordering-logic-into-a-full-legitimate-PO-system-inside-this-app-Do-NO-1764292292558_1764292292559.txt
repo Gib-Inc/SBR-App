@@ -1,0 +1,196 @@
+Upgrade the current purchase ordering logic into a full, legitimate PO system inside this app. Do NOT rely on GHL Opportunities as the primary record; use this app’s DB as the system of record and use GHL only as an approval/communication layer.
+
+==================================================
+A) DATABASE & MODELS – PURCHASE ORDERS
+==================================================
+Create or update models and tables for:
+
+1) PURCHASE ORDERS (table: purchase_orders)
+   Fields:
+   - id (PK)
+   - poNumber (string, unique, human-friendly sequential number)
+   - buyerCompanyName
+   - buyerAddress
+   - supplierId (FK to suppliers)
+   - supplierName
+   - supplierEmail
+   - supplierAddress
+   - shipToLocation
+   - currency
+   - paymentTerms
+   - incoterms (nullable)
+   - expectedArrivalDate (nullable)
+   - status enum:
+     - DRAFT
+     - APPROVED
+     - SENT
+     - PARTIALLY_RECEIVED
+     - RECEIVED
+     - CLOSED
+     - CANCELLED
+   - subtotal
+   - shippingCost
+   - otherFees
+   - total
+   - ghlOpportunityId (nullable; for linking into GHL)
+   - externalAccountingId (nullable; reserved for future integration)
+   - createdAt
+   - updatedAt
+
+2) PURCHASE ORDER LINES (table: purchase_order_lines)
+   Fields:
+   - id (PK)
+   - purchaseOrderId (FK to purchase_orders)
+   - sku
+   - itemName
+   - unitOfMeasure
+   - orderedQty
+   - receivedQty (default 0)
+   - unitCost
+   - lineTotal
+   - expectedArrivalDate (nullable)
+   - createdAt
+   - updatedAt
+
+3) RECEIPTS (table: purchase_order_receipts)
+   Fields:
+   - id (PK)
+   - purchaseOrderId (FK)
+   - dateReceived
+   - warehouseLocation
+   - createdAt
+   - updatedAt
+
+   And a child structure for receipt lines (can be a separate table purchase_order_receipt_lines):
+   - id
+   - receiptId (FK to purchase_order_receipts)
+   - sku
+   - receivedQty
+
+Update ORM/typescript models and API types accordingly.
+
+==================================================
+B) PO STATE MACHINE + API
+==================================================
+Implement a state machine for purchase_orders.status:
+
+- Valid transitions:
+  - DRAFT → APPROVED
+  - APPROVED → SENT
+  - SENT → PARTIALLY_RECEIVED
+  - PARTIALLY_RECEIVED → RECEIVED
+  - RECEIVED → CLOSED
+  - Any open state → CANCELLED (with reason)
+
+API endpoints (REST or equivalent):
+
+1) POST /api/purchase-orders
+   - Create a new PO in DRAFT with header + line items.
+   - Autogenerate poNumber (sequential) using a central helper.
+
+2) GET /api/purchase-orders
+   - List POs with filters: status, supplierId, date range.
+
+3) GET /api/purchase-orders/:id
+   - Return header, lines, derived totals, and receipts.
+
+4) PATCH /api/purchase-orders/:id
+   - Update header fields (buyer/supplier info, dates, terms).
+   - Change status using the allowed transitions only.
+
+5) POST /api/purchase-orders/:id/lines
+   - Add or update line items (sku, orderedQty, unitCost, etc.).
+
+6) POST /api/purchase-orders/:id/receipts
+   - Body: dateReceived, warehouseLocation, and an array of { sku, receivedQty }.
+   - Logic:
+     - For each line:
+       - Increase line.receivedQty by sum of receipts for that sku.
+       - Cap at orderedQty.
+     - Update purchase order status:
+       - If some but not all orderedQty are received: PARTIALLY_RECEIVED.
+       - If all orderedQty are received: RECEIVED.
+     - Update inventory tables to add receivedQty to on-hand stock for each sku.
+
+==================================================
+C) GHL INTEGRATION AS APPROVAL/COMMS LAYER
+==================================================
+Modify the “Fix in GHL” flow so that:
+
+1) When we detect high/critical risk items:
+   - We FIRST create one or more purchase_orders in this app (status = DRAFT) with full header + lines.
+   - THEN for each purchase_order:
+     - Create or update a GHL Opportunity in the “Purchasing” pipeline.
+     - Store the resulting ghlOpportunityId on the purchase_orders row.
+     - Include in GHL custom fields:
+       - poNumber
+       - poTotal (total)
+       - poStatus (mirrors our status)
+       - earliestStockoutDate among the items on that PO
+     - Add a note to the Opportunity with a human-readable summary of each line (sku, name, orderedQty, projected stockout, etc.).
+
+2) Add an endpoint to receive approval updates from GHL:
+   - POST /api/webhooks/ghl/po-approved
+     - Body contains ghlOpportunityId or poNumber.
+     - Logic:
+       - Look up the corresponding purchase_order.
+       - Change status from DRAFT → APPROVED.
+       - Optionally auto-change to SENT if configured.
+
+3) Provide a URL for each PO detail:
+   - e.g. /purchase-orders/:id
+   - Use this as the deep link from GHL so users can open the full PO view in this app.
+
+==================================================
+D) PO BUILDER UI (IN THIS APP)
+==================================================
+On the PO builder screen:
+
+1) Show a list of POs with:
+   - Columns: PO Number, Supplier, Status, Total, Expected Arrival, Last Updated.
+   - Filter by status and supplier.
+
+2) PO Detail view:
+   - Header section: buyer + supplier + terms + status.
+   - Lines table: SKU, Item Name, Ordered Qty, Received Qty, Unit Cost, Line Total.
+   - Summary: Subtotal, shipping, otherFees, total.
+   - Receipts section: all receipts and per-line receivedQty.
+   - Buttons:
+     - “Approve” (DRAFT → APPROVED)
+     - “Mark as Sent” (APPROVED → SENT)
+     - “Record Receipt” (opens receipt entry modal)
+     - “Close PO” (RECEIVED → CLOSED)
+   - “Export PDF” button that generates a printable PO document.
+
+3) PDF Template:
+   - Generate a clean PDF for the PO with:
+     - Buyer and supplier info.
+     - PO number and date.
+     - Table of lines (sku, description, qty, price, line total).
+     - Terms, currency, payment terms, etc.
+
+==================================================
+E) WIRING WITH STOCK WARNING BANNER
+==================================================
+- The Dashboard stock warning banner continues to use the same “at risk” logic.
+- When the user clicks “Fix in GHL”:
+  - The app:
+    - Creates DRAFT POs in this PO system (as in section C).
+    - Creates corresponding GHL Opportunities linked via poNumber/ghlOpportunityId.
+    - Returns the URL of the most urgent PO detail page (in this app).
+  - The frontend:
+    - Opens that PO detail page in a new tab.
+    - From there, the user can review, approve, and send the PO.
+
+==================================================
+F) COMMENTS ABOUT LEGALITY / LEGITIMACY (IN CODE COMMENTS)
+==================================================
+- Add comments near PO PDF/email logic that:
+  - POs created here are official purchase documents and should be reviewed before sending.
+  - Supplier terms and email content must comply with the actual contracts and local laws.
+  - Any automated sending should include internal approvals (e.g. GHL approvals) before emailing suppliers.
+
+Implement all of the above so that:
+- The PO system in THIS app is a complete, auditable source of truth.
+- GHL is used for approvals, reminders, and communication, not as the primary PO record.
+- The existing stock warning and “Fix in GHL” flows now create and manage real, legitimate purchase orders.

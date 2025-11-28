@@ -28,8 +28,8 @@ Preferred communication style: Simple, everyday language.
 ### Data Architecture
 
 *   **Database**: PostgreSQL (via Neon serverless driver) with Drizzle Kit for migrations.
-*   **Core Entities**: Users, Items, Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders, BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes, LabelFormats.
-*   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers, SalesOrders to Items via line items with SKU mapping.
+*   **Core Entities**: Users, Items, Bins, InventoryByBin, BillOfMaterials, Suppliers, SupplierItems, SalesHistory, SalesOrders, BackorderSnapshots, FinishedInventorySnapshot, IntegrationHealth, IntegrationConfigs, Settings, Barcodes, LabelFormats, PurchaseOrders, PurchaseOrderLines, PurchaseOrderReceipts, PurchaseOrderReceiptLines.
+*   **Relationships**: Products to BOM to Components, Items to InventoryByBin to Bins, Items to SupplierItems to Suppliers, SalesOrders to Items via line items with SKU mapping, PurchaseOrders to Suppliers, PurchaseOrderLines to Items, Receipts to POs.
 *   **Integration Data**: SalesOrders include rawPayload JSONB field.
 
 ### Forecasting & Analytics
@@ -48,6 +48,10 @@ Preferred communication style: Simple, everyday language.
 *   **Demo Data Seeding**: Development database can be populated with realistic demo data.
 *   **UI/UX**: Responsive layouts, sticky table elements, and standardized table presentation.
 *   **LLM-Powered PO Creation**: 3-step wizard for Purchase Order creation with LLM-generated messages and GoHighLevel integration for sending.
+*   **Purchase Order State Machine**: Full lifecycle management with status transitions: DRAFT → APPROVAL_PENDING → APPROVED → SENT → PARTIAL_RECEIVED/RECEIVED → CLOSED. Cancellation only allowed from open states (DRAFT, APPROVAL_PENDING, APPROVED, SENT).
+*   **PO Receipt Tracking**: PurchaseOrderReceipts and PurchaseOrderReceiptLines track partial and full receipts against POs, with automatic status transitions.
+*   **PO PDF Export**: Professional PDF generation using pdfkit with company branding, line items table, and financial totals. Available via `/api/purchase-orders/:id/pdf`.
+*   **Fix-in-GHL Integration**: Stock Warning Banner creates real Purchase Orders in system first, then optionally links to GoHighLevel opportunities via ghlOpportunityId field for supplier communication.
 *   **Integration Health & Key Rotation**: Automated monitoring of OAuth tokens and API keys, health status classification (OK, WARNING, CRITICAL, EXPIRED), and alerts.
 *   **System of Record Principles**: Inventory App is the system of record for quantities; Shopify/Amazon are order sources only; Extensiv/Pivot are read-only; QuickBooks is financial-only; GoHighLevel is messaging-only; PhantomBuster is discovery-only.
 *   **Idempotency Guarantees**: Unique constraints prevent duplicate order imports.

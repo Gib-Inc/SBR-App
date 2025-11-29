@@ -70,36 +70,47 @@ interface PurchaseOrderWithSupplier extends PurchaseOrder {
   lines?: any[];
 }
 
-type POStatus =
+// Unified PO lifecycle status (uses displayStatus from API)
+type PODisplayStatus =
   | "DRAFT"
-  | "APPROVAL_PENDING"
-  | "APPROVED"
   | "SENT"
-  | "PARTIAL_RECEIVED"
+  | "ACCEPTED"
+  | "PARTIAL"
   | "RECEIVED"
   | "CLOSED"
   | "CANCELLED";
 
-const STATUS_CONFIG: Record<POStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
+// Legacy status type for backward compatibility
+type POStatus = PODisplayStatus | "APPROVAL_PENDING" | "APPROVED" | "PARTIAL_RECEIVED" | "PARTIALLY_RECEIVED";
+
+const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: any }> = {
   DRAFT: { label: "Draft", variant: "secondary", icon: FileText },
-  APPROVAL_PENDING: { label: "Pending Approval", variant: "outline", icon: Clock },
-  APPROVED: { label: "Approved", variant: "default", icon: CheckCircle },
   SENT: { label: "Sent", variant: "default", icon: Send },
+  ACCEPTED: { label: "Accepted", variant: "default", icon: CheckCircle2 },
+  PARTIAL: { label: "Partial", variant: "outline", icon: PackageCheck },
+  PARTIALLY_RECEIVED: { label: "Partial", variant: "outline", icon: PackageCheck },
   PARTIAL_RECEIVED: { label: "Partial", variant: "outline", icon: PackageCheck },
   RECEIVED: { label: "Received", variant: "default", icon: Truck },
   CLOSED: { label: "Closed", variant: "secondary", icon: CheckCircle },
   CANCELLED: { label: "Cancelled", variant: "destructive", icon: XCircle },
+  // Legacy statuses (show as Draft in unified view)
+  APPROVAL_PENDING: { label: "Draft", variant: "secondary", icon: FileText },
+  APPROVED: { label: "Draft", variant: "secondary", icon: FileText },
 };
 
-const STATUS_COLORS: Record<POStatus, string> = {
+const STATUS_COLORS: Record<string, string> = {
   DRAFT: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
-  APPROVAL_PENDING: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-  APPROVED: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
   SENT: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400",
+  ACCEPTED: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  PARTIAL: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+  PARTIALLY_RECEIVED: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
   PARTIAL_RECEIVED: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
   RECEIVED: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
   CLOSED: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
   CANCELLED: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+  // Legacy statuses
+  APPROVAL_PENDING: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  APPROVED: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -481,7 +492,9 @@ export default function PurchaseOrders() {
       po.supplier?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       po.supplierName?.toLowerCase().includes(searchQuery.toLowerCase());
     
-    const matchesStatus = statusFilter === "all" || po.status === statusFilter;
+    // Use displayStatus for filtering (unified lifecycle status)
+    const poDisplayStatus = (po as any).displayStatus || po.status;
+    const matchesStatus = statusFilter === "all" || poDisplayStatus === statusFilter;
     
     return matchesSearch && matchesStatus;
   });
@@ -492,8 +505,10 @@ export default function PurchaseOrders() {
     return dateB - dateA;
   });
 
+  // Use displayStatus for status counts
   const statusCounts = enrichedPOs.reduce((acc, po) => {
-    acc[po.status] = (acc[po.status] || 0) + 1;
+    const displayStatus = (po as any).displayStatus || po.status;
+    acc[displayStatus] = (acc[displayStatus] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
@@ -604,11 +619,13 @@ export default function PurchaseOrders() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
-                  {Object.entries(STATUS_CONFIG).map(([status, config]) => (
-                    <SelectItem key={status} value={status}>
-                      {config.label}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="DRAFT">Draft</SelectItem>
+                  <SelectItem value="SENT">Sent</SelectItem>
+                  <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                  <SelectItem value="PARTIAL">Partial</SelectItem>
+                  <SelectItem value="RECEIVED">Received</SelectItem>
+                  <SelectItem value="CLOSED">Closed</SelectItem>
+                  <SelectItem value="CANCELLED">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -631,7 +648,6 @@ export default function PurchaseOrders() {
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Email</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Ack</th>
                   <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Items</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected</th>
@@ -642,7 +658,7 @@ export default function PurchaseOrders() {
               <tbody>
                 {sortedPOs.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="h-32 text-center text-muted-foreground">
+                    <td colSpan={9} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -663,19 +679,13 @@ export default function PurchaseOrders() {
                         <span className="font-medium">{po.supplier?.name || po.supplierName || "-"}</span>
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">
-                        <StatusBadge status={po.status} />
+                        <StatusBadge status={(po as any).displayStatus || po.status} />
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">
                         <EmailStatusBadge 
                           status={(po as any).lastEmailStatus} 
                           sentAt={(po as any).lastEmailSentAt}
                           emailTo={(po as any).emailTo}
-                        />
-                      </td>
-                      <td className="p-3 align-middle whitespace-nowrap">
-                        <AckStatusBadge 
-                          status={(po as any).acknowledgementStatus} 
-                          acknowledgedAt={(po as any).acknowledgedAt}
                         />
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap text-center">
@@ -709,7 +719,8 @@ export default function PurchaseOrders() {
                                 <FileDown className="h-4 w-4 mr-2" />
                                 Download PDF
                               </DropdownMenuItem>
-                              {(po.status === "DRAFT" || po.status === "APPROVED") && (
+                              {/* Show Send PO for Draft status */}
+                              {((po as any).displayStatus === "DRAFT" || po.status === "DRAFT" || po.status === "APPROVED") && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem 
@@ -724,7 +735,8 @@ export default function PurchaseOrders() {
                                   </DropdownMenuItem>
                                 </>
                               )}
-                              {(po.status === "SENT" || po.status === "PARTIAL_RECEIVED") && (
+                              {/* Show Confirm Receipt for Sent, Accepted, or Partial status */}
+                              {["SENT", "ACCEPTED", "PARTIAL"].includes((po as any).displayStatus || po.status) && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleAction(po.id, "bulk-confirm-receipt"); }}>
@@ -733,7 +745,8 @@ export default function PurchaseOrders() {
                                   </DropdownMenuItem>
                                 </>
                               )}
-                              {!["CLOSED", "CANCELLED", "RECEIVED", "PARTIAL_RECEIVED"].includes(po.status) && (
+                              {/* Show Cancel for open statuses */}
+                              {!["CLOSED", "CANCELLED", "RECEIVED"].includes((po as any).displayStatus || po.status) && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
@@ -779,7 +792,7 @@ export default function PurchaseOrders() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  <StatusBadge status={poDetails.status} />
+                  <StatusBadge status={poDetails.displayStatus || poDetails.status} />
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Order Date</p>
@@ -819,20 +832,10 @@ export default function PurchaseOrders() {
                       {poDetails.emailTo || poDetails.supplierEmail || selectedPO?.supplier?.email || "-"}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Acknowledgement</p>
-                    {poDetails.acknowledgementStatus && poDetails.acknowledgementStatus !== 'NONE' ? (
-                      <AckStatusBadge 
-                        status={poDetails.acknowledgementStatus} 
-                        acknowledgedAt={poDetails.acknowledgedAt}
-                      />
-                    ) : (
-                      <span className="text-sm text-muted-foreground">Not confirmed</span>
-                    )}
-                  </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {(poDetails.status === "DRAFT" || poDetails.status === "APPROVED") && (
+                  {/* Show Send PO for Draft status */}
+                  {(poDetails.displayStatus === "DRAFT" || poDetails.status === "DRAFT" || poDetails.status === "APPROVED") && (
                     <Button
                       onClick={() => handleSendPO(poDetails.id)}
                       disabled={sendPOMutation.isPending}
@@ -851,7 +854,8 @@ export default function PurchaseOrders() {
                       )}
                     </Button>
                   )}
-                  {poDetails.status === "SENT" && 
+                  {/* Show Mark as Accepted for Sent status (not yet accepted) */}
+                  {(poDetails.displayStatus === "SENT" || poDetails.status === "SENT") && 
                    (!poDetails.acknowledgementStatus || poDetails.acknowledgementStatus === 'NONE' || poDetails.acknowledgementStatus === 'PENDING') && (
                     <Button
                       variant="outline"
@@ -901,9 +905,11 @@ export default function PurchaseOrders() {
                         {poDetails.lines.map((line: any) => {
                           const remaining = line.qtyOrdered - (line.qtyReceived || 0);
                           const isFullyReceived = remaining <= 0;
+                          // Allow accepting items when status is Sent, Accepted, or Partial
+                          const displayStatus = poDetails.displayStatus || poDetails.status;
                           const canAccept = poDetails?.id && 
                             line?.id && 
-                            ['SENT', 'PARTIAL_RECEIVED'].includes(poDetails.status) && 
+                            ['SENT', 'ACCEPTED', 'PARTIAL', 'PARTIAL_RECEIVED'].includes(displayStatus) && 
                             remaining > 0;
                           
                           return (

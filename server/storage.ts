@@ -93,6 +93,8 @@ import {
   type InsertLabelFormat,
   type SystemLog,
   type InsertSystemLog,
+  type ShippoLabelLog,
+  type InsertShippoLabelLog,
   type AiAgentSettings,
   type InsertAiAgentSettings,
 } from "@shared/schema";
@@ -293,6 +295,17 @@ export interface IStorage {
   // Return Events
   getReturnEventsByRequestId(returnRequestId: string): Promise<ReturnEvent[]>;
   createReturnEvent(event: InsertReturnEvent): Promise<ReturnEvent>;
+
+  // Shippo Label Logs
+  getAllShippoLabelLogs(): Promise<ShippoLabelLog[]>;
+  getShippoLabelLog(id: string): Promise<ShippoLabelLog | undefined>;
+  getShippoLabelLogByScanCode(scanCode: string): Promise<ShippoLabelLog | undefined>;
+  getShippoLabelLogByTrackingNumber(trackingNumber: string): Promise<ShippoLabelLog | undefined>;
+  getShippoLabelLogsByReturnId(returnRequestId: string): Promise<ShippoLabelLog[]>;
+  getShippoLabelLogsBySalesOrderId(salesOrderId: string): Promise<ShippoLabelLog[]>;
+  createShippoLabelLog(log: InsertShippoLabelLog): Promise<ShippoLabelLog>;
+  updateShippoLabelLog(id: string, log: Partial<InsertShippoLabelLog>): Promise<ShippoLabelLog | undefined>;
+  searchShippoLabelLogs(params: { search?: string; page?: number; pageSize?: number }): Promise<{ logs: ShippoLabelLog[]; total: number }>;
 
   // Return Helper Methods
   getNextRMANumber(): Promise<string>;
@@ -2021,6 +2034,97 @@ export class MemStorage implements IStorage {
     };
     this.returnEvents.set(id, event);
     return event;
+  }
+
+  // Shippo Label Logs (Stubs - MemStorage not used in production)
+  private shippoLabelLogs: Map<string, ShippoLabelLog> = new Map();
+
+  async getAllShippoLabelLogs(): Promise<ShippoLabelLog[]> {
+    return Array.from(this.shippoLabelLogs.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async getShippoLabelLog(id: string): Promise<ShippoLabelLog | undefined> {
+    return this.shippoLabelLogs.get(id);
+  }
+
+  async getShippoLabelLogByScanCode(scanCode: string): Promise<ShippoLabelLog | undefined> {
+    return Array.from(this.shippoLabelLogs.values()).find(log => log.scanCode === scanCode);
+  }
+
+  async getShippoLabelLogByTrackingNumber(trackingNumber: string): Promise<ShippoLabelLog | undefined> {
+    return Array.from(this.shippoLabelLogs.values()).find(log => log.trackingNumber === trackingNumber);
+  }
+
+  async getShippoLabelLogsByReturnId(returnRequestId: string): Promise<ShippoLabelLog[]> {
+    return Array.from(this.shippoLabelLogs.values())
+      .filter(log => log.returnRequestId === returnRequestId);
+  }
+
+  async getShippoLabelLogsBySalesOrderId(salesOrderId: string): Promise<ShippoLabelLog[]> {
+    return Array.from(this.shippoLabelLogs.values())
+      .filter(log => log.salesOrderId === salesOrderId);
+  }
+
+  async createShippoLabelLog(insertLog: InsertShippoLabelLog): Promise<ShippoLabelLog> {
+    const id = randomUUID();
+    const now = new Date();
+    const log: ShippoLabelLog = {
+      id,
+      type: insertLog.type ?? 'RETURN',
+      shippoShipmentId: insertLog.shippoShipmentId ?? null,
+      shippoTransactionId: insertLog.shippoTransactionId ?? null,
+      labelUrl: insertLog.labelUrl ?? null,
+      trackingNumber: insertLog.trackingNumber ?? null,
+      carrier: insertLog.carrier ?? null,
+      serviceLevel: insertLog.serviceLevel ?? null,
+      labelCost: insertLog.labelCost ?? null,
+      labelCurrency: insertLog.labelCurrency ?? 'USD',
+      status: insertLog.status ?? 'CREATED',
+      scanCode: insertLog.scanCode ?? null,
+      scannedAt: insertLog.scannedAt ?? null,
+      scannedBy: insertLog.scannedBy ?? null,
+      barcodeId: insertLog.barcodeId ?? null,
+      sku: insertLog.sku ?? null,
+      salesOrderId: insertLog.salesOrderId ?? null,
+      returnRequestId: insertLog.returnRequestId ?? null,
+      channel: insertLog.channel ?? null,
+      customerName: insertLog.customerName ?? null,
+      customerEmail: insertLog.customerEmail ?? null,
+      orderDate: insertLog.orderDate ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.shippoLabelLogs.set(id, log);
+    return log;
+  }
+
+  async updateShippoLabelLog(id: string, updates: Partial<InsertShippoLabelLog>): Promise<ShippoLabelLog | undefined> {
+    const log = this.shippoLabelLogs.get(id);
+    if (!log) return undefined;
+    const updated = { ...log, ...updates, updatedAt: new Date() };
+    this.shippoLabelLogs.set(id, updated);
+    return updated;
+  }
+
+  async searchShippoLabelLogs(params: { search?: string; page?: number; pageSize?: number }): Promise<{ logs: ShippoLabelLog[]; total: number }> {
+    let logs = Array.from(this.shippoLabelLogs.values());
+    if (params.search) {
+      const s = params.search.toLowerCase();
+      logs = logs.filter(l =>
+        l.trackingNumber?.toLowerCase().includes(s) ||
+        l.sku?.toLowerCase().includes(s) ||
+        l.customerName?.toLowerCase().includes(s) ||
+        l.salesOrderId?.toLowerCase().includes(s) ||
+        l.returnRequestId?.toLowerCase().includes(s)
+      );
+    }
+    const total = logs.length;
+    logs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 50;
+    const start = (page - 1) * pageSize;
+    return { logs: logs.slice(start, start + pageSize), total };
   }
 
   // Return Helper Methods
@@ -4039,6 +4143,90 @@ export class PostgresStorage implements IStorage {
   async createReturnEvent(event: InsertReturnEvent): Promise<ReturnEvent> {
     const results = await this.db.insert(schema.returnEvents).values(event).returning();
     return results[0];
+  }
+
+  // Shippo Label Logs
+  async getAllShippoLabelLogs(): Promise<ShippoLabelLog[]> {
+    return await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .orderBy(drizzleSql`created_at DESC`);
+  }
+
+  async getShippoLabelLog(id: string): Promise<ShippoLabelLog | undefined> {
+    const results = await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .where(eq(schema.shippoLabelLogs.id, id));
+    return results[0];
+  }
+
+  async getShippoLabelLogByScanCode(scanCode: string): Promise<ShippoLabelLog | undefined> {
+    const results = await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .where(eq(schema.shippoLabelLogs.scanCode, scanCode));
+    return results[0];
+  }
+
+  async getShippoLabelLogByTrackingNumber(trackingNumber: string): Promise<ShippoLabelLog | undefined> {
+    const results = await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .where(eq(schema.shippoLabelLogs.trackingNumber, trackingNumber));
+    return results[0];
+  }
+
+  async getShippoLabelLogsByReturnId(returnRequestId: string): Promise<ShippoLabelLog[]> {
+    return await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .where(eq(schema.shippoLabelLogs.returnRequestId, returnRequestId));
+  }
+
+  async getShippoLabelLogsBySalesOrderId(salesOrderId: string): Promise<ShippoLabelLog[]> {
+    return await this.db.select()
+      .from(schema.shippoLabelLogs)
+      .where(eq(schema.shippoLabelLogs.salesOrderId, salesOrderId));
+  }
+
+  async createShippoLabelLog(log: InsertShippoLabelLog): Promise<ShippoLabelLog> {
+    const results = await this.db.insert(schema.shippoLabelLogs).values(log).returning();
+    return results[0];
+  }
+
+  async updateShippoLabelLog(id: string, updates: Partial<InsertShippoLabelLog>): Promise<ShippoLabelLog | undefined> {
+    const results = await this.db.update(schema.shippoLabelLogs)
+      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .where(eq(schema.shippoLabelLogs.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async searchShippoLabelLogs(params: { search?: string; page?: number; pageSize?: number }): Promise<{ logs: ShippoLabelLog[]; total: number }> {
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 50;
+    const offset = (page - 1) * pageSize;
+
+    let query = this.db.select().from(schema.shippoLabelLogs);
+    let countQuery = this.db.select({ count: drizzleSql<number>`count(*)` }).from(schema.shippoLabelLogs);
+
+    if (params.search) {
+      const searchTerm = `%${params.search}%`;
+      const searchCondition = or(
+        drizzleSql`tracking_number ILIKE ${searchTerm}`,
+        drizzleSql`sku ILIKE ${searchTerm}`,
+        drizzleSql`customer_name ILIKE ${searchTerm}`,
+        drizzleSql`sales_order_id ILIKE ${searchTerm}`,
+        drizzleSql`return_request_id ILIKE ${searchTerm}`,
+        drizzleSql`channel ILIKE ${searchTerm}`
+      );
+      query = query.where(searchCondition) as typeof query;
+      countQuery = countQuery.where(searchCondition) as typeof countQuery;
+    }
+
+    const [logs, countResult] = await Promise.all([
+      query.orderBy(drizzleSql`created_at DESC`).limit(pageSize).offset(offset),
+      countQuery
+    ]);
+
+    const total = Number(countResult[0]?.count ?? 0);
+    return { logs, total };
   }
 
   // Return Helper Methods

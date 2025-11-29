@@ -1,0 +1,141 @@
+I want a helper that can auto-suggest a default purchase cost for a product by fetching the supplier’s product page and letting our LLM extract the unit price, BUT only when no manual cost is set. If the product already has a cost, the helper should do nothing.
+
+Please inspect the current schema, product/item models, and any existing LLM/OpenAI utilities first, then implement the following.
+
+==================================================
+A) SCHEMA CHANGES
+==================================================
+1) In the product / item model used for purchasing (the same one that feeds the BOM and Purchase Orders):
+
+- Ensure we have:
+  - defaultPurchaseCost: number | null
+  - currency: string (e.g. "USD")
+- Add fields if they do not exist:
+  - supplierProductUrl: string | null   // URL to the supplier’s product page
+  - costSource: enum or string          // "MANUAL" | "AUTO_SCRAPED" | "API" (default "MANUAL")
+  - lastCostUpdatedAt: Date | null
+
+Do NOT remove or change existing cost fields; just extend.
+
+==================================================
+B) SERVER HELPER – FETCH + LLM EXTRACT
+==================================================
+2) Implement a server-side helper:
+
+  async function autoSuggestPurchaseCost(productId: string): Promise<{ updated: boolean; price?: number; reason?: string }>
+
+Behavior:
+
+- Load the product by id.
+- If:
+  - product.defaultPurchaseCost is NOT null AND costSource === "MANUAL"
+  - → return { updated: false, reason: "Manual cost already set." }
+
+- If product.supplierProductUrl is missing:
+  - return { updated: false, reason: "No supplierProductUrl." }
+
+- Fetch HTML of supplierProductUrl using an HTTP client with:
+  - Reasonable timeout.
+  - Basic user-agent header.
+  - Handle non-200 responses and errors gracefully.
+
+- Extract price from the page:
+
+  1) Implement a small non-LLM fallback:
+     - Search for currency patterns like `$123.45`, `USD 123.45`, etc. in the HTML.
+     - Collect all matches and try to choose the most likely one:
+       - For V1, pick the lowest positive number above some minimum (e.g. > 0.01) but below a sanity cap (e.g. < 1_000_000).
+     - If this yields a plausible price, use it.
+
+  2) If the non-LLM extraction fails or is ambiguous AND we have an LLM utility set up:
+     - Call our LLM/OpenAI helper with a prompt like:
+       - “You receive HTML from a supplier’s product page. Extract the main unit price for a single unit of the product in numbers only (e.g. 15.32). If you cannot confidently find a price, return null.”
+     - Pass either:
+       - A truncated slice of the HTML around the first few currency patterns, OR
+       - A length-limited version of the HTML to avoid token explosion.
+     - Expect a JSON response `{ "price": number | null }`.
+
+- Sanity-check the extracted price:
+  - Must be > 0 and < a reasonable cap (e.g. 1_000_000).
+  - If not valid, return { updated: false, reason: "No reliable price found." }.
+
+- If valid and product.defaultPurchaseCost is still null:
+  - Update:
+    - defaultPurchaseCost = price
+    - currency = existing default currency or "USD"
+    - costSource = "AUTO_SCRAPED"
+    - lastCostUpdatedAt = now
+  - Persist and return { updated: true, price }.
+
+- If valid but product.defaultPurchaseCost has a manual value:
+  - Do NOT overwrite.
+  - Optionally log the suggested price to a system log table for later review.
+  - Return { updated: false, price, reason: "Manual cost already set; suggestion ignored." }.
+
+Add logging for:
+- Fetch failures (network, 4xx/5xx).
+- LLM failures / invalid JSON.
+- Suspicious prices rejected by sanity checks.
+
+==================================================
+C) API ENDPOINT
+==================================================
+3) Create a secure endpoint for this helper, e.g.:
+
+- POST /api/products/:id/auto-suggest-cost
+
+Behavior:
+- Auth check as for other admin/product endpoints.
+- Call autoSuggestPurchaseCost(productId).
+- Return JSON with { updated, price?, reason? }.
+- HTTP 200 for all logical outcomes; 500 only for unexpected errors.
+
+==================================================
+D) UI – PRODUCT DETAIL “SUGGEST COST” BUTTON
+==================================================
+4) In the Product / Item detail UI (where defaultPurchaseCost is edited):
+
+- If:
+  - defaultPurchaseCost is null or 0, AND
+  - supplierProductUrl is present
+  → show a small secondary button near the purchase cost field:
+
+  - Label: “Suggest cost from supplier”
+  - On click:
+    - Call POST /api/products/:id/auto-suggest-cost.
+    - Show loading state.
+
+- On response:
+  - If updated === true:
+    - Update the form state with the new defaultPurchaseCost value.
+    - Show a small “Suggested from supplier” note and maybe a `costSource` badge.
+  - If updated === false:
+    - If price is present, show a toast:
+      - “Found suggested cost $X.XX (not applied because a manual cost exists).”
+    - If no price, show:
+      - “Could not find a reliable price on the supplier page: {reason}.”
+
+- Never silently overwrite an existing manual cost from the UI.
+
+==================================================
+E) SAFETY / LEGAL
+==================================================
+5) Before making the HTTP request, read from a configuration flag:
+
+- AUTO_SCRAPE_SUPPLIER_PRICES_ENABLED (boolean env).
+- If false, the helper should immediately return { updated: false, reason: "Auto-scrape disabled by config." }.
+
+This allows us to disable scraping quickly if a supplier’s terms of service or robots.txt disallow automated access.
+
+6) Do not store full HTML content in the database. If logging is needed, store only:
+- URL
+- Timestamp
+- Minimal snippet used for the LLM extraction
+to avoid collecting unnecessary personal data.
+
+==================================================
+F) INTEGRATION WITH PURCHASE ORDERS
+==================================================
+7) Make sure the Create PO flow uses defaultPurchaseCost exactly as before, so when a product that previously had no cost gets auto-suggested, that cost now flows naturally into new PO line items.
+
+Implement all of the above, wiring into existing models and utilities instead of duplicating logic, and keep the auto-scraped price strictly as a helper that fills missing costs — never overriding explicit manual pricing.

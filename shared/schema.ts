@@ -59,6 +59,12 @@ export const items = pgTable("items", {
   forecastDirty: boolean("forecast_dirty").notNull().default(true), // Indicates forecast needs refresh
   lastForecastAt: timestamp("last_forecast_at"), // Last time AI forecast was updated
   forecastData: jsonb("forecast_data"), // Stores last generated forecast (ReorderRecommendation)
+  // Purchase cost fields for auto-suggest feature
+  defaultPurchaseCost: real("default_purchase_cost"), // Default cost when creating PO lines (can be auto-scraped)
+  currency: text("currency").default("USD"), // Currency for defaultPurchaseCost
+  supplierProductUrl: text("supplier_product_url"), // URL to supplier's product page for price scraping
+  costSource: text("cost_source").default("MANUAL"), // 'MANUAL' | 'AUTO_SCRAPED' | 'API'
+  lastCostUpdatedAt: timestamp("last_cost_updated_at"), // When cost was last updated
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

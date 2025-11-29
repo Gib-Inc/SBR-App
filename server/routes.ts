@@ -6320,6 +6320,239 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Mark PO as accepted (internal override)
+  app.post("/api/purchase-orders/:id/mark-accepted-internal", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const po = await storage.getPurchaseOrder(id);
+      
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      if (!['NONE', 'PENDING'].includes(po.acknowledgementStatus || 'NONE')) {
+        return res.status(409).json({ 
+          error: `PO already has acknowledgement status: ${po.acknowledgementStatus}` 
+        });
+      }
+
+      const updated = await storage.updatePurchaseOrder(id, {
+        acknowledgementStatus: 'INTERNAL_CONFIRMED',
+        acknowledgedAt: new Date(),
+        acknowledgedSource: 'INTERNAL',
+      });
+
+      // Log the event
+      await storage.createSystemLog({
+        type: 'PO_INTERNAL_ACCEPTED',
+        message: `PO ${po.poNumber} marked as accepted internally`,
+        details: { poId: id, poNumber: po.poNumber },
+        source: 'USER',
+        userId: req.session.userId,
+      });
+
+      console.log(`[PurchaseOrder] PO ${po.poNumber} marked as accepted internally`);
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error marking PO as accepted:", error);
+      res.status(500).json({ error: "Failed to mark purchase order as accepted" });
+    }
+  });
+
+  // Supplier acknowledgement via token (public endpoint - no auth)
+  app.post("/api/purchase-orders/acknowledge", async (req: Request, res: Response) => {
+    try {
+      const { token, action } = req.body;
+      
+      if (!token || !action) {
+        return res.status(400).json({ error: "Token and action are required" });
+      }
+
+      if (action !== 'ACCEPT') {
+        return res.status(400).json({ error: "Invalid action. Only 'ACCEPT' is supported." });
+      }
+
+      // Find PO by token
+      const allPOs = await storage.getAllPurchaseOrders();
+      const po = allPOs.find(p => p.ackToken === token);
+      
+      if (!po) {
+        return res.status(404).json({ error: "Invalid or expired confirmation link" });
+      }
+
+      // Check if token is expired
+      if (po.ackTokenExpiresAt && new Date(po.ackTokenExpiresAt) < new Date()) {
+        return res.status(410).json({ error: "Confirmation link has expired" });
+      }
+
+      // Check if already acknowledged
+      if (['SUPPLIER_ACCEPTED', 'SUPPLIER_DECLINED', 'INTERNAL_CONFIRMED'].includes(po.acknowledgementStatus || '')) {
+        return res.status(409).json({ 
+          error: "This purchase order has already been acknowledged",
+          currentStatus: po.acknowledgementStatus 
+        });
+      }
+
+      // Update PO with supplier acknowledgement
+      const updated = await storage.updatePurchaseOrder(po.id, {
+        acknowledgementStatus: 'SUPPLIER_ACCEPTED',
+        acknowledgedAt: new Date(),
+        acknowledgedSource: 'SUPPLIER_LINK',
+      });
+
+      // Log the event
+      await storage.createSystemLog({
+        type: 'PO_SUPPLIER_ACCEPTED',
+        message: `Supplier accepted PO ${po.poNumber} via confirmation link`,
+        details: { poId: po.id, poNumber: po.poNumber },
+        source: 'EXTERNAL',
+      });
+
+      console.log(`[PurchaseOrder] Supplier accepted PO ${po.poNumber} via confirmation link`);
+
+      res.json({ success: true, poNumber: po.poNumber, status: 'SUPPLIER_ACCEPTED' });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error processing supplier acknowledgement:", error);
+      res.status(500).json({ error: "Failed to process acknowledgement" });
+    }
+  });
+
+  // Get PO by ack token (public endpoint for supplier page)
+  app.get("/api/purchase-orders/by-token/:token", async (req: Request, res: Response) => {
+    try {
+      const { token } = req.params;
+      
+      if (!token) {
+        return res.status(400).json({ error: "Token is required" });
+      }
+
+      // Find PO by token
+      const allPOs = await storage.getAllPurchaseOrders();
+      const po = allPOs.find(p => p.ackToken === token);
+      
+      if (!po) {
+        return res.status(404).json({ error: "Invalid confirmation link" });
+      }
+
+      // Check if token is expired
+      if (po.ackTokenExpiresAt && new Date(po.ackTokenExpiresAt) < new Date()) {
+        return res.status(410).json({ error: "Confirmation link has expired" });
+      }
+
+      // Get supplier and lines for display
+      const supplier = po.supplierId ? await storage.getSupplier(po.supplierId) : null;
+      const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+
+      // Return limited info for supplier page (no sensitive internal data)
+      res.json({
+        poNumber: po.poNumber,
+        orderDate: po.orderDate,
+        expectedDate: po.expectedDate,
+        supplierName: supplier?.name || po.supplierName || 'Unknown',
+        buyerCompanyName: po.buyerCompanyName,
+        total: po.total,
+        currency: po.currency,
+        acknowledgementStatus: po.acknowledgementStatus,
+        lines: lines.map(line => ({
+          itemName: line.itemName,
+          sku: line.sku,
+          qtyOrdered: line.qtyOrdered,
+          unitCost: line.unitCost,
+          lineTotal: line.lineTotal,
+        })),
+      });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error fetching PO by token:", error);
+      res.status(500).json({ error: "Failed to fetch purchase order" });
+    }
+  });
+
+  // SendGrid event webhook (public endpoint - no auth, use webhook signature verification in production)
+  app.post("/api/sendgrid/events", async (req: Request, res: Response) => {
+    try {
+      const events = req.body;
+      
+      if (!Array.isArray(events)) {
+        return res.status(400).json({ error: "Invalid event format" });
+      }
+
+      console.log(`[SendGrid Webhook] Received ${events.length} events`);
+
+      for (const event of events) {
+        const poId = event.po_id || event.customArgs?.po_id;
+        const messageId = event.sg_message_id;
+        const eventType = event.event;
+        const timestamp = event.timestamp ? new Date(event.timestamp * 1000) : new Date();
+
+        if (!poId && !messageId) {
+          console.log(`[SendGrid Webhook] Skipping event without PO identifier:`, eventType);
+          continue;
+        }
+
+        // Find PO by ID or message ID
+        let po = null;
+        if (poId) {
+          po = await storage.getPurchaseOrder(poId);
+        }
+        if (!po && messageId) {
+          const allPOs = await storage.getAllPurchaseOrders();
+          po = allPOs.find(p => p.lastEmailProviderMessageId === messageId);
+        }
+
+        if (!po) {
+          console.log(`[SendGrid Webhook] PO not found for event:`, { poId, messageId, eventType });
+          continue;
+        }
+
+        // Process based on event type
+        const updateData: any = {
+          lastEmailEventAt: timestamp,
+          lastEmailEventType: eventType,
+        };
+
+        switch (eventType) {
+          case 'open':
+            updateData.lastEmailStatus = 'OPENED';
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email opened`);
+            break;
+          case 'delivered':
+            // Keep SENT status but update event info
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email delivered`);
+            break;
+          case 'bounce':
+          case 'dropped':
+          case 'spamreport':
+          case 'unsubscribe':
+            updateData.lastEmailStatus = 'FAILED';
+            updateData.lastEmailError = `Email ${eventType}: ${event.reason || event.status || 'Unknown reason'}`;
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email failed: ${eventType}`);
+            
+            // Log failure event
+            await storage.createSystemLog({
+              type: 'PO_EMAIL_FAILED',
+              message: `PO ${po.poNumber} email ${eventType}`,
+              details: { poId: po.id, poNumber: po.poNumber, reason: event.reason || event.status },
+              source: 'EXTERNAL',
+            });
+            break;
+          default:
+            // Log but don't update for unknown events
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} unknown event: ${eventType}`);
+            continue;
+        }
+
+        await storage.updatePurchaseOrder(po.id, updateData);
+      }
+
+      res.status(200).send('OK');
+    } catch (error: any) {
+      console.error("[SendGrid Webhook] Error processing events:", error);
+      // Return 200 to prevent SendGrid from retrying
+      res.status(200).send('Error logged');
+    }
+  });
+
   // Receive PO - creates RECEIVE transactions and updates quantities
   app.post("/api/purchase-orders/:id/receive", requireAuth, async (req: Request, res: Response) => {
     try {

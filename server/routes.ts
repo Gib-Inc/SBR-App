@@ -2775,15 +2775,22 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const userId = req.session.userId!;
       const provider = req.params.provider.toUpperCase();
+      console.log(`[IntegrationConfig] GET request - userId: ${userId}, provider: ${provider}`);
+      
       const config = await storage.getIntegrationConfig(userId, provider);
+      console.log(`[IntegrationConfig] Query result:`, config ? `found id=${config.id}` : 'not found');
       
       if (!config) {
+        // Debug: check if any configs exist for this user
+        const allConfigs = await storage.getAllIntegrationConfigs(userId);
+        console.log(`[IntegrationConfig] All configs for user:`, allConfigs.map(c => c.provider));
         return res.status(404).json({ error: "Integration config not found" });
       }
       
       // Sanitize config before sending to client
       res.json(sanitizeIntegrationConfig(config));
     } catch (error: any) {
+      console.error(`[IntegrationConfig] GET error:`, error);
       res.status(500).json({ error: error.message || "Failed to fetch integration config" });
     }
   });

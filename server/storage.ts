@@ -2743,10 +2743,7 @@ export class MemStorage implements IStorage {
     // Not supported in MemStorage
   }
 
-  // Integration Config health check methods
-  async getIntegrationConfig(id: string): Promise<IntegrationConfig | null> {
-    return this.integrationConfigs.get(id) || null;
-  }
+  // Integration Config health check methods - use getIntegrationConfigById from line 1367 instead
 
   async getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]> {
     return Array.from(this.integrationConfigs.values()).filter(c => c.userId === userId);
@@ -3544,8 +3541,10 @@ export class PostgresStorage implements IStorage {
 
   async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
     const normalizedProvider = provider.toUpperCase();
+    console.log(`[Storage] getIntegrationConfig - userId: ${userId}, provider: ${normalizedProvider}`);
     const results = await this.db.select().from(schema.integrationConfigs)
       .where(and(eq(schema.integrationConfigs.userId, userId), eq(schema.integrationConfigs.provider, normalizedProvider)));
+    console.log(`[Storage] getIntegrationConfig - found ${results.length} results`);
     return results[0];
   }
 
@@ -4992,12 +4991,7 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.quickbooksAuth.id, id));
   }
 
-  // Integration Config health check methods
-  async getIntegrationConfig(id: string): Promise<IntegrationConfig | null> {
-    const results = await this.db.select().from(schema.integrationConfigs)
-      .where(eq(schema.integrationConfigs.id, id));
-    return results[0] || null;
-  }
+  // Integration Config health check methods - use getIntegrationConfigById from line 3554 instead
 
   async getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]> {
     return await this.db.select().from(schema.integrationConfigs)

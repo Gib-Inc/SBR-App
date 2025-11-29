@@ -7805,6 +7805,33 @@ Generate only the email body text, no subject line.`;
             labelUrl: labelResponse.labelUrl,
           });
 
+          // Create ShippoLabelLog for tracking and scanning
+          const skuList = returnItems.map(ri => ri.sku).join(',');
+          try {
+            await storage.createShippoLabelLog({
+              type: 'RETURN',
+              shippoShipmentId: labelResponse.shippoShipmentId,
+              shippoTransactionId: labelResponse.shippoTransactionId,
+              labelUrl: labelResponse.labelUrl,
+              trackingNumber: labelResponse.trackingNumber,
+              carrier: labelResponse.carrier,
+              serviceLevel: labelResponse.serviceLevel,
+              labelCost: labelResponse.labelCost,
+              labelCurrency: labelResponse.labelCurrency || 'USD',
+              status: 'CREATED',
+              scanCode: labelResponse.trackingNumber, // Use tracking number as scan code
+              sku: returnItems.length === 1 ? returnItems[0].sku : skuList,
+              salesOrderId: salesOrderId,
+              returnRequestId: returnRequest.id,
+              channel: salesOrder.channel,
+              customerName: salesOrder.customerName,
+              customerEmail: salesOrder.customerEmail,
+              orderDate: salesOrder.orderDate,
+            });
+          } catch (logErr) {
+            console.warn('[Returns] Failed to create ShippoLabelLog:', logErr);
+          }
+
           labelResult = {
             carrier: labelResponse.carrier,
             trackingNumber: labelResponse.trackingNumber,

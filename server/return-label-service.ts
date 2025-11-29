@@ -28,6 +28,12 @@ export interface ReturnLabelResponse {
   carrier: string;
   trackingNumber: string;
   labelUrl: string;
+  // Extended fields for Shippo logging
+  shippoShipmentId?: string;
+  shippoTransactionId?: string;
+  serviceLevel?: string;
+  labelCost?: number;
+  labelCurrency?: string;
 }
 
 export interface IReturnLabelService {
@@ -121,6 +127,12 @@ export class ShippoReturnLabelService implements IReturnLabelService {
         carrier: transaction.tracking_carrier || rate.provider,
         trackingNumber: transaction.tracking_number,
         labelUrl: transaction.label_url,
+        // Extended fields for logging
+        shippoShipmentId: shipment.object_id,
+        shippoTransactionId: transaction.object_id,
+        serviceLevel: rate.servicelevel?.name || rate.servicelevel_name,
+        labelCost: parseFloat(rate.amount) || undefined,
+        labelCurrency: rate.currency || 'USD',
       };
     } catch (error: any) {
       console.error('[ShippoService] Label generation failed:', error.message);

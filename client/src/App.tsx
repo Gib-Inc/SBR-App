@@ -27,6 +27,7 @@ import SalesOrders from "@/pages/sales-orders";
 import PurchaseOrders from "@/pages/purchase-orders";
 import Returns from "@/pages/returns";
 import Login from "@/pages/login";
+import POAcknowledge from "@/pages/po-acknowledge";
 import NotFound from "@/pages/not-found";
 
 function UserMenu() {
@@ -127,9 +128,14 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AuthProvider>
-          <AuthenticatedApp />
-        </AuthProvider>
+        <Switch>
+          <Route path="/po/acknowledge/:token" component={POAcknowledge} />
+          <Route>
+            <AuthProvider>
+              <AuthenticatedApp />
+            </AuthProvider>
+          </Route>
+        </Switch>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

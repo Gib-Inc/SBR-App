@@ -1,0 +1,178 @@
+I want Shippo return labels to be fully logged under Barcodes → “Shippo Labels” and for our warehouse “Scan” flow to recognize those labels and automatically mark returns received and update inventory.
+
+Please inspect existing models (Returns, SalesOrders, ProductBarcodes), Shippo integration, scan APIs/UI, and the Barcodes page first. Reuse anything that already exists; only add what’s missing.
+
+==================================================
+A) DATA MODEL – SHIPPO LABEL HISTORY
+==================================================
+Create or extend a Shippo label history model, e.g. `ShippoLabelLog`:
+
+Fields:
+- id (PK)
+- type enum: "RETURN"             // V1: only return labels
+- shippoShipmentId (string)
+- shippoTransactionId (string)
+- labelUrl (string)
+- trackingNumber (string)
+- carrier (string, nullable)
+- serviceLevel (string, nullable)
+- status (string)                 // e.g. "CREATED", "SCANNED_RECEIVED", etc.
+- scanCode (string)               // value that the scanner reads; for V1 use trackingNumber or the printed barcode value
+- barcodeId (FK to ProductBarcode, nullable)
+- sku (string)
+- salesOrderId (string, nullable)
+- returnOrderId (string, nullable)
+- channel (string)                // e.g. "SHOPIFY", "AMAZON"
+- customerName (string)
+- customerEmail (string, nullable)
+- orderDate (DateTime, nullable)
+- createdAt (DateTime)
+- updatedAt (DateTime)
+
+This table is history/analytics only (no actions, no workflow).
+
+==================================================
+B) HOOK INTO RETURN CREATION (SHIPPO)
+==================================================
+In the existing flow where we create a return and call Shippo (the endpoint behind “Create Return” on Sales Orders):
+
+1) After a successful Shippo transaction:
+   - Create a ShippoLabelLog row with:
+     - type = "RETURN"
+     - shippoShipmentId, shippoTransactionId, labelUrl, trackingNumber, carrier, serviceLevel
+     - status = "CREATED"
+     - scanCode = trackingNumber (or the barcode value printed on the label)
+     - barcodeId: map to the primary product barcode if there is a clear one; otherwise leave null for multi-SKU returns.
+     - sku: for single-SKU returns, store that SKU; for multi-SKU, either store a representative SKU or a simple concatenation.
+     - salesOrderId = the related SalesOrder id
+     - returnOrderId = the created ReturnOrder id
+     - channel = sales order channel
+     - customerName, customerEmail
+     - orderDate = sales order date
+
+2) If Shippo label creation fails:
+   - Do NOT create a ShippoLabelLog.
+   - Return an error to the client and log a system event type "SHIPPO_ERROR" with details.
+
+3) If we already have a Shippo webhook or polling:
+   - When Shippo sends updates, optionally update ShippoLabelLog.status and other fields, but do not change the warehouse workflow; this is just richer history.
+
+==================================================
+C) SCAN ENDPOINT – RECOGNIZE RETURN LABELS AND UPDATE INVENTORY
+==================================================
+We already have product scanning; extend it so the same scan endpoint can also recognize return labels.
+
+1) Create or extend a generic scan endpoint:
+
+- POST /api/scans/ingest
+
+Input:
+- code: string        // scanned value
+- source?: string     // e.g. "WAREHOUSE_SCANNER", optional
+
+Server logic:
+
+(1) Try product barcode first (existing behavior):
+- If `code` matches a ProductBarcode, keep current product-scan behavior and return.
+
+(2) If no product match, treat as potential Shippo label:
+- Look up ShippoLabelLog where scanCode = code.
+- If not found:
+  - Log system event:
+    - type: "SHIPPO_LABEL_NOT_FOUND"
+    - entityType: "SCAN"
+    - severity: "WARNING"
+    - code: "LABEL_SCAN_NO_MATCH"
+    - message: `Scanned code ${code} did not match any Shippo label.`
+    - details: { code, source }
+  - Return JSON: { status: "UNKNOWN_CODE" }.
+
+- If found:
+  - Load the associated ReturnOrder (via returnOrderId) and its ReturnLines.
+  - If ReturnOrder not found, log similar mismatch and return UNKNOWN_CODE.
+
+2) For a matched ReturnOrder:
+
+- Only proceed if ReturnOrder.status is in a pre-receipt state, e.g. "CREATED" or "IN_TRANSIT".
+- If status is already "RECEIVED" or "CLOSED":
+  - Do NOT change inventory again.
+  - Optionally log a "DUPLICATE_LABEL_SCAN" event (severity WARNING).
+  - Return JSON: { status: "ALREADY_RECEIVED", returnOrderId, salesOrderId }.
+
+- Otherwise, in a transaction:
+  - Set ReturnOrder.status = "RECEIVED".
+  - Add ReturnOrder.receivedAt = now (add this field if it does not exist).
+  - For each ReturnLine:
+    - Determine the warehouse/location for returned stock (use the default inventory location used elsewhere).
+    - Increase inventory for the associated SKU:
+      - e.g. inventory.onHand[location] += qtyReturning
+    - Update any existing tracking fields on SalesOrderLine if present (e.g. returnedQtyReceived).
+  - Update ShippoLabelLog.status = "SCANNED_RECEIVED".
+  - Call Shopify inventory sync helper (if implemented) with the list of affected SKUs:
+    - syncInventoryForSkus([...skusFromReturnLines])
+  - Log system event:
+    - type: "RETURN_RECEIVED_FROM_SCAN"
+    - entityType: "RETURN"
+    - entityId: returnOrderId
+    - severity: "INFO"
+    - code: "RETURN_SCANNED_RECEIVED"
+    - message: `Return ${returnOrderId} received via label scan ${code}.`
+    - details: { code, returnOrderId, salesOrderId, skus: [...] }
+
+- Response JSON for success:
+  - { status: "RETURN_RECEIVED", returnOrderId, salesOrderId, skus: [...], updatedInventorySummary: {...} }
+
+==================================================
+D) UI – BARCODES “SHIPPO LABELS” TABLE (READ-ONLY)
+==================================================
+Under Barcodes, add a new section/tab named “Shippo Labels”:
+
+1) Backend:
+   - Expose an API endpoint for listing ShippoLabelLog rows:
+     - GET /api/shippo-labels?search=&page=&pageSize=
+   - Support search by SKU, trackingNumber, salesOrderId, returnOrderId, customerName, etc.
+
+2) UI:
+   - Design the table using the same table component and style as existing sections on the Barcodes page.
+   - Columns:
+     - Created (ShippoLabelLog.createdAt)
+     - Type (e.g. “Return”)
+     - SKU
+     - Order ID
+     - Return ID
+     - Channel
+     - Customer
+     - Tracking #
+     - Carrier
+     - Status
+
+   - No row-level actions (no edit/delete/print).
+   - Rows are read-only; optionally, clicking a row may open the related Return or Sales Order detail if that’s easy to reuse, but this is not required.
+
+==================================================
+E) UI – SCAN FLOW
+==================================================
+Use the existing “Scan” UI (the button/field where warehouse staff scan barcodes):
+
+- On scan:
+  - Send the scanned value to POST /api/scans/ingest.
+- For response:
+  - status: "RETURN_RECEIVED":
+    - Show success toast: “Return received and inventory updated.”
+    - Optionally show a link to open the Return or Sales Order.
+  - status: "ALREADY_RECEIVED":
+    - Show info toast: “This return was already received; no changes made.”
+  - status: "UNKNOWN_CODE":
+    - Show warning toast: “Code not recognized as product or return label.”
+
+==================================================
+F) SAFETY
+==================================================
+- Ensure inventory changes and ReturnOrder status changes happen in a single transaction so we don’t half-update.
+- Do not allow a scanned label to double-adjust inventory.
+- Keep ShippoLabelLog immutable except for status updates from scan/webhook; never delete it when returns are closed.
+- Do not introduce a second “scan” endpoint; extend the existing path so product and label scans share one entry point.
+
+Implement all of this so that:
+- Every return label created via Shippo is logged in ShippoLabelLog and visible under Barcodes → Shippo Labels.
+- Scanning a Shippo label in the warehouse is the authoritative action to mark a return received and automatically adjust inventory.

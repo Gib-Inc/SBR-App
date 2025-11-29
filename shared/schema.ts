@@ -1006,6 +1006,84 @@ export type InsertReturnEvent = z.infer<typeof insertReturnEventSchema>;
 export type ReturnEvent = typeof returnEvents.$inferSelect;
 
 // ============================================================================
+// SHIPPO LABEL LOG
+// ============================================================================
+// Centralized log of all Shippo shipping labels created by the system.
+// Used for tracking, analytics, and enabling warehouse scan workflows.
+// Currently supports return labels; can be extended for outbound shipments.
+
+export const ShippoLabelType = {
+  RETURN: "RETURN",
+  // Future: OUTBOUND, RESHIP, etc.
+} as const;
+export type ShippoLabelType = typeof ShippoLabelType[keyof typeof ShippoLabelType];
+
+export const ShippoLabelStatus = {
+  CREATED: "CREATED", // Label generated, not yet scanned
+  IN_TRANSIT: "IN_TRANSIT", // Carrier picked up/in transit (from webhook)
+  SCANNED_RECEIVED: "SCANNED_RECEIVED", // Scanned at warehouse
+  DELIVERED: "DELIVERED", // Delivered (from webhook)
+  CANCELLED: "CANCELLED", // Label voided
+  LOST: "LOST", // Package lost in transit
+} as const;
+export type ShippoLabelStatus = typeof ShippoLabelStatus[keyof typeof ShippoLabelStatus];
+
+export const shippoLabelLogs = pgTable("shippo_label_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull().default('RETURN'), // See ShippoLabelType enum
+  
+  // Shippo identifiers
+  shippoShipmentId: text("shippo_shipment_id"), // Shippo shipment object ID
+  shippoTransactionId: text("shippo_transaction_id"), // Shippo transaction/label ID
+  
+  // Label details
+  labelUrl: text("label_url"), // URL to label PDF
+  trackingNumber: text("tracking_number"), // Carrier tracking number
+  carrier: text("carrier"), // 'USPS', 'UPS', 'FEDEX', etc.
+  serviceLevel: text("service_level"), // 'priority', 'express', 'ground', etc.
+  labelCost: real("label_cost"), // Cost of the label
+  labelCurrency: text("label_currency").default('USD'),
+  
+  // Scan workflow
+  status: text("status").notNull().default('CREATED'), // See ShippoLabelStatus enum
+  scanCode: text("scan_code"), // Value that scanner reads (usually trackingNumber or barcode value)
+  scannedAt: timestamp("scanned_at"), // When label was scanned at warehouse
+  scannedBy: text("scanned_by"), // User ID who scanned
+  
+  // Related entities
+  barcodeId: varchar("barcode_id").references(() => barcodes.id), // FK to ProductBarcode if applicable
+  sku: text("sku"), // SKU(s) for this shipment; for multi-SKU, comma-separated or JSON
+  salesOrderId: varchar("sales_order_id").references(() => salesOrders.id),
+  returnRequestId: varchar("return_request_id").references(() => returnRequests.id),
+  
+  // Order context (denormalized for quick lookup)
+  channel: text("channel"), // 'SHOPIFY', 'AMAZON', 'DIRECT', etc.
+  customerName: text("customer_name"),
+  customerEmail: text("customer_email"),
+  orderDate: timestamp("order_date"), // Date of original order
+  
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  scanCodeIdx: index("shippo_label_logs_scan_code_idx").on(table.scanCode),
+  trackingNumberIdx: index("shippo_label_logs_tracking_number_idx").on(table.trackingNumber),
+  returnRequestIdIdx: index("shippo_label_logs_return_request_id_idx").on(table.returnRequestId),
+  salesOrderIdIdx: index("shippo_label_logs_sales_order_id_idx").on(table.salesOrderId),
+  statusIdx: index("shippo_label_logs_status_idx").on(table.status),
+  createdAtIdx: index("shippo_label_logs_created_at_idx").on(table.createdAt),
+  typeIdx: index("shippo_label_logs_type_idx").on(table.type),
+}));
+
+export const insertShippoLabelLogSchema = createInsertSchema(shippoLabelLogs).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true 
+});
+export type InsertShippoLabelLog = z.infer<typeof insertShippoLabelLogSchema>;
+export type ShippoLabelLog = typeof shippoLabelLogs.$inferSelect;
+
+// ============================================================================
 // CHANNELS (Marketing & Sales Channels)
 // ============================================================================
 // Defines canonical channels for ad platforms and sales channels.

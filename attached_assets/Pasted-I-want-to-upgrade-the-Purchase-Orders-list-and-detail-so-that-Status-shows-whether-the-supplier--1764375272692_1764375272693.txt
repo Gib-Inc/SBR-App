@@ -1,0 +1,188 @@
+I want to upgrade the Purchase Orders list and detail so that:
+
+- Status shows whether the supplier has actually ACCEPTED the PO (not just that we sent it).
+- The Email column shows email state: Not Sent / Sent / Opened / Failed.
+- There is a column in the PO list that shows the total number of items ordered for that PO.
+
+Please first inspect the existing Purchase Orders schema, APIs, and React components. If any of the described concepts already exist (acknowledgement fields, email tracking, totals), reuse and complete them instead of duplicating. If they do not exist, create them as described below.
+
+==================================================
+A) SUPPLIER ACCEPTANCE (“ACCEPTED” ICON IN STATUS)
+==================================================
+1) DATA MODEL – ACK FIELDS
+On the PurchaseOrder model, add (or reuse if already present) fields for supplier acknowledgement:
+
+- acknowledgementStatus enum:
+  - "NONE"           // default, no acknowledgement yet
+  - "PENDING"        // email sent but supplier has not confirmed
+  - "SUPPLIER_ACCEPTED"
+  - "SUPPLIER_DECLINED"
+  - "INTERNAL_CONFIRMED"  // we manually marked it accepted
+- acknowledgedAt (DateTime, nullable)
+- acknowledgedSource (string, nullable)    // "SUPPLIER_LINK" | "INTERNAL"
+- ackToken (string, nullable)              // secure token for supplier link
+- ackTokenExpiresAt (DateTime, nullable)   // optional
+
+If something equivalent already exists, normalize to these values where reasonable.
+
+2) GENERATING ACK TOKEN ON SEND
+When a PO email is successfully sent:
+
+- If ackToken is null:
+  - Generate a secure random token (sufficient length, URL-safe).
+  - Store ackToken and optional ackTokenExpiresAt on the PO.
+- Set acknowledgementStatus appropriately:
+  - If it is "NONE", change it to "PENDING".
+
+3) SUPPLIER UX – “ACCEPT PO” PAGE
+Create a simple supplier-facing route, e.g.:
+
+- GET /po/acknowledge/:token
+  - Looks up the PO by ackToken.
+  - If token invalid or expired, show an error.
+  - If valid, show a minimal page:
+    - PO number, supplier name, order date, key line items.
+    - Buttons: “Accept PO” and optionally “Request Changes” (for V1, you can implement only Accept).
+
+- POST /api/purchase-orders/acknowledge
+  - Input: { token, action } where action is "ACCEPT".
+  - On ACCEPT:
+    - Lookup PO by token.
+    - Set acknowledgementStatus = "SUPPLIER_ACCEPTED"
+    - acknowledgedAt = now
+    - acknowledgedSource = "SUPPLIER_LINK"
+    - Optionally log a system log event: type "PO_SUPPLIER_ACCEPTED".
+    - Return a simple success payload/page.
+
+4) INTERNAL OVERRIDE BUTTON
+In the internal PO detail modal:
+
+- Add a small control when acknowledgementStatus is "NONE" or "PENDING":
+  - Button: “Mark as accepted”.
+  - On click:
+    - Confirm with user.
+    - Call POST /api/purchase-orders/:id/mark-accepted-internal
+    - On server:
+      - Set acknowledgementStatus = "INTERNAL_CONFIRMED"
+      - acknowledgedAt = now
+      - acknowledgedSource = "INTERNAL"
+      - Log a system log event "PO_INTERNAL_ACCEPTED".
+
+5) EMAIL TEMPLATE – INSERT ACK LINK
+In the PO email body (the template used by SendGrid):
+
+- Include a line such as:
+  - “To confirm this purchase order, click here: <confirmation link>”
+- The confirmation link should be:
+  - `${APP_BASE_URL}/po/acknowledge/${ackToken}`
+
+Make sure this uses the freshly generated token if one was created on send.
+
+6) STATUS COLUMN – SHOW ACCEPTED ICON
+In the Purchase Orders list table, update the Status column rendering:
+
+- Base PO lifecycle status (Draft / Sent / Partial / Received / Closed) remains as is.
+- Overlay an “accepted” icon or badge when `acknowledgementStatus` is in:
+  - "SUPPLIER_ACCEPTED" or "INTERNAL_CONFIRMED".
+- Tooltip text examples:
+  - SUPPLIER_ACCEPTED → “Supplier accepted”
+  - INTERNAL_CONFIRMED → “Internally marked accepted”
+  - PENDING → optional small indicator: “Awaiting supplier confirmation”.
+
+Ensure the list query returns `acknowledgementStatus` so the UI can render this without extra roundtrips.
+
+==================================================
+B) EMAIL COLUMN – NOT SENT / SENT / OPENED / FAILED
+==================================================
+1) DATA MODEL – EMAIL STATUS
+On the PurchaseOrder model, confirm or add fields:
+
+- emailStatus enum:
+  - "NOT_SENT"
+  - "SENT"
+  - "OPENED"
+  - "FAILED"
+- lastEmailProviderMessageId (string, nullable)
+- lastEmailEventAt (DateTime, nullable)
+- lastEmailEventType (string, nullable) // e.g. "delivered", "open", "bounce"
+
+If existing fields cover this, reuse them.
+
+2) ON SEND (SENDGRID)
+In the PO email send service:
+
+- On successful SendGrid send:
+  - Set:
+    - emailStatus = "SENT"
+    - lastEmailProviderMessageId = SendGrid message id
+    - lastEmailEventAt = now
+    - lastEmailEventType = "sent"
+  - Keep existing “Not Sent / Sent” UI but align it to these values.
+- On SendGrid failure:
+  - Set emailStatus = "FAILED".
+
+3) SENDGRID EVENT WEBHOOK – OPEN / BOUNCE
+Create or extend a webhook endpoint, e.g.:
+
+- POST /api/sendgrid/events
+
+Behavior:
+- Parse the array of events.
+- For each event:
+  - If it has a message id we can map back to a PO (use lastEmailProviderMessageId or custom arg in the email metadata):
+    - For event type:
+      - "open":
+        - Set emailStatus = "OPENED"
+        - lastEmailEventAt = event timestamp
+        - lastEmailEventType = "open"
+      - "delivered":
+        - Optionally keep emailStatus = "SENT" but update lastEmailEventAt/Type.
+      - "bounce" or "dropped":
+        - Set emailStatus = "FAILED"
+        - lastEmailEventAt = timestamp
+        - lastEmailEventType = event type
+- Do not throw on unknown events; just ignore or log them.
+
+4) EMAIL COLUMN UI
+In the Purchase Orders list table, for the Email column:
+
+- Map emailStatus to labels:
+  - NOT_SENT → “Not sent”
+  - SENT → “Sent”
+  - OPENED → “Opened”
+  - FAILED → “Send failed”
+- Use small badges with different colors for quick scanning.
+- Ensure the list query returns emailStatus (and optionally lastEmailEventType) so no extra queries are needed.
+
+==================================================
+C) TOTAL ITEMS ORDERED COLUMN
+==================================================
+1) DATA MODEL / QUERY
+For each PO, compute the total number of items ordered:
+
+- totalItemsOrdered = sum(line.qtyOrdered for all lines on that PO)
+
+You can:
+- Either store `totalItemsOrdered` on PurchaseOrder and keep it updated whenever lines change.
+- Or compute it in the list query (JOIN + SUM + GROUP BY) if performance is acceptable.
+
+2) UI – PURCHASE ORDERS TABLE
+In the Purchase Orders list table:
+
+- Add a new column, e.g. “Items”.
+- Render the computed totalItemsOrdered there.
+- Make sure:
+  - This value reflects updates when line items change (recalculate and persist or recalc in query).
+
+==================================================
+D) SAFETY / LOGGING
+==================================================
+- For supplier acceptance via link:
+  - Log a system event when a PO is accepted or declined by supplier.
+- For email events (SendGrid webhook):
+  - On failures or bounces, also log an event so it appears in the Logs page.
+
+Implement all of the above by:
+- Reusing any existing fields/logic you find that already address parts of this.
+- Only adding new fields/endpoints/UX where gaps exist.
+- Keeping current PO lifecycle statuses and Send flow intact while layering on acceptance, richer email state, and the total items ordered column.

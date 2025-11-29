@@ -221,10 +221,22 @@ export const purchaseOrders = pgTable("purchase_orders", {
   emailTo: text("email_to"), // Actual email address used when sending the PO
   emailSubject: text("email_subject"), // Last subject used
   emailBodyText: text("email_body_text"), // Plain-text body (for audit)
-  lastEmailStatus: text("last_email_status").notNull().default('NOT_SENT'), // NOT_SENT, SENT, FAILED
+  lastEmailStatus: text("last_email_status").notNull().default('NOT_SENT'), // NOT_SENT, SENT, OPENED, FAILED
   lastEmailSentAt: timestamp("last_email_sent_at"),
   lastEmailProviderMessageId: text("last_email_provider_message_id"), // SendGrid message ID
   lastEmailError: text("last_email_error"), // Error message if send failed
+  lastEmailEventAt: timestamp("last_email_event_at"), // Timestamp of last email event (open, bounce, etc.)
+  lastEmailEventType: text("last_email_event_type"), // Type of last email event (sent, delivered, open, bounce, etc.)
+  
+  // Supplier Acknowledgement - Tracks whether supplier has confirmed the PO
+  acknowledgementStatus: text("acknowledgement_status").notNull().default('NONE'), // NONE, PENDING, SUPPLIER_ACCEPTED, SUPPLIER_DECLINED, INTERNAL_CONFIRMED
+  acknowledgedAt: timestamp("acknowledged_at"),
+  acknowledgedSource: text("acknowledged_source"), // SUPPLIER_LINK, INTERNAL
+  ackToken: text("ack_token"), // Secure token for supplier confirmation link
+  ackTokenExpiresAt: timestamp("ack_token_expires_at"),
+  
+  // Aggregated totals (updated when lines change)
+  totalItemsOrdered: integer("total_items_ordered").notNull().default(0),
   
   // GHL Integration (Communication/Approval Layer Only)
   ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity in Replit POs pipeline
@@ -259,9 +271,20 @@ export type POStatus = typeof PO_STATUS[keyof typeof PO_STATUS];
 export const PO_EMAIL_STATUS = {
   NOT_SENT: 'NOT_SENT',
   SENT: 'SENT',
+  OPENED: 'OPENED',
   FAILED: 'FAILED',
 } as const;
 export type POEmailStatus = typeof PO_EMAIL_STATUS[keyof typeof PO_EMAIL_STATUS];
+
+// PO Acknowledgement Status enum for type safety
+export const PO_ACK_STATUS = {
+  NONE: 'NONE',
+  PENDING: 'PENDING',
+  SUPPLIER_ACCEPTED: 'SUPPLIER_ACCEPTED',
+  SUPPLIER_DECLINED: 'SUPPLIER_DECLINED',
+  INTERNAL_CONFIRMED: 'INTERNAL_CONFIRMED',
+} as const;
+export type POAckStatus = typeof PO_ACK_STATUS[keyof typeof PO_ACK_STATUS];
 
 export const insertPurchaseOrderSchema = createInsertSchema(purchaseOrders).omit({ id: true, createdAt: true, updatedAt: true });
 export const updatePurchaseOrderSchema = insertPurchaseOrderSchema.partial();

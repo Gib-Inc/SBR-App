@@ -3806,12 +3806,14 @@ export class PostgresStorage implements IStorage {
     const lines = await this.getPurchaseOrderLinesByPOId(purchaseOrderId);
     
     let subtotal = 0;
+    let totalItemsOrdered = 0;
     for (const line of lines) {
       const lineTotal = Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
       if (lineTotal !== line.lineTotal) {
         await this.updatePurchaseOrderLine(line.id, { lineTotal, updatedAt: new Date() });
       }
       subtotal += lineTotal;
+      totalItemsOrdered += line.qtyOrdered || 0;
     }
     subtotal = Math.round(subtotal * 100) / 100;
     
@@ -3825,6 +3827,7 @@ export class PostgresStorage implements IStorage {
     return this.updatePurchaseOrder(purchaseOrderId, {
       subtotal,
       total,
+      totalItemsOrdered,
       updatedAt: new Date(),
     });
   }

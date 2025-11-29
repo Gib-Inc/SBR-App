@@ -1360,7 +1360,8 @@ export class MemStorage implements IStorage {
   }
 
   async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
-    return Array.from(this.integrationConfigs.values()).find((c) => c.userId === userId && c.provider === provider);
+    const normalizedProvider = provider.toUpperCase();
+    return Array.from(this.integrationConfigs.values()).find((c) => c.userId === userId && c.provider === normalizedProvider);
   }
 
   async getIntegrationConfigById(id: string): Promise<IntegrationConfig | undefined> {
@@ -3542,8 +3543,9 @@ export class PostgresStorage implements IStorage {
   }
 
   async getIntegrationConfig(userId: string, provider: string): Promise<IntegrationConfig | undefined> {
+    const normalizedProvider = provider.toUpperCase();
     const results = await this.db.select().from(schema.integrationConfigs)
-      .where(and(eq(schema.integrationConfigs.userId, userId), eq(schema.integrationConfigs.provider, provider)));
+      .where(and(eq(schema.integrationConfigs.userId, userId), eq(schema.integrationConfigs.provider, normalizedProvider)));
     return results[0];
   }
 

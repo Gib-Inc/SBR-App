@@ -1,0 +1,68 @@
+The GoHighLevel integration dialog still shows “GOHIGHLEVEL is not configured” even after I’ve entered my API key and Location ID and hit save. “Create / Test Connection / Sync Now” are not behaving correctly.
+
+Please do the following:
+
+1) Inspect the GoHighLevel integration code:
+   - Backend config/storage for GHL:
+     - Where API key and Location ID are stored (env vars, DB models, etc.).
+     - Any `isConfigured` flag or check.
+   - The endpoint(s) behind:
+     - “Test Connection”
+     - “Sync Now”
+   - The frontend component that renders the GoHighLevel modal and “Not configured” message.
+
+2) Fix credential persistence:
+   - Ensure that when I click “Configure” and save, the API key and Location ID are actually stored in a durable place (DB or env-backed settings table).
+   - The app must never log or expose these values in the UI or console.
+   - Add basic validation:
+     - API key is non-empty.
+     - Location ID is non-empty.
+   - If validation fails, show clear UI errors in the Configure dialog instead of silently failing.
+
+3) Implement a real “Test Connection”:
+   - Create or fix a backend helper that:
+     - Reads the stored GHL API key and Location ID.
+     - Calls a simple, safe GHL endpoint using the correct base URL and headers:
+       - Use the official REST base (LeadConnector) and the expected header shape:
+         - `Authorization: Bearer <apiKey>`
+         - Any other required headers for the current GHL REST API.
+     - Treat a 200 response as success.
+     - Treat 401/403 as “Invalid API key”.
+     - Treat 404 with “unknown location” as “Invalid Location ID”.
+     - Surface network/timeout errors as a generic “Connection failed” message.
+
+   - Implement a backend endpoint, e.g. `POST /api/integrations/gohighlevel/test-connection`, that returns:
+     - `{ ok: true }` on success.
+     - `{ ok: false, code: "INVALID_API_KEY" | "INVALID_LOCATION_ID" | "NETWORK_ERROR" | "UNKNOWN_ERROR", message: string }` on failure.
+
+4) Fix the “configured” state:
+   - Create a single source of truth for “GHL is configured” on the backend:
+     - e.g. `gohighlevelConfig.status` enum: "NOT_CONFIGURED" | "CONFIGURED".
+   - Set `status = "CONFIGURED"` only when:
+     - Valid API key and Location ID are stored AND
+     - A test call has succeeded at least once.
+   - Expose a small status endpoint used by the UI:
+     - `GET /api/integrations/gohighlevel/status` → `{ status, lastTestAt, lastErrorCode? }`.
+
+   - Update the frontend GoHighLevel card/modal:
+     - Show the “GOHIGHLEVEL is not configured” banner ONLY when status === "NOT_CONFIGURED".
+     - After a successful save + test, update state so the banner changes to a success / “Connected” state.
+     - Wire the “Test Connection” button to call the test endpoint and show the result in-line (success or specific error instead of the generic banner).
+
+5) Make “Sync Now” safe:
+   - Ensure “Sync Now”:
+     - First checks that status === "CONFIGURED".
+     - If not configured, show a message like “Please configure GoHighLevel first.”
+     - If configured, perform whatever sync logic exists, and handle 401/403 gracefully by marking status = "NOT_CONFIGURED" again and showing “Credentials no longer valid”.
+
+6) Logging and safety:
+   - Never log the raw API key or Location ID.
+   - Logs for GHL should only contain:
+     - HTTP status codes
+     - High-level error messages
+     - Possibly the Location ID (not the key itself).
+
+When you’re done:
+- The Configure dialog should save my API key and Location ID reliably.
+- “Test Connection” should either tell me “Connected to GoHighLevel” or a clear, specific reason (invalid key, wrong location, network error).
+- The main GoHighLevel card should switch from “Not configured” to a connected state once the test passes.

@@ -9137,6 +9137,113 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // SHOPIFY INVENTORY SYNC
+  // ============================================================================
+
+  // Trigger manual Shopify inventory sync for all mapped items
+  app.post("/api/shopify/sync-inventory", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
+      
+      if (!shopifyInventorySync.isConfigured()) {
+        return res.status(400).json({ 
+          error: "Shopify not configured", 
+          message: "Please set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN environment variables" 
+        });
+      }
+
+      const result = await shopifyInventorySync.syncAllInventory(userId);
+      
+      res.json({
+        success: true,
+        message: `Synced ${result.synced} items to Shopify`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('[Shopify Sync] Error syncing inventory:', error);
+      res.status(500).json({ error: error.message || 'Failed to sync inventory' });
+    }
+  });
+
+  // Sync a single item's inventory to Shopify
+  app.post("/api/shopify/sync-inventory/:itemId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { itemId } = req.params;
+      const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
+
+      if (!shopifyInventorySync.isConfigured()) {
+        return res.status(400).json({ 
+          error: "Shopify not configured", 
+          message: "Please set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN environment variables" 
+        });
+      }
+
+      const result = await shopifyInventorySync.syncItemById(itemId, userId);
+      
+      if (!result) {
+        return res.status(404).json({ 
+          error: "Item not found or not mapped to Shopify",
+          message: "Ensure the item has a Shopify variant ID configured"
+        });
+      }
+
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          message: `Synced ${result.sku} to Shopify`,
+          ...result 
+        });
+      } else {
+        res.status(400).json({ 
+          success: false, 
+          error: result.error,
+          ...result 
+        });
+      }
+    } catch (error: any) {
+      console.error('[Shopify Sync] Error syncing item:', error);
+      res.status(500).json({ error: error.message || 'Failed to sync item' });
+    }
+  });
+
+  // Check Shopify sync configuration status
+  app.get("/api/shopify/sync-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
+      const settings = await storage.getAiAgentSettingsByUserId(userId);
+
+      res.json({
+        configured: shopifyInventorySync.isConfigured(),
+        twoWaySyncEnabled: settings?.shopifyTwoWaySync || false,
+        safetyBuffer: settings?.shopifySafetyBuffer || 0,
+        environmentVariables: {
+          SHOPIFY_SHOP_DOMAIN: !!process.env.SHOPIFY_SHOP_DOMAIN,
+          SHOPIFY_ACCESS_TOKEN: !!process.env.SHOPIFY_ACCESS_TOKEN,
+          SHOPIFY_LOCATION_ID: !!process.env.SHOPIFY_LOCATION_ID,
+        }
+      });
+    } catch (error: any) {
+      console.error('[Shopify Sync] Error checking status:', error);
+      res.status(500).json({ error: error.message || 'Failed to check sync status' });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

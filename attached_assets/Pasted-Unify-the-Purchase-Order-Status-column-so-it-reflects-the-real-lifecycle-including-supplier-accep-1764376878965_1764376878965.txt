@@ -1,0 +1,140 @@
+Unify the Purchase Order “Status” column so it reflects the real lifecycle, including supplier acceptance, and remove the separate Ack column.
+
+Target behavior:
+
+- Before email: Status = “Draft”
+- After first successful email send to supplier and before acceptance or receipts: Status = “Sent”
+- After supplier accepts (via link) or we manually mark accepted and before any quantity is received: Status = “Accepted”
+- When some but not all ordered quantities have been received: Status = “Partial”
+- When all quantities on the PO are fully received: Status = “Received”
+- (Optional) If you already have a “Closed” or financial status, keep it internally but the visible status priority above should still be respected for the operational column.
+
+Please first inspect the existing PurchaseOrder schema, APIs, and React components. Reuse existing fields wherever possible and only add what’s missing.
+
+==================================================
+A) DATA MODEL & STATUS LOGIC
+==================================================
+1) Inspect the PurchaseOrder model:
+   - Note the existing fields:
+     - `status` (enum)
+     - any acknowledgement fields (ackStatus, acknowledgementStatus, etc.)
+     - any receipt/completion fields
+   - DO NOT create duplicate concepts. If `acknowledgementStatus` or similar already exists, keep it and only adjust how we derive the visible status.
+
+2) Define (or confirm) the internal enum values used for status and acknowledgement:
+
+   Internal PO receipt/flow fields:
+   - status enum should at least support:
+     - "DRAFT"
+     - "SENT"
+     - "ACCEPTED"          // by supplier or internal confirm
+     - "PARTIAL"           // partially received
+     - "RECEIVED"          // fully received
+     - "CLOSED" (if you already use this for financial closure)
+
+   Acknowledgement:
+   - You may keep a separate acknowledgementStatus field if it already exists, e.g.:
+     - "NONE"
+     - "PENDING"
+     - "SUPPLIER_ACCEPTED"
+     - "INTERNAL_CONFIRMED"
+   - If this field does not exist yet, keep the simpler approach:
+     - Use the main `status` field to represent “Accepted” when the supplier confirms or we mark it accepted.
+
+3) Implement a helper function on the server (or shared domain layer), e.g.:
+
+   `derivePoStatus(po: PurchaseOrder, lineItems: PurchaseOrderLine[]): PurchaseOrderStatus`
+
+   Logic (priority order):
+
+   - If `status === "DRAFT"` and no email has been sent:
+       return "DRAFT"
+
+   - Else if there are line items and:
+       totalQtyReceived > 0 and totalQtyReceived < totalQtyOrdered:
+       return "PARTIAL"
+
+   - Else if totalQtyReceived === totalQtyOrdered and totalQtyOrdered > 0:
+       return "RECEIVED"  // If you need a separate internal CLOSED flag, maintain that separately.
+
+   - Else if we have an accepted flag but no receipts yet:
+       // supplier accepted via link or internal manual confirmation
+       return "ACCEPTED"
+
+   - Else if we have at least one successful email send to supplier but no accepted flag and no receipts:
+       return "SENT"
+
+   - Else:
+       // fallback to existing status or DRAFT
+       return existingStatus or "DRAFT"
+
+   Where:
+   - `totalQtyOrdered` = sum(line.qtyOrdered)
+   - `totalQtyReceived` = sum(line.qtyReceived)
+
+   Make sure this helper is used consistently:
+   - When loading POs for the list.
+   - When updating a PO after:
+     - email send
+     - acceptance events
+     - receipt events.
+
+4) When supplier accepts (via ack link) or internal user clicks “Mark as accepted”:
+   - Set or keep the underlying acceptance flags as they are now (ackStatus, acknowledgedAt, etc.).
+   - Re-run `derivePoStatus` and persist the resulting status (e.g. "ACCEPTED") unless the PO is already PARTIAL/RECEIVED.
+
+5) When receipts are recorded on line items:
+   - After saving line qtyReceived, recalc:
+     - totalQtyOrdered
+     - totalQtyReceived
+   - Use `derivePoStatus` to update the PO’s status to PARTIAL or RECEIVED accordingly, even if it was previously ACCEPTED.
+
+==================================================
+B) UI – STATUS COLUMN ONLY (REMOVE ACK COLUMN)
+==================================================
+1) Remove the separate “Ack” column from the Purchase Orders list table:
+   - Delete the column definition and any related props/state for ack in the table.
+
+2) In the Purchase Orders list:
+   - For each row, use the derived `status` value from the API to render a single status badge with labels:
+     - "Draft"
+     - "Sent"
+     - "Accepted"
+     - "Partial"
+     - "Received"
+     - "Closed" (if applicable)
+   - Map enum values to these human-readable labels and consistent colors.
+
+3) Ensure the list API returns the correct, derived status:
+   - Either compute status on the server (preferred) and include a `displayStatus` / `status` field directly in the API response.
+   - Or, if you must compute it in the client, expose enough information (qtyOrdered sums, qtyReceived sums, accepted flags, email sent flags) and use a mirrored `deriveStatus` utility in the client.
+
+==================================================
+C) EMAIL COLUMN (KEEP EXISTING BEHAVIOR)
+==================================================
+Do not change the Email column from the last implementation, except to ensure it is independent from status:
+
+- Email column shows:
+  - "Not Sent"
+  - "Sent"
+  - "Opened"
+  - "Failed"
+- Status column shows the operational lifecycle (Draft, Sent, Accepted, Partial, Received).
+
+Internally:
+- Email state should still be driven by emailStatus and SendGrid events.
+- PO status should be driven by the logic in section A, not by emailStatus directly (except for the “Sent” state when no acceptance/receipts yet).
+
+==================================================
+D) VALIDATION / CHECKS
+==================================================
+- After implementing, check:
+  - DRAFT PO with no email: status shows “Draft”.
+  - After successful email send, no acceptance, no receipts: status shows “Sent”.
+  - After supplier uses the ack link (or internal “Mark as accepted”): status shows “Accepted” until any receipts occur.
+  - After partial receipt: status shows “Partial”.
+  - After full receipt of all lines: status shows “Received”.
+- The Ack column should be removed from the table; all acknowledgement state is reflected through Status.
+- Ensure no old code paths still try to set a different status string that conflicts with this logic.
+
+Implement these changes by inspecting the existing code first, then adapting/enhancing the status logic and UI rather than duplicating concepts.

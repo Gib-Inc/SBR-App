@@ -256,16 +256,63 @@ export const purchaseOrders = pgTable("purchase_orders", {
 }));
 
 // PO Status enum for type safety
+// Lifecycle: DRAFT → SENT → ACCEPTED → PARTIAL → RECEIVED → CLOSED
 export const PO_STATUS = {
   DRAFT: 'DRAFT',
-  APPROVED: 'APPROVED',
-  SENT: 'SENT',
-  PARTIALLY_RECEIVED: 'PARTIALLY_RECEIVED',
-  RECEIVED: 'RECEIVED',
-  CLOSED: 'CLOSED',
+  APPROVAL_PENDING: 'APPROVAL_PENDING', // Internal approval pending (legacy)
+  APPROVED: 'APPROVED', // Legacy - maps to DRAFT in display
+  SENT: 'SENT', // Email sent to supplier, awaiting response
+  ACCEPTED: 'ACCEPTED', // Supplier accepted (via link or internal mark)
+  PARTIAL: 'PARTIAL', // Some items received
+  PARTIALLY_RECEIVED: 'PARTIALLY_RECEIVED', // Legacy alias for PARTIAL
+  RECEIVED: 'RECEIVED', // All items received
+  CLOSED: 'CLOSED', // Financially closed
   CANCELLED: 'CANCELLED',
 } as const;
 export type POStatus = typeof PO_STATUS[keyof typeof PO_STATUS];
+
+// Helper to derive display status from PO data and line items
+export function derivePoDisplayStatus(po: {
+  status: string;
+  lastEmailStatus?: string | null;
+  lastEmailSentAt?: Date | string | null;
+  acknowledgementStatus?: string | null;
+}, totalQtyOrdered: number, totalQtyReceived: number): POStatus {
+  // Priority 1: Check receipt status (highest priority)
+  if (totalQtyOrdered > 0 && totalQtyReceived >= totalQtyOrdered) {
+    return PO_STATUS.RECEIVED;
+  }
+  if (totalQtyOrdered > 0 && totalQtyReceived > 0 && totalQtyReceived < totalQtyOrdered) {
+    return PO_STATUS.PARTIAL;
+  }
+  
+  // Priority 2: Check if already in a terminal/receipt state
+  if (po.status === 'RECEIVED' || po.status === 'CLOSED' || po.status === 'CANCELLED') {
+    return po.status as POStatus;
+  }
+  if (po.status === 'PARTIAL' || po.status === 'PARTIALLY_RECEIVED') {
+    return PO_STATUS.PARTIAL;
+  }
+  
+  // Priority 3: Check acceptance status
+  const ackStatus = po.acknowledgementStatus || 'NONE';
+  if (ackStatus === 'SUPPLIER_ACCEPTED' || ackStatus === 'INTERNAL_CONFIRMED') {
+    return PO_STATUS.ACCEPTED;
+  }
+  
+  // Priority 4: Check if email was sent
+  const emailSent = po.lastEmailStatus === 'SENT' || po.lastEmailStatus === 'OPENED' || po.lastEmailSentAt;
+  if (emailSent) {
+    return PO_STATUS.SENT;
+  }
+  
+  // Priority 5: Default to DRAFT for anything else
+  if (po.status === 'APPROVED' || po.status === 'APPROVAL_PENDING') {
+    return PO_STATUS.DRAFT; // Show as Draft until sent
+  }
+  
+  return PO_STATUS.DRAFT;
+}
 
 // PO Email Status enum for type safety
 export const PO_EMAIL_STATUS = {

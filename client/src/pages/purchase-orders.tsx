@@ -12,6 +12,7 @@ import {
   FileDown,
   Truck,
   CheckCircle,
+  CheckCircle2,
   XCircle,
   Clock,
   Send,
@@ -23,6 +24,7 @@ import {
   Mail,
   MailX,
   MailCheck,
+  Package,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -113,7 +115,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-type EmailStatus = "NOT_SENT" | "SENT" | "FAILED";
+type EmailStatus = "NOT_SENT" | "SENT" | "OPENED" | "FAILED";
 
 const EMAIL_STATUS_CONFIG: Record<EmailStatus, { label: string; icon: any; colorClass: string }> = {
   NOT_SENT: { 
@@ -123,6 +125,11 @@ const EMAIL_STATUS_CONFIG: Record<EmailStatus, { label: string; icon: any; color
   },
   SENT: { 
     label: "Sent", 
+    icon: MailCheck, 
+    colorClass: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" 
+  },
+  OPENED: { 
+    label: "Opened", 
     icon: MailCheck, 
     colorClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" 
   },
@@ -146,7 +153,9 @@ function EmailStatusBadge({
   const config = EMAIL_STATUS_CONFIG[emailStatus] || EMAIL_STATUS_CONFIG.NOT_SENT;
   const Icon = config.icon;
   
-  const tooltipContent = emailStatus === "SENT" && sentAt 
+  const tooltipContent = emailStatus === "OPENED" && sentAt 
+    ? `Opened by ${emailTo || "supplier"} (sent ${format(new Date(sentAt), "MM/dd/yyyy HH:mm")})`
+    : emailStatus === "SENT" && sentAt 
     ? `Sent to ${emailTo || "supplier"} on ${format(new Date(sentAt), "MM/dd/yyyy HH:mm")}`
     : emailStatus === "FAILED" 
     ? "Email delivery failed"
@@ -157,6 +166,65 @@ function EmailStatusBadge({
       className={`${config.colorClass} font-medium`} 
       title={tooltipContent}
       data-testid={`badge-email-${emailStatus.toLowerCase()}`}
+    >
+      <Icon className="w-3 h-3 mr-1" />
+      {config.label}
+    </Badge>
+  );
+}
+
+type AckStatus = "NONE" | "PENDING" | "SUPPLIER_ACCEPTED" | "INTERNAL_CONFIRMED" | "EXPIRED";
+
+const ACK_STATUS_CONFIG: Record<AckStatus, { label: string; icon: any; colorClass: string }> = {
+  NONE: { 
+    label: "—", 
+    icon: Clock, 
+    colorClass: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500" 
+  },
+  PENDING: { 
+    label: "Pending", 
+    icon: Clock, 
+    colorClass: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400" 
+  },
+  SUPPLIER_ACCEPTED: { 
+    label: "Confirmed", 
+    icon: CheckCircle2, 
+    colorClass: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" 
+  },
+  INTERNAL_CONFIRMED: { 
+    label: "Verified", 
+    icon: CheckCircle2, 
+    colorClass: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" 
+  },
+  EXPIRED: { 
+    label: "Expired", 
+    icon: Clock, 
+    colorClass: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500" 
+  },
+};
+
+function AckStatusBadge({ 
+  status, 
+  acknowledgedAt 
+}: { 
+  status: string | null | undefined; 
+  acknowledgedAt?: Date | string | null;
+}) {
+  const ackStatus = (status || "NONE") as AckStatus;
+  if (ackStatus === "NONE") return null;
+  
+  const config = ACK_STATUS_CONFIG[ackStatus] || ACK_STATUS_CONFIG.NONE;
+  const Icon = config.icon;
+  
+  const tooltipContent = acknowledgedAt 
+    ? `${config.label} on ${format(new Date(acknowledgedAt), "MM/dd/yyyy HH:mm")}`
+    : config.label;
+  
+  return (
+    <Badge 
+      className={`${config.colorClass} font-medium ml-1`} 
+      title={tooltipContent}
+      data-testid={`badge-ack-${ackStatus.toLowerCase()}`}
     >
       <Icon className="w-3 h-3 mr-1" />
       {config.label}
@@ -542,6 +610,8 @@ export default function PurchaseOrders() {
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Email</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Ack</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Items</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total</th>
@@ -551,7 +621,7 @@ export default function PurchaseOrders() {
               <tbody>
                 {sortedPOs.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="h-32 text-center text-muted-foreground">
+                    <td colSpan={10} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -580,6 +650,20 @@ export default function PurchaseOrders() {
                           sentAt={(po as any).lastEmailSentAt}
                           emailTo={(po as any).emailTo}
                         />
+                      </td>
+                      <td className="p-3 align-middle whitespace-nowrap">
+                        <AckStatusBadge 
+                          status={(po as any).acknowledgementStatus} 
+                          acknowledgedAt={(po as any).acknowledgedAt}
+                        />
+                      </td>
+                      <td className="p-3 align-middle whitespace-nowrap text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <Package className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-sm" data-testid={`text-po-items-${po.id}`}>
+                            {(po as any).totalItemsOrdered || po.lines?.length || "—"}
+                          </span>
+                        </div>
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.orderDate)}</td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.expectedDate)}</td>

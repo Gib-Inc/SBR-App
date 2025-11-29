@@ -363,7 +363,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get GHL configuration (optional - we can still create POs without GHL)
       const ghlConfig = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = (ghlConfig?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
+      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
       const apiKey = ghlConfig?.apiKey;
       const locationId = (ghlConfig?.config as any)?.locationId;
       const pipelineId = (ghlConfig?.config as any)?.purchasePipelineId || process.env.GHL_PURCHASE_PIPELINE_ID;
@@ -3670,6 +3670,48 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GoHighLevel - Status (check if configured and connected)
+  app.get("/api/integrations/gohighlevel/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      
+      if (!config) {
+        return res.json({
+          configured: false,
+          isConnected: false,
+          message: 'GoHighLevel not configured',
+        });
+      }
+      
+      const apiKey = config.apiKey;
+      const locationId = (config.config as any)?.locationId;
+      
+      if (!apiKey || !locationId) {
+        return res.json({
+          configured: false,
+          isConnected: false,
+          message: 'Missing API key or Location ID',
+          hasApiKey: !!apiKey,
+          hasLocationId: !!locationId,
+        });
+      }
+      
+      return res.json({
+        configured: true,
+        isConnected: config.lastSyncStatus === 'SUCCESS',
+        isEnabled: config.isEnabled,
+        lastSyncAt: config.lastSyncAt,
+        lastSyncStatus: config.lastSyncStatus,
+        lastSyncMessage: config.lastSyncMessage,
+        hasApiKey: true,
+        hasLocationId: true,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get GoHighLevel status" });
+    }
+  });
+
   // GoHighLevel - Test Connection
   app.post("/api/integrations/gohighlevel/test", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -3677,14 +3719,32 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
+      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
       const apiKey = config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       
-      if (!apiKey || !locationId) {
+      // Return specific error codes for missing credentials
+      if (!apiKey && !locationId) {
         return res.status(400).json({ 
           success: false,
-          message: "GoHighLevel credentials not configured. Please add API key and Location ID." 
+          message: "GoHighLevel credentials not configured. Please add API key and Location ID.",
+          errorCode: 'NOT_CONFIGURED',
+        });
+      }
+      
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false,
+          message: "API key is required. Please add your GoHighLevel API key.",
+          errorCode: 'MISSING_API_KEY',
+        });
+      }
+      
+      if (!locationId) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Location ID is required. Please add your GoHighLevel Location ID.",
+          errorCode: 'MISSING_LOCATION_ID',
         });
       }
 
@@ -3704,7 +3764,8 @@ TOTAL: $${subtotal.toFixed(2)}
     } catch (error: any) {
       res.status(500).json({ 
         success: false,
-        message: error.message || "Failed to test GoHighLevel connection" 
+        message: error.message || "Failed to test GoHighLevel connection",
+        errorCode: 'UNKNOWN',
       });
     }
   });
@@ -3716,7 +3777,7 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
+      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
       const apiKey = config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       

@@ -55,8 +55,14 @@ export class GoHighLevelClient {
 
   /**
    * Test the API connection
+   * Returns detailed error codes for specific failure scenarios
    */
-  async testConnection(): Promise<{ success: boolean; message: string }> {
+  async testConnection(): Promise<{ 
+    success: boolean; 
+    message: string; 
+    errorCode?: 'INVALID_API_KEY' | 'INVALID_LOCATION_ID' | 'NETWORK_ERROR' | 'RATE_LIMITED' | 'SERVER_ERROR' | 'UNKNOWN';
+    locationName?: string;
+  }> {
     try {
       const response = await fetch(`${this.baseUrl}/locations/${this.locationId}`, {
         headers: this.getHeaders(),
@@ -64,7 +70,57 @@ export class GoHighLevelClient {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`GHL API error: ${response.status} ${response.statusText} - ${errorText}`);
+        let parsedError: any = {};
+        try {
+          parsedError = JSON.parse(errorText);
+        } catch { /* ignore parse errors */ }
+        
+        // Determine specific error code based on HTTP status
+        if (response.status === 401) {
+          return {
+            success: false,
+            message: 'Invalid API key. Please check your GoHighLevel API key and try again.',
+            errorCode: 'INVALID_API_KEY',
+          };
+        }
+        
+        if (response.status === 403) {
+          return {
+            success: false,
+            message: 'Access forbidden. Your API key may not have access to this location.',
+            errorCode: 'INVALID_API_KEY',
+          };
+        }
+        
+        if (response.status === 404) {
+          return {
+            success: false,
+            message: 'Location not found. Please verify your Location ID is correct.',
+            errorCode: 'INVALID_LOCATION_ID',
+          };
+        }
+        
+        if (response.status === 429) {
+          return {
+            success: false,
+            message: 'Rate limited. Too many requests. Please try again later.',
+            errorCode: 'RATE_LIMITED',
+          };
+        }
+        
+        if (response.status >= 500) {
+          return {
+            success: false,
+            message: `GoHighLevel server error (${response.status}). Please try again later.`,
+            errorCode: 'SERVER_ERROR',
+          };
+        }
+
+        return {
+          success: false,
+          message: parsedError.message || `GHL API error: ${response.status} ${response.statusText}`,
+          errorCode: 'UNKNOWN',
+        };
       }
 
       const data = await response.json();
@@ -73,11 +129,30 @@ export class GoHighLevelClient {
       return {
         success: true,
         message: `Connected successfully to ${locationName}`,
+        locationName,
       };
     } catch (error: any) {
+      // Network-level errors (DNS, timeout, etc.)
+      if (error.cause?.code === 'ENOTFOUND' || error.cause?.code === 'ECONNREFUSED') {
+        return {
+          success: false,
+          message: 'Network error. Unable to reach GoHighLevel API. Please check your internet connection.',
+          errorCode: 'NETWORK_ERROR',
+        };
+      }
+      
+      if (error.name === 'AbortError' || error.cause?.code === 'ETIMEDOUT') {
+        return {
+          success: false,
+          message: 'Connection timed out. GoHighLevel API is not responding.',
+          errorCode: 'NETWORK_ERROR',
+        };
+      }
+      
       return {
         success: false,
         message: error.message || 'Failed to connect to GoHighLevel API',
+        errorCode: 'UNKNOWN',
       };
     }
   }

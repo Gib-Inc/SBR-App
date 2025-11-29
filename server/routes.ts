@@ -1926,6 +1926,67 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // ============================================================================
+  // SHIPPO LABEL LOGS
+  // ============================================================================
+  // Provides visibility into all Shippo-generated labels for returns/shipments.
+  // Used by the Barcodes page to display a read-only table of labels.
+  
+  app.get("/api/shippo-label-logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { 
+        search, 
+        type, 
+        status, 
+        limit = '50', 
+        offset = '0' 
+      } = req.query;
+      
+      const filters: {
+        search?: string;
+        type?: string;
+        status?: string;
+        limit?: number;
+        offset?: number;
+      } = {
+        limit: parseInt(limit as string) || 50,
+        offset: parseInt(offset as string) || 0,
+      };
+      
+      if (search && typeof search === 'string') {
+        filters.search = search;
+      }
+      if (type && typeof type === 'string') {
+        filters.type = type;
+      }
+      if (status && typeof status === 'string') {
+        filters.status = status;
+      }
+      
+      const result = await storage.getShippoLabelLogs(filters);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ShippoLabels] Error fetching label logs:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch label logs" });
+    }
+  });
+  
+  app.get("/api/shippo-label-logs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const labelLog = await storage.getShippoLabelLog(id);
+      
+      if (!labelLog) {
+        return res.status(404).json({ error: "Label log not found" });
+      }
+      
+      res.json(labelLog);
+    } catch (error: any) {
+      console.error("[ShippoLabels] Error fetching label log:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch label log" });
+    }
+  });
+
+  // ============================================================================
   // PRODUCTS (Finished Products with BOM)
   // ============================================================================
   

@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { Link } from "wouter";
 import { CreatePODialog } from "@/components/create-po-dialog";
+import { EditPODialog } from "@/components/edit-po-dialog";
 import {
   Plus,
   Search,
@@ -26,6 +27,7 @@ import {
   MailX,
   MailCheck,
   Package,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -266,6 +268,8 @@ export default function PurchaseOrders() {
   const [selectedPO, setSelectedPO] = useState<PurchaseOrderWithSupplier | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingPO, setEditingPO] = useState<PurchaseOrderWithSupplier | null>(null);
 
   const { data: purchaseOrders, isLoading } = useQuery<PurchaseOrderWithSupplier[]>({
     queryKey: ["/api/purchase-orders"],
@@ -721,6 +725,23 @@ export default function PurchaseOrders() {
                                 <FileDown className="h-4 w-4 mr-2" />
                                 Download PDF
                               </DropdownMenuItem>
+                              {/* Show Edit for Draft status */}
+                              {((po as any).displayStatus === "DRAFT" || po.status === "DRAFT" || po.status === "APPROVAL_PENDING" || po.status === "APPROVED") && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingPO(po);
+                                      setIsEditOpen(true);
+                                    }}
+                                    data-testid={`button-edit-po-${po.id}`}
+                                  >
+                                    <Pencil className="h-4 w-4 mr-2" />
+                                    Edit PO
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                               {/* Show Send PO for Draft status */}
                               {((po as any).displayStatus === "DRAFT" || po.status === "DRAFT" || po.status === "APPROVED") && (
                                 <>
@@ -1095,6 +1116,22 @@ export default function PurchaseOrders() {
           )}
 
           <DialogFooter className="gap-2">
+            {/* Edit button for Draft POs */}
+            {poDetails?.id && 
+             ['DRAFT', 'APPROVAL_PENDING', 'APPROVED'].includes(poDetails.status) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditingPO({ ...selectedPO, lines: poDetails.lines } as PurchaseOrderWithSupplier);
+                  setIsDetailOpen(false);
+                  setIsEditOpen(true);
+                }}
+                data-testid="button-edit-po-detail"
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit PO
+              </Button>
+            )}
             {poDetails?.id && 
              poDetails.lines?.length > 0 &&
              ['SENT', 'PARTIAL_RECEIVED'].includes(poDetails.status) && 
@@ -1151,6 +1188,18 @@ export default function PurchaseOrders() {
         onOpenChange={setIsCreateOpen}
         onPOCreated={(poId) => {
           queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+        }}
+      />
+
+      <EditPODialog
+        open={isEditOpen}
+        onOpenChange={setIsEditOpen}
+        purchaseOrder={editingPO}
+        onPOUpdated={(poId) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+          if (selectedPO?.id === poId) {
+            queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", poId, "composite"] });
+          }
         }}
       />
     </div>

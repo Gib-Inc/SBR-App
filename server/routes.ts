@@ -6292,6 +6292,131 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // PUT endpoint for full PO edit (including line items) - only for DRAFT status
+  app.put("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { supplierId, orderDate, expectedDate, shippingCost, otherFees, notes, lines } = req.body;
+
+      const existingPO = await storage.getPurchaseOrder(id);
+      if (!existingPO) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      // Only allow editing DRAFT status POs
+      if (!['DRAFT', 'APPROVAL_PENDING', 'APPROVED'].includes(existingPO.status)) {
+        return res.status(400).json({ error: "Only draft purchase orders can be edited" });
+      }
+
+      // Validate supplierId is provided
+      const effectiveSupplierId = supplierId || existingPO.supplierId;
+      if (!effectiveSupplierId) {
+        return res.status(400).json({ error: "Supplier is required" });
+      }
+
+      // Validate supplier exists if being changed
+      if (supplierId && supplierId !== existingPO.supplierId) {
+        const supplier = await storage.getSupplier(supplierId);
+        if (!supplier) {
+          return res.status(400).json({ error: "Invalid supplier" });
+        }
+      }
+
+      // Validate lines only if they are being updated
+      if (lines !== undefined && lines !== null) {
+        if (!Array.isArray(lines)) {
+          return res.status(400).json({ error: "Lines must be an array" });
+        }
+        
+        if (lines.length === 0) {
+          return res.status(400).json({ error: "At least one line item is required" });
+        }
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.itemId) {
+            return res.status(400).json({ error: `Line ${i + 1}: Item ID is required` });
+          }
+          if (!line.qtyOrdered || line.qtyOrdered < 1) {
+            return res.status(400).json({ error: `Line ${i + 1}: Quantity must be greater than 0` });
+          }
+          if (line.unitCost === undefined || line.unitCost === null || line.unitCost <= 0) {
+            return res.status(400).json({ error: `Line ${i + 1}: Unit cost must be greater than 0` });
+          }
+        }
+      }
+      // Note: If lines is not provided (undefined/null), we skip line validation
+      // and only update the PO header fields, preserving existing lines
+
+      // Update PO header
+      const poUpdates: any = { updatedAt: new Date() };
+      if (supplierId) poUpdates.supplierId = supplierId;
+      if (orderDate) poUpdates.orderDate = new Date(orderDate);
+      if (expectedDate !== undefined) poUpdates.expectedDate = expectedDate ? new Date(expectedDate) : null;
+      if (shippingCost !== undefined) poUpdates.shippingCost = Math.round((Number(shippingCost) || 0) * 100) / 100;
+      if (otherFees !== undefined) poUpdates.otherFees = Math.round((Number(otherFees) || 0) * 100) / 100;
+      if (notes !== undefined) poUpdates.notes = notes;
+
+      await storage.updatePurchaseOrder(id, poUpdates);
+
+      // Handle line items if provided
+      if (lines && Array.isArray(lines)) {
+        // Get existing lines
+        const existingLines = await storage.getPurchaseOrderLinesByPOId(id);
+        const existingLineIds = new Set(existingLines.map(l => l.id));
+        const incomingLineIds = new Set(lines.filter((l: any) => l.id && !l.id.startsWith('temp-')).map((l: any) => l.id));
+
+        // Delete lines that are no longer present
+        for (const existingLine of existingLines) {
+          if (!incomingLineIds.has(existingLine.id)) {
+            await storage.deletePurchaseOrderLine(existingLine.id);
+          }
+        }
+
+        // Update or create lines
+        for (const line of lines) {
+          const item = await storage.getItem(line.itemId);
+          if (!item) continue;
+
+          const lineTotal = Math.round((line.qtyOrdered * line.unitCost) * 100) / 100;
+
+          if (line.id && existingLineIds.has(line.id)) {
+            // Update existing line
+            await storage.updatePurchaseOrderLine(line.id, {
+              itemId: line.itemId,
+              sku: item.sku,
+              itemName: item.name,
+              qtyOrdered: line.qtyOrdered,
+              unitCost: Math.round((Number(line.unitCost) || 0) * 100) / 100,
+              lineTotal,
+            });
+          } else {
+            // Create new line
+            await storage.createPurchaseOrderLine({
+              purchaseOrderId: id,
+              itemId: line.itemId,
+              sku: item.sku,
+              itemName: item.name,
+              qtyOrdered: line.qtyOrdered,
+              unitCost: Math.round((Number(line.unitCost) || 0) * 100) / 100,
+              lineTotal,
+              qtyReceived: 0,
+            });
+          }
+        }
+      }
+
+      // Recalculate totals
+      const recalculated = await storage.recalculatePOTotals(id);
+      const updatedLines = await storage.getPurchaseOrderLinesByPOId(id);
+
+      res.json({ ...recalculated, lines: updatedLines });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error updating purchase order:", error);
+      res.status(400).json({ error: error.message || "Failed to update purchase order" });
+    }
+  });
+
   app.delete("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;

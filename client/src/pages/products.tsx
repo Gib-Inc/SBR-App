@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -16,6 +16,7 @@ import { TransferDialog } from "@/components/transfer-dialog";
 import { ProductionDialog } from "@/components/production-dialog";
 import { TransactionHistoryDialog } from "@/components/transaction-history-dialog";
 import { ScanInventoryModal } from "@/components/scan-inventory-modal";
+import { ItemCostSettingsDialog } from "@/components/item-cost-settings-dialog";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -31,6 +32,7 @@ function ItemTableRow({
   onProduce,
   onViewHistory,
   onReorder,
+  onCostSettings,
   aiRecommendations,
   backorderSnapshots
 }: { 
@@ -42,6 +44,7 @@ function ItemTableRow({
   onProduce?: (item: any) => void;
   onViewHistory?: (item: any) => void;
   onReorder?: (item: any) => void;
+  onCostSettings?: (item: any) => void;
   aiRecommendations?: any[];
   backorderSnapshots?: any[];
 }) {
@@ -538,6 +541,18 @@ function ItemTableRow({
               <ShoppingCart className="h-4 w-4" />
             </Button>
           )}
+          {item.type === "component" && onCostSettings && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => onCostSettings(item)}
+              data-testid={`button-cost-settings-${item.id}`}
+              className="h-8 w-8"
+              title="Cost settings"
+            >
+              <DollarSign className="h-4 w-4" />
+            </Button>
+          )}
           {onViewHistory && (
             <Button
               variant="ghost"
@@ -848,7 +863,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
       if (!supplier) throw new Error("No supplier configured");
       
       const qty = data.qty;
-      const unitCost = item.primarySupplier?.unitCost || 0;
+      const unitCost = item.defaultPurchaseCost || item.primarySupplier?.unitCost || item.primarySupplier?.price || 0;
 
       if (data.mode === "new") {
         // Create new PO
@@ -1251,6 +1266,7 @@ export default function BOM() {
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scanMode, setScanMode] = useState<"RAW" | "FINISHED">("RAW");
   const [reorderItem, setReorderItem] = useState<any>(null);
+  const [costSettingsItem, setCostSettingsItem] = useState<any>(null);
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -1580,6 +1596,7 @@ export default function BOM() {
                     onDelete={handleDelete}
                     onViewHistory={setHistoryItem}
                     onReorder={setReorderItem}
+                    onCostSettings={setCostSettingsItem}
                     aiRecommendations={aiRecommendations}
                   />
                 ))}
@@ -1640,6 +1657,13 @@ export default function BOM() {
           isOpen={!!reorderItem}
           onClose={() => setReorderItem(null)}
           item={reorderItem}
+        />
+      )}
+      {costSettingsItem && (
+        <ItemCostSettingsDialog
+          isOpen={!!costSettingsItem}
+          onClose={() => setCostSettingsItem(null)}
+          item={costSettingsItem}
         />
       )}
       

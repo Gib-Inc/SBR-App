@@ -213,13 +213,18 @@ export function CreatePODialog({
           : l
       ));
     } else {
+      const itemWithAny = item as any;
+      const defaultCost = itemWithAny.defaultPurchaseCost || 
+                          itemWithAny.primarySupplier?.unitCost || 
+                          itemWithAny.primarySupplier?.price || 
+                          0;
       const newLine: DraftLineItem = {
         id: `temp-${Date.now()}`,
         itemId: item.id,
         sku: item.sku,
         name: item.name,
         qtyOrdered: 1,
-        unitCost: 0,
+        unitCost: defaultCost,
       };
       setLineItems(prev => [...prev, newLine]);
     }

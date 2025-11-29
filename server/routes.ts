@@ -1489,6 +1489,15 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const validated = updateItemSchema.parse(req.body);
       
+      // Validate supplierProductUrl if provided (SSRF prevention with DNS resolution)
+      if (validated.supplierProductUrl) {
+        const { AutoSuggestCostService } = await import("./services/auto-suggest-cost-service");
+        const urlValidation = await AutoSuggestCostService.validateUrlWithDNS(validated.supplierProductUrl);
+        if (!urlValidation.valid) {
+          return res.status(400).json({ error: `Invalid supplier URL: ${urlValidation.reason}` });
+        }
+      }
+      
       // Get the existing item to check its type
       const existingItem = await storage.getItem(req.params.id);
       if (!existingItem) {
@@ -1609,6 +1618,21 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete item" });
+    }
+  });
+
+  // Auto-suggest purchase cost from supplier product page
+  app.post("/api/items/:id/auto-suggest-cost", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { AutoSuggestCostService } = await import("./services/auto-suggest-cost-service");
+      const result = await AutoSuggestCostService.autoSuggestPurchaseCost(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Items] Auto-suggest cost error:", error);
+      res.status(500).json({ 
+        updated: false, 
+        reason: error.message || "Unexpected error during price suggestion" 
+      });
     }
   });
 

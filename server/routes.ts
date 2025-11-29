@@ -2788,7 +2788,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // Create new integration config
+  // Create or update integration config (upsert behavior)
   app.post("/api/integration-configs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -2798,15 +2798,38 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(400).json({ error: "Provider is required" });
       }
 
-      // Check if config already exists
-      const existing = await storage.getIntegrationConfig(userId, provider.toUpperCase());
+      const normalizedProvider = provider.toUpperCase();
+
+      // Check if config already exists - if so, update it instead of creating
+      const existing = await storage.getIntegrationConfig(userId, normalizedProvider);
       if (existing) {
-        return res.status(409).json({ error: "Integration config already exists" });
+        // Update the existing config
+        const updated = await storage.updateIntegrationConfig(existing.id, {
+          accountName: accountName || existing.accountName,
+          apiKey: apiKey || existing.apiKey,
+          config: config || existing.config,
+        });
+
+        // Log the update
+        try {
+          const user = await storage.getUser(userId);
+          await AuditLogger.logIntegrationConfigUpdated({
+            integrationType: normalizedProvider,
+            integrationName: accountName || normalizedProvider,
+            configured: true,
+            userId,
+            userName: user?.email,
+          });
+        } catch (logError) {
+          console.warn('[IntegrationConfig] Failed to log config update:', logError);
+        }
+
+        return res.json(sanitizeIntegrationConfig(updated!));
       }
 
       const newConfig = await storage.createIntegrationConfig({
         userId,
-        provider: provider.toUpperCase(),
+        provider: normalizedProvider,
         accountName: accountName || null,
         apiKey: apiKey || null,
         isEnabled: true,
@@ -2817,8 +2840,8 @@ TOTAL: $${subtotal.toFixed(2)}
       try {
         const user = await storage.getUser(userId);
         await AuditLogger.logIntegrationConfigUpdated({
-          integrationType: provider.toUpperCase(),
-          integrationName: accountName || provider.toUpperCase(),
+          integrationType: normalizedProvider,
+          integrationName: accountName || normalizedProvider,
           configured: true,
           userId,
           userName: user?.email,
@@ -2830,6 +2853,10 @@ TOTAL: $${subtotal.toFixed(2)}
       // Sanitize response before sending to client
       res.status(201).json(sanitizeIntegrationConfig(newConfig));
     } catch (error: any) {
+      // Handle duplicate key error gracefully
+      if (error.message?.includes('duplicate key') || error.code === '23505') {
+        return res.status(409).json({ error: "Integration config already exists. Please refresh and try again." });
+      }
       res.status(500).json({ error: error.message || "Failed to create integration config" });
     }
   });

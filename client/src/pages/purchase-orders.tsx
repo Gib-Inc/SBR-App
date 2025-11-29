@@ -390,6 +390,27 @@ export default function PurchaseOrders() {
     },
   });
 
+  const markAcceptedMutation = useMutation({
+    mutationFn: async (poId: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/mark-accepted-internal`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to mark as accepted");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      if (selectedPO?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", selectedPO.id, "composite"] });
+      }
+      toast({ title: "PO marked as accepted" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const [editingShipping, setEditingShipping] = useState(false);
   const [editingOtherFees, setEditingOtherFees] = useState(false);
   const [shippingValue, setShippingValue] = useState<string>("");
@@ -775,7 +796,7 @@ export default function PurchaseOrders() {
               </div>
 
               <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <div>
                     <p className="text-sm text-muted-foreground">Email Status</p>
                     <EmailStatusBadge 
@@ -798,26 +819,60 @@ export default function PurchaseOrders() {
                       {poDetails.emailTo || poDetails.supplierEmail || selectedPO?.supplier?.email || "-"}
                     </p>
                   </div>
-                </div>
-                {(poDetails.status === "DRAFT" || poDetails.status === "APPROVED") && (
-                  <Button
-                    onClick={() => handleSendPO(poDetails.id)}
-                    disabled={sendPOMutation.isPending}
-                    data-testid="button-send-po-detail"
-                  >
-                    {sendPOMutation.isPending ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Sending...
-                      </>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Acknowledgement</p>
+                    {poDetails.acknowledgementStatus && poDetails.acknowledgementStatus !== 'NONE' ? (
+                      <AckStatusBadge 
+                        status={poDetails.acknowledgementStatus} 
+                        acknowledgedAt={poDetails.acknowledgedAt}
+                      />
                     ) : (
-                      <>
-                        <Mail className="h-4 w-4 mr-2" />
-                        Send PO
-                      </>
+                      <span className="text-sm text-muted-foreground">Not confirmed</span>
                     )}
-                  </Button>
-                )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {(poDetails.status === "DRAFT" || poDetails.status === "APPROVED") && (
+                    <Button
+                      onClick={() => handleSendPO(poDetails.id)}
+                      disabled={sendPOMutation.isPending}
+                      data-testid="button-send-po-detail"
+                    >
+                      {sendPOMutation.isPending ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Mail className="h-4 w-4 mr-2" />
+                          Send PO
+                        </>
+                      )}
+                    </Button>
+                  )}
+                  {poDetails.status === "SENT" && 
+                   (!poDetails.acknowledgementStatus || poDetails.acknowledgementStatus === 'NONE' || poDetails.acknowledgementStatus === 'PENDING') && (
+                    <Button
+                      variant="outline"
+                      onClick={() => markAcceptedMutation.mutate(poDetails.id)}
+                      disabled={markAcceptedMutation.isPending}
+                      data-testid="button-mark-accepted"
+                    >
+                      {markAcceptedMutation.isPending ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Marking...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          Mark as Accepted
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
               </div>
 
               {poDetails.notes && (

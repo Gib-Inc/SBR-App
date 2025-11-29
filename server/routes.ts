@@ -50,6 +50,7 @@ import {
   insertSalesOrderSchema,
   insertSalesOrderLineSchema,
   updateSalesOrderSchema,
+  derivePoDisplayStatus,
   type Item,
   type SalesOrderLine,
   type ReturnItem,
@@ -5331,11 +5332,26 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const purchaseOrders = await storage.getAllPurchaseOrders();
       
-      // Enrich with line items for table display
+      // Enrich with line items and derived display status
       const enrichedPOs = await Promise.all(
         purchaseOrders.map(async (po) => {
           const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
-          return { ...po, lines };
+          const totalQtyOrdered = lines.reduce((sum, l) => sum + (l.qtyOrdered || 0), 0);
+          const totalQtyReceived = lines.reduce((sum, l) => sum + (l.qtyReceived || 0), 0);
+          
+          // Derive the display status based on lifecycle
+          const displayStatus = derivePoDisplayStatus(
+            {
+              status: po.status,
+              lastEmailStatus: po.lastEmailStatus,
+              lastEmailSentAt: po.lastEmailSentAt,
+              acknowledgementStatus: po.acknowledgementStatus,
+            },
+            totalQtyOrdered,
+            totalQtyReceived
+          );
+          
+          return { ...po, lines, displayStatus, totalQtyOrdered, totalQtyReceived };
         })
       );
       
@@ -5350,16 +5366,36 @@ TOTAL: $${subtotal.toFixed(2)}
   app.get("/api/purchase-orders/summary", requireAuth, async (req: Request, res: Response) => {
     try {
       const allPOs = await storage.getAllPurchaseOrders();
+      
+      // Calculate derived status for each PO for accurate summary
+      const posWithDerivedStatus = await Promise.all(
+        allPOs.map(async (po) => {
+          const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+          const totalQtyOrdered = lines.reduce((sum, l) => sum + (l.qtyOrdered || 0), 0);
+          const totalQtyReceived = lines.reduce((sum, l) => sum + (l.qtyReceived || 0), 0);
+          const displayStatus = derivePoDisplayStatus(
+            {
+              status: po.status,
+              lastEmailStatus: po.lastEmailStatus,
+              lastEmailSentAt: po.lastEmailSentAt,
+              acknowledgementStatus: po.acknowledgementStatus,
+            },
+            totalQtyOrdered,
+            totalQtyReceived
+          );
+          return { ...po, displayStatus };
+        })
+      );
+      
       const summary = {
-        total: allPOs.length,
-        draft: allPOs.filter(po => po.status === 'DRAFT').length,
-        approvalPending: allPOs.filter(po => po.status === 'APPROVAL_PENDING').length,
-        approved: allPOs.filter(po => po.status === 'APPROVED').length,
-        sent: allPOs.filter(po => po.status === 'SENT').length,
-        partialReceived: allPOs.filter(po => po.status === 'PARTIAL_RECEIVED').length,
-        received: allPOs.filter(po => po.status === 'RECEIVED').length,
-        closed: allPOs.filter(po => po.status === 'CLOSED').length,
-        cancelled: allPOs.filter(po => po.status === 'CANCELLED').length,
+        total: posWithDerivedStatus.length,
+        draft: posWithDerivedStatus.filter(po => po.displayStatus === 'DRAFT').length,
+        sent: posWithDerivedStatus.filter(po => po.displayStatus === 'SENT').length,
+        accepted: posWithDerivedStatus.filter(po => po.displayStatus === 'ACCEPTED').length,
+        partial: posWithDerivedStatus.filter(po => po.displayStatus === 'PARTIAL').length,
+        received: posWithDerivedStatus.filter(po => po.displayStatus === 'RECEIVED').length,
+        closed: posWithDerivedStatus.filter(po => po.displayStatus === 'CLOSED').length,
+        cancelled: posWithDerivedStatus.filter(po => po.displayStatus === 'CANCELLED').length,
       };
       res.json(summary);
     } catch (error: any) {
@@ -5378,7 +5414,22 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       const lines = await storage.getPurchaseOrderLinesByPOId(id);
-      res.json({ ...purchaseOrder, lines });
+      const totalQtyOrdered = lines.reduce((sum, l) => sum + (l.qtyOrdered || 0), 0);
+      const totalQtyReceived = lines.reduce((sum, l) => sum + (l.qtyReceived || 0), 0);
+      
+      // Derive the display status based on lifecycle
+      const displayStatus = derivePoDisplayStatus(
+        {
+          status: purchaseOrder.status,
+          lastEmailStatus: purchaseOrder.lastEmailStatus,
+          lastEmailSentAt: purchaseOrder.lastEmailSentAt,
+          acknowledgementStatus: purchaseOrder.acknowledgementStatus,
+        },
+        totalQtyOrdered,
+        totalQtyReceived
+      );
+      
+      res.json({ ...purchaseOrder, lines, displayStatus, totalQtyOrdered, totalQtyReceived });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error fetching purchase order:", error);
       res.status(500).json({ error: "Failed to fetch purchase order" });

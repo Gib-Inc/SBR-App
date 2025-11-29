@@ -3803,19 +3803,25 @@ export class PostgresStorage implements IStorage {
   }
 
   async recalculatePOTotals(purchaseOrderId: string): Promise<PurchaseOrder | undefined> {
-    // Get all lines for this PO
     const lines = await this.getPurchaseOrderLinesByPOId(purchaseOrderId);
     
-    // Calculate subtotal from line totals
-    const subtotal = lines.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
+    let subtotal = 0;
+    for (const line of lines) {
+      const lineTotal = Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
+      if (lineTotal !== line.lineTotal) {
+        await this.updatePurchaseOrderLine(line.id, { lineTotal, updatedAt: new Date() });
+      }
+      subtotal += lineTotal;
+    }
+    subtotal = Math.round(subtotal * 100) / 100;
     
-    // Get current PO to get shipping and other fees
     const po = await this.getPurchaseOrder(purchaseOrderId);
     if (!po) return undefined;
     
-    const total = subtotal + (po.shippingCost || 0) + (po.otherFees || 0);
+    const shippingCost = po.shippingCost || 0;
+    const otherFees = po.otherFees || 0;
+    const total = Math.round((subtotal + shippingCost + otherFees) * 100) / 100;
     
-    // Update PO with new totals
     return this.updatePurchaseOrder(purchaseOrderId, {
       subtotal,
       total,

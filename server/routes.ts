@@ -5468,6 +5468,11 @@ TOTAL: $${subtotal.toFixed(2)}
 
       const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
       
+      // Recalculate PO totals after creating all lines
+      if (createdLines.length > 0) {
+        await storage.recalculatePOTotals(purchaseOrder.id);
+      }
+      
       // Update linked recommendations to ACCEPTED and log AI events
       const supplier = validatedPO.supplierId ? await storage.getSupplier(validatedPO.supplierId) : null;
       for (const linked of linkedRecommendations) {
@@ -5900,10 +5905,51 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(404).json({ error: "Purchase order not found" });
       }
 
+      if ('shippingCost' in validatedUpdates || 'otherFees' in validatedUpdates) {
+        const recalculated = await storage.recalculatePOTotals(id);
+        if (recalculated) {
+          const lines = await storage.getPurchaseOrderLinesByPOId(id);
+          return res.json({ ...recalculated, lines });
+        }
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("[PurchaseOrder] Error updating purchase order:", error);
       res.status(400).json({ error: error.message || "Failed to update purchase order" });
+    }
+  });
+
+  app.post("/api/purchase-orders/:id/update-financials", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { shippingCost, otherFees } = req.body;
+      
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+
+      const updates: any = { updatedAt: new Date() };
+      if (shippingCost !== undefined) {
+        updates.shippingCost = Math.round((Number(shippingCost) || 0) * 100) / 100;
+      }
+      if (otherFees !== undefined) {
+        updates.otherFees = Math.round((Number(otherFees) || 0) * 100) / 100;
+      }
+      
+      await storage.updatePurchaseOrder(id, updates);
+      const recalculated = await storage.recalculatePOTotals(id);
+      
+      if (!recalculated) {
+        return res.status(404).json({ error: "Failed to recalculate totals" });
+      }
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      res.json({ ...recalculated, lines });
+    } catch (error: any) {
+      console.error("[PurchaseOrder] Error updating financials:", error);
+      res.status(400).json({ error: error.message || "Failed to update financials" });
     }
   });
 
@@ -6006,8 +6052,15 @@ TOTAL: $${subtotal.toFixed(2)}
 
   app.post("/api/purchase-order-lines", requireAuth, async (req: Request, res: Response) => {
     try {
-      const validatedLine = insertPurchaseOrderLineSchema.parse(req.body);
+      const lineData = req.body;
+      const lineTotal = Math.round((Number(lineData.qtyOrdered) || 0) * (Number(lineData.unitCost) || 0) * 100) / 100;
+      const validatedLine = insertPurchaseOrderLineSchema.parse({ ...lineData, lineTotal });
       const line = await storage.createPurchaseOrderLine(validatedLine);
+      
+      if (line.purchaseOrderId) {
+        await storage.recalculatePOTotals(line.purchaseOrderId);
+      }
+      
       res.status(201).json(line);
     } catch (error: any) {
       console.error("[PurchaseOrderLine] Error creating line:", error);
@@ -6018,12 +6071,27 @@ TOTAL: $${subtotal.toFixed(2)}
   app.patch("/api/purchase-order-lines/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const validatedUpdates = insertPurchaseOrderLineSchema.partial().parse(req.body);
+      const existingLine = await storage.getPurchaseOrderLine(id);
+      if (!existingLine) {
+        return res.status(404).json({ error: "Line not found" });
+      }
       
+      const updateData = req.body;
+      if ('qtyOrdered' in updateData || 'unitCost' in updateData) {
+        const qtyOrdered = updateData.qtyOrdered ?? existingLine.qtyOrdered;
+        const unitCost = updateData.unitCost ?? existingLine.unitCost;
+        updateData.lineTotal = Math.round((Number(qtyOrdered) || 0) * (Number(unitCost) || 0) * 100) / 100;
+      }
+      
+      const validatedUpdates = insertPurchaseOrderLineSchema.partial().parse(updateData);
       const updated = await storage.updatePurchaseOrderLine(id, validatedUpdates);
       
       if (!updated) {
         return res.status(404).json({ error: "Line not found" });
+      }
+
+      if (existingLine.purchaseOrderId) {
+        await storage.recalculatePOTotals(existingLine.purchaseOrderId);
       }
 
       res.json(updated);
@@ -6036,10 +6104,20 @@ TOTAL: $${subtotal.toFixed(2)}
   app.delete("/api/purchase-order-lines/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const existingLine = await storage.getPurchaseOrderLine(id);
+      if (!existingLine) {
+        return res.status(404).json({ error: "Line not found" });
+      }
+      
+      const purchaseOrderId = existingLine.purchaseOrderId;
       const deleted = await storage.deletePurchaseOrderLine(id);
       
       if (!deleted) {
         return res.status(404).json({ error: "Line not found" });
+      }
+
+      if (purchaseOrderId) {
+        await storage.recalculatePOTotals(purchaseOrderId);
       }
 
       res.status(204).send();

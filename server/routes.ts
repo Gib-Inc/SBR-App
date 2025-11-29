@@ -7221,11 +7221,28 @@ TOTAL: $${subtotal.toFixed(2)}
         })
       );
 
+      // Compute derived display status (single source of truth)
+      const totalQtyOrdered = lines.reduce((sum, l) => sum + (l.qtyOrdered || 0), 0);
+      const totalQtyReceived = lines.reduce((sum, l) => sum + (l.qtyReceived || 0), 0);
+      const displayStatus = derivePoDisplayStatus(
+        {
+          status: po.status,
+          lastEmailStatus: po.lastEmailStatus,
+          lastEmailSentAt: po.lastEmailSentAt,
+          acknowledgementStatus: po.acknowledgementStatus,
+        },
+        totalQtyOrdered,
+        totalQtyReceived
+      );
+
       res.json({
         ...po,
         supplier,
         lines: enrichedLines,
         receipts: enrichedReceipts,
+        displayStatus,
+        totalQtyOrdered,
+        totalQtyReceived,
       });
     } catch (error: any) {
       console.error("[PurchaseOrder] Error fetching composite view:", error);

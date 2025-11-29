@@ -1,0 +1,89 @@
+The status badge in the top-left of the Purchase Order detail modal is not always matching the status shown in the Purchase Orders table. I want ONE single source of truth for PO status so both places always match.
+
+Please inspect the existing implementation and then fix it so:
+
+- The PO list table “Status” column and
+- The PO detail header “Status” badge
+
+both use the same derived status value from the same server-side logic.
+
+==================================================
+A) FIND CURRENT STATUS SOURCES
+==================================================
+1) Inspect:
+   - The API that returns the Purchase Orders list.
+   - The API that returns a single Purchase Order for the detail view.
+   - The React components for:
+     - Purchase Orders table/list.
+     - Purchase Order detail modal.
+
+2) Identify:
+   - How the list “Status” label is currently computed (enum value, helper, etc.).
+   - How the detail header “Status” badge is currently computed (direct from PO.status, local recomputation, etc.).
+
+Do NOT introduce a new status concept. Reuse and normalize the existing one.
+
+==================================================
+B) SERVER-SIDE STATUS DERIVATION (SINGLE SOURCE OF TRUTH)
+==================================================
+If not already done, create or reuse a server-side helper:
+
+- `derivePoStatus(po: PurchaseOrder, lineItems: PurchaseOrderLine[]): PurchaseOrderStatus`
+
+that applies the lifecycle we already agreed on:
+
+Priority order:
+- If DRAFT and no email sent → "Draft"
+- Else if some but not all qtyReceived < qtyOrdered → "Partial"
+- Else if all qtyReceived == qtyOrdered and qtyOrdered > 0 → "Received"
+- Else if accepted (supplier or internal) and no receipts yet → "Accepted"
+- Else if at least one successful email send and no acceptance/receipts yet → "Sent"
+- Else → fallback to "Draft" or existing default.
+
+Use:
+- totalQtyOrdered = sum(line.qtyOrdered)
+- totalQtyReceived = sum(line.qtyReceived)
+- accepted flag(s) from existing acknowledgement fields or internal-accepted flag.
+- email sent indicator from existing email status.
+
+Apply this helper:
+- When preparing data for the PO list API.
+- When preparing data for the PO detail API.
+
+Expose the result as a single field, e.g. `derivedStatus` or `status`, consistently in both APIs.
+
+==================================================
+C) UI – MAKE HEADER USE THE SAME STATUS AS THE TABLE
+==================================================
+1) In the Purchase Orders list:
+   - Continue using the status field from the API (the derived value) for the Status column badge.
+
+2) In the PO detail modal:
+   - Replace any local status computation or use of a different field with the same status value used by the list:
+     - Use `po.status` or `po.derivedStatus` from the detail API response (whichever is provided by the updated API).
+   - Do NOT recalculate status in the client by re-summing qtyReceived, acknowledging flags, etc. The client should just display the server-derived status.
+
+3) Ensure the visual labels match exactly between list and detail:
+   - "Draft"
+   - "Sent"
+   - "Accepted"
+   - "Partial"
+   - "Received"
+   - "Closed" (if applicable)
+
+Use a shared mapping from enum to label/color if possible.
+
+==================================================
+D) REFRESH & TEST
+==================================================
+After the change:
+
+- Create a DRAFT PO with no email → list + detail both show “Draft”.
+- Send PO email, no acceptance/receipts → both show “Sent”.
+- Mark accepted (supplier link or internal) with no receipts → both show “Accepted”.
+- Receive some but not all line quantities → both show “Partial”.
+- Receive all quantities → both show “Received”.
+
+If any view still shows a different status than the list, fix that location to consume the same server-derived status field.
+
+Implement this by reusing existing logic where possible and only adding the minimum necessary changes to unify status across list and detail views.

@@ -7633,6 +7633,238 @@ Generate only the email body text, no subject line.`;
 
   const labelService = createReturnLabelService();
 
+  // Create return from sales order with label generation in one step
+  // POST /api/returns/from-sales-order
+  // Body: { salesOrderId, lines: [{ salesOrderLineId, qtyToReturn, reason? }], overallReason?, generateLabel? }
+  // Returns: ReturnRequest with label info (labelUrl, trackingNumber, carrier)
+  app.post("/api/returns/from-sales-order", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { salesOrderId, lines, overallReason, generateLabel = true } = req.body;
+
+      if (!salesOrderId) {
+        return res.status(400).json({ error: "salesOrderId is required" });
+      }
+
+      if (!lines || !Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item is required" });
+      }
+
+      // Load the sales order
+      const salesOrder = await storage.getSalesOrder(salesOrderId);
+      if (!salesOrder) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Load sales order lines
+      const salesOrderLines = await storage.getSalesOrderLinesByOrderId(salesOrderId);
+      
+      // Validate each line
+      const validatedLines: Array<{
+        salesOrderLine: typeof salesOrderLines[0];
+        qtyToReturn: number;
+        reason?: string;
+      }> = [];
+
+      for (const line of lines) {
+        if (!line.salesOrderLineId || !line.qtyToReturn || line.qtyToReturn <= 0) {
+          return res.status(400).json({ 
+            error: `Invalid line: salesOrderLineId and qtyToReturn > 0 are required` 
+          });
+        }
+
+        const salesOrderLine = salesOrderLines.find(sol => sol.id === line.salesOrderLineId);
+        if (!salesOrderLine) {
+          return res.status(400).json({ 
+            error: `Line ${line.salesOrderLineId} does not belong to this order` 
+          });
+        }
+
+        const fulfilledQty = salesOrderLine.fulfilledQty || 0;
+        const returnedQty = salesOrderLine.returnedQty || 0;
+        const availableToReturn = fulfilledQty - returnedQty;
+
+        if (line.qtyToReturn > availableToReturn) {
+          return res.status(400).json({ 
+            error: `Cannot return ${line.qtyToReturn} of ${salesOrderLine.productName || salesOrderLine.sku} - only ${availableToReturn} available` 
+          });
+        }
+
+        validatedLines.push({
+          salesOrderLine,
+          qtyToReturn: line.qtyToReturn,
+          reason: line.reason,
+        });
+      }
+
+      // Parse customer shipping address from sales order
+      let shippingAddress = salesOrder.shippingAddress;
+      if (typeof shippingAddress === 'string') {
+        try {
+          shippingAddress = JSON.parse(shippingAddress);
+        } catch {
+          shippingAddress = null;
+        }
+      }
+
+      // Create the return request
+      const returnRequest = await storage.createReturnRequest({
+        salesOrderId,
+        orderNumber: salesOrder.orderNumber || salesOrder.externalOrderId,
+        externalOrderId: salesOrder.externalOrderId,
+        salesChannel: salesOrder.channel,
+        source: 'Manual',
+        customerName: salesOrder.customerName,
+        customerEmail: salesOrder.customerEmail,
+        customerPhone: salesOrder.customerPhone,
+        shippingAddress: shippingAddress,
+        status: 'OPEN',
+        resolutionRequested: 'REFUND',
+        reason: overallReason || 'Customer requested return',
+        initiatedVia: 'MANUAL_UI',
+        labelProvider: process.env.SHIPPO_API_KEY ? 'SHIPPO' : 'STUB',
+      });
+
+      // Create return items
+      const returnItems = [];
+      for (const { salesOrderLine, qtyToReturn, reason } of validatedLines) {
+        // Look up inventory item by SKU if needed
+        let inventoryItemId = null;
+        const item = await storage.getItemBySku(salesOrderLine.sku);
+        if (item) {
+          inventoryItemId = item.id;
+        }
+
+        const returnItem = await storage.createReturnItem({
+          returnRequestId: returnRequest.id,
+          salesOrderLineId: salesOrderLine.id,
+          inventoryItemId,
+          sku: salesOrderLine.sku,
+          productName: salesOrderLine.productName,
+          unitPrice: salesOrderLine.unitPrice,
+          qtyOrdered: salesOrderLine.quantity,
+          qtyRequested: qtyToReturn,
+          qtyApproved: qtyToReturn, // Auto-approve for manual UI returns
+          itemReason: reason || null,
+        });
+
+        // Update returnedQty on the sales order line
+        const newReturnedQty = (salesOrderLine.returnedQty || 0) + qtyToReturn;
+        await storage.updateSalesOrderLine(salesOrderLine.id, {
+          returnedQty: newReturnedQty,
+        });
+
+        returnItems.push(returnItem);
+      }
+
+      // Generate label if requested
+      let labelResult = null;
+      if (generateLabel) {
+        try {
+          // Prepare items for label service
+          const itemsForLabel = await Promise.all(
+            returnItems.map(async (ri) => {
+              const item = ri.inventoryItemId ? await storage.getItem(ri.inventoryItemId) : null;
+              return {
+                sku: ri.sku,
+                name: item?.name || ri.productName || ri.sku,
+                quantity: ri.qtyApproved,
+              };
+            })
+          );
+
+          // Parse customer address for label
+          const customerAddress = shippingAddress ? {
+            street1: (shippingAddress as any).address1 || (shippingAddress as any).street1 || '',
+            street2: (shippingAddress as any).address2 || (shippingAddress as any).street2 || '',
+            city: (shippingAddress as any).city || '',
+            state: (shippingAddress as any).province || (shippingAddress as any).state || '',
+            zip: (shippingAddress as any).zip || (shippingAddress as any).postalCode || '',
+            country: (shippingAddress as any).country || (shippingAddress as any).countryCode || 'US',
+          } : undefined;
+
+          // Generate label
+          const labelResponse = await labelService.generateLabel({
+            customerName: salesOrder.customerName,
+            customerAddress,
+            items: itemsForLabel,
+          });
+
+          // Create shipment record
+          await storage.createReturnShipment({
+            returnRequestId: returnRequest.id,
+            carrier: labelResponse.carrier,
+            trackingNumber: labelResponse.trackingNumber,
+            labelUrl: labelResponse.labelUrl,
+          });
+
+          // Update return request with label info and status
+          await storage.updateReturnRequest(returnRequest.id, {
+            status: 'LABEL_CREATED',
+            carrier: labelResponse.carrier,
+            trackingNumber: labelResponse.trackingNumber,
+            labelUrl: labelResponse.labelUrl,
+          });
+
+          labelResult = {
+            carrier: labelResponse.carrier,
+            trackingNumber: labelResponse.trackingNumber,
+            labelUrl: labelResponse.labelUrl,
+          };
+
+          // Log success
+          try {
+            await AuditLogger.logReturnStatusChanged({
+              returnId: returnRequest.id,
+              returnNumber: returnRequest.rmaNumber || returnRequest.id,
+              oldStatus: 'OPEN',
+              newStatus: 'LABEL_CREATED',
+            });
+          } catch (logError) {
+            console.warn('[Returns] Failed to log status change:', logError);
+          }
+        } catch (labelError: any) {
+          console.error('[Returns] Failed to generate label:', labelError);
+          // Log the error but don't fail the return creation
+          await logService.log({
+            type: 'SHIPPO_ERROR',
+            severity: 'ERROR',
+            message: `Failed to generate return label for return ${returnRequest.id}`,
+            details: { returnId: returnRequest.id, error: labelError.message },
+          });
+          // Return is still created, just without a label
+        }
+      }
+
+      // Log return creation
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        await AuditLogger.logReturnCreated({
+          returnId: returnRequest.id,
+          returnNumber: returnRequest.rmaNumber || returnRequest.id,
+          orderId: salesOrderId,
+          orderNumber: salesOrder.orderNumber || salesOrder.externalOrderId || 'N/A',
+          reason: overallReason,
+          userId: req.session.userId!,
+          userName: user?.email,
+        });
+      } catch (logError) {
+        console.warn('[Returns] Failed to log return creation:', logError);
+      }
+
+      // Fetch updated return request
+      const updatedReturn = await storage.getReturnRequest(returnRequest.id);
+
+      res.status(201).json({
+        returnRequest: updatedReturn,
+        items: returnItems,
+        label: labelResult,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error creating return from sales order:", error);
+      res.status(400).json({ error: error.message || "Failed to create return" });
+    }
+  });
+
   // Create a return request
   // POST /api/returns
   // Body: { externalOrderId, salesChannel, customerName, customerEmail?, customerPhone?, ghlContactId?, resolutionRequested, reason, initiatedVia?, labelProvider?, items: [{ inventoryItemId or sku, qtyOrdered, qtyRequested, itemReason?, disposition? }] }

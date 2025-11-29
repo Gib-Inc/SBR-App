@@ -1,0 +1,170 @@
+I want the “Create Return” button on the Sales Orders detail screen to create a real return in our system and generate a valid Shippo return label, then track that return on the Returns page.
+
+Please inspect the existing SalesOrder, Returns, and Shippo integration code first, reuse anything that already exists (models, endpoints, UI patterns), and only add what is missing.
+
+==================================================
+A) DATA MODEL – RETURN ORDER + RETURN LINES
+==================================================
+1) Check the current schema for returns.
+   - If we already have ReturnOrder/ReturnLine (or equivalent) models, extend them as needed.
+   - If not, create:
+
+   ReturnOrder:
+   - id (PK)
+   - salesOrderId (FK to SalesOrder)
+   - channel (e.g. "SHOPIFY", "AMAZON")
+   - customerName
+   - email
+   - phone
+   - shipFromAddress (JSON or fields for name, street, city, state, zip, country)
+   - shipToAddress (warehouse address)
+   - status enum: "CREATED" | "IN_TRANSIT" | "RECEIVED" | "CLOSED"
+   - reason (text, nullable)
+   - shippoShipmentId (string, nullable)
+   - shippoTransactionId (string, nullable)
+   - labelUrl (string, nullable)
+   - trackingNumber (string, nullable)
+   - carrier (string, nullable)
+   - serviceLevel (string, nullable)
+   - createdAt, updatedAt
+
+   ReturnLine:
+   - id (PK)
+   - returnOrderId (FK)
+   - salesOrderLineId (FK to SalesOrderLine)
+   - sku
+   - productName
+   - qtyOrdered
+   - qtyReturning
+   - unitPrice
+   - reason (nullable)
+
+2) Ensure SalesOrderLine has:
+   - returnedQty (number, default 0)
+
+==================================================
+B) BACKEND – CREATE RETURN FROM SALES ORDER
+==================================================
+Create a new endpoint, reusing existing patterns for auth and validation:
+
+- POST /api/returns/from-sales-order
+
+Input:
+- salesOrderId: string
+- lines: Array<{ salesOrderLineId: string; qtyToReturn: number; reason?: string }>
+- overallReason?: string
+- serviceLevelToken?: string (optional for choosing Shippo service level)
+
+Server flow:
+1) Load SalesOrder and its lines.
+2) For each input line:
+   - Validate that the line belongs to the order.
+   - Validate qtyToReturn > 0.
+   - Validate qtyToReturn <= (fulfilledQty - returnedQty) for that line.
+   - If any check fails, return a 400 with a clear message.
+3) Build a new ReturnOrder object:
+   - salesOrderId, channel, customerName, email, phone.
+   - shipFromAddress = customer shipping address from the order.
+   - shipToAddress = warehouse address from config/env (WAREHOUSE_* env vars if available; if not, create them).
+   - status = "CREATED"
+   - reason = overallReason.
+4) Build ReturnLine records for each line with:
+   - salesOrderLineId, sku, productName, qtyOrdered, qtyReturning, unitPrice, reason.
+5) Call a Shippo integration helper to create a return shipment + transaction:
+   - Inputs:
+     - from: shipFromAddress (customer)
+     - to: shipToAddress (warehouse)
+     - parcels: for V1, you can use a sensible default parcel definition or derive from line items if that already exists.
+     - serviceLevelToken: use the provided token or a default from env.
+   - On success:
+     - Save shippoShipmentId, shippoTransactionId, labelUrl, trackingNumber, carrier, serviceLevel on ReturnOrder.
+   - On error:
+     - Do NOT commit the ReturnOrder/ReturnLine changes.
+     - Return an error to the client.
+     - Log a system log event type "SHIPPO_ERROR" with details.
+
+6) On success:
+   - Increment SalesOrderLine.returnedQty for each line by the qtyToReturn.
+   - Optionally update SalesOrder status to something like "RETURN_IN_PROGRESS" if that fits our status model.
+   - Return the ReturnOrder plus its lines and labelUrl to the client.
+
+==================================================
+C) SHIPPO INTEGRATION
+==================================================
+Inspect existing Shippo integration:
+
+- If we already have helpers for creating shipments/transactions, reuse them and add a specific helper:
+
+  `createReturnLabelFromSalesOrder(returnOrder: ReturnOrder, lines: ReturnLine[]): Promise<ShippoResult>`
+
+- If not, create a minimal Shippo client that:
+  - Reads API key and defaults from env (SHIPPO_API_KEY, SHIPPO_DEFAULT_SERVICE_LEVEL, WAREHOUSE_ADDRESS_*).
+  - Creates a return shipment and transaction.
+  - Returns: { shipmentId, transactionId, labelUrl, trackingNumber, carrier, serviceLevel }.
+
+Handle API errors gracefully and log them using the existing system_logs mechanism.
+
+==================================================
+D) SALES ORDERS UI – “Create Return” FLOW
+==================================================
+In the Sales Orders “Order Details” modal:
+
+1) Enable the “Create Return” button when:
+   - The order is in a status that supports returns (e.g. Shipped / Fulfilled).
+   - At least one line has (fulfilledQty - returnedQty) > 0.
+
+2) On click:
+   - Open a new modal “Create Return”.
+   - Show a table of line items with columns:
+     - SKU
+     - Product
+     - Ordered
+     - Fulfilled
+     - Already Returned
+     - Qty to return (editable input; default 0, max = fulfilledQty - returnedQty)
+     - Reason (dropdown or text, optional)
+
+   - Below the table, show:
+     - Read-only customer shipping address (from SalesOrder).
+     - Read-only warehouse address.
+     - Overall reason (textarea, optional).
+     - Optional service level selector if we support multiple service levels.
+
+3) On submit:
+   - Validate on the client that at least one line has qtyToReturn > 0.
+   - Call POST /api/returns/from-sales-order with the selected lines and reasons.
+   - While waiting, show a loading state.
+
+4) On success:
+   - Show a success view within the modal:
+     - Return ID
+     - Link/button: “View Label” (opens labelUrl in a new tab).
+     - Tracking number / carrier.
+   - Optionally provide a button “Open in Returns page” that navigates to the corresponding ReturnOrder row.
+   - Refresh the Sales Orders list/order detail so returnedQty and any status/indicators update.
+
+5) On error:
+   - Show an error toast with the message from the API.
+   - Do not create a local return; the source of truth stays server-side.
+
+==================================================
+E) RETURNS PAGE – SURFACE MANUAL RETURNS
+==================================================
+On the existing Returns page:
+
+- Ensure new ReturnOrders created from the Sales Orders flow appear with:
+  - Return ID
+  - Sales Order ID
+  - Customer
+  - Status (CREATED / IN_TRANSIT / RECEIVED / CLOSED)
+  - Created date
+  - Total qtyReturning (sum from ReturnLines)
+  - A label icon that links to labelUrl.
+  - A tracking icon/link that points to carrier tracking if possible.
+
+Later, when warehouse scanning/receiving is implemented, that will update ReturnOrder.status from CREATED → IN_TRANSIT → RECEIVED → CLOSED. For now, just ensure CREATED and label metadata are persisted correctly.
+
+Implement all of this by:
+- Reusing existing models and components where they already exist.
+- Avoiding duplication of status or return concepts.
+- Keeping Shippo integration and logging robust and failure-safe.

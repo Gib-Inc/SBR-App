@@ -179,11 +179,33 @@ const newOrderSchema = z.object({
 
 type NewOrderFormValues = z.infer<typeof newOrderSchema>;
 
+interface ReturnCreationResult {
+  returnRequest: {
+    id: string;
+    rmaNumber?: string;
+    status: string;
+    trackingNumber?: string;
+    labelUrl?: string;
+    carrier?: string;
+  };
+  items: Array<{
+    id: string;
+    sku: string;
+    qtyRequested: number;
+  }>;
+  label?: {
+    carrier: string;
+    trackingNumber: string;
+    labelUrl: string;
+  } | null;
+}
+
 export default function SalesOrders() {
   const { toast } = useToast();
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showNewOrderDialog, setShowNewOrderDialog] = useState(false);
   const [showCreateReturnDialog, setShowCreateReturnDialog] = useState(false);
+  const [returnCreationResult, setReturnCreationResult] = useState<ReturnCreationResult | null>(null);
   const [channelFilter, setChannelFilter] = useState<string>("ALL");
 
   const { data: orders = [], isLoading } = useQuery<EnrichedSalesOrder[]>({
@@ -329,33 +351,28 @@ export default function SalesOrders() {
   const createReturnMutation = useMutation({
     mutationFn: async (data: {
       salesOrderId: string;
-      externalOrderId: string;
-      salesChannel: string;
-      customerName: string;
-      customerEmail: string | null;
-      customerPhone: string | null;
-      resolutionRequested: string;
-      reason: string;
-      items: Array<{
-        inventoryItemId: string;
-        sku: string;
-        qtyOrdered: number;
-        qtyRequested: number;
+      lines: Array<{
+        salesOrderLineId: string;
+        qtyToReturn: number;
+        reason?: string;
       }>;
-    }) => {
-      const res = await apiRequest("POST", "/api/returns", {
-        ...data,
-        source: "Manual",
-        initiatedVia: "MANUAL_UI",
-      });
+      overallReason: string;
+      generateLabel?: boolean;
+    }): Promise<ReturnCreationResult> => {
+      const res = await apiRequest("POST", "/api/returns/from-sales-order", data);
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (result: ReturnCreationResult) => {
       queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
-      toast({ title: "Return request created successfully" });
-      setShowCreateReturnDialog(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders", selectedOrderId] });
+      setReturnCreationResult(result);
+      if (result.label) {
+        toast({ title: "Return created with shipping label" });
+      } else {
+        toast({ title: "Return request created" });
+      }
     },
     onError: (error: Error) => {
       toast({ 
@@ -1286,39 +1303,123 @@ export default function SalesOrders() {
 
       {/* Create Return Dialog */}
       {selectedOrder && (
-        <Dialog open={showCreateReturnDialog} onOpenChange={setShowCreateReturnDialog}>
+        <Dialog 
+          open={showCreateReturnDialog} 
+          onOpenChange={(open) => {
+            setShowCreateReturnDialog(open);
+            if (!open) {
+              setReturnCreationResult(null);
+            }
+          }}
+        >
           <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Create Return Request</DialogTitle>
-              <DialogDescription>
-                Create a return request for order {selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
-              </DialogDescription>
-            </DialogHeader>
+            {returnCreationResult ? (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                    Return Created Successfully
+                  </DialogTitle>
+                  <DialogDescription>
+                    Return {returnCreationResult.returnRequest.rmaNumber || returnCreationResult.returnRequest.id.slice(0, 8)} has been created
+                  </DialogDescription>
+                </DialogHeader>
 
-            <CreateReturnForm
-              order={selectedOrder}
-              onSubmit={(data) => {
-                createReturnMutation.mutate({
-                  salesOrderId: selectedOrder.id,
-                  externalOrderId: selectedOrder.externalOrderId || '',
-                  salesChannel: selectedOrder.channel,
-                  customerName: selectedOrder.customerName,
-                  customerEmail: selectedOrder.customerEmail || null,
-                  customerPhone: selectedOrder.customerPhone || null,
-                  resolutionRequested: data.resolutionRequested,
-                  reason: data.reason,
-                  items: data.items.map(item => ({
-                    inventoryItemId: item.inventoryItemId,
-                    sku: item.sku,
-                    qtyOrdered: item.qtyOrdered,
-                    qtyRequested: item.qtyRequested,
-                    salesOrderLineId: item.salesOrderLineId,
-                  })),
-                });
-              }}
-              isPending={createReturnMutation.isPending}
-              onCancel={() => setShowCreateReturnDialog(false)}
-            />
+                <div className="space-y-4">
+                  {returnCreationResult.label && (
+                    <Card>
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Truck className="h-4 w-4" />
+                          Shipping Label Generated
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Carrier:</span>
+                            <div className="font-medium">{returnCreationResult.label.carrier}</div>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Tracking Number:</span>
+                            <div className="font-medium font-mono">{returnCreationResult.label.trackingNumber}</div>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => window.open(returnCreationResult.label?.labelUrl, '_blank')}
+                          data-testid="button-download-label"
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Download Return Label
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  <div className="border rounded-lg p-4">
+                    <div className="text-sm font-medium mb-2">Items Being Returned:</div>
+                    <div className="space-y-2">
+                      {returnCreationResult.items.map((item) => (
+                        <div key={item.id} className="flex justify-between text-sm">
+                          <span className="font-mono">{item.sku}</span>
+                          <span className="text-muted-foreground">Qty: {item.qtyRequested}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <DialogFooter className="gap-2">
+                  <Button
+                    variant="outline"
+                    asChild
+                    data-testid="button-view-return"
+                  >
+                    <Link href="/returns">
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                      View in Returns
+                    </Link>
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setShowCreateReturnDialog(false);
+                      setReturnCreationResult(null);
+                    }}
+                    data-testid="button-close-return-dialog"
+                  >
+                    Done
+                  </Button>
+                </DialogFooter>
+              </>
+            ) : (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Create Return Request</DialogTitle>
+                  <DialogDescription>
+                    Create a return request for order {selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <CreateReturnForm
+                  order={selectedOrder}
+                  onSubmit={(data) => {
+                    createReturnMutation.mutate({
+                      salesOrderId: selectedOrder.id,
+                      lines: data.items.map(item => ({
+                        salesOrderLineId: item.salesOrderLineId,
+                        qtyToReturn: item.qtyRequested,
+                      })),
+                      overallReason: data.reason,
+                      generateLabel: true,
+                    });
+                  }}
+                  isPending={createReturnMutation.isPending}
+                  onCancel={() => setShowCreateReturnDialog(false)}
+                />
+              </>
+            )}
           </DialogContent>
         </Dialog>
       )}

@@ -1,0 +1,104 @@
+Add a read-only “Shippo Labels” history section under the Barcodes page to store every Shippo return label we create. Treat it like Shippo-specific logs tied to barcodes/orders, with no actions.
+
+First inspect the existing schema, Shippo integration, Returns flow, and Barcodes UI. Reuse any existing models and components where possible; only add what’s missing.
+
+==================================================
+A) DATA MODEL – SHIPPO LABEL HISTORY
+==================================================
+1) Check if there is already a table/model for Shippo label history.
+   - If something similar exists, extend it.
+   - If not, create a new model, e.g. `ShippoLabelLog`:
+
+   Fields:
+   - id (PK)
+   - type enum: "RETURN"        // V1: we only log return labels
+   - shippoShipmentId (string)
+   - shippoTransactionId (string)
+   - labelUrl (string)
+   - trackingNumber (string)
+   - carrier (string, nullable)
+   - serviceLevel (string, nullable)
+   - status (string, nullable)  // e.g. "CREATED", Shippo status text, etc.
+   - barcodeId (FK to product/barcode if available, nullable)
+   - sku (string)
+   - salesOrderId (string, nullable)
+   - returnOrderId (string, nullable)
+   - channel (string)           // e.g. "SHOPIFY", "AMAZON"
+   - customerName (string)
+   - customerEmail (string, nullable)
+   - orderDate (DateTime, nullable)
+   - createdAt (DateTime)
+   - updatedAt (DateTime)
+
+   This table is for history and analytics only; no actions or mutable workflow here.
+
+==================================================
+B) HOOK INTO RETURN CREATION (SHIPPO)
+==================================================
+2) In the existing flow where we create Shippo labels for returns (the endpoint that handles “Create Return” from Sales Orders and calls Shippo):
+
+   After a successful Shippo transaction:
+
+   - Create a ShippoLabelLog row:
+     - type = "RETURN"
+     - shippoShipmentId, shippoTransactionId, labelUrl, trackingNumber, carrier, serviceLevel
+     - status = "CREATED" (or the initial Shippo status)
+     - barcodeId = primary product barcode if we can map; otherwise null
+     - sku = main SKU for the return line if there is only one; if multiple SKUs, either:
+       - store a comma-separated list, OR
+       - just store a representative SKU; we can expand later.
+     - salesOrderId = associated sales order id
+     - returnOrderId = the created return id
+     - channel = sales order channel
+     - customerName, customerEmail
+     - orderDate = sales order date
+   - Ensure this creation happens in the same transaction as the ReturnOrder, so logs are consistent with returns.
+
+3) If there is a Shippo webhook or status polling:
+   - When Shippo sends an update (e.g. label purchased, in transit, delivered), update:
+     - ShippoLabelLog.status
+     - trackingNumber, carrier, serviceLevel if needed
+   - Do not change any workflow; this is just better history.
+
+==================================================
+C) BARCODES PAGE – “SHIPPO LABELS” SECTION
+==================================================
+4) In the Barcodes page UI:
+
+   - Add a new section or tab named “Shippo Labels”.
+   - Use the same table style as the other sections on this page (same component, typography, spacing).
+
+   Table columns:
+   - Created (ShippoLabelLog.createdAt, formatted date/time)
+   - Type (fixed “Return” for now)
+   - SKU
+   - Order ID (salesOrderId)
+   - Return ID (returnOrderId)
+   - Channel
+   - Customer
+   - Tracking #
+   - Carrier
+   - Status
+
+   Requirements:
+   - No action buttons (no edit/delete/print in this section).
+   - Each row is read-only.
+   - Optional: clicking a row can open the linked Return detail or Sales Order detail in a side panel if that’s already easy to reuse; if not, just keep it read-only.
+
+5) Backend for this table:
+   - Add an API endpoint for listing ShippoLabelLog rows with pagination and basic filters:
+     - GET /api/shippo-labels?search=&page=&pageSize=
+     - Search should support SKU, salesOrderId, trackingNumber, and customerName.
+   - The Barcodes “Shippo Labels” table should use this endpoint.
+
+==================================================
+D) SAFETY & CONSISTENCY
+==================================================
+6) Ensure:
+   - If Shippo label creation fails, no ShippoLabelLog row is created.
+   - Deleting or editing Returns does NOT delete ShippoLabelLog; this is history only.
+   - Logs and this Shippo Labels table stay in sync regarding Shippo errors (logs for errors, ShippoLabelLog for successful labels).
+
+Implement this as an additive feature:
+- Don’t change existing barcode behavior or actions.
+- Don’t introduce any new business logic in ShippoLabelLog; it is strictly read-only history visible under Barcodes → “Shippo Labels”.

@@ -1,4 +1,5 @@
 import sgMail from "@sendgrid/mail";
+import crypto from "crypto";
 import { storage } from "../storage";
 import { poPdfService } from "./po-pdf-service";
 import type { PurchaseOrder, PurchaseOrderLine, Supplier } from "@shared/schema";
@@ -39,6 +40,16 @@ export class PurchaseOrderEmailService {
     return process.env.SENDGRID_FROM_EMAIL || "";
   }
 
+  private generateAckToken(): string {
+    return crypto.randomBytes(32).toString('hex');
+  }
+
+  private getAppBaseUrl(): string {
+    return process.env.APP_BASE_URL || process.env.REPLIT_DEV_DOMAIN 
+      ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
+      : 'http://localhost:5000';
+  }
+
   async sendPurchaseOrderEmail(poId: string): Promise<SendEmailResult> {
     console.log(`[PO Email] Starting email send for PO: ${poId}`);
 
@@ -51,12 +62,12 @@ export class PurchaseOrderEmailService {
     }
 
     try {
-      const poData = await this.loadPOWithDetails(poId);
+      let poData = await this.loadPOWithDetails(poId);
       if (!poData) {
         return { success: false, error: "Purchase order not found" };
       }
 
-      const { po, lines, supplier } = poData;
+      let { po, lines, supplier } = poData;
 
       const recipientEmail = this.determineRecipientEmail(po, supplier);
       if (!recipientEmail) {
@@ -67,11 +78,37 @@ export class PurchaseOrderEmailService {
         };
       }
 
+      // Generate ack token if not present
+      let ackToken = po.ackToken;
+      if (!ackToken) {
+        ackToken = this.generateAckToken();
+        const ackTokenExpiresAt = new Date();
+        ackTokenExpiresAt.setDate(ackTokenExpiresAt.getDate() + 30); // Token valid for 30 days
+        
+        await storage.updatePurchaseOrder(poId, {
+          ackToken,
+          ackTokenExpiresAt,
+          acknowledgementStatus: po.acknowledgementStatus === 'NONE' ? 'PENDING' : po.acknowledgementStatus,
+        });
+        
+        // Reload PO with updated token
+        const updatedPO = await storage.getPurchaseOrder(poId);
+        if (updatedPO) {
+          po = updatedPO;
+        }
+      } else if (po.acknowledgementStatus === 'NONE') {
+        // Update status to PENDING if sending again
+        await storage.updatePurchaseOrder(poId, {
+          acknowledgementStatus: 'PENDING',
+        });
+      }
+
       const pdfBuffer = await poPdfService.generatePOPdf({ po, lines, supplier });
 
       const supplierName = supplier?.name || po.supplierName || "Supplier";
       const subject = `Purchase Order ${po.poNumber} – ${supplierName}`;
-      const bodyText = this.buildEmailBody(po, lines, supplierName);
+      const confirmationLink = `${this.getAppBaseUrl()}/po/acknowledge/${ackToken}`;
+      const bodyText = this.buildEmailBody(po, lines, supplierName, confirmationLink);
 
       sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
@@ -91,6 +128,10 @@ export class PurchaseOrderEmailService {
             disposition: "attachment" as const,
           },
         ],
+        customArgs: {
+          po_id: poId,
+          po_number: po.poNumber,
+        },
       };
 
       console.log(`[PO Email] Sending email to: ${recipientEmail}, subject: ${subject}`);
@@ -144,7 +185,7 @@ export class PurchaseOrderEmailService {
     return null;
   }
 
-  private buildEmailBody(po: PurchaseOrder, lines: PurchaseOrderLine[], supplierName: string): string {
+  private buildEmailBody(po: PurchaseOrder, lines: PurchaseOrderLine[], supplierName: string, confirmationLink?: string): string {
     const orderDate = new Date(po.orderDate).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
@@ -169,6 +210,10 @@ export class PurchaseOrderEmailService {
 
     const paymentTerms = po.paymentTerms ? `Payment Terms: ${po.paymentTerms}` : "";
 
+    const confirmationSection = confirmationLink 
+      ? `\n\nTo confirm this purchase order, please click here:\n${confirmationLink}\n`
+      : "";
+
     return `Dear ${supplierName},
 
 Please find attached Purchase Order ${po.poNumber} from ${po.buyerCompanyName || "our company"}.
@@ -187,7 +232,7 @@ Order Total: $${total.toFixed(2)} ${po.currency || "USD"}
 
 ${po.shipToLocation ? `Ship To:\n${po.shipToLocation}\n` : ""}
 The complete purchase order is attached as a PDF for your records.
-
+${confirmationSection}
 If you have any questions regarding this order, please reply to this email.
 
 Thank you for your continued partnership.

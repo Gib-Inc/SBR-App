@@ -1,0 +1,143 @@
+The “Create PO” button on the Purchase Orders page currently does nothing. Make it production-ready and wire it into a full create-purchase-order flow that uses the existing PO data model, line item model, and detail modal.
+
+First inspect the current implementation:
+- Purchase Orders page component (table + header metrics + Create PO button).
+- Purchase Order detail modal / drawer component used when viewing an existing PO.
+- Existing APIs and types for PurchaseOrder and PurchaseOrderLine, including status, emailStatus, subtotal, shipping, otherFees, total, etc.
+
+Reuse as much as possible. Only add what is missing.
+
+==================================================
+A) FRONTEND – WIRE “CREATE PO” BUTTON
+==================================================
+1) On the Purchase Orders page:
+   - Ensure the “Create PO” button opens the Purchase Order detail modal in **create mode**.
+   - You can either:
+     - Use the same detail component and pass a `mode = "create"` prop, OR
+     - Navigate to a route like `/purchase-orders/new` that renders the same detail component in create mode.
+   - While in create mode, show a header title such as “New Purchase Order” and do not show a PO Number until it is created.
+
+2) In the PO detail component, support two modes:
+   - View/Edit existing PO (current behavior).
+   - Create new PO:
+     - Bind form fields to a local draft state:
+       - supplierId (required)
+       - orderDate (default today)
+       - expectedDate (optional but editable)
+       - emailTo (optional for now)
+       - lineItems: array of draft PurchaseOrderLine
+       - shippingCost, otherFees (numeric)
+     - Initial status for a new PO must be `"DRAFT"` and emailStatus `"NOT_SENT"`.
+
+3) Create line items UI for new POs:
+   - Table with columns:
+     - Item / Product picker (SKU + name search; reuse existing product lookup)
+     - Qty Ordered (required, positive number)
+     - Unit Cost (required, positive number)
+     - Line Total (read-only, qty * unitCost)
+   - Controls:
+     - “Add Line Item” button.
+     - Per-row remove/delete icon for discarding a line.
+   - At least one line item is required before saving.
+
+4) Financial summary:
+   - Reuse the existing financial summary UI.
+   - For new POs:
+     - Subtotal = sum(lineTotal)
+     - Total  = subtotal + (shippingCost || 0) + (otherFees || 0)
+   - Update these reactively as qty/unit cost/shipping/other fees change.
+
+5) Footer actions in create mode:
+   - Primary button: “Save PO”
+   - Secondary button: “Cancel”
+   - “Save PO” is disabled until:
+     - supplierId is set, AND
+     - there is at least one valid line item with qtyOrdered > 0 and unitCost ≥ 0.
+
+6) On successful creation:
+   - Close the modal.
+   - Show a success toast: “Purchase order created.”
+   - Refresh the Purchase Orders list (refetch or inject the new PO into the table state) so the new PO appears with:
+     - Status = “Draft”
+     - Email = “Not Sent”
+     - Items count = computed from line items
+   - Optionally auto-select the newly created row or allow the user to re-open it from the table.
+
+==================================================
+B) BACKEND – CREATE PURCHASE ORDER ENDPOINT
+==================================================
+7) Implement or finalize a POST endpoint to create a PO, e.g.:
+
+   - POST /api/purchase-orders
+
+Request body (shape can match existing types, but must support):
+- supplierId (string, required)
+- orderDate (date, required)
+- expectedDate (date, optional)
+- emailTo (string, optional)
+- shippingCost (number, optional)
+- otherFees (number, optional)
+- lines: Array<{
+    productId or sku (required),
+    qtyOrdered (required, > 0),
+    unitCost (required, ≥ 0)
+  }>
+
+Server logic:
+- Validate supplierId exists.
+- Validate each line:
+  - product exists (via productId/sku).
+  - qtyOrdered > 0.
+  - unitCost ≥ 0.
+- Create a new PurchaseOrder row:
+  - status = "DRAFT"
+  - emailStatus = "NOT_SENT"
+  - subtotal = sum(qtyOrdered * unitCost)
+  - shippingCost = value or 0
+  - otherFees = value or 0
+  - total = subtotal + shippingCost + otherFees
+  - generate a unique PO number (e.g. PO-YYYY-####) using the existing numbering pattern if one is already in place.
+- Create PurchaseOrderLine rows for each line with:
+  - qtyOrdered
+  - qtyReceived = 0
+  - unitCost
+  - lineTotal = qtyOrdered * unitCost
+- Return the full created PurchaseOrder including:
+  - id
+  - poNumber
+  - supplier
+  - status
+  - emailStatus
+  - items count
+  - orderDate, expectedDate, totals, etc.
+
+- Ensure the endpoint uses proper error handling:
+  - 400 for validation errors, with clear messages.
+  - 500 for unexpected errors, logging details on the server.
+
+==================================================
+C) FRONTEND – ERROR HANDLING & UX POLISH
+==================================================
+8) In the create-PO modal:
+   - On submit, show a loading state and prevent duplicate submissions.
+   - If the server returns validation errors (400):
+     - Map them to field-level errors where possible (e.g. supplier missing, invalid qty).
+     - Show a generic toast if field mapping is not possible.
+   - If the server returns 500:
+     - Show a toast: “Could not create purchase order. Please try again.”
+     - Keep the draft in the form so the user can retry.
+
+9) Ensure that:
+   - When editing an existing PO (view mode), the existing behavior for status, email, receipts, and financial summary stays intact.
+   - The “Create PO” flow does not break the existing PO detail rendering; the component should handle both new and existing PO shapes.
+
+10) Add minimal tests where appropriate:
+   - At least one backend test for POST /api/purchase-orders verifying:
+     - It rejects invalid input.
+     - It creates a PO with correct subtotal/total for simple input.
+   - If there is a frontend test harness, add a smoke test that:
+     - Mounts the Purchase Orders page.
+     - Simulates clicking “Create PO”.
+     - Asserts that the create modal appears.
+
+Implement all of the above so that clicking “Create PO” brings up a complete, validated create-purchase-order experience and newly created POs flow correctly into the existing PO table and detail view.

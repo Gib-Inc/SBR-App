@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { Link } from "wouter";
+import { CreatePODialog } from "@/components/create-po-dialog";
 import {
   Plus,
   Search,
@@ -264,6 +265,7 @@ export default function PurchaseOrders() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedPO, setSelectedPO] = useState<PurchaseOrderWithSupplier | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   const { data: purchaseOrders, isLoading } = useQuery<PurchaseOrderWithSupplier[]>({
     queryKey: ["/api/purchase-orders"],
@@ -545,7 +547,7 @@ export default function PurchaseOrders() {
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Purchase Orders</h1>
           <p className="text-sm text-muted-foreground">Manage supplier orders and receipts</p>
         </div>
-        <Button data-testid="button-create-po">
+        <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-po">
           <Plus className="h-4 w-4 mr-2" />
           Create PO
         </Button>
@@ -1143,6 +1145,14 @@ export default function PurchaseOrders() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CreatePODialog 
+        open={isCreateOpen} 
+        onOpenChange={setIsCreateOpen}
+        onPOCreated={(poId) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+        }}
+      />
     </div>
   );
 }

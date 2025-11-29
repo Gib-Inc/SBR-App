@@ -1699,6 +1699,233 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // ============================================================================
+  // UNIFIED SCAN INGESTION (Products + Return Labels)
+  // ============================================================================
+  // This endpoint handles both product barcodes and Shippo return labels.
+  // It first tries to match product barcodes, then falls back to Shippo labels.
+  
+  app.post("/api/scans/ingest", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { code, source } = req.body;
+      
+      if (!code || typeof code !== 'string') {
+        return res.status(400).json({ error: "code is required" });
+      }
+      
+      const scanSource = source || 'WAREHOUSE_SCANNER';
+      
+      // Step 1: Try to match against product barcodes first
+      const barcode = await storage.getBarcodeByValue(code);
+      if (barcode) {
+        // Handle product barcode (existing behavior)
+        if (barcode.purpose === "item" || barcode.purpose === "finished_product") {
+          if (!barcode.referenceId) {
+            return res.json({ status: "PRODUCT_MATCH", barcode, message: "Barcode not linked to item" });
+          }
+          
+          const item = await storage.getItem(barcode.referenceId);
+          if (!item) {
+            return res.json({ status: "PRODUCT_MATCH", barcode, message: "Item not found" });
+          }
+          
+          return res.json({
+            status: "PRODUCT_MATCH",
+            barcode,
+            item: { id: item.id, sku: item.sku, name: item.name },
+            message: `Matched product: ${item.name}`,
+          });
+        }
+        
+        if (barcode.purpose === "bin") {
+          const bin = barcode.referenceId ? await storage.getBin(barcode.referenceId) : null;
+          return res.json({
+            status: "BIN_MATCH",
+            barcode,
+            bin,
+            message: bin ? `Matched bin: ${bin.name}` : "Bin not found",
+          });
+        }
+        
+        return res.json({ status: "PRODUCT_MATCH", barcode });
+      }
+      
+      // Step 2: Try to match against Shippo label logs
+      const labelLog = await storage.getShippoLabelLogByScanCode(code);
+      
+      if (!labelLog) {
+        // No match found - log the event
+        try {
+          await logService.log({
+            type: 'SKU_MISMATCH', // Using existing type, could add SHIPPO_LABEL_NOT_FOUND
+            severity: 'WARNING',
+            message: `Scanned code "${code}" did not match any product or Shippo label`,
+            details: { code, source: scanSource },
+          });
+        } catch (logErr) {
+          console.warn('[Scan] Failed to log unknown code:', logErr);
+        }
+        
+        return res.json({
+          status: "UNKNOWN_CODE",
+          message: "Code not recognized as product or return label",
+        });
+      }
+      
+      // Found a Shippo label - check if it's a return label
+      if (labelLog.type !== 'RETURN' || !labelLog.returnRequestId) {
+        return res.json({
+          status: "LABEL_NOT_RETURN",
+          labelLog: { id: labelLog.id, type: labelLog.type, trackingNumber: labelLog.trackingNumber },
+          message: "Label is not a return label",
+        });
+      }
+      
+      // Load the return request
+      const returnRequest = await storage.getReturnRequest(labelLog.returnRequestId);
+      if (!returnRequest) {
+        try {
+          await logService.log({
+            type: 'SKU_MISMATCH',
+            severity: 'WARNING',
+            message: `Label ${code} references missing return ${labelLog.returnRequestId}`,
+            details: { code, labelLogId: labelLog.id, returnRequestId: labelLog.returnRequestId },
+          });
+        } catch (logErr) {
+          console.warn('[Scan] Failed to log missing return:', logErr);
+        }
+        return res.json({ status: "UNKNOWN_CODE", message: "Return request not found" });
+      }
+      
+      // Check if already received
+      const receivedStatuses = ['RETURNED', 'RECEIVED_AT_WAREHOUSE', 'REFUND_ISSUE_PENDING', 'REFUNDED', 'CLOSED', 'COMPLETED'];
+      if (receivedStatuses.includes(returnRequest.status)) {
+        // Already received - don't double-adjust inventory
+        try {
+          await logService.log({
+            type: 'SKU_MISMATCH', // Could use a dedicated DUPLICATE_LABEL_SCAN type
+            severity: 'WARNING',
+            message: `Duplicate scan: Return ${returnRequest.id} already received`,
+            details: { code, returnRequestId: returnRequest.id, currentStatus: returnRequest.status },
+          });
+        } catch (logErr) {
+          console.warn('[Scan] Failed to log duplicate scan:', logErr);
+        }
+        
+        return res.json({
+          status: "ALREADY_RECEIVED",
+          returnRequestId: returnRequest.id,
+          salesOrderId: returnRequest.salesOrderId,
+          rmaNumber: returnRequest.rmaNumber,
+          message: "This return was already received; no changes made",
+        });
+      }
+      
+      // Process the return - update status, inventory, and label log
+      const now = new Date();
+      const returnItems = await storage.getReturnItemsByRequestId(returnRequest.id);
+      const affectedSkus: string[] = [];
+      const inventoryUpdates: { sku: string; qty: number }[] = [];
+      
+      // Update return request status to RETURNED
+      await storage.updateReturnRequest(returnRequest.id, {
+        status: 'RETURNED',
+        receivedAt: now,
+      });
+      
+      // Update each return item and inventory
+      for (const returnItem of returnItems) {
+        // Mark item as received
+        await storage.updateReturnItem(returnItem.id, {
+          qtyReceived: returnItem.qtyApproved, // All approved qty is received
+          condition: 'GOOD', // Default assumption; can be updated later
+        });
+        
+        // Update inventory - returns go to Hildale warehouse
+        if (returnItem.inventoryItemId) {
+          const item = await storage.getItem(returnItem.inventoryItemId);
+          if (item) {
+            const newHildaleQty = (item.hildaleQty ?? 0) + returnItem.qtyApproved;
+            await storage.updateItem(returnItem.inventoryItemId, {
+              hildaleQty: newHildaleQty,
+            });
+            
+            affectedSkus.push(item.sku);
+            inventoryUpdates.push({ sku: item.sku, qty: returnItem.qtyApproved });
+          }
+        } else if (returnItem.sku) {
+          // Try to find item by SKU
+          const item = await storage.getItemBySku(returnItem.sku);
+          if (item) {
+            const newHildaleQty = (item.hildaleQty ?? 0) + returnItem.qtyApproved;
+            await storage.updateItem(item.id, {
+              hildaleQty: newHildaleQty,
+            });
+            
+            affectedSkus.push(item.sku);
+            inventoryUpdates.push({ sku: item.sku, qty: returnItem.qtyApproved });
+          }
+        }
+        
+        affectedSkus.push(returnItem.sku);
+      }
+      
+      // Update the Shippo label log
+      await storage.updateShippoLabelLog(labelLog.id, {
+        status: 'SCANNED_RECEIVED',
+        scannedAt: now,
+        scannedBy: req.session.userId || undefined,
+      });
+      
+      // Create return event for audit trail
+      try {
+        await storage.createReturnEvent({
+          returnRequestId: returnRequest.id,
+          type: 'WAREHOUSE_SCAN',
+          fromStatus: returnRequest.status,
+          toStatus: 'RETURNED',
+          actor: `user:${req.session.userId || 'unknown'}`,
+          message: `Return received via label scan (tracking: ${labelLog.trackingNumber})`,
+          payload: { scanCode: code, source: scanSource, affectedSkus },
+        });
+      } catch (evtErr) {
+        console.warn('[Scan] Failed to create return event:', evtErr);
+      }
+      
+      // Log the success
+      try {
+        await logService.log({
+          type: 'RETURN_EVENT' as any, // System log for return scanning
+          severity: 'INFO',
+          message: `Return ${returnRequest.rmaNumber || returnRequest.id} received via label scan`,
+          details: { 
+            code, 
+            returnRequestId: returnRequest.id, 
+            salesOrderId: returnRequest.salesOrderId,
+            affectedSkus,
+            inventoryUpdates,
+          },
+        });
+      } catch (logErr) {
+        console.warn('[Scan] Failed to log return receipt:', logErr);
+      }
+      
+      return res.json({
+        status: "RETURN_RECEIVED",
+        returnRequestId: returnRequest.id,
+        salesOrderId: returnRequest.salesOrderId,
+        rmaNumber: returnRequest.rmaNumber,
+        skus: affectedSkus,
+        inventoryUpdates,
+        message: `Return received and inventory updated for ${affectedSkus.length} item(s)`,
+      });
+      
+    } catch (error: any) {
+      console.error("[Scan] Error processing scan:", error);
+      res.status(500).json({ error: error.message || "Failed to process scan" });
+    }
+  });
+
+  // ============================================================================
   // PRODUCTS (Finished Products with BOM)
   // ============================================================================
   

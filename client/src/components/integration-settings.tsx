@@ -71,7 +71,6 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const [amazonSyncOrders, setAmazonSyncOrders] = useState(true);
   
   // GoHighLevel fields
-  const [ghlBaseUrl, setGhlBaseUrl] = useState("https://rest.gohighlevel.com/v1");
   const [ghlApiKey, setGhlApiKey] = useState("");
   const [ghlLocationId, setGhlLocationId] = useState("");
   
@@ -108,7 +107,6 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         setClientSecret("");
         setAmazonSyncOrders(config.config?.syncOrders !== false);
       } else if (integrationType === "GOHIGHLEVEL") {
-        setGhlBaseUrl(config.config?.baseUrl || "https://rest.gohighlevel.com/v1");
         setGhlApiKey("");
         setGhlLocationId(config.config?.locationId || "");
       } else if (integrationType === "PHANTOMBUSTER") {
@@ -188,7 +186,6 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         };
       } else if (integrationType === "GOHIGHLEVEL") {
         configData = {
-          baseUrl: ghlBaseUrl,
           locationId: ghlLocationId,
         };
       } else if (integrationType === "PHANTOMBUSTER") {
@@ -490,18 +487,6 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
               {integrationType === "GOHIGHLEVEL" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="ghl-base-url" data-testid="label-ghl-base-url">
-                      Base URL
-                    </Label>
-                    <Input
-                      id="ghl-base-url"
-                      placeholder="https://rest.gohighlevel.com/v1"
-                      value={ghlBaseUrl}
-                      onChange={(e) => setGhlBaseUrl(e.target.value)}
-                      data-testid="input-ghl-base-url"
-                    />
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="ghl-api-key" data-testid="label-ghl-api-key">
                       API Key
                     </Label>
@@ -513,6 +498,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       onChange={(e) => setGhlApiKey(e.target.value)}
                       data-testid="input-ghl-api-key"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Get your API key from GoHighLevel Settings → API Keys
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="ghl-location-id" data-testid="label-ghl-location-id">
@@ -525,6 +513,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       onChange={(e) => setGhlLocationId(e.target.value)}
                       data-testid="input-ghl-location-id"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Find your Location ID in Settings → Business Profile → Location ID
+                    </p>
                   </div>
                 </>
               )}

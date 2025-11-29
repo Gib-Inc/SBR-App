@@ -322,6 +322,63 @@ export default function PurchaseOrders() {
     },
   });
 
+  const [editingShipping, setEditingShipping] = useState(false);
+  const [editingOtherFees, setEditingOtherFees] = useState(false);
+  const [shippingValue, setShippingValue] = useState<string>("");
+  const [otherFeesValue, setOtherFeesValue] = useState<string>("");
+
+  const updateFinancialsMutation = useMutation({
+    mutationFn: async ({ poId, shippingCost, otherFees }: { poId: string; shippingCost?: number; otherFees?: number }) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/update-financials`, { shippingCost, otherFees });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to update financials");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      if (selectedPO?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", selectedPO.id, "composite"] });
+      }
+      toast({ title: "Financial details updated" });
+      setEditingShipping(false);
+      setEditingOtherFees(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleSaveShipping = () => {
+    if (!selectedPO?.id) return;
+    const value = parseFloat(shippingValue) || 0;
+    updateFinancialsMutation.mutate({ poId: selectedPO.id, shippingCost: value });
+  };
+
+  const handleSaveOtherFees = () => {
+    if (!selectedPO?.id) return;
+    const value = parseFloat(otherFeesValue) || 0;
+    updateFinancialsMutation.mutate({ poId: selectedPO.id, otherFees: value });
+  };
+
+  const startEditShipping = () => {
+    setShippingValue(String(poDetails?.shippingCost || 0));
+    setEditingShipping(true);
+  };
+
+  const startEditOtherFees = () => {
+    setOtherFeesValue(String(poDetails?.otherFees || 0));
+    setEditingOtherFees(true);
+  };
+
+  const calculateValueReceived = () => {
+    if (!poDetails?.lines?.length) return 0;
+    return poDetails.lines.reduce((sum: number, line: any) => {
+      return sum + ((line.qtyReceived || 0) * (line.unitCost || 0));
+    }, 0);
+  };
+
   const supplierMap = new Map(suppliers?.map(s => [s.id, s]) || []);
 
   const enrichedPOs = purchaseOrders?.map(po => ({
@@ -793,19 +850,98 @@ export default function PurchaseOrders() {
                 </div>
               )}
 
-              <div className="grid grid-cols-3 gap-4 pt-4 border-t">
-                <div>
-                  <p className="text-sm text-muted-foreground">Subtotal</p>
-                  <p className="font-medium">{formatCurrency(poDetails.subtotal)}</p>
+              <div className="space-y-3 pt-4 border-t">
+                <h4 className="font-medium">Financial Summary</h4>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Subtotal</span>
+                    <span className="font-medium" data-testid="text-po-subtotal">{formatCurrency(poDetails.subtotal)}</span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Shipping</span>
+                    {editingShipping ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={shippingValue}
+                          onChange={(e) => setShippingValue(e.target.value)}
+                          className="w-24 h-8 text-right"
+                          autoFocus
+                          data-testid="input-shipping-cost"
+                        />
+                        <Button size="sm" variant="ghost" onClick={handleSaveShipping} disabled={updateFinancialsMutation.isPending} data-testid="button-save-shipping">
+                          {updateFinancialsMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingShipping(false)} data-testid="button-cancel-shipping">
+                          <XCircle className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <span 
+                        className="font-medium cursor-pointer hover:underline" 
+                        onClick={startEditShipping}
+                        title="Click to edit"
+                        data-testid="text-po-shipping"
+                      >
+                        {formatCurrency(poDetails.shippingCost)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Other Fees</span>
+                    {editingOtherFees ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={otherFeesValue}
+                          onChange={(e) => setOtherFeesValue(e.target.value)}
+                          className="w-24 h-8 text-right"
+                          autoFocus
+                          data-testid="input-other-fees"
+                        />
+                        <Button size="sm" variant="ghost" onClick={handleSaveOtherFees} disabled={updateFinancialsMutation.isPending} data-testid="button-save-fees">
+                          {updateFinancialsMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3" />}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingOtherFees(false)} data-testid="button-cancel-fees">
+                          <XCircle className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <span 
+                        className="font-medium cursor-pointer hover:underline" 
+                        onClick={startEditOtherFees}
+                        title="Click to edit"
+                        data-testid="text-po-other-fees"
+                      >
+                        {formatCurrency(poDetails.otherFees)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex justify-between items-center pt-2 border-t">
+                    <span className="text-sm font-medium">Total</span>
+                    <span className="font-bold text-lg" data-testid="text-po-total">{formatCurrency(poDetails.total)}</span>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Shipping</p>
-                  <p className="font-medium">{formatCurrency(poDetails.shippingCost)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Other Fees</p>
-                  <p className="font-medium">{formatCurrency(poDetails.otherFees)}</p>
-                </div>
+
+                {poDetails.lines?.some((line: any) => (line.qtyReceived || 0) > 0) && (
+                  <div className="mt-3 pt-3 border-t">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-muted-foreground">Value Ordered</span>
+                      <span className="font-medium" data-testid="text-value-ordered">{formatCurrency(poDetails.subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-muted-foreground">Value Received</span>
+                      <span className="font-medium text-green-600" data-testid="text-value-received">{formatCurrency(calculateValueReceived())}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

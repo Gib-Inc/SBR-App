@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building } from "lucide-react";
+import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building, Package, ExternalLink, Tag } from "lucide-react";
 import { SiAmazon as AmazonIcon, SiShopify as ShopifyIcon } from "react-icons/si";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -1034,6 +1034,9 @@ export default function Barcodes() {
             onDelete={handleDelete}
             onPrint={handlePrint}
           />
+
+          {/* Shippo Labels Section */}
+          <ShippoLabelsSection searchQuery={searchQuery} />
         </div>
       )}
 
@@ -1228,6 +1231,167 @@ export default function Barcodes() {
           onOpenChange={setIsImportWizardOpen}
         />
     </div>
+  );
+}
+
+function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
+  const { data, isLoading } = useQuery<{
+    logs: any[];
+    total: number;
+  }>({
+    queryKey: ["/api/shippo-label-logs", { search: searchQuery || undefined }],
+  });
+
+  const logs = data?.logs ?? [];
+
+  function getStatusBadge(status: string) {
+    switch (status) {
+      case 'CREATED':
+        return <Badge variant="secondary" className="text-xs">Created</Badge>;
+      case 'SCANNED_RECEIVED':
+        return <Badge className="text-xs bg-green-600 text-white">Received</Badge>;
+      case 'VOIDED':
+        return <Badge variant="destructive" className="text-xs">Voided</Badge>;
+      default:
+        return <Badge variant="outline" className="text-xs">{status}</Badge>;
+    }
+  }
+
+  function getTypeBadge(type: string) {
+    switch (type) {
+      case 'RETURN':
+        return <Badge className="text-xs bg-blue-600 text-white">Return</Badge>;
+      case 'OUTBOUND':
+        return <Badge className="text-xs bg-purple-600 text-white">Outbound</Badge>;
+      default:
+        return <Badge variant="outline" className="text-xs">{type}</Badge>;
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 text-lg font-semibold flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Shippo Labels
+          </h3>
+          <div className="flex justify-center py-8">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (logs.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="mb-4 text-lg font-semibold flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Shippo Labels
+          </h3>
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+            <Tag className="h-8 w-8 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {searchQuery ? "No Shippo labels matching your search" : "No Shippo labels generated yet"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Labels are created when return requests are processed
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Package className="h-5 w-5" />
+            Shippo Labels
+          </h3>
+          <Badge variant="secondary" className="text-xs">
+            {logs.length} label{logs.length !== 1 ? 's' : ''}
+          </Badge>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Tracking #</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Type</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Carrier</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Cost</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
+                <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log: any) => (
+                <tr key={log.id} className="border-b hover-elevate" data-testid={`row-shippo-label-${log.id}`}>
+                  <td className="p-3 whitespace-nowrap font-mono text-xs">
+                    {log.trackingNumber || '-'}
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    {getTypeBadge(log.type)}
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    <span className="text-sm">{log.carrier || '-'}</span>
+                    {log.serviceLevel && (
+                      <span className="block text-xs text-muted-foreground">{log.serviceLevel}</span>
+                    )}
+                  </td>
+                  <td className="p-3 whitespace-nowrap font-mono text-xs">
+                    {log.sku || '-'}
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    <span className="text-sm">{log.customerName || '-'}</span>
+                    {log.channel && (
+                      <span className="block text-xs text-muted-foreground">{log.channel}</span>
+                    )}
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    {getStatusBadge(log.status)}
+                  </td>
+                  <td className="p-3 whitespace-nowrap">
+                    {log.labelCost ? (
+                      <span className="text-sm">
+                        ${log.labelCost.toFixed(2)} {log.labelCurrency || 'USD'}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
+                  </td>
+                  <td className="p-3 whitespace-nowrap text-muted-foreground text-sm">
+                    {log.createdAt ? format(new Date(log.createdAt), 'MMM d, yyyy') : '-'}
+                  </td>
+                  <td className="p-3 whitespace-nowrap text-right">
+                    {log.labelUrl && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => window.open(log.labelUrl, '_blank')}
+                        data-testid={`button-view-label-${log.id}`}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

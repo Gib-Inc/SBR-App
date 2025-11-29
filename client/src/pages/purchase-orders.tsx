@@ -854,9 +854,8 @@ export default function PurchaseOrders() {
                       )}
                     </Button>
                   )}
-                  {/* Show Mark as Accepted for Sent status (not yet accepted) */}
-                  {(poDetails.displayStatus === "SENT" || poDetails.status === "SENT") && 
-                   (!poDetails.acknowledgementStatus || poDetails.acknowledgementStatus === 'NONE' || poDetails.acknowledgementStatus === 'PENDING') && (
+                  {/* Show Mark as Accepted only when displayStatus is SENT (not yet accepted) */}
+                  {(poDetails.displayStatus || poDetails.status) === "SENT" && (
                     <Button
                       variant="outline"
                       onClick={() => markAcceptedMutation.mutate(poDetails.id)}

@@ -7402,6 +7402,179 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Shopify webhook endpoint for order events (orders/create, orders/updated)
+  // Public endpoint - use HMAC verification for security
+  app.post("/api/webhooks/shopify", async (req: Request, res: Response) => {
+    try {
+      const shopifyWebhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+      
+      // Verify HMAC signature if secret is configured
+      if (shopifyWebhookSecret) {
+        const hmacHeader = req.headers['x-shopify-hmac-sha256'] as string;
+        if (!hmacHeader) {
+          console.error("[Shopify Webhook] Missing HMAC header");
+          return res.status(401).json({ error: "Missing webhook signature" });
+        }
+        
+        // Verify signature using crypto
+        const crypto = await import('crypto');
+        const rawBody = JSON.stringify(req.body);
+        const calculatedHmac = crypto
+          .createHmac('sha256', shopifyWebhookSecret)
+          .update(rawBody, 'utf8')
+          .digest('base64');
+        
+        if (calculatedHmac !== hmacHeader) {
+          console.error("[Shopify Webhook] Invalid HMAC signature");
+          return res.status(401).json({ error: "Invalid webhook signature" });
+        }
+      } else {
+        console.warn("[Shopify Webhook] SHOPIFY_WEBHOOK_SECRET not configured - skipping signature verification");
+      }
+
+      const topic = req.headers['x-shopify-topic'] as string;
+      const shopDomain = req.headers['x-shopify-shop-domain'] as string;
+      const order = req.body;
+
+      console.log(`[Shopify Webhook] Received ${topic} from ${shopDomain}`);
+
+      if (!topic || !['orders/create', 'orders/updated', 'orders/cancelled'].includes(topic)) {
+        console.log(`[Shopify Webhook] Ignoring topic: ${topic}`);
+        return res.status(200).json({ message: "Event ignored" });
+      }
+
+      if (!order || !order.id) {
+        console.error("[Shopify Webhook] Invalid order payload");
+        return res.status(400).json({ error: "Invalid order payload" });
+      }
+
+      // Normalize the order data
+      const externalOrderId = String(order.id);
+      const orderNumber = order.name || order.order_number || externalOrderId;
+      const customerName = order.customer 
+        ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim()
+        : order.billing_address?.name || 'Unknown';
+      const customerEmail = order.customer?.email || order.email || null;
+      const customerPhone = order.customer?.phone || order.billing_address?.phone || null;
+      const externalCustomerId = order.customer?.id ? String(order.customer.id) : null;
+      
+      // Map Shopify financial_status/fulfillment_status to our status
+      let status = 'PENDING';
+      if (topic === 'orders/cancelled' || order.cancelled_at) {
+        status = 'CANCELLED';
+      } else if (order.fulfillment_status === 'fulfilled') {
+        status = 'SHIPPED';
+      } else if (order.financial_status === 'paid' || order.financial_status === 'partially_paid') {
+        status = 'CONFIRMED';
+      }
+
+      const orderDate = order.created_at ? new Date(order.created_at) : new Date();
+      const totalAmount = order.total_price ? parseFloat(order.total_price) : 0;
+      const currency = order.currency || 'USD';
+
+      // Extract line items with SKU mapping
+      const lineItems = (order.line_items || []).map((item: any) => ({
+        externalLineId: String(item.id),
+        sku: item.sku || null,
+        productName: item.title || item.name || 'Unknown',
+        quantity: item.quantity || 1,
+        unitPrice: item.price ? parseFloat(item.price) : 0,
+        lineTotal: (item.price ? parseFloat(item.price) : 0) * (item.quantity || 1),
+      }));
+
+      // Check for existing order
+      const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', externalOrderId);
+      const existingOrder = existingOrders[0];
+
+      if (existingOrder) {
+        // Update existing order
+        await storage.updateSalesOrder(existingOrder.id, {
+          status,
+          customerName,
+          customerEmail,
+          customerPhone,
+          externalCustomerId,
+          lineItems,
+          totalAmount,
+          rawPayload: order,
+        });
+        
+        console.log(`[Shopify Webhook] Updated order ${orderNumber} (${existingOrder.id})`);
+        
+        await storage.createSystemLog({
+          type: 'SHOPIFY_SYNC_ERROR', // Using existing type for sync events
+          message: `Shopify order ${orderNumber} updated via webhook`,
+          details: { orderId: existingOrder.id, externalOrderId, topic, status },
+          source: 'EXTERNAL',
+        });
+      } else if (topic === 'orders/create') {
+        // Create new order
+        const newOrder = await storage.createSalesOrder({
+          channel: 'SHOPIFY',
+          externalOrderId,
+          externalOrderNumber: orderNumber,
+          customerName,
+          customerEmail,
+          customerPhone,
+          externalCustomerId,
+          status,
+          orderDate,
+          totalAmount,
+          currency,
+          lineItems,
+          sourceUrl: `https://${shopDomain}/admin/orders/${order.id}`,
+          rawPayload: order,
+        });
+
+        console.log(`[Shopify Webhook] Created order ${orderNumber} (${newOrder.id})`);
+
+        // Map SKUs to internal items and update inventory
+        const inventoryMovement = new InventoryMovement(storage);
+        for (const lineItem of lineItems) {
+          if (!lineItem.sku) continue;
+          
+          // Try to find item by shopifySku first, then by internal SKU
+          const items = await storage.getAllItems();
+          const matchedItem = items.find(i => 
+            i.shopifySku === lineItem.sku || i.sku === lineItem.sku
+          );
+          
+          if (matchedItem) {
+            // Decrement available for sale quantity
+            await inventoryMovement.recordMovement(
+              matchedItem.id,
+              'SALE',
+              -lineItem.quantity,
+              `Shopify order ${orderNumber}`,
+              { orderId: newOrder.id, externalOrderId }
+            );
+          } else {
+            // Log SKU mismatch
+            await storage.createSystemLog({
+              type: 'SKU_MISMATCH',
+              message: `Shopify order ${orderNumber}: SKU "${lineItem.sku}" not found`,
+              details: { orderId: newOrder.id, sku: lineItem.sku, productName: lineItem.productName },
+              source: 'EXTERNAL',
+            });
+          }
+        }
+      }
+
+      res.status(200).json({ success: true, message: "Webhook processed" });
+    } catch (error: any) {
+      console.error("[Shopify Webhook] Error processing webhook:", error);
+      // Log the error
+      await storage.createSystemLog({
+        type: 'SHOPIFY_SYNC_ERROR',
+        message: `Shopify webhook error: ${error.message}`,
+        details: { error: error.message, stack: error.stack },
+        source: 'EXTERNAL',
+      });
+      // Return 200 to prevent Shopify from retrying
+      res.status(200).json({ error: "Error logged", message: error.message });
+    }
+  });
+
   // Receive PO - creates RECEIVE transactions and updates quantities
   app.post("/api/purchase-orders/:id/receive", requireAuth, async (req: Request, res: Response) => {
     try {

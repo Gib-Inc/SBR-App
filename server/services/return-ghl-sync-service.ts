@@ -1,19 +1,41 @@
+import { GHL_CONFIG } from "../config/ghl-config";
+import { ghlOpportunitiesService } from "./ghl-opportunities-service";
 import { storage } from "../storage";
-import { goHighLevelClient } from "./gohighlevel-client";
-import type { ReturnRequest, Settings } from "@shared/schema";
 import { ReturnStatus, ReturnEventType } from "@shared/schema";
+import type { ReturnRequest, SalesOrder } from "@shared/schema";
 
 interface GHLSyncResult {
   success: boolean;
   opportunityId?: string;
   opportunityUrl?: string;
   error?: string;
+  created?: boolean;
+  updated?: boolean;
 }
 
 export class ReturnGHLSyncService {
-  
-  async syncReturnRefundTaskToGHL(returnId: string): Promise<GHLSyncResult> {
+  private userId: string | null = null;
+
+  async initialize(userId: string): Promise<boolean> {
+    this.userId = userId;
+    return await ghlOpportunitiesService.initialize(userId);
+  }
+
+  isConfigured(): boolean {
+    return ghlOpportunitiesService.isConfigured();
+  }
+
+  async syncReturnRefundToGHL(returnId: string): Promise<GHLSyncResult> {
     console.log(`[ReturnGHLSync] Syncing return ${returnId} to GHL refund pipeline`);
+
+    if (!this.userId) {
+      return { success: false, error: "Service not initialized with userId" };
+    }
+
+    if (!this.isConfigured()) {
+      console.log("[ReturnGHLSync] GHL not configured, skipping sync");
+      return { success: false, error: "GoHighLevel not configured" };
+    }
 
     try {
       const returnRequest = await storage.getReturnRequest(returnId);
@@ -21,212 +43,179 @@ export class ReturnGHLSyncService {
         return { success: false, error: "Return request not found" };
       }
 
-      const settings = await this.getSettings();
-      if (!settings) {
-        return { success: false, error: "No settings configured" };
-      }
-
-      if (!settings.gohighlevelApiKey || !settings.gohighlevelLocationId) {
-        console.log("[ReturnGHLSync] GHL not configured, skipping sync");
-        return { success: false, error: "GoHighLevel not configured" };
-      }
-
-      const pipelineId = settings.gohighlevelReturnsPipelineId;
-      const issueRefundStageId = settings.gohighlevelReturnsStageIssueRefundId;
-      const refundedStageId = settings.gohighlevelReturnsStageRefundedId;
-
-      if (!pipelineId) {
-        console.log("[ReturnGHLSync] Returns pipeline not configured, skipping sync");
-        return { success: false, error: "Returns pipeline not configured in settings" };
-      }
-
-      let salesOrder = null;
-      if (returnRequest.salesOrderId) {
-        salesOrder = await storage.getSalesOrder(returnRequest.salesOrderId);
-      }
-
-      let stageId: string | undefined;
-      if (returnRequest.status === ReturnStatus.REFUND_ISSUE_PENDING) {
-        stageId = issueRefundStageId || undefined;
-      } else if (returnRequest.status === ReturnStatus.REFUNDED) {
-        stageId = refundedStageId || undefined;
-      }
-
+      const stageId = this.getStageForReturnStatus(returnRequest.status);
       if (!stageId) {
         console.log(`[ReturnGHLSync] No stage configured for status ${returnRequest.status}`);
-        return { success: false, error: `No GHL stage configured for ${returnRequest.status}` };
+        return { success: false, error: `No GHL stage for status ${returnRequest.status}` };
       }
 
-      const opportunityName = `Issue refund – Order ${returnRequest.externalOrderId || returnRequest.orderNumber} – ${returnRequest.customerName}`;
+      let salesOrder: SalesOrder | null = null;
+      if (returnRequest.salesOrderId) {
+        salesOrder = (await storage.getSalesOrder(returnRequest.salesOrderId)) || null;
+      }
+
+      const oppStatus = this.getOpportunityStatus(returnRequest.status);
+      const name = this.buildReturnOpportunityName(returnRequest, salesOrder);
+      const monetaryValue = salesOrder?.totalRefundAmount || 0;
 
       const items = await storage.getReturnItemsByRequestId(returnId);
       const itemsSummary = items.map(i => `${i.qtyRequested}x ${i.sku}`).join(", ");
 
-      if (returnRequest.ghlRefundOpportunityId) {
-        const updateResult = await this.updateOpportunity(
-          returnRequest.ghlRefundOpportunityId,
-          stageId,
-          settings
-        );
-        
-        if (updateResult.success) {
-          await storage.createReturnEvent({
-            returnRequestId: returnId,
-            type: ReturnEventType.REFUND_TASK_CREATED,
-            actor: 'system',
-            message: `GHL opportunity updated to stage ${returnRequest.status}`,
-            payload: { opportunityId: returnRequest.ghlRefundOpportunityId, stageId },
-          });
-        }
-
-        return updateResult;
-      }
-
-      const createResult = await this.createOpportunity({
-        name: opportunityName,
-        pipelineId,
-        stageId,
-        contactId: returnRequest.ghlContactId || undefined,
-        settings,
-        metadata: {
-          order_id: returnRequest.externalOrderId || returnRequest.orderNumber,
-          rma_number: returnRequest.rmaNumber,
-          channel: returnRequest.salesChannel,
-          customer_name: returnRequest.customerName,
-          customer_email: returnRequest.customerEmail,
-          items: itemsSummary,
-          reason: returnRequest.reason || returnRequest.reasonCode,
-          return_id: returnId,
+      const result = await ghlOpportunitiesService.upsertOpportunity({
+        externalKey: `return-${returnId}`,
+        name,
+        pipelineStageId: stageId,
+        status: oppStatus,
+        amount: monetaryValue,
+        contact: {
+          name: returnRequest.customerName || salesOrder?.customerName,
+          email: returnRequest.customerEmail || salesOrder?.customerEmail || undefined,
+          phone: returnRequest.customerPhone || salesOrder?.customerPhone || undefined,
         },
+        customFields: {
+          return_id: returnId,
+          rma_number: returnRequest.rmaNumber,
+          order_id: returnRequest.externalOrderId || returnRequest.orderNumber,
+          channel: returnRequest.salesChannel || salesOrder?.channel,
+          return_status: returnRequest.status,
+          reason: returnRequest.reason || returnRequest.reasonCode,
+          items: itemsSummary,
+          refund_amount: monetaryValue,
+        },
+        existingOpportunityId: returnRequest.ghlRefundOpportunityId,
       });
 
-      if (createResult.success && createResult.opportunityId) {
-        await storage.updateReturnRequest(returnId, {
-          ghlRefundOpportunityId: createResult.opportunityId,
-          ghlRefundOpportunityUrl: createResult.opportunityUrl,
-        });
+      if (result.success && result.opportunityId) {
+        if (result.opportunityId !== returnRequest.ghlRefundOpportunityId) {
+          await storage.updateReturnRequest(returnId, {
+            ghlRefundOpportunityId: result.opportunityId,
+            ghlRefundOpportunityUrl: result.opportunityUrl,
+          });
+          console.log(`[ReturnGHLSync] Updated return with GHL opportunity ID: ${result.opportunityId}`);
+        }
 
         await storage.createReturnEvent({
           returnRequestId: returnId,
           type: ReturnEventType.REFUND_TASK_CREATED,
-          actor: 'system',
-          message: `GHL "Issue refund" opportunity created`,
-          payload: createResult,
+          actor: "system",
+          message: result.created 
+            ? `GHL "Issue refund" opportunity created`
+            : `GHL opportunity updated to ${returnRequest.status}`,
+          payload: { 
+            opportunityId: result.opportunityId, 
+            stageId,
+            created: result.created,
+            updated: result.updated,
+          },
         });
       }
 
-      return createResult;
-
+      return result;
     } catch (error: any) {
       console.error("[ReturnGHLSync] Error syncing to GHL:", error);
       return { success: false, error: error.message };
     }
   }
 
-  private async getSettings(): Promise<Settings | null> {
-    const allSettings = await storage.getAllSettings();
-    return allSettings[0] || null;
+  async syncReturnStatusChange(returnId: string): Promise<GHLSyncResult> {
+    console.log(`[ReturnGHLSync] Status change for return: ${returnId}`);
+    return await this.syncReturnRefundToGHL(returnId);
   }
 
-  private async createOpportunity(params: {
-    name: string;
-    pipelineId: string;
-    stageId: string;
-    contactId?: string;
-    settings: Settings;
-    metadata: Record<string, any>;
-  }): Promise<GHLSyncResult> {
-    const { name, pipelineId, stageId, contactId, settings, metadata } = params;
+  async markReturnRefunded(returnId: string): Promise<GHLSyncResult> {
+    console.log(`[ReturnGHLSync] Marking return ${returnId} as refunded`);
+
+    if (!this.userId) {
+      return { success: false, error: "Service not initialized with userId" };
+    }
+
+    if (!this.isConfigured()) {
+      return { success: false, error: "GHL not configured" };
+    }
 
     try {
-      const payload: any = {
+      const returnRequest = await storage.getReturnRequest(returnId);
+      if (!returnRequest) {
+        return { success: false, error: "Return request not found" };
+      }
+
+      if (!returnRequest.ghlRefundOpportunityId) {
+        console.log("[ReturnGHLSync] No existing GHL opportunity - creating new one");
+        return await this.syncReturnRefundToGHL(returnId);
+      }
+
+      let salesOrder: SalesOrder | null = null;
+      if (returnRequest.salesOrderId) {
+        salesOrder = (await storage.getSalesOrder(returnRequest.salesOrderId)) || null;
+      }
+
+      const name = this.buildReturnOpportunityName(returnRequest, salesOrder);
+
+      const result = await ghlOpportunitiesService.upsertOpportunity({
+        externalKey: `return-${returnId}`,
         name,
-        pipelineId,
-        pipelineStageId: stageId,
-        status: "open",
-      };
-
-      if (contactId) {
-        payload.contactId = contactId;
-      }
-
-      const baseUrl = settings.gohighlevelBaseUrl || "https://rest.gohighlevel.com";
-      const response = await fetch(`${baseUrl}/v1/pipelines/${pipelineId}/opportunities`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${settings.gohighlevelApiKey}`,
-          "Content-Type": "application/json",
+        pipelineStageId: GHL_CONFIG.stages.REFUNDED,
+        status: "won",
+        amount: 0,
+        customFields: {
+          return_id: returnId,
+          rma_number: returnRequest.rmaNumber,
+          return_status: "REFUNDED",
+          refunded_at: new Date().toISOString(),
         },
-        body: JSON.stringify(payload),
+        existingOpportunityId: returnRequest.ghlRefundOpportunityId,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("[ReturnGHLSync] Failed to create opportunity:", errorData);
-        return { 
-          success: false, 
-          error: `GHL API error: ${response.status} ${JSON.stringify(errorData)}` 
-        };
+      if (result.success) {
+        await storage.createReturnEvent({
+          returnRequestId: returnId,
+          type: ReturnEventType.REFUND_COMPLETED,
+          actor: "system",
+          message: `GHL opportunity marked as refunded`,
+          payload: { opportunityId: result.opportunityId },
+        });
       }
 
-      const result = await response.json();
-      const opportunityId = result.opportunity?.id || result.id;
-      
-      const opportunityUrl = `https://app.gohighlevel.com/v2/location/${settings.gohighlevelLocationId}/opportunities/${opportunityId}`;
-
-      console.log(`[ReturnGHLSync] Created GHL opportunity: ${opportunityId}`);
-
-      return {
-        success: true,
-        opportunityId,
-        opportunityUrl,
-      };
-
+      return result;
     } catch (error: any) {
-      console.error("[ReturnGHLSync] Error creating opportunity:", error);
+      console.error("[ReturnGHLSync] Error marking as refunded:", error);
       return { success: false, error: error.message };
     }
   }
 
-  private async updateOpportunity(
-    opportunityId: string,
-    stageId: string,
-    settings: Settings
-  ): Promise<GHLSyncResult> {
-    try {
-      const baseUrl = settings.gohighlevelBaseUrl || "https://rest.gohighlevel.com";
-      const response = await fetch(`${baseUrl}/v1/opportunities/${opportunityId}`, {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${settings.gohighlevelApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          pipelineStageId: stageId,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error("[ReturnGHLSync] Failed to update opportunity:", errorData);
-        return { 
-          success: false, 
-          error: `GHL API error: ${response.status}` 
-        };
-      }
-
-      console.log(`[ReturnGHLSync] Updated GHL opportunity ${opportunityId} to stage ${stageId}`);
-
-      return {
-        success: true,
-        opportunityId,
-        opportunityUrl: `https://app.gohighlevel.com/v2/location/${settings.gohighlevelLocationId}/opportunities/${opportunityId}`,
-      };
-
-    } catch (error: any) {
-      console.error("[ReturnGHLSync] Error updating opportunity:", error);
-      return { success: false, error: error.message };
+  private getStageForReturnStatus(status: string): string | null {
+    switch (status) {
+      case ReturnStatus.REFUND_ISSUE_PENDING:
+      case ReturnStatus.APPROVED:
+      case ReturnStatus.RETURNED:
+        return GHL_CONFIG.stages.REFUND_PROCESSING;
+      case ReturnStatus.REFUNDED:
+      case ReturnStatus.CLOSED:
+        return GHL_CONFIG.stages.REFUNDED;
+      default:
+        return null;
     }
+  }
+
+  private getOpportunityStatus(returnStatus: string): "open" | "won" | "lost" {
+    switch (returnStatus) {
+      case ReturnStatus.REFUNDED:
+      case ReturnStatus.CLOSED:
+        return "won";
+      case ReturnStatus.REJECTED:
+        return "lost";
+      default:
+        return "open";
+    }
+  }
+
+  private buildReturnOpportunityName(
+    returnRequest: ReturnRequest, 
+    salesOrder: SalesOrder | null
+  ): string {
+    const orderId = returnRequest.externalOrderId || returnRequest.orderNumber || "Unknown";
+    const customerName = returnRequest.customerName || salesOrder?.customerName || "Customer";
+    return `Refund – Order ${orderId} – ${customerName}`;
   }
 }
 

@@ -119,6 +119,10 @@ export interface IStorage {
   createItem(item: InsertItem): Promise<Item>;
   updateItem(id: string, item: Partial<InsertItem>): Promise<Item | undefined>;
   deleteItem(id: string): Promise<boolean>;
+  // Channel SKU lookups (for integration mapping)
+  findProductByShopifySku(shopifySku: string): Promise<Item | null>;
+  findProductByAmazonSku(amazonSku: string): Promise<Item | null>;
+  findProductByExtensivSku(extensivSku: string): Promise<Item | null>;
 
   // Bins
   getAllBins(): Promise<Bin[]>;
@@ -907,6 +911,18 @@ export class MemStorage implements IStorage {
 
   async getItemBySku(sku: string): Promise<Item | undefined> {
     return Array.from(this.items.values()).find((item) => item.sku === sku);
+  }
+
+  async findProductByShopifySku(shopifySku: string): Promise<Item | null> {
+    return Array.from(this.items.values()).find((item) => item.shopifySku === shopifySku) || null;
+  }
+
+  async findProductByAmazonSku(amazonSku: string): Promise<Item | null> {
+    return Array.from(this.items.values()).find((item) => item.amazonSku === amazonSku) || null;
+  }
+
+  async findProductByExtensivSku(extensivSku: string): Promise<Item | null> {
+    return Array.from(this.items.values()).find((item) => item.extensivSku === extensivSku) || null;
   }
 
   async createItem(insertItem: InsertItem): Promise<Item> {
@@ -3219,6 +3235,21 @@ export class PostgresStorage implements IStorage {
   async getItemBySku(sku: string): Promise<Item | undefined> {
     const results = await this.db.select().from(schema.items).where(eq(schema.items.sku, sku));
     return results[0];
+  }
+
+  async findProductByShopifySku(shopifySku: string): Promise<Item | null> {
+    const results = await this.db.select().from(schema.items).where(eq(schema.items.shopifySku, shopifySku));
+    return results[0] || null;
+  }
+
+  async findProductByAmazonSku(amazonSku: string): Promise<Item | null> {
+    const results = await this.db.select().from(schema.items).where(eq(schema.items.amazonSku, amazonSku));
+    return results[0] || null;
+  }
+
+  async findProductByExtensivSku(extensivSku: string): Promise<Item | null> {
+    const results = await this.db.select().from(schema.items).where(eq(schema.items.extensivSku, extensivSku));
+    return results[0] || null;
   }
 
   async createItem(insertItem: InsertItem): Promise<Item> {

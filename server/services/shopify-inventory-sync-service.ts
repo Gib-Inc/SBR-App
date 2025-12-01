@@ -6,11 +6,13 @@
  * - Shopify quantities are PUSHED from this app (write-only to Shopify)
  * - Shopify orders are READ from Shopify (orders sync is handled by ShopifyClient)
  * - Safety buffer can be applied to reserve some stock from Shopify
+ * 
+ * Credentials Source: IntegrationConfig table (with env var fallback)
  */
 
 import { storage } from "../storage";
 import { logService } from "./log-service";
-import type { Item } from "@shared/schema";
+import type { Item, IntegrationConfig } from "@shared/schema";
 
 export interface ShopifyInventoryLevel {
   inventoryItemId: string;
@@ -36,32 +38,93 @@ export interface ShopifyBulkSyncResult {
   results: ShopifySyncResult[];
 }
 
-export class ShopifyInventorySyncService {
-  private shopDomain: string;
-  private accessToken: string;
-  private apiVersion: string;
-  private defaultLocationId: string | null;
+interface ShopifyCredentials {
+  shopDomain: string;
+  accessToken: string;
+  apiVersion: string;
+  defaultLocationId: string | null;
+}
 
-  constructor() {
-    this.shopDomain = (process.env.SHOPIFY_SHOP_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    this.accessToken = process.env.SHOPIFY_ACCESS_TOKEN || '';
-    this.apiVersion = process.env.SHOPIFY_API_VERSION || '2024-01';
-    this.defaultLocationId = process.env.SHOPIFY_LOCATION_ID || null;
+export class ShopifyInventorySyncService {
+  private credentials: ShopifyCredentials | null = null;
+  private userId: string | null = null;
+
+  /**
+   * Initialize the service with user-specific credentials from IntegrationConfig
+   * Falls back to environment variables if no config is found
+   */
+  async initialize(userId: string): Promise<boolean> {
+    this.userId = userId;
+    
+    try {
+      // Try to get credentials from IntegrationConfig
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      if (config?.isEnabled && config.apiKey) {
+        const configData = config.config as Record<string, any> || {};
+        this.credentials = {
+          shopDomain: (configData.shopDomain || '').replace(/^https?:\/\//, '').replace(/\/$/, ''),
+          accessToken: config.apiKey,
+          apiVersion: configData.apiVersion || '2024-01',
+          defaultLocationId: configData.locationId || null,
+        };
+        console.log(`[ShopifyInventorySync] Initialized with IntegrationConfig for user ${userId}`);
+        return this.isConfigured();
+      }
+      
+      // Fall back to environment variables
+      const envDomain = (process.env.SHOPIFY_SHOP_DOMAIN || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const envToken = process.env.SHOPIFY_ACCESS_TOKEN || '';
+      
+      if (envDomain && envToken) {
+        this.credentials = {
+          shopDomain: envDomain,
+          accessToken: envToken,
+          apiVersion: process.env.SHOPIFY_API_VERSION || '2024-01',
+          defaultLocationId: process.env.SHOPIFY_LOCATION_ID || null,
+        };
+        console.log(`[ShopifyInventorySync] Initialized with environment variables (fallback)`);
+        return this.isConfigured();
+      }
+      
+      console.log(`[ShopifyInventorySync] No Shopify credentials found for user ${userId}`);
+      return false;
+    } catch (error: any) {
+      console.error(`[ShopifyInventorySync] Error initializing:`, error.message);
+      return false;
+    }
   }
 
   private getHeaders(): Record<string, string> {
+    if (!this.credentials) {
+      throw new Error('ShopifyInventorySyncService not initialized');
+    }
     return {
-      'X-Shopify-Access-Token': this.accessToken,
+      'X-Shopify-Access-Token': this.credentials.accessToken,
       'Content-Type': 'application/json',
     };
   }
 
   private getBaseUrl(): string {
-    return `https://${this.shopDomain}/admin/api/${this.apiVersion}`;
+    if (!this.credentials) {
+      throw new Error('ShopifyInventorySyncService not initialized');
+    }
+    return `https://${this.credentials.shopDomain}/admin/api/${this.credentials.apiVersion}`;
   }
 
   isConfigured(): boolean {
-    return !!(this.shopDomain && this.accessToken);
+    return !!(this.credentials?.shopDomain && this.credentials?.accessToken);
+  }
+
+  /**
+   * Get the current credentials info (for status display)
+   */
+  getCredentialsInfo(): { configured: boolean; shopDomain?: string; hasLocationId: boolean } {
+    return {
+      configured: this.isConfigured(),
+      shopDomain: this.credentials?.shopDomain,
+      hasLocationId: !!this.credentials?.defaultLocationId,
+    };
   }
 
   /**
@@ -182,17 +245,29 @@ export class ShopifyInventorySyncService {
       return result;
     }
 
-    const locationId = item.shopifyLocationId || this.defaultLocationId;
+    // Use item-level location or default from credentials
+    const locationId = item.shopifyLocationId || this.credentials?.defaultLocationId;
     if (!locationId) {
       result.error = 'No Shopify location ID configured';
       return result;
     }
 
     try {
-      const inventoryItemId = await this.getInventoryItemId(item.shopifyVariantId);
+      // Use shopifyInventoryItemId if available, otherwise fetch it
+      let inventoryItemId = item.shopifyInventoryItemId;
       if (!inventoryItemId) {
-        result.error = 'Could not get inventory item ID from Shopify';
-        return result;
+        inventoryItemId = await this.getInventoryItemId(item.shopifyVariantId);
+        if (!inventoryItemId) {
+          result.error = 'Could not get inventory item ID from Shopify';
+          return result;
+        }
+        
+        // Optionally update the item with the fetched inventory item ID
+        try {
+          await storage.updateItem(item.id, { shopifyInventoryItemId: inventoryItemId });
+        } catch (e) {
+          // Non-critical, continue
+        }
       }
 
       result.previousLevel = await this.getInventoryLevel(inventoryItemId, locationId) ?? undefined;
@@ -234,8 +309,10 @@ export class ShopifyInventorySyncService {
   /**
    * Sync all items that have Shopify mapping configured
    * Only syncs items where shopifyVariantId is set
+   * 
+   * @param userId - Required user ID for settings lookup
    */
-  async syncAllInventory(userId?: string): Promise<ShopifyBulkSyncResult> {
+  async syncAllInventory(userId: string): Promise<ShopifyBulkSyncResult> {
     const result: ShopifyBulkSyncResult = {
       totalItems: 0,
       synced: 0,
@@ -244,20 +321,22 @@ export class ShopifyInventorySyncService {
       results: [],
     };
 
-    if (!this.isConfigured()) {
-      console.log('[ShopifyInventorySync] Not configured, skipping bulk sync');
-      return result;
-    }
-
-    let safetyBuffer = 0;
-    if (userId) {
-      const settings = await storage.getAiAgentSettingsByUserId(userId);
-      if (settings?.shopifyTwoWaySync === false) {
-        console.log('[ShopifyInventorySync] Two-way sync disabled for user, skipping');
+    // Initialize if not already
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        console.log('[ShopifyInventorySync] Not configured, skipping bulk sync');
         return result;
       }
-      safetyBuffer = settings?.shopifySafetyBuffer || 0;
     }
+
+    // Check if two-way sync is enabled
+    const settings = await storage.getAiAgentSettingsByUserId(userId);
+    if (settings?.shopifyTwoWaySync === false) {
+      console.log('[ShopifyInventorySync] Two-way sync disabled for user, skipping');
+      return result;
+    }
+    const safetyBuffer = settings?.shopifySafetyBuffer || 0;
 
     const items = await storage.getAllItems();
     const shopifyItems = items.filter((item: Item) => item.shopifyVariantId);
@@ -277,6 +356,7 @@ export class ShopifyInventorySyncService {
         result.failed++;
       }
 
+      // Rate limiting - Shopify has API limits
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
@@ -290,18 +370,20 @@ export class ShopifyInventorySyncService {
   /**
    * Sync inventory for a specific item by ID
    * Called after inventory movements (PO receipts, sales, returns, etc.)
-   * Requires userId to check user's Shopify sync settings
+   * 
+   * @param itemId - The item ID to sync
+   * @param userId - Required user ID for settings and credentials lookup
    */
   async syncItemById(itemId: string, userId: string): Promise<ShopifySyncResult | null> {
-    if (!this.isConfigured()) {
-      return null;
+    // Initialize if not already
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        return null;
+      }
     }
 
-    if (!userId) {
-      console.log('[ShopifyInventorySync] No userId provided, skipping sync');
-      return null;
-    }
-
+    // Check if two-way sync is enabled
     const settings = await storage.getAiAgentSettingsByUserId(userId);
     if (!settings?.shopifyTwoWaySync) {
       return null;
@@ -317,5 +399,5 @@ export class ShopifyInventorySyncService {
   }
 }
 
-
+// Singleton instance - must call initialize() before use
 export const shopifyInventorySync = new ShopifyInventorySyncService();

@@ -10822,12 +10822,23 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: "Not authenticated" });
       }
 
+      // Check if two-way sync is enabled before proceeding
+      const settings = await storage.getAiAgentSettingsByUserId(userId);
+      if (!settings?.shopifyTwoWaySync) {
+        return res.status(400).json({ 
+          error: "Two-way sync disabled", 
+          message: "Enable 'Push Inventory to Shopify' in AI Agent Settings to use this feature" 
+        });
+      }
+
       const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
       
-      if (!shopifyInventorySync.isConfigured()) {
+      // Initialize with user-specific credentials
+      const initialized = await shopifyInventorySync.initialize(userId);
+      if (!initialized) {
         return res.status(400).json({ 
           error: "Shopify not configured", 
-          message: "Please set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN environment variables" 
+          message: "Please configure Shopify integration in Data Sources or set environment variables" 
         });
       }
 
@@ -10852,13 +10863,24 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: "Not authenticated" });
       }
 
+      // Check if two-way sync is enabled before proceeding
+      const settings = await storage.getAiAgentSettingsByUserId(userId);
+      if (!settings?.shopifyTwoWaySync) {
+        return res.status(400).json({ 
+          error: "Two-way sync disabled", 
+          message: "Enable 'Push Inventory to Shopify' in AI Agent Settings to use this feature" 
+        });
+      }
+
       const { itemId } = req.params;
       const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
 
-      if (!shopifyInventorySync.isConfigured()) {
+      // Initialize with user-specific credentials
+      const initialized = await shopifyInventorySync.initialize(userId);
+      if (!initialized) {
         return res.status(400).json({ 
           error: "Shopify not configured", 
-          message: "Please set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN environment variables" 
+          message: "Please configure Shopify integration in Data Sources or set environment variables" 
         });
       }
 
@@ -10900,16 +10922,23 @@ Generate only the email body text, no subject line.`;
 
       const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
       const settings = await storage.getAiAgentSettingsByUserId(userId);
+      
+      // Try to initialize with user credentials
+      await shopifyInventorySync.initialize(userId);
+      const credentialsInfo = shopifyInventorySync.getCredentialsInfo();
 
       res.json({
-        configured: shopifyInventorySync.isConfigured(),
+        configured: credentialsInfo.configured,
+        shopDomain: credentialsInfo.shopDomain,
+        hasLocationId: credentialsInfo.hasLocationId,
         twoWaySyncEnabled: settings?.shopifyTwoWaySync || false,
         safetyBuffer: settings?.shopifySafetyBuffer || 0,
-        environmentVariables: {
-          SHOPIFY_SHOP_DOMAIN: !!process.env.SHOPIFY_SHOP_DOMAIN,
-          SHOPIFY_ACCESS_TOKEN: !!process.env.SHOPIFY_ACCESS_TOKEN,
-          SHOPIFY_LOCATION_ID: !!process.env.SHOPIFY_LOCATION_ID,
-        }
+        // Source info
+        source: credentialsInfo.configured 
+          ? (await storage.getIntegrationConfig(userId, 'SHOPIFY'))?.isEnabled 
+            ? 'integration_config' 
+            : 'environment_variables'
+          : 'none',
       });
     } catch (error: any) {
       console.error('[Shopify Sync] Error checking status:', error);

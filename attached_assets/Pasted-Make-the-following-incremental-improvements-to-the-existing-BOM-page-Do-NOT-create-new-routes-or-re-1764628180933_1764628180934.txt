@@ -1,0 +1,134 @@
+Make the following incremental improvements to the existing BOM page. Do NOT create new routes or remove any of the Shopify/Amazon/Extensiv SKU work you already built. Keep all current functionality; only extend it.
+
+GOALS
+1) Add a UPC field to the product model and expose it on the BOM tables and product forms.
+2) Make the “Finished Products” and “Stock Inventory” tables horizontally AND vertically scrollable, consistent with our other list pages (e.g., Purchase Orders, Sales Orders).
+
+========================================
+A) DATA MODEL – ADD UPC
+========================================
+1) In the core product / item model used by the BOM (finished products and stock inventory):
+
+   - Keep existing fields:
+     - sku              // House SKU, required, unique
+     - shopifySku       // nullable, unique when present
+     - amazonSku        // nullable, unique when present
+     - extensivSku      // nullable, unique when present
+
+   - Add a new field:
+     - upc: string | null   // GS1/UPC/GTIN for the finished product
+
+2) Constraints:
+
+   - Allow `upc` to be NULL (so we don’t break existing data).
+   - Add a unique index on `upc` where `upc IS NOT NULL`.
+   - Do NOT enforce “required” at the DB level yet; just treat UPC as recommended for finished products.
+
+3) Migration:
+
+   - Create and run a migration that adds the `upc` column and its unique index without dropping or altering existing SKU fields.
+   - Ensure any seed/demo data is updated to include UPCs where convenient, but this is optional.
+
+========================================
+B) BOM UI – SHOW UPC COLUMN
+========================================
+The BOM page at /products currently shows the “Finished Products” and “Stock Inventory” tables with columns including Name, SKU (House), Shopify SKU, Amazon SKU, Extensiv SKU, Forecast, etc.
+
+1) Finished Products table:
+
+   - Add a new column labeled “UPC” bound to `product.upc`.
+
+   - Recommended order near the left side:
+     - Name
+     - SKU        (House SKU)
+     - UPC
+     - Shopify SKU
+     - Amazon SKU
+     - Extensiv SKU
+     - Forecast
+     - Hildale Qty
+     - Pivot Qty
+     - Available for Sale
+     - Extensiv Δ
+     - Actions
+
+   - Cell rendering:
+     - If `product.upc` is set, display the value.
+     - If null/empty, display “—”.
+
+2) Stock Inventory table:
+
+   - If this table is backed by the same product model, also add a “UPC” column bound to `upc` in a sensible position (after SKU, before supplier/cost columns).
+   - Same display rules: show value or “—”.
+
+3) Column visibility:
+
+   - Include UPC in the same column-definition system the table already uses.
+   - By default, set UPC column to visible.
+   - Ensure the existing “Columns” control (the column-visibility editor on the BOM toolbar) can toggle UPC on/off just like Shopify SKU, Amazon SKU, and Extensiv SKU.
+
+========================================
+C) PRODUCT ADD / EDIT FORMS – UPC FIELD
+========================================
+1) In the Add Product / Edit Product form used for Finished Products:
+
+   - Add an input labeled “UPC” bound to `upc` on the product.
+   - Place it in the same “Identifiers / SKUs” area as:
+     - SKU (House)
+     - Shopify SKU
+     - Amazon SKU
+     - Extensiv SKU
+
+2) Validation:
+
+   - No hard required rule yet, but:
+     - Trim whitespace.
+     - Optionally enforce basic format (digits only, length 8/12/13/14) but do NOT block save aggressively; soft validation or helper text is fine.
+   - On save, if another product already has the same non-null `upc`, show a clear error and prevent saving (respect the unique index).
+
+========================================
+D) BOM TABLE SCROLL – H/V SCROLLABLE LIKE OTHER LISTS
+========================================
+Make the “Finished Products” and “Stock Inventory” tables scrollable in all directions, consistent with other list views (e.g., Purchase Orders, Sales Orders).
+
+1) Layout:
+
+   - Wrap each table in a container that:
+     - Has a reasonable max height (for example 60vh–70vh) so it doesn’t grow infinitely tall.
+     - Uses `overflow-y: auto` and `overflow-x: auto` to enable both vertical and horizontal scrolling when content exceeds bounds.
+
+   - Use the same layout pattern used on other list pages in this app (reuse existing TableWrapper / DataTable layout if we have one) so styling is consistent.
+
+2) Table header / body:
+
+   - Keep headers sticky at the top of the scroll area if that’s how other tables behave:
+     - e.g., CSS: `position: sticky; top: 0; z-index` as used elsewhere.
+   - Ensure column widths remain sensible when more columns (UPC, channel SKUs) are added:
+     - Allow horizontal scroll instead of squashing columns too narrow.
+
+3) Responsiveness:
+
+   - On smaller screens, confirm that:
+     - The horizontal scroll works (no columns truncated).
+     - The “Columns / SKU Status / Scan Finished Products / Add Product” toolbar remains visible above the scroll container and does not scroll sideways with the table.
+
+========================================
+E) INTEGRATION WIRING (LIGHT TOUCH)
+========================================
+Do not rewrite the existing mapping logic; just make sure UPC is available for future matching and diagnostics.
+
+1) Ensure any product-detail API responses used by integrations (Shopify/Amazon/Extensiv) now include the `upc` field, so future logic can use it.
+
+2) In the SKU Mapping / SKU Status UI, include UPC in the row details if it is available:
+   - e.g., show House SKU + UPC together when presenting internal products, but keep all existing matching rules as-is.
+
+========================================
+F) FINAL CHECKS
+========================================
+- Confirm:
+  - UPC field exists in the DB and model, with unique index (nullable).
+  - BOM Finished Products and Stock Inventory tables display a UPC column.
+  - UPC appears in the Add/Edit Product form and can be saved/edited.
+  - Column visibility control can hide/show the UPC column.
+  - Finished Products and Stock Inventory tables are vertically and horizontally scrollable like the other main tables, with headers behaving correctly.
+- Do not remove or alter existing Shopify/Amazon/Extensiv SKU behavior or the SKU Mapping feature; this change should be additive only.

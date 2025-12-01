@@ -185,6 +185,154 @@ export class ShopifyClient {
   }
 
   /**
+   * Look up product variants by SKU
+   * Returns the variant if found, null if not
+   */
+  async findVariantBySku(sku: string): Promise<{ found: boolean; productId?: string; variantId?: string } | null> {
+    try {
+      // Shopify Admin API doesn't have direct SKU search, so we use the inventory_item lookup
+      // or search products and filter by variant SKU
+      const url = `${this.getBaseUrl()}/products.json?fields=id,variants&limit=250`;
+      
+      const response = await fetch(url, {
+        headers: this.getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Shopify API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const products = data.products || [];
+      
+      for (const product of products) {
+        for (const variant of product.variants || []) {
+          if (variant.sku === sku) {
+            return {
+              found: true,
+              productId: String(product.id),
+              variantId: String(variant.id),
+            };
+          }
+        }
+      }
+      
+      return { found: false };
+    } catch (error: any) {
+      console.error(`[Shopify] Error looking up SKU ${sku}:`, error.message);
+      return null; // Return null to indicate API error
+    }
+  }
+
+  /**
+   * Verify multiple SKUs in batch with full pagination
+   * Uses Shopify's cursor-based pagination via Link header
+   * Returns an object with found and missing SKUs
+   * 
+   * Note: Per Shopify docs, when using page_info cursor, you can ONLY include
+   * page_info and limit params. The cursor encodes the original query context.
+   */
+  async verifySkus(skus: string[]): Promise<{ found: string[]; missing: string[]; error?: string }> {
+    try {
+      // Build a set of all SKUs in Shopify using cursor-based pagination
+      const shopifySkus = new Set<string>();
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/products.json?limit=250`;
+      let pageCount = 0;
+      const maxPages = 100; // Safety limit (25,000 products max)
+      
+      while (nextPageUrl && pageCount < maxPages) {
+        const response = await fetch(nextPageUrl, {
+          headers: this.getHeaders(),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[Shopify] API error on page ${pageCount + 1}: ${response.status} - ${errorText}`);
+          // Return error instead of defaulting to missing
+          return { 
+            found: [], 
+            missing: [], 
+            error: `Shopify API error (page ${pageCount + 1}): ${response.status} - ${errorText}` 
+          };
+        }
+
+        const data = await response.json();
+        const products = data.products || [];
+        
+        // Add all SKUs from this page - full product objects include variants with SKUs
+        for (const product of products) {
+          for (const variant of product.variants || []) {
+            if (variant.sku) {
+              shopifySkus.add(variant.sku);
+            }
+          }
+        }
+        
+        pageCount++;
+        
+        // Check for next page using Link header (Shopify cursor-based pagination)
+        // The Link header contains the full URL including page_info cursor
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+        
+        // If no next link or we got fewer than 250 products, we're done
+        if (!nextPageUrl || products.length < 250) {
+          break;
+        }
+      }
+
+      console.log(`[Shopify] Scanned ${pageCount} page(s), found ${shopifySkus.size} unique SKUs`);
+      
+      // Categorize input SKUs
+      const found: string[] = [];
+      const missing: string[] = [];
+      
+      for (const sku of skus) {
+        if (shopifySkus.has(sku)) {
+          found.push(sku);
+        } else {
+          missing.push(sku);
+        }
+      }
+      
+      return { found, missing };
+    } catch (error: any) {
+      console.error(`[Shopify] verifySkus error:`, error);
+      return { 
+        found: [], 
+        missing: [], 
+        error: error.message || 'Failed to verify SKUs' 
+      };
+    }
+  }
+
+  /**
+   * Extract the next page URL from Shopify Link header
+   * Shopify returns the full URL with page_info cursor, so we use it directly
+   * Format: <https://store.myshopify.com/admin/api/.../products.json?page_info=xyz&limit=250>; rel="next"
+   */
+  private extractNextLinkUrl(linkHeader: string | null): string | null {
+    if (!linkHeader) return null;
+    
+    // Parse Link header - may contain multiple links separated by commas
+    // Each link format: <url>; rel="type"
+    const links = linkHeader.split(',');
+    
+    for (const link of links) {
+      const trimmed = link.trim();
+      // Look specifically for rel="next" (not "previous" or other rels)
+      if (trimmed.includes('rel="next"') || trimmed.includes("rel='next'")) {
+        // Extract the URL between < and >
+        const urlMatch = trimmed.match(/<([^>]+)>/);
+        if (urlMatch && urlMatch[1]) {
+          return urlMatch[1];
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * Fetch recent orders from Shopify
    * @param daysBack - Number of days to look back (default: 7)
    */

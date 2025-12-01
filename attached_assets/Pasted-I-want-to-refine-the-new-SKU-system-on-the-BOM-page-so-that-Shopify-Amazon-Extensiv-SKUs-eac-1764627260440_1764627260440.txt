@@ -1,0 +1,166 @@
+I want to refine the new SKU system on the BOM page so that:
+
+- Shopify / Amazon / Extensiv SKUs each have their own column (not stacked in one cell).
+- I can show/hide those columns from an “edit columns” control on the BOM products table.
+- There is a “verify wiring” / health-check that confirms each integration (Shopify, Amazon, Extensiv) is using the correct SKU fields and that mappings are valid.
+
+Do NOT create new pages or routes. All of this must live in the existing BOM view at /products and the existing SKU mapping layer.
+
+========================================
+A) REPLACE “SOURCE SKUS” WITH SEPARATE COLUMNS
+========================================
+1) Locate the BOM page component at /products that renders:
+
+   - Finished Products table
+   - Stock Inventory table
+
+   It currently has a single “Source SKUs” column with stacked text:
+   - Shopify: …
+   - Amazon: …
+   - Extensiv: …
+
+2) Replace that ONE “Source SKUs” column with THREE separate columns, bound directly to the product fields:
+
+   - Column: “Shopify SKU”
+     - Cell: product.shopifySku or “—”
+
+   - Column: “Amazon SKU”
+     - Cell: product.amazonSku or “—”
+
+   - Column: “Extensiv SKU”
+     - Cell: product.extensivSku or “—”
+
+3) Maintain column order on the Finished Products table roughly as:
+
+   - Name
+   - SKU   (House SKU)
+   - Shopify SKU
+   - Amazon SKU
+   - Extensiv SKU
+   - Forecast
+   - Hildale Qty
+   - Pivot Qty
+   - Available for Sale
+   - Extensiv Δ
+   - Actions
+
+4) If the Stock Inventory table is backed by the same product model, also add these three columns there in a sensible order (after House SKU and Supplier fields). If Stock Inventory uses a different model, only add these columns where they make sense and can be bound to known fields.
+
+5) Remove ALL stacked “Source SKUs” text cells; make sure no old label text remains in the UI or JSX.
+
+========================================
+B) COLUMN SHOW/HIDE CONTROLS FOR BOM TABLE
+========================================
+I want to be able to hide Shopify / Amazon / Extensiv columns if we don’t use those channels.
+
+1) Add a “Columns” / “Edit Columns” control for the Finished Products table:
+
+   - Place an icon button in the BOM toolbar, next to “SKU Mapping / Import / Export / Scan”.
+   - Use a standard “columns” or “sliders” icon (whatever icon set we already use).
+
+2) Clicking this button opens a small popover or modal with checkboxes like:
+
+   - [ ] Shopify SKU
+   - [ ] Amazon SKU
+   - [ ] Extensiv SKU
+   - (Optional) other columns like Forecast, Hildale Qty, Pivot Qty, Available for Sale if that’s easy; but the channel SKUs are required.
+
+3) Behavior:
+
+   - Toggling a checkbox immediately shows/hides that column in the Finished Products table.
+   - Default visibility:
+     - If the corresponding integration is configured and enabled, default that column to visible.
+     - If an integration is not configured, default that column to hidden.
+   - Persist column visibility per browser (e.g. localStorage keyed by user + table name) so the configuration survives reloads.
+
+4) Implementation details:
+
+   - Use a common column definition array with `visible` flags, rather than hard-coded JSX per column.
+   - The same mechanism can be reused later for other tables if needed.
+
+========================================
+C) ENSURE CHANNEL FIELDS ARE CORRECTLY WIRED
+========================================
+I want a clear health-check that:
+
+- Shopify integration uses product.shopifySku.
+- Amazon integration uses product.amazonSku.
+- Extensiv integration uses product.extensivSku.
+- Mappings in the DB actually correspond to real SKUs in each external system.
+
+1) Code-level wiring check:
+
+   - Confirm (and enforce via code) that:
+
+     - Shopify order + product import logic ALWAYS resolves products via:
+       `findProductByShopifySku(line.sku)` and reads/writes `product.shopifySku`.
+
+     - Amazon order import logic ALWAYS resolves via:
+       `findProductByAmazonSku(sellerSku)` (or equivalent) and reads/writes `product.amazonSku`.
+
+     - Extensiv inventory sync ALWAYS resolves via:
+       `findProductByExtensivSku(itemCode)` and reads/writes `product.extensivSku`.
+
+   - Add small unit/integration tests for each helper to ensure they query the correct fields:
+     - e.g. mock product with only shopifySku set and verify Shopify lookup succeeds while others don’t.
+
+2) UI “Verify Channel SKUs” action:
+
+   - Extend the existing “SKU Mapping” UX with a “Verify Channel SKUs” button (either on the BOM toolbar near “SKU Mapping” or inside the mapping dialog).
+
+   - When clicked, run a backend verification routine that for each enabled integration:
+
+     Shopify:
+       - For a sample of mapped products (e.g. first 50 where product.shopifySku is NOT NULL):
+         - Call Shopify API to try to fetch the variant by its SKU (or appropriate query).
+         - Classify each as:
+           - OK (external SKU exists and matches)
+           - Missing remotely (no variant with that SKU)
+         - Also count external SKUs that exist in Shopify but aren’t mapped (if that’s cheaply discoverable).
+
+     Amazon:
+       - For a sample of mapped products with product.amazonSku:
+         - Call Amazon API (seller SKU endpoint) and verify existence.
+         - Classify the same way: OK vs Missing.
+
+     Extensiv:
+       - For each product with product.extensivSku:
+         - Check Extensiv’s API for an item with that code.
+         - Classify OK vs Missing.
+
+   - Present a summary report in the UI, e.g.:
+
+     - Shopify: 45 OK, 3 Missing mappings, 12 unmapped external SKUs.
+     - Amazon: 20 OK, 1 Missing, 5 unmapped.
+     - Extensiv: 10 OK, 0 Missing, 0 unmapped.
+
+   - For “Missing” entries, show a small table with:
+     - House SKU, Product Name, Channel SKU, Status.
+     - Include a link or button to jump directly into the mapping wizard for that channel.
+
+3) Integration guardrails (light touch):
+
+   - When a user clicks “Test Connection” or “Sync Now” for Shopify/Amazon/Extensiv:
+     - Optionally run a quick version of the verification (small sample) and show warnings if there are many missing or unmapped SKUs.
+   - Do NOT block sync if everything else is working; just clearly surface that channel SKUs might need cleanup.
+
+========================================
+D) FINAL EXPECTATIONS
+========================================
+After these changes:
+
+- BOM Finished Products (and Stock Inventory where applicable) have three distinct columns:
+  - “Shopify SKU” (product.shopifySku)
+  - “Amazon SKU”  (product.amazonSku)
+  - “Extensiv SKU” (product.extensivSku)
+
+- There is an “Edit Columns” control that lets me toggle visibility of these columns (and persists my choices), so if a business doesn’t use Shopify, that column can be hidden.
+
+- The existing integration logic is explicitly wired to the correct fields:
+  - Shopify ↔ shopifySku
+  - Amazon ↔ amazonSku
+  - Extensiv ↔ extensivSku
+
+- A “Verify Channel SKUs” action runs a health check against external APIs and reports mismatches/unmapped SKUs so I can trust that the right data is tied to each column.
+
+Implement all of the above cleanly, reusing existing components where possible, and keep BOM as the single master sheet for product-level SKU visibility.

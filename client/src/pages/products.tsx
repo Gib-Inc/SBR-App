@@ -8,7 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2 } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { SiShopify, SiAmazon } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -24,6 +27,48 @@ const WAREHOUSE_LOCATIONS = [
   "Hildale",
 ];
 
+interface ChannelColumnVisibility {
+  shopifySku: boolean;
+  amazonSku: boolean;
+  extensivSku: boolean;
+}
+
+const COLUMN_VISIBILITY_STORAGE_KEY = "bom-channel-column-visibility";
+
+function getDefaultColumnVisibility(): ChannelColumnVisibility {
+  return {
+    shopifySku: true,
+    amazonSku: true,
+    extensivSku: true,
+  };
+}
+
+function loadColumnVisibility(): ChannelColumnVisibility {
+  if (typeof window === "undefined") {
+    return getDefaultColumnVisibility();
+  }
+  try {
+    const stored = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+    if (stored) {
+      return { ...getDefaultColumnVisibility(), ...JSON.parse(stored) };
+    }
+  } catch (e) {
+    console.error("Failed to load column visibility:", e);
+  }
+  return getDefaultColumnVisibility();
+}
+
+function saveColumnVisibility(visibility: ChannelColumnVisibility) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(visibility));
+  } catch (e) {
+    console.error("Failed to save column visibility:", e);
+  }
+}
+
 function ItemTableRow({ 
   item, 
   onDelete, 
@@ -35,7 +80,8 @@ function ItemTableRow({
   onReorder,
   onCostSettings,
   aiRecommendations,
-  backorderSnapshots
+  backorderSnapshots,
+  columnVisibility,
 }: { 
   item: any; 
   onDelete: (item: any) => void;
@@ -48,6 +94,7 @@ function ItemTableRow({
   onCostSettings?: (item: any) => void;
   aiRecommendations?: any[];
   backorderSnapshots?: any[];
+  columnVisibility?: ChannelColumnVisibility;
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -192,22 +239,29 @@ function ItemTableRow({
         )}
       </td>
 
-      {/* Source SKUs Column (only for finished products) - Shows Shopify/Amazon/Extensiv mappings */}
-      {item.type === "finished_product" && (
-        <td className="px-3 align-middle">
-          <div className="text-xs leading-relaxed space-y-0.5" data-testid={`text-source-skus-${item.id}`}>
-            <div className="flex items-center gap-1">
-              <span className="text-muted-foreground w-14">Shopify:</span>
-              <span className="font-mono">{item.shopifySku || "—"}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-muted-foreground w-14">Amazon:</span>
-              <span className="font-mono">{item.amazonSku || "—"}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="text-muted-foreground w-14">Extensiv:</span>
-              <span className="font-mono">{item.extensivSku || "—"}</span>
-            </div>
+      {/* Shopify SKU Column (only for finished products when column is visible) */}
+      {item.type === "finished_product" && (columnVisibility?.shopifySku ?? true) && (
+        <td className="px-3 align-middle whitespace-nowrap">
+          <div className="font-mono text-sm" data-testid={`text-shopify-sku-${item.id}`}>
+            {item.shopifySku || <span className="text-muted-foreground">—</span>}
+          </div>
+        </td>
+      )}
+
+      {/* Amazon SKU Column (only for finished products when column is visible) */}
+      {item.type === "finished_product" && (columnVisibility?.amazonSku ?? true) && (
+        <td className="px-3 align-middle whitespace-nowrap">
+          <div className="font-mono text-sm" data-testid={`text-amazon-sku-${item.id}`}>
+            {item.amazonSku || <span className="text-muted-foreground">—</span>}
+          </div>
+        </td>
+      )}
+
+      {/* Extensiv SKU Column (only for finished products when column is visible) */}
+      {item.type === "finished_product" && (columnVisibility?.extensivSku ?? true) && (
+        <td className="px-3 align-middle whitespace-nowrap">
+          <div className="font-mono text-sm" data-testid={`text-extensiv-sku-${item.id}`}>
+            {item.extensivSku || <span className="text-muted-foreground">—</span>}
           </div>
         </td>
       )}
@@ -1343,7 +1397,41 @@ export default function BOM() {
   const [reorderItem, setReorderItem] = useState<any>(null);
   const [costSettingsItem, setCostSettingsItem] = useState<any>(null);
   const [isSkuMappingWizardOpen, setIsSkuMappingWizardOpen] = useState(false);
+  const [columnVisibility, setColumnVisibility] = useState<ChannelColumnVisibility>(getDefaultColumnVisibility);
+  const [isVerifyingSkus, setIsVerifyingSkus] = useState(false);
+  const [verificationResults, setVerificationResults] = useState<any>(null);
+  const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const stored = loadColumnVisibility();
+    setColumnVisibility(stored);
+  }, []);
+
+  const handleColumnVisibilityChange = (column: keyof ChannelColumnVisibility, visible: boolean) => {
+    const newVisibility = { ...columnVisibility, [column]: visible };
+    setColumnVisibility(newVisibility);
+    saveColumnVisibility(newVisibility);
+  };
+
+  const handleVerifyChannelSkus = async () => {
+    setIsVerifyingSkus(true);
+    setVerificationResults(null);
+    try {
+      const response = await apiRequest("POST", "/api/integrations/verify-channel-skus", {});
+      const results = await response.json();
+      setVerificationResults(results);
+      setIsVerifyModalOpen(true);
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Verification Failed",
+        description: error.message || "Failed to verify channel SKUs",
+      });
+    } finally {
+      setIsVerifyingSkus(false);
+    }
+  };
 
   const { data: items, isLoading } = useQuery({
     queryKey: ["/api/items"],
@@ -1538,6 +1626,74 @@ export default function BOM() {
             <p className="text-sm text-muted-foreground">Products with bill of materials</p>
           </div>
           <div className="flex gap-2">
+            {/* Edit Columns Popover (only affects Finished Products table) */}
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" size="sm" data-testid="button-edit-columns">
+                  <SlidersHorizontal className="mr-2 h-4 w-4" />
+                  Columns
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56" align="end">
+                <div className="space-y-3">
+                  <div className="font-medium text-sm">Show/Hide Channel SKU Columns</div>
+                  <p className="text-xs text-muted-foreground">Only applies to Finished Products table</p>
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={columnVisibility.shopifySku}
+                        onCheckedChange={(checked) => handleColumnVisibilityChange("shopifySku", !!checked)}
+                        data-testid="checkbox-column-shopify"
+                      />
+                      <SiShopify className="h-4 w-4 text-green-600" />
+                      <span className="text-sm">Shopify SKU</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={columnVisibility.amazonSku}
+                        onCheckedChange={(checked) => handleColumnVisibilityChange("amazonSku", !!checked)}
+                        data-testid="checkbox-column-amazon"
+                      />
+                      <SiAmazon className="h-4 w-4 text-orange-500" />
+                      <span className="text-sm">Amazon SKU</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={columnVisibility.extensivSku}
+                        onCheckedChange={(checked) => handleColumnVisibilityChange("extensivSku", !!checked)}
+                        data-testid="checkbox-column-extensiv"
+                      />
+                      <Package className="h-4 w-4 text-blue-600" />
+                      <span className="text-sm">Extensiv SKU</span>
+                    </label>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+            {/* Check SKU Mapping Status Button */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleVerifyChannelSkus}
+                    disabled={isVerifyingSkus}
+                    data-testid="button-verify-channel-skus"
+                  >
+                    {isVerifyingSkus ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                    )}
+                    SKU Status
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>View mapping counts for each channel</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Button
               variant="outline"
               size="sm"
@@ -1580,7 +1736,30 @@ export default function BOM() {
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source SKUs</th>
+                  {columnVisibility.shopifySku && (
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <SiShopify className="h-3.5 w-3.5 text-green-600" />
+                        Shopify SKU
+                      </div>
+                    </th>
+                  )}
+                  {columnVisibility.amazonSku && (
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <SiAmazon className="h-3.5 w-3.5 text-orange-500" />
+                        Amazon SKU
+                      </div>
+                    </th>
+                  )}
+                  {columnVisibility.extensivSku && (
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <Package className="h-3.5 w-3.5 text-blue-600" />
+                        Extensiv SKU
+                      </div>
+                    </th>
+                  )}
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
@@ -1603,6 +1782,7 @@ export default function BOM() {
                     onProduce={setProductionItem}
                     onViewHistory={setHistoryItem}
                     backorderSnapshots={backorderSnapshots}
+                    columnVisibility={columnVisibility}
                   />
                 ))}
               </tbody>
@@ -1766,6 +1946,238 @@ export default function BOM() {
         isOpen={isSkuMappingWizardOpen}
         onClose={() => setIsSkuMappingWizardOpen(false)}
       />
+
+      {/* Verify Channel SKUs Results Modal */}
+      <Dialog open={isVerifyModalOpen} onOpenChange={setIsVerifyModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5" />
+              Channel SKU Verification
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Verifies that mapped SKUs exist in each external channel via API
+            </p>
+          </DialogHeader>
+          {verificationResults && (
+            <div className="space-y-6">
+              {/* Summary */}
+              <div className="grid grid-cols-3 gap-4">
+                {/* Shopify Summary */}
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <SiShopify className="h-4 w-4 text-green-600" />
+                        <span className="font-medium">Shopify</span>
+                      </div>
+                      {verificationResults.shopify?.apiStatus === "verified" && (
+                        <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          <Check className="mr-1 h-3 w-3" />
+                          Verified
+                        </Badge>
+                      )}
+                      {verificationResults.shopify?.apiStatus === "error" && (
+                        <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400">
+                          <AlertCircle className="mr-1 h-3 w-3" />
+                          Error
+                        </Badge>
+                      )}
+                      {verificationResults.shopify?.apiStatus === "not_configured" && (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Not Setup
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Found in Shopify:</span>
+                        <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          {verificationResults.shopify?.ok || 0}
+                        </Badge>
+                      </div>
+                      {verificationResults.shopify?.missing > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Not Found:</span>
+                          <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400">
+                            {verificationResults.shopify?.missing || 0}
+                          </Badge>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Not Mapped:</span>
+                        <Badge variant="outline" className="bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
+                          {verificationResults.shopify?.unmapped || 0}
+                        </Badge>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                {/* Amazon Summary */}
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <SiAmazon className="h-4 w-4 text-orange-500" />
+                        <span className="font-medium">Amazon</span>
+                      </div>
+                      {verificationResults.amazon?.apiStatus === "mapping_only" && (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Mapping Only
+                        </Badge>
+                      )}
+                      {verificationResults.amazon?.apiStatus === "not_configured" && (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Not Setup
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Mapped:</span>
+                        <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          {verificationResults.amazon?.ok || 0}
+                        </Badge>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Not Mapped:</span>
+                        <Badge variant="outline" className="bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
+                          {verificationResults.amazon?.unmapped || 0}
+                        </Badge>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                {/* Extensiv Summary */}
+                <Card>
+                  <CardContent className="pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Package className="h-4 w-4 text-blue-600" />
+                        <span className="font-medium">Extensiv</span>
+                      </div>
+                      {verificationResults.extensiv?.apiStatus === "verified" && (
+                        <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          <Check className="mr-1 h-3 w-3" />
+                          Verified
+                        </Badge>
+                      )}
+                      {verificationResults.extensiv?.apiStatus === "error" && (
+                        <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400">
+                          <AlertCircle className="mr-1 h-3 w-3" />
+                          Error
+                        </Badge>
+                      )}
+                      {verificationResults.extensiv?.apiStatus === "not_configured" && (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Not Setup
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Found in Extensiv:</span>
+                        <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                          {verificationResults.extensiv?.ok || 0}
+                        </Badge>
+                      </div>
+                      {verificationResults.extensiv?.missing > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Not Found:</span>
+                          <Badge variant="outline" className="bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400">
+                            {verificationResults.extensiv?.missing || 0}
+                          </Badge>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Not Mapped:</span>
+                        <Badge variant="outline" className="bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
+                          {verificationResults.extensiv?.unmapped || 0}
+                        </Badge>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Missing Items Details */}
+              {(verificationResults.shopify?.missingItems?.length > 0 ||
+                verificationResults.extensiv?.missingItems?.length > 0) && (
+                <div className="space-y-3">
+                  <h3 className="font-medium text-sm flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-red-500" />
+                    SKUs Not Found in External Systems
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    These channel SKUs were configured but could not be found via API lookup
+                  </p>
+                  <div className="rounded-md border overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50">
+                        <tr className="border-b">
+                          <th className="p-2 text-left">Channel</th>
+                          <th className="p-2 text-left">Channel SKU</th>
+                          <th className="p-2 text-left">Product Name</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {verificationResults.shopify?.missingItems?.map((item: any, idx: number) => (
+                          <tr key={`shopify-${idx}`} className="border-b">
+                            <td className="p-2">
+                              <div className="flex items-center gap-1">
+                                <SiShopify className="h-3 w-3 text-green-600" />
+                                Shopify
+                              </div>
+                            </td>
+                            <td className="p-2 font-mono text-xs">{item.sku}</td>
+                            <td className="p-2 text-muted-foreground">{item.name}</td>
+                          </tr>
+                        ))}
+                        {verificationResults.extensiv?.missingItems?.map((item: any, idx: number) => (
+                          <tr key={`extensiv-${idx}`} className="border-b">
+                            <td className="p-2">
+                              <div className="flex items-center gap-1">
+                                <Package className="h-3 w-3 text-blue-600" />
+                                Extensiv
+                              </div>
+                            </td>
+                            <td className="p-2 font-mono text-xs">{item.sku}</td>
+                            <td className="p-2 text-muted-foreground">{item.name}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Notes */}
+              {verificationResults.notes && (
+                <div className="text-sm text-muted-foreground">
+                  <p>{verificationResults.notes}</p>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setIsVerifyModalOpen(false);
+                    setIsSkuMappingWizardOpen(true);
+                  }}
+                  data-testid="button-open-mapping-wizard"
+                >
+                  <Link2 className="mr-2 h-4 w-4" />
+                  Open SKU Mapping
+                </Button>
+                <Button onClick={() => setIsVerifyModalOpen(false)} data-testid="button-close-verify-modal">
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -151,6 +151,55 @@ export class ExtensivClient {
   }
 
   /**
+   * Verify multiple SKUs exist in Extensiv inventory
+   * Returns an object with found and missing SKUs
+   */
+  async verifySkus(skus: string[]): Promise<{ found: string[]; missing: string[]; error?: string }> {
+    try {
+      // First get warehouses
+      const warehouses = await this.getWarehouses();
+      if (warehouses.length === 0) {
+        return { 
+          found: [], 
+          missing: skus, 
+          error: 'No warehouses found in Extensiv' 
+        };
+      }
+
+      // Collect all SKUs across all warehouses
+      const extensivSkus = new Set<string>();
+      for (const warehouse of warehouses) {
+        const items = await this.getAllInventory(warehouse.id);
+        for (const item of items) {
+          if (item.sku) {
+            extensivSkus.add(item.sku);
+          }
+        }
+      }
+      
+      // Categorize input SKUs
+      const found: string[] = [];
+      const missing: string[] = [];
+      
+      for (const sku of skus) {
+        if (extensivSkus.has(sku)) {
+          found.push(sku);
+        } else {
+          missing.push(sku);
+        }
+      }
+      
+      return { found, missing };
+    } catch (error: any) {
+      return { 
+        found: [], 
+        missing: skus, 
+        error: error.message || 'Failed to verify SKUs in Extensiv' 
+      };
+    }
+  }
+
+  /**
    * Adjust inventory quantity for a SKU at a warehouse (for returns, corrections, etc.)
    * @param warehouseId - The warehouse ID or location code
    * @param sku - The SKU to adjust

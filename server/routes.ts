@@ -2977,6 +2977,149 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ error: "Failed to fetch integration health" });
     }
   });
+
+  // Verify Channel SKUs - API-backed health check that confirms each channel's SKUs exist
+  app.post("/api/integrations/verify-channel-skus", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const items = await storage.getAllItems();
+      const finishedProducts = items.filter(i => i.type === 'finished_product');
+
+      const results: any = {
+        shopify: { ok: 0, missing: 0, unmapped: 0, missingItems: [], apiStatus: "not_configured" },
+        amazon: { ok: 0, missing: 0, unmapped: 0, missingItems: [], apiStatus: "not_configured" },
+        extensiv: { ok: 0, missing: 0, unmapped: 0, missingItems: [], apiStatus: "not_configured" },
+        notes: "",
+      };
+
+      // Collect mapped SKUs per channel
+      const shopifySkus: string[] = [];
+      const amazonSkus: string[] = [];
+      const extensivSkus: string[] = [];
+      const skuToProduct: Record<string, any> = {};
+
+      for (const product of finishedProducts) {
+        if (product.shopifySku) {
+          shopifySkus.push(product.shopifySku);
+          skuToProduct[`shopify:${product.shopifySku}`] = product;
+        } else {
+          results.shopify.unmapped++;
+        }
+
+        if (product.amazonSku) {
+          amazonSkus.push(product.amazonSku);
+          skuToProduct[`amazon:${product.amazonSku}`] = product;
+        } else {
+          results.amazon.unmapped++;
+        }
+
+        if (product.extensivSku) {
+          extensivSkus.push(product.extensivSku);
+          skuToProduct[`extensiv:${product.extensivSku}`] = product;
+        } else {
+          results.extensiv.unmapped++;
+        }
+      }
+
+      // Check integration configurations and perform API verification
+      const shopifyConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const amazonConfig = await storage.getIntegrationConfig(userId, 'AMAZON');
+      const extensivConfig = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+
+      const integrationNotes: string[] = [];
+
+      // Verify Shopify SKUs via API
+      if (shopifyConfig?.apiKey && shopifyConfig?.shopDomain) {
+        try {
+          const { ShopifyClient } = await import("./services/shopify-client");
+          const shopifyClient = new ShopifyClient(
+            shopifyConfig.shopDomain,
+            shopifyConfig.apiKey
+          );
+          
+          if (shopifySkus.length > 0) {
+            const verifyResult = await shopifyClient.verifySkus(shopifySkus);
+            
+            if (verifyResult.error) {
+              results.shopify.apiStatus = "error";
+              integrationNotes.push(`Shopify API error: ${verifyResult.error}`);
+              results.shopify.ok = 0;
+              results.shopify.missing = shopifySkus.length;
+            } else {
+              results.shopify.apiStatus = "verified";
+              results.shopify.ok = verifyResult.found.length;
+              results.shopify.missing = verifyResult.missing.length;
+              results.shopify.missingItems = verifyResult.missing.map(sku => ({
+                sku,
+                name: skuToProduct[`shopify:${sku}`]?.name || sku
+              }));
+              integrationNotes.push(`Shopify: ${verifyResult.found.length} verified, ${verifyResult.missing.length} not found`);
+            }
+          } else {
+            results.shopify.apiStatus = "verified";
+            integrationNotes.push("Shopify: No SKUs to verify");
+          }
+        } catch (error: any) {
+          results.shopify.apiStatus = "error";
+          integrationNotes.push(`Shopify verification failed: ${error.message}`);
+        }
+      } else {
+        integrationNotes.push("Shopify not configured");
+      }
+
+      // Amazon - Note: Full SP-API integration requires complex auth
+      if (amazonConfig?.apiKey) {
+        results.amazon.apiStatus = "mapping_only";
+        results.amazon.ok = amazonSkus.length;
+        integrationNotes.push(`Amazon: ${amazonSkus.length} mapped (API verification requires SP-API setup)`);
+      } else {
+        integrationNotes.push("Amazon not configured");
+      }
+
+      // Verify Extensiv SKUs via API
+      if (extensivConfig?.apiKey) {
+        try {
+          const { ExtensivClient } = await import("./services/extensiv-client");
+          const baseUrl = extensivConfig.baseUrl || 'https://api.skubana.com/v1';
+          const extensivClient = new ExtensivClient(extensivConfig.apiKey, baseUrl);
+          
+          if (extensivSkus.length > 0) {
+            const verifyResult = await extensivClient.verifySkus(extensivSkus);
+            
+            if (verifyResult.error) {
+              results.extensiv.apiStatus = "error";
+              integrationNotes.push(`Extensiv API error: ${verifyResult.error}`);
+              results.extensiv.ok = 0;
+              results.extensiv.missing = extensivSkus.length;
+            } else {
+              results.extensiv.apiStatus = "verified";
+              results.extensiv.ok = verifyResult.found.length;
+              results.extensiv.missing = verifyResult.missing.length;
+              results.extensiv.missingItems = verifyResult.missing.map(sku => ({
+                sku,
+                name: skuToProduct[`extensiv:${sku}`]?.name || sku
+              }));
+              integrationNotes.push(`Extensiv: ${verifyResult.found.length} verified, ${verifyResult.missing.length} not found`);
+            }
+          } else {
+            results.extensiv.apiStatus = "verified";
+            integrationNotes.push("Extensiv: No SKUs to verify");
+          }
+        } catch (error: any) {
+          results.extensiv.apiStatus = "error";
+          integrationNotes.push(`Extensiv verification failed: ${error.message}`);
+        }
+      } else {
+        integrationNotes.push("Extensiv not configured");
+      }
+
+      results.notes = integrationNotes.join(". ") + ".";
+
+      res.json(results);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to verify channel SKUs" });
+    }
+  });
   
   // GoHighLevel - Sync sales history
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {

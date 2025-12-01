@@ -1,0 +1,302 @@
+Connect this app to GoHighLevel once, correctly, using the IDs below and mirror all key events (sales orders, purchase orders, refunds, stock warnings) into a single GHL pipeline via Opportunities.
+
+Use these fixed IDs:
+
+- locationId: exl44iieQVxSWYsySkpq
+- pipelineId: m28NXgDcGrl85EMg7ZPN
+
+Stage IDs in that pipeline:
+- PO Sent:                f87df3cc-07d1-45e0-bb14-e54f15d32726
+- PO Paid:                c7d0dc4f-41bf-4e13-bd99-f6110e90ec2f
+- PO Delivered:           c1935d57-59cb-47e5-b182-7b209f514f82
+- Sales Orders:           4eab2cae-426e-4ff3-9304-560416a41b04
+- Processing Refund:      d946f5f8-e469-47df-9f06-99223fc3e497
+- Refunded:               801a89fa-8f39-4b67-960b-ed1614833594
+- (Stock) 21–30 Days:     85ead3ad-da5f-4659-bb35-43a3ea03b268
+- (Stock) 14–21 Days:     eea14324-ac58-4b95-a259-6762e1a3796b
+- (Stock) Order Now:      a62574d0-2d31-4de4-86dd-a9192cc30130
+
+==================================================
+A) CORE GHL CLIENT AND CONFIG
+==================================================
+1. Inspect existing GoHighLevel integration code:
+   - Where the GHL API key and locationId are read (env vars / DB).
+   - Any existing HTTP client or helper functions for LeadConnector.
+   - Any existing “Test Connection” or “Sync” endpoints.
+
+2. Create a single server-side config object and reuse it everywhere:
+
+   export const GHL_CONFIG = {
+     locationId: "exl44iieQVxSWYsySkpq",
+     pipelineId: "m28NXgDcGrl85EMg7ZPN",
+     stages: {
+       PO_SENT: "f87df3cc-07d1-45e0-bb14-e54f15d32726",
+       PO_PAID: "c7d0dc4f-41bf-4e13-bd99-f6110e90ec2f",
+       PO_DELIVERED: "c1935d57-59cb-47e5-b182-7b209f514f82",
+       SALES_ORDERS: "4eab2cae-426e-4ff3-9304-560416a41b04",
+       REFUND_PROCESSING: "d946f5f8-e469-47df-9f06-99223fc3e497",
+       REFUNDED: "801a89fa-8f39-4b67-960b-ed1614833594",
+       STOCK_21_30: "85ead3ad-da5f-4659-bb35-43a3ea03b268",
+       STOCK_14_21: "eea14324-ac58-4b95-a259-6762e1a3796b",
+       STOCK_ORDER_NOW: "a62574d0-2d31-4de4-86dd-a9192cc30130",
+     },
+   };
+
+3. Standardize a GHL HTTP client:
+   - Use the correct LeadConnector REST base URL already used in the project.
+   - Default headers:
+     - Authorization: Bearer <API_KEY_FROM_SECURE_STORE>
+     - Accept: application/json
+     - Content-Type: application/json
+   - Implement a wrapper function `ghlClient.request(method, path, body?)` that:
+     - Handles errors, logs only status codes / messages (never API keys).
+     - Throws or returns structured errors to the caller.
+
+4. Ensure there is a “Test Connection” endpoint that:
+   - Reads the API key and locationId from the secure store.
+   - Calls a simple GHL endpoint (e.g. locations or contacts).
+   - Returns { ok: true } on success and a descriptive code/message on error.
+   - Frontend “Test Connection” button should display that result to the user.
+
+==================================================
+B) SCHEMA MAPPINGS FOR GHL OPPORTUNITY IDS
+==================================================
+For stable upserts, every local entity that maps to a GHL Opportunity must store the related `ghlOpportunityId`.
+
+1. Extend/confirm these fields in the backend models:
+
+   - PurchaseOrder:
+     - ghlOpportunityId: string | null
+
+   - SalesOrder:
+     - ghlOpportunityId: string | null
+
+   - ReturnOrder (refund flow object):
+     - ghlOpportunityId: string | null
+
+   - Inventory risk / forecast model (whichever powers top at-risk items / stock warning):
+     - ghlOpportunityId: string | null
+
+2. Always reuse these IDs when syncing so we do not create duplicate Opportunities.
+
+==================================================
+C) GENERIC GHL OPPORTUNITY UPSERT SERVICE
+==================================================
+Create an internal service module, e.g. `ghlOpportunitiesService`, with:
+
+1. `async upsertOpportunity(params: {
+      externalKey: string; // internal reference for logging only
+      name: string;
+      pipelineStageId: string;
+      status: "open" | "won" | "lost";
+      amount?: number;
+      contact?: { name?: string; email?: string; phone?: string };
+      customFields?: Record<string, any>;
+      existingOpportunityId?: string | null;
+   }): Promise<string /* ghlOpportunityId */>`
+
+   Behavior:
+   - If `existingOpportunityId` is present:
+     - PATCH that Opportunity:
+       - pipelineId = GHL_CONFIG.pipelineId
+       - pipelineStageId = params.pipelineStageId
+       - status = params.status
+       - Update name, amount, and any custom fields / contact if needed.
+   - If not:
+     - POST a new Opportunity with:
+       - locationId = GHL_CONFIG.locationId
+       - pipelineId = GHL_CONFIG.pipelineId
+       - pipelineStageId = params.pipelineStageId
+       - status = params.status
+       - name = params.name
+       - amount and contact/customFields if available.
+     - Return the new Opportunity id.
+
+   - Handle HTTP errors:
+     - Log internal error info without secrets.
+     - Return or throw structured errors so callers can decide whether to retry.
+
+2. Helper name builders:
+   - `buildSalesOrderName(order)` → e.g. `"Sales Order " + order.orderId + " (" + order.channel + ")"`.
+   - `buildPurchaseOrderName(po)` → e.g. `"PO " + po.poNumber + " – " + po.supplierName`.
+
+==================================================
+D) SALES ORDERS → GHL
+==================================================
+Wire every SalesOrder to the “Sales Orders” / refund stages.
+
+1. On SalesOrder creation (e.g. Shopify/Amazon import or manual entry):
+
+   - Trigger `syncSalesOrderToGHL(order)` after the order is saved.
+   - Behavior:
+     - Stage: `GHL_CONFIG.stages.SALES_ORDERS`
+     - Status: "open"
+     - Name: `buildSalesOrderName(order)`
+     - Amount: order total (if known)
+     - Contact: use customer name, email, phone if available
+     - Call `upsertOpportunity` with:
+       - existingOpportunityId = order.ghlOpportunityId
+     - Save returned `ghlOpportunityId` back to the SalesOrder record.
+
+2. When the SalesOrder fulfillment status updates to “Delivered” / “Fulfilled”:
+
+   - Call `syncSalesOrderToGHL(order)` again:
+     - Stage: keep `SALES_ORDERS`
+     - Status: "won"
+     - Optional: append “– Delivered” in the name
+     - Use the existing `ghlOpportunityId`.
+
+3. Refund flow (SalesOrder ↔ ReturnOrder):
+
+   - When a return/refund is created and in “Processing Refund” state:
+     - For the associated SalesOrder (and/or ReturnOrder), call:
+
+       - `upsertOpportunity` with:
+         - pipelineStageId = GHL_CONFIG.stages.REFUND_PROCESSING
+         - status = "open"
+         - amount: refund amount if known
+         - existingOpportunityId = order.ghlOpportunityId (or return.ghlOpportunityId, but use one shared ID)
+       - Persist the same `ghlOpportunityId` on both SalesOrder and ReturnOrder if they both reference it.
+
+   - When the refund is completed and the refund status becomes “Refunded”:
+
+       - Move that same Opportunity:
+         - pipelineStageId = GHL_CONFIG.stages.REFUNDED
+         - status = "won"
+       - Keep the same `ghlOpportunityId` on both records.
+
+==================================================
+E) PURCHASE ORDERS → GHL
+==================================================
+Map the PO lifecycle to “PO Sent / Paid / Delivered”.
+
+1. When a PO is created but not yet sent:
+   - No GHL Opportunity is required yet. Only sync when we actually send/commit.
+
+2. When the PO is **sent** (e.g. SendGrid email send succeeds and PO status becomes “Sent”):
+
+   - Trigger `syncPurchaseOrderToGHL(po)`:
+     - Stage: GHL_CONFIG.stages.PO_SENT
+     - Status: "open"
+     - Name: `buildPurchaseOrderName(po)`
+     - Amount: PO total (if known)
+     - Contact: supplier name and email if available
+     - Call `upsertOpportunity` with:
+       - existingOpportunityId = po.ghlOpportunityId
+     - Save returned `ghlOpportunityId` on the PurchaseOrder.
+
+3. When the PO is **paid** (local PO status transitions to “Paid” / “Invoiced & Paid”):
+
+   - Call `syncPurchaseOrderToGHL(po)` again:
+     - Stage: GHL_CONFIG.stages.PO_PAID
+     - Status: "open" (still awaiting delivery)
+     - Use existing `ghlOpportunityId`.
+
+4. When the PO is **fully delivered/received** (all line items received, PO status “Received” / “Closed”):
+
+   - Call `syncPurchaseOrderToGHL(po)`:
+     - Stage: GHL_CONFIG.stages.PO_DELIVERED
+     - Status: "won" (PO lifecycle complete)
+     - Optionally add a note/custom field such as “All items received”.
+
+5. Optional: If a PO is cancelled or permanently rejected:
+   - Optionally update the same Opportunity:
+     - Keep it in PO_SENT or move to a future “Cancelled” stage if added.
+     - Status: "lost".
+
+==================================================
+F) STOCK RISK / FORECAST → GHL
+==================================================
+Use the forecast / “Top At-Risk Items” to drive stock tasks in GHL.
+
+1. Identify the model powering “at risk” items (e.g. InventoryRisk or similar). Each record should include:
+   - productId / SKU
+   - daysLeft until stockout
+   - risk band or recommendation (Order Now, etc.)
+   - ghlOpportunityId: string | null
+
+2. Implement `syncStockRiskToGHL(risk)`:
+
+   - Decide stage based on `daysLeft` or risk level:
+     - if daysLeft <= 0 or marked “Order Now”:
+       - stage = GHL_CONFIG.stages.STOCK_ORDER_NOW
+     - else if daysLeft <= 14:
+       - stage = GHL_CONFIG.stages.STOCK_14_21
+     - else if daysLeft <= 30:
+       - stage = GHL_CONFIG.stages.STOCK_21_30
+     - else:
+       - do nothing (no GHL opp needed).
+
+   - Name:
+     - `"Stock risk – " + productName + " (" + daysLeft + " days)"`.
+   - Status:
+     - Always "open" while risk is active.
+   - Amount:
+     - Optional (e.g. estimated revenue at risk).
+
+   - Call `upsertOpportunity` with:
+     - pipelineStageId = chosen stage
+     - existingOpportunityId = risk.ghlOpportunityId
+   - Persist returned `ghlOpportunityId` on the risk record.
+
+3. When the risk is resolved (inventory replenished, daysLeft > 30, or item no longer flagged):
+
+   - If `ghlOpportunityId` exists:
+     - Update that Opportunity:
+       - status = "won" (risk resolved)
+       - Keep last stage or move to a neutral stage if added in future.
+     - Optionally clear `ghlOpportunityId` or leave it for history.
+
+==================================================
+G) TRIGGERS & ROBUSTNESS
+==================================================
+1. Ensure automatic trigger points:
+
+   - SalesOrder:
+     - After create/import → syncSalesOrderToGHL.
+     - After fulfillment → update status to "won".
+     - After refund status changes (“Processing Refund” / “Refunded”) → move to refund stages.
+
+   - PurchaseOrder:
+     - After PO is sent (email success, status Sent) → PO_SENT.
+     - After PO is paid → PO_PAID.
+     - After PO is fully received/closed → PO_DELIVERED and status "won".
+
+   - StockRisk:
+     - After each forecast run / risk recompute → syncStockRiskToGHL on changed records.
+     - When a risk is cleared → mark the linked Opportunity as "won".
+
+2. Sync calls:
+   - Should not block the main UI; either:
+     - Run via a background job/queue, or
+     - Fire-and-forget with retry/backoff logic.
+   - Logging:
+     - On success: log internal IDs (orderId / poId / riskId, ghlOpportunityId, stage).
+     - On failure: log error code/message and path; NEVER the API key.
+
+3. Safety:
+   - If the GHL API key or locationId is missing or the “Test Connection” status is failing:
+     - All sync helpers should short-circuit with a warning log and not throw uncaught errors.
+
+==================================================
+H) EXPECTED BEHAVIOR SUMMARY
+==================================================
+- New customer order (Shopify or Amazon) → creates/updates a single Opportunity in pipeline m28NXgDcGrl85EMg7ZPN, stage “Sales Orders” (4eab2cae-426e-4ff3-9304-560416a41b04), status "open". When that order is delivered, the same Opportunity is updated to status "won".
+
+- Each Purchase Order:
+  - When sent → creates/updates an Opportunity in stage “PO Sent” (f87df3cc-07d1-45e0-bb14-e54f15d32726), status "open".
+  - When paid → same Opportunity moves to “PO Paid” (c7d0dc4f-41bf-4e13-bd99-f6110e90ec2f), status "open".
+  - When fully delivered → same Opportunity moves to “PO Delivered” (c1935d57-59cb-47e5-b182-7b209f514f82), status "won".
+
+- Refunds:
+  - When a refund/return is started → the Sales Order’s Opportunity moves to “Processing Refund” (d946f5f8-e469-47df-9f06-99223fc3e497), status "open".
+  - When the refund completes → the same Opportunity moves to “Refunded” (801a89fa-8f39-4b67-960b-ed1614833594), status "won".
+
+- Stock risk:
+  - For each at-risk product:
+    - 21–30 days → create/update Opportunity in stage 85ead3ad-da5f-4659-bb35-43a3ea03b268, status "open".
+    - 14–21 days → create/update Opportunity in stage eea14324-ac58-4b95-a259-6762e1a3796b, status "open".
+    - “Order Now” / <= 0–14 days → create/update Opportunity in stage a62574d0-2d31-4de4-86dd-a9192cc30130, status "open".
+  - When stock is replenished and risk cleared → mark those Opportunities as "won".
+
+Implement everything above cleanly, reusing a single GHL client and the `GHL_CONFIG` mapping, so that each local record keeps a stable `ghlOpportunityId` and we never create duplicate GHL Opportunities for the same sales order, purchase order, refund, or stock risk.

@@ -263,6 +263,49 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     });
   };
 
+  // Get all suggested matches for bulk apply
+  const getAllSuggestedMatches = () => {
+    return filteredProducts
+      .filter(item => !item.shopifyVariantId) // Only unmapped items
+      .map(item => ({ item, match: getSuggestedMatch(item) }))
+      .filter((entry): entry is { item: Item; match: NonNullable<ReturnType<typeof getSuggestedMatch>> } => 
+        entry.match !== null
+      );
+  };
+
+  // Bulk apply all suggested matches
+  const [isApplyingAll, setIsApplyingAll] = useState(false);
+  
+  const applyAllSuggestedMatches = async () => {
+    const matches = getAllSuggestedMatches();
+    if (matches.length === 0) return;
+    
+    setIsApplyingAll(true);
+    try {
+      for (const { item, match } of matches) {
+        await linkToShopifyMutation.mutateAsync({
+          itemId: item.id,
+          variantId: match.variant.variantId,
+          inventoryItemId: match.variant.inventoryItemId,
+          productId: match.variant.productId,
+          sku: match.variant.sku,
+        });
+      }
+      toast({
+        title: "All Matches Applied",
+        description: `Successfully linked ${matches.length} product${matches.length > 1 ? 's' : ''} to Shopify`,
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Bulk Apply Failed",
+        description: "Some products could not be linked. Please try again.",
+      });
+    } finally {
+      setIsApplyingAll(false);
+    }
+  };
+
   // Filter Shopify variants by search
   const filteredShopifyVariants = useMemo(() => {
     if (!shopifySearchQuery) return allShopifyVariants;
@@ -291,23 +334,30 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     if (!shopifyProducts?.success) {
       return (
         <div className="text-center py-8">
-          <AlertTriangle className="h-12 w-12 text-orange-500 mx-auto mb-3" />
-          <p className="font-medium">Unable to load Shopify products</p>
-          <p className="text-sm text-muted-foreground mb-4">
-            {shopifyProducts?.message || "Configure Shopify integration in Settings"}
+          <SiShopify className="h-12 w-12 text-[#96bf48] mx-auto mb-3" />
+          <p className="font-medium">Connect Shopify to Enable Auto-Matching</p>
+          <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
+            {shopifyProducts?.message?.includes("not configured") 
+              ? "Add your Shopify store credentials in AI Agent → Data Sources to automatically match products by UPC and SKU."
+              : shopifyProducts?.message || "Configure Shopify integration to enable product matching."}
           </p>
-          <Button variant="outline" onClick={() => refetchShopify()} data-testid="button-retry-shopify">
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Retry
-          </Button>
+          <div className="flex justify-center gap-2">
+            <Button variant="outline" onClick={() => refetchShopify()} data-testid="button-retry-shopify">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </div>
         </div>
       );
     }
 
+    const suggestedMatches = getAllSuggestedMatches();
+    const suggestedCount = suggestedMatches.length;
+
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="outline" className="gap-1">
               <CheckCircle className="h-3 w-3 text-green-500" />
               {mappedCount} Linked
@@ -316,15 +366,38 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
               <XCircle className="h-3 w-3 text-orange-500" />
               {unmappedCount} Unmapped
             </Badge>
+            {suggestedCount > 0 && (
+              <Badge variant="default" className="gap-1 bg-blue-500">
+                <Sparkles className="h-3 w-3" />
+                {suggestedCount} Suggested
+              </Badge>
+            )}
             <Badge variant="secondary" className="gap-1">
               <SiShopify className="h-3 w-3" />
               {shopifyProducts.totalVariants} Variants
             </Badge>
           </div>
-          <Button variant="outline" size="sm" onClick={() => refetchShopify()} data-testid="button-refresh-shopify">
-            <RefreshCw className="h-4 w-4 mr-1" />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {suggestedCount > 0 && (
+              <Button 
+                size="sm" 
+                onClick={applyAllSuggestedMatches}
+                disabled={isApplyingAll}
+                data-testid="button-apply-all-matches"
+              >
+                {isApplyingAll ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-1" />
+                )}
+                Apply All ({suggestedCount})
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => refetchShopify()} data-testid="button-refresh-shopify">
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         <ScrollArea className="h-[400px] pr-4">

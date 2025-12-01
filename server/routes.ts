@@ -3091,10 +3091,38 @@ TOTAL: $${subtotal.toFixed(2)}
       
       for (const extensivItem of extensivItems) {
         try {
-          const item = await storage.getItemBySku(extensivItem.sku);
+          // Try to find product by internal/house SKU first, then fall back to Extensiv SKU mapping
+          let item = await storage.getItemBySku(extensivItem.sku);
+          
+          if (!item) {
+            // Fallback: try to find product by Extensiv SKU mapping
+            item = await storage.findProductByExtensivSku(extensivItem.sku);
+            
+            if (item) {
+              console.log(`[Extensiv] Matched SKU ${extensivItem.sku} to product ${item.sku} via extensivSku mapping`);
+            }
+          }
           
           if (!item) {
             unmatchedSkus.push(extensivItem.sku);
+            
+            // Log SKU mismatch for review (but don't block - Extensiv is read-only)
+            try {
+              const { logService } = await import('./services/log-service');
+              await logService.logSkuMismatch({
+                source: 'EXTENSIV',
+                externalSku: extensivItem.sku,
+                orderId: 'INVENTORY_SYNC',
+                lineItemData: { 
+                  sku: extensivItem.sku, 
+                  quantity: extensivItem.quantity,
+                  tip: 'Configure via BOM > SKU Mapping'
+                }
+              });
+            } catch (logErr) {
+              console.warn('[Extensiv] Failed to log SKU mismatch:', logErr);
+            }
+            
             continue;
           }
 
@@ -3294,12 +3322,39 @@ TOTAL: $${subtotal.toFixed(2)}
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
-                // Try to find product by SKU
-                const product = await storage.getItemBySku(lineItem.sku);
+                // Try to find product by internal/house SKU first, then fall back to Shopify SKU mapping
+                let product = await storage.getItemBySku(lineItem.sku);
+                
+                if (!product) {
+                  // Fallback: try to find product by Shopify SKU mapping
+                  product = await storage.findProductByShopifySku(lineItem.sku);
+                  
+                  if (product) {
+                    console.log(`[Shopify] Matched SKU ${lineItem.sku} to product ${product.sku} via shopifySku mapping`);
+                  }
+                }
                 
                 if (!product) {
                   unmatchedSkus.push(lineItem.sku);
                   console.warn(`[Shopify] SKU not found: ${lineItem.sku} - order ${salesOrder.id} will be created without this line`);
+                  
+                  // Log SKU mismatch for review
+                  try {
+                    const { logService } = await import('./services/log-service');
+                    await logService.logSkuMismatch({
+                      source: 'SHOPIFY',
+                      externalSku: lineItem.sku,
+                      orderId: orderData.externalOrderId,
+                      lineItemData: { 
+                        sku: lineItem.sku, 
+                        qtyOrdered: lineItem.qtyOrdered,
+                        tip: 'Configure via BOM > SKU Mapping'
+                      }
+                    });
+                  } catch (logErr) {
+                    console.warn('[Shopify] Failed to log SKU mismatch:', logErr);
+                  }
+                  
                   continue;
                 }
 
@@ -3565,12 +3620,39 @@ TOTAL: $${subtotal.toFixed(2)}
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
-                // Try to find product by SKU
-                const product = await storage.getItemBySku(lineItem.sku);
+                // Try to find product by internal/house SKU first, then fall back to Amazon SKU mapping
+                let product = await storage.getItemBySku(lineItem.sku);
+                
+                if (!product) {
+                  // Fallback: try to find product by Amazon SKU mapping
+                  product = await storage.findProductByAmazonSku(lineItem.sku);
+                  
+                  if (product) {
+                    console.log(`[Amazon] Matched SKU ${lineItem.sku} to product ${product.sku} via amazonSku mapping`);
+                  }
+                }
                 
                 if (!product) {
                   unmatchedSkus.push(lineItem.sku);
                   console.warn(`[Amazon] SKU not found: ${lineItem.sku} - order ${salesOrder.id} will be created without this line`);
+                  
+                  // Log SKU mismatch for review
+                  try {
+                    const { logService } = await import('./services/log-service');
+                    await logService.logSkuMismatch({
+                      source: 'AMAZON',
+                      externalSku: lineItem.sku,
+                      orderId: orderData.externalOrderId,
+                      lineItemData: { 
+                        sku: lineItem.sku, 
+                        qtyOrdered: lineItem.qtyOrdered,
+                        tip: 'Configure via BOM > SKU Mapping'
+                      }
+                    });
+                  } catch (logErr) {
+                    console.warn('[Amazon] Failed to log SKU mismatch:', logErr);
+                  }
+                  
                   continue;
                 }
 

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
@@ -17,6 +17,7 @@ import { ProductionDialog } from "@/components/production-dialog";
 import { TransactionHistoryDialog } from "@/components/transaction-history-dialog";
 import { ScanInventoryModal } from "@/components/scan-inventory-modal";
 import { ItemCostSettingsDialog } from "@/components/item-cost-settings-dialog";
+import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -1341,6 +1342,7 @@ export default function BOM() {
   const [scanMode, setScanMode] = useState<"RAW" | "FINISHED">("RAW");
   const [reorderItem, setReorderItem] = useState<any>(null);
   const [costSettingsItem, setCostSettingsItem] = useState<any>(null);
+  const [isSkuMappingWizardOpen, setIsSkuMappingWizardOpen] = useState(false);
   const { toast } = useToast();
 
   const { data: items, isLoading } = useQuery({
@@ -1476,6 +1478,14 @@ export default function BOM() {
           <p className="text-sm text-muted-foreground">Manage finished products and stock inventory</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setIsSkuMappingWizardOpen(true)}
+            data-testid="button-sku-mapping-wizard"
+          >
+            <Link2 className="mr-2 h-4 w-4" />
+            SKU Mapping
+          </Button>
           <Button
             variant="outline"
             onClick={() => setIsImportDialogOpen(true)}
@@ -1749,6 +1759,12 @@ export default function BOM() {
         mode={scanMode}
         context="BOM_PAGE"
         onModeChange={setScanMode}
+      />
+      
+      {/* SKU Mapping Wizard */}
+      <SkuMappingWizard
+        isOpen={isSkuMappingWizardOpen}
+        onClose={() => setIsSkuMappingWizardOpen(false)}
       />
     </div>
   );

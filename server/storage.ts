@@ -120,9 +120,9 @@ export interface IStorage {
   updateItem(id: string, item: Partial<InsertItem>): Promise<Item | undefined>;
   deleteItem(id: string): Promise<boolean>;
   // Channel SKU lookups (for integration mapping)
-  findProductByShopifySku(shopifySku: string): Promise<Item | null>;
-  findProductByAmazonSku(amazonSku: string): Promise<Item | null>;
-  findProductByExtensivSku(extensivSku: string): Promise<Item | null>;
+  findProductByShopifySku(shopifySku: string): Promise<Item | undefined>;
+  findProductByAmazonSku(amazonSku: string): Promise<Item | undefined>;
+  findProductByExtensivSku(extensivSku: string): Promise<Item | undefined>;
 
   // Bins
   getAllBins(): Promise<Bin[]>;
@@ -913,16 +913,16 @@ export class MemStorage implements IStorage {
     return Array.from(this.items.values()).find((item) => item.sku === sku);
   }
 
-  async findProductByShopifySku(shopifySku: string): Promise<Item | null> {
-    return Array.from(this.items.values()).find((item) => item.shopifySku === shopifySku) || null;
+  async findProductByShopifySku(shopifySku: string): Promise<Item | undefined> {
+    return Array.from(this.items.values()).find((item) => item.shopifySku === shopifySku);
   }
 
-  async findProductByAmazonSku(amazonSku: string): Promise<Item | null> {
-    return Array.from(this.items.values()).find((item) => item.amazonSku === amazonSku) || null;
+  async findProductByAmazonSku(amazonSku: string): Promise<Item | undefined> {
+    return Array.from(this.items.values()).find((item) => item.amazonSku === amazonSku);
   }
 
-  async findProductByExtensivSku(extensivSku: string): Promise<Item | null> {
-    return Array.from(this.items.values()).find((item) => item.extensivSku === extensivSku) || null;
+  async findProductByExtensivSku(extensivSku: string): Promise<Item | undefined> {
+    return Array.from(this.items.values()).find((item) => item.extensivSku === extensivSku);
   }
 
   async createItem(insertItem: InsertItem): Promise<Item> {
@@ -3237,19 +3237,19 @@ export class PostgresStorage implements IStorage {
     return results[0];
   }
 
-  async findProductByShopifySku(shopifySku: string): Promise<Item | null> {
+  async findProductByShopifySku(shopifySku: string): Promise<Item | undefined> {
     const results = await this.db.select().from(schema.items).where(eq(schema.items.shopifySku, shopifySku));
-    return results[0] || null;
+    return results[0];
   }
 
-  async findProductByAmazonSku(amazonSku: string): Promise<Item | null> {
+  async findProductByAmazonSku(amazonSku: string): Promise<Item | undefined> {
     const results = await this.db.select().from(schema.items).where(eq(schema.items.amazonSku, amazonSku));
-    return results[0] || null;
+    return results[0];
   }
 
-  async findProductByExtensivSku(extensivSku: string): Promise<Item | null> {
+  async findProductByExtensivSku(extensivSku: string): Promise<Item | undefined> {
     const results = await this.db.select().from(schema.items).where(eq(schema.items.extensivSku, extensivSku));
-    return results[0] || null;
+    return results[0];
   }
 
   async createItem(insertItem: InsertItem): Promise<Item> {

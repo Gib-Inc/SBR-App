@@ -6583,6 +6583,12 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(404).json({ error: "Purchase order not found" });
       }
 
+      // Sync to GHL (non-blocking)
+      const { triggerPOSync } = await import("./services/ghl-sync-triggers");
+      triggerPOSync(req.session.userId!, id, "delivered").catch(err => {
+        console.error(`[PurchaseOrder] GHL sync error:`, err.message);
+      });
+
       res.json(updated);
     } catch (error: any) {
       console.error("[PurchaseOrder] Error marking purchase order as received:", error);
@@ -6600,6 +6606,12 @@ TOTAL: $${subtotal.toFixed(2)}
       if (!updated) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
+
+      // Sync to GHL (non-blocking)
+      const { triggerPOSync } = await import("./services/ghl-sync-triggers");
+      triggerPOSync(req.session.userId!, id, "paid").catch(err => {
+        console.error(`[PurchaseOrder] GHL sync error:`, err.message);
+      });
 
       res.json(updated);
     } catch (error: any) {
@@ -6793,7 +6805,7 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // Import email service dynamically to avoid circular dependencies
       const { purchaseOrderEmailService } = await import("./services/po-email-service");
-      const { poGHLSyncService } = await import("./services/po-ghl-sync-service");
+      const { triggerPOSync } = await import("./services/ghl-sync-triggers");
 
       // Send the PO via email
       const emailResult = await purchaseOrderEmailService.sendPurchaseOrderEmail(id);
@@ -6829,16 +6841,9 @@ TOTAL: $${subtotal.toFixed(2)}
       console.log(`[PurchaseOrder] PO ${po.poNumber} sent via email to ${emailResult.recipientEmail}`);
 
       // Sync to GHL (non-blocking, log errors but don't fail the request)
-      try {
-        const ghlResult = await poGHLSyncService.syncPurchaseOrderToGHL(id);
-        if (ghlResult.success) {
-          console.log(`[PurchaseOrder] PO ${po.poNumber} synced to GHL: ${ghlResult.opportunityId}`);
-        } else {
-          console.warn(`[PurchaseOrder] GHL sync skipped or failed for PO ${po.poNumber}: ${ghlResult.error}`);
-        }
-      } catch (ghlError: any) {
-        console.error(`[PurchaseOrder] GHL sync error for PO ${po.poNumber}:`, ghlError.message);
-      }
+      triggerPOSync(req.session.userId!, id, "sent").catch(err => {
+        console.error(`[PurchaseOrder] GHL sync error for PO ${po.poNumber}:`, err.message);
+      });
 
       res.json({
         ...updated,
@@ -7232,6 +7237,14 @@ TOTAL: $${subtotal.toFixed(2)}
 
       for (const itemId of receivedItemIds) {
         await backorderService.checkAndFulfillBackorders(itemId, 0);
+      }
+
+      // Sync to GHL if fully received (non-blocking)
+      if (allFullyReceived) {
+        const { triggerPOSync } = await import("./services/ghl-sync-triggers");
+        triggerPOSync(req.session.userId!, id, "delivered").catch(err => {
+          console.error(`[PurchaseOrder] GHL sync error:`, err.message);
+        });
       }
 
       res.json({ ...updated, lines: updatedLines });
@@ -9090,6 +9103,12 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ error: "Cannot mark refund pending from current status" });
       }
       
+      // Sync to GHL (non-blocking)
+      const { triggerReturnSync } = await import("./services/ghl-sync-triggers");
+      triggerReturnSync(req.session.userId!, id, false).catch(err => {
+        console.error(`[Returns] GHL sync error:`, err.message);
+      });
+      
       const returnDetails = await returnsService.getReturnWithDetails(id);
       res.json(returnDetails);
     } catch (error: any) {
@@ -9110,6 +9129,12 @@ Generate only the email body text, no subject line.`;
       if (!success) {
         return res.status(400).json({ error: "Cannot mark refund completed from current status" });
       }
+      
+      // Sync to GHL as refunded (non-blocking)
+      const { triggerReturnSync } = await import("./services/ghl-sync-triggers");
+      triggerReturnSync(req.session.userId!, id, true).catch(err => {
+        console.error(`[Returns] GHL sync error:`, err.message);
+      });
       
       const returnDetails = await returnsService.getReturnWithDetails(id);
       res.json(returnDetails);

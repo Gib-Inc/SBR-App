@@ -191,6 +191,26 @@ function ItemTableRow({
         )}
       </td>
 
+      {/* Source SKUs Column (only for finished products) - Shows Shopify/Amazon/Extensiv mappings */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle">
+          <div className="text-xs leading-relaxed space-y-0.5" data-testid={`text-source-skus-${item.id}`}>
+            <div className="flex items-center gap-1">
+              <span className="text-muted-foreground w-14">Shopify:</span>
+              <span className="font-mono">{item.shopifySku || "—"}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-muted-foreground w-14">Amazon:</span>
+              <span className="font-mono">{item.amazonSku || "—"}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-muted-foreground w-14">Extensiv:</span>
+              <span className="font-mono">{item.extensivSku || "—"}</span>
+            </div>
+          </div>
+        </td>
+      )}
+
       {/* Supplier Columns (only for components) */}
       {item.type === "component" && (
         <>
@@ -1496,6 +1516,7 @@ export default function BOM() {
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source SKUs</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>

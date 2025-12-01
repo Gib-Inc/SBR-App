@@ -1767,8 +1767,8 @@ export default function BOM() {
             </CardContent>
           </Card>
         ) : (
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full">
+          <div className="overflow-x-auto overflow-y-visible rounded-md border">
+            <table className="w-full min-w-[1400px]">
               <thead className="bg-muted/50">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>

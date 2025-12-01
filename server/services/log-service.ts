@@ -179,6 +179,99 @@ class LogService {
     });
   }
 
+  async logShopifyWebhookReceived(params: {
+    topic: string;
+    shopDomain: string;
+    externalOrderId: string;
+    orderNumber: string;
+    action: 'created' | 'updated' | 'cancelled';
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_SYNC_INFO,
+      entityType: SystemLogEntityType.ORDER,
+      entityId: params.externalOrderId,
+      severity: SystemLogSeverity.INFO,
+      code: `SHOPIFY_ORDER_${params.action.toUpperCase()}`,
+      message: `Shopify order ${params.orderNumber} ${params.action} via webhook from ${params.shopDomain}`,
+      details: params,
+    });
+  }
+
+  async logShopifyBackorder(params: {
+    orderId: string;
+    orderNumber: string;
+    itemId: string;
+    sku: string;
+    qtyOrdered: number;
+    qtyAllocated: number;
+    qtyBackordered: number;
+    availableStock: number;
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_BACKORDER,
+      entityType: SystemLogEntityType.ORDER,
+      entityId: params.orderId,
+      severity: SystemLogSeverity.WARNING,
+      code: "SHOPIFY_BACKORDER_CREATED",
+      message: `Order ${params.orderNumber}: Insufficient stock for ${params.sku}. Allocated ${params.qtyAllocated}/${params.qtyOrdered}, backordered ${params.qtyBackordered}`,
+      details: params,
+    });
+  }
+
+  async logShopifyWebhookError(params: {
+    topic?: string;
+    shopDomain?: string;
+    externalOrderId?: string;
+    error: string;
+    errorDetails?: any;
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_WEBHOOK_ERROR,
+      entityType: SystemLogEntityType.ORDER,
+      entityId: params.externalOrderId || null,
+      severity: SystemLogSeverity.ERROR,
+      code: "SHOPIFY_WEBHOOK_FAILED",
+      message: `Shopify webhook error${params.topic ? ` (${params.topic})` : ''}: ${params.error}`,
+      details: params,
+    });
+  }
+
+  async logShopifySkuMapping(params: {
+    itemId: string;
+    sku: string;
+    shopifyProductId: string;
+    shopifyVariantId: string;
+    shopifyInventoryItemId: string;
+    matchType: 'UPC' | 'SKU' | 'MANUAL';
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_SYNC_INFO,
+      entityType: SystemLogEntityType.PRODUCT,
+      entityId: params.itemId,
+      severity: SystemLogSeverity.INFO,
+      code: "SHOPIFY_SKU_MAPPED",
+      message: `Linked ${params.sku} to Shopify variant ${params.shopifyVariantId} via ${params.matchType} match`,
+      details: params,
+    });
+  }
+
+  async logShopifyBulkSync(params: {
+    totalItems: number;
+    synced: number;
+    skipped: number;
+    failed: number;
+    duration?: number;
+  }): Promise<void> {
+    const success = params.failed === 0;
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_SYNC_INFO,
+      severity: success ? SystemLogSeverity.INFO : SystemLogSeverity.WARNING,
+      code: success ? "SHOPIFY_BULK_SYNC_COMPLETE" : "SHOPIFY_BULK_SYNC_PARTIAL",
+      message: `Shopify bulk sync: ${params.synced}/${params.totalItems} synced, ${params.skipped} skipped, ${params.failed} failed`,
+      details: params,
+    });
+  }
+
   async logGhlSyncError(params: {
     entityType: string;
     entityId: string;

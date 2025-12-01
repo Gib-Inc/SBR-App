@@ -60,6 +60,7 @@ import { createReturnLabelService } from "./return-label-service";
 import { returnsService } from "./services/returns-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
+import { logService } from "./services/log-service";
 
 const SALT_ROUNDS = 10;
 
@@ -7501,11 +7502,13 @@ TOTAL: $${subtotal.toFixed(2)}
         
         console.log(`[Shopify Webhook] Updated order ${orderNumber} (${existingOrder.id})`);
         
-        await storage.createSystemLog({
-          type: 'SHOPIFY_SYNC_ERROR', // Using existing type for sync events
-          message: `Shopify order ${orderNumber} updated via webhook`,
-          details: { orderId: existingOrder.id, externalOrderId, topic, status },
-          source: 'EXTERNAL',
+        // Log the order update
+        await logService.logShopifyWebhookReceived({
+          topic,
+          shopDomain: shopDomain || 'unknown',
+          externalOrderId,
+          orderNumber,
+          action: 'updated',
         });
       } else if (topic === 'orders/create') {
         // Create new order
@@ -7527,6 +7530,15 @@ TOTAL: $${subtotal.toFixed(2)}
         });
 
         console.log(`[Shopify Webhook] Created order ${orderNumber} (${newOrder.id})`);
+        
+        // Log the order creation
+        await logService.logShopifyWebhookReceived({
+          topic,
+          shopDomain: shopDomain || 'unknown',
+          externalOrderId,
+          orderNumber,
+          action: 'created',
+        });
 
         // Map SKUs to internal items and update inventory
         const inventoryMovement = new InventoryMovement(storage);
@@ -7563,20 +7575,16 @@ TOTAL: $${subtotal.toFixed(2)}
             if (qtyBackordered > 0) {
               console.log(`[Shopify Webhook] Order ${orderNumber}: ${matchedItem.sku} backordered ${qtyBackordered} units`);
               
-              // Log backorder event
-              await storage.createSystemLog({
-                type: 'SKU_MISMATCH', // Re-using type for backorder alerts
-                message: `Order ${orderNumber}: Insufficient stock for ${matchedItem.sku}. Backordered: ${qtyBackordered}`,
-                details: { 
-                  orderId: newOrder.id, 
-                  itemId: matchedItem.id,
-                  sku: matchedItem.sku, 
-                  qtyOrdered, 
-                  qtyAllocated: qtyToAllocate,
-                  qtyBackordered,
-                  availableStock 
-                },
-                source: 'EXTERNAL',
+              // Log backorder event using proper logging method
+              await logService.logShopifyBackorder({
+                orderId: newOrder.id, 
+                orderNumber,
+                itemId: matchedItem.id,
+                sku: matchedItem.sku || 'unknown', 
+                qtyOrdered, 
+                qtyAllocated: qtyToAllocate,
+                qtyBackordered,
+                availableStock,
               });
             }
           } else {
@@ -7607,13 +7615,16 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(200).json({ success: true, message: "Webhook processed" });
     } catch (error: any) {
       console.error("[Shopify Webhook] Error processing webhook:", error);
-      // Log the error
-      await storage.createSystemLog({
-        type: 'SHOPIFY_SYNC_ERROR',
-        message: `Shopify webhook error: ${error.message}`,
-        details: { error: error.message, stack: error.stack },
-        source: 'EXTERNAL',
+      
+      // Log the error using proper logging method
+      await logService.logShopifyWebhookError({
+        topic: req.headers['x-shopify-topic'] as string,
+        shopDomain: req.headers['x-shopify-shop-domain'] as string,
+        externalOrderId: req.body?.id ? String(req.body.id) : undefined,
+        error: error.message || 'Unknown error',
+        errorDetails: { stack: error.stack },
       });
+      
       // Return 200 to prevent Shopify from retrying
       res.status(200).json({ error: "Error logged", message: error.message });
     }

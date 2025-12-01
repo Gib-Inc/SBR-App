@@ -7530,24 +7530,55 @@ TOTAL: $${subtotal.toFixed(2)}
 
         // Map SKUs to internal items and update inventory
         const inventoryMovement = new InventoryMovement(storage);
+        const items = await storage.getAllItems();
+        
         for (const lineItem of lineItems) {
           if (!lineItem.sku) continue;
           
           // Try to find item by shopifySku first, then by internal SKU
-          const items = await storage.getAllItems();
           const matchedItem = items.find(i => 
             i.shopifySku === lineItem.sku || i.sku === lineItem.sku
           );
           
           if (matchedItem) {
-            // Decrement available for sale quantity
-            await inventoryMovement.recordMovement(
-              matchedItem.id,
-              'SALE',
-              -lineItem.quantity,
-              `Shopify order ${orderNumber}`,
-              { orderId: newOrder.id, externalOrderId }
-            );
+            // Check available inventory
+            const availableStock = (matchedItem.hildaleQty ?? 0) + (matchedItem.pivotQty ?? 0);
+            const qtyOrdered = lineItem.quantity;
+            const qtyToAllocate = Math.min(qtyOrdered, availableStock);
+            const qtyBackordered = qtyOrdered - qtyToAllocate;
+            
+            // Record sale movement for allocated quantity
+            if (qtyToAllocate > 0) {
+              await inventoryMovement.recordMovement(
+                matchedItem.id,
+                'SALE',
+                -qtyToAllocate,
+                `Shopify order ${orderNumber}`,
+                { orderId: newOrder.id, externalOrderId }
+              );
+            }
+            
+            // Update line item with allocation info
+            // Note: Line items are stored in order's lineItems array, not separately
+            if (qtyBackordered > 0) {
+              console.log(`[Shopify Webhook] Order ${orderNumber}: ${matchedItem.sku} backordered ${qtyBackordered} units`);
+              
+              // Log backorder event
+              await storage.createSystemLog({
+                type: 'SKU_MISMATCH', // Re-using type for backorder alerts
+                message: `Order ${orderNumber}: Insufficient stock for ${matchedItem.sku}. Backordered: ${qtyBackordered}`,
+                details: { 
+                  orderId: newOrder.id, 
+                  itemId: matchedItem.id,
+                  sku: matchedItem.sku, 
+                  qtyOrdered, 
+                  qtyAllocated: qtyToAllocate,
+                  qtyBackordered,
+                  availableStock 
+                },
+                source: 'EXTERNAL',
+              });
+            }
           } else {
             // Log SKU mismatch
             await storage.createSystemLog({
@@ -7557,6 +7588,19 @@ TOTAL: $${subtotal.toFixed(2)}
               source: 'EXTERNAL',
             });
           }
+        }
+        
+        // Trigger GHL sync for new order (if configured)
+        try {
+          // Find first admin user for GHL sync context
+          const adminUsers = await storage.getAllUsers();
+          const adminUser = adminUsers.find(u => u.role === 'admin') || adminUsers[0];
+          if (adminUser) {
+            const { triggerSalesOrderSync } = await import("./services/ghl-sync-triggers");
+            await triggerSalesOrderSync(adminUser.id, newOrder.id, false);
+          }
+        } catch (ghlError: any) {
+          console.warn(`[Shopify Webhook] GHL sync skipped:`, ghlError.message);
         }
       }
 

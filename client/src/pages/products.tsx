@@ -31,6 +31,7 @@ interface ChannelColumnVisibility {
   shopifySku: boolean;
   amazonSku: boolean;
   extensivSku: boolean;
+  upc: boolean;
 }
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "bom-channel-column-visibility";
@@ -40,6 +41,7 @@ function getDefaultColumnVisibility(): ChannelColumnVisibility {
     shopifySku: true,
     amazonSku: true,
     extensivSku: true,
+    upc: true,
   };
 }
 
@@ -262,6 +264,15 @@ function ItemTableRow({
         <td className="px-3 align-middle whitespace-nowrap">
           <div className="font-mono text-sm" data-testid={`text-extensiv-sku-${item.id}`}>
             {item.extensivSku || <span className="text-muted-foreground">—</span>}
+          </div>
+        </td>
+      )}
+
+      {/* UPC Column (only for finished products when column is visible) */}
+      {item.type === "finished_product" && (columnVisibility?.upc ?? true) && (
+        <td className="px-3 align-middle whitespace-nowrap">
+          <div className="font-mono text-sm" data-testid={`text-upc-${item.id}`}>
+            {item.upc || <span className="text-muted-foreground">—</span>}
           </div>
         </td>
       )}
@@ -1180,6 +1191,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   const [shopifySku, setShopifySku] = useState("");
   const [amazonSku, setAmazonSku] = useState("");
   const [extensivSku, setExtensivSku] = useState("");
+  const [upc, setUpc] = useState("");
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1202,6 +1214,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       setShopifySku("");
       setAmazonSku("");
       setExtensivSku("");
+      setUpc("");
     },
     onError: (error: Error) => {
       toast({
@@ -1232,6 +1245,7 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       if (shopifySku.trim()) payload.shopifySku = shopifySku.trim();
       if (amazonSku.trim()) payload.amazonSku = amazonSku.trim();
       if (extensivSku.trim()) payload.extensivSku = extensivSku.trim();
+      if (upc.trim()) payload.upc = upc.trim();
     } else {
       // Components: currentStock and category
       payload.currentStock = Number(currentStock);
@@ -1354,6 +1368,20 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
                     />
                   </div>
                 </div>
+              </div>
+              
+              {/* UPC Field */}
+              <div className="space-y-2 border-t pt-4">
+                <Label htmlFor="upc" className="text-sm font-medium">UPC (Optional)</Label>
+                <Input
+                  id="upc"
+                  value={upc}
+                  onChange={(e) => setUpc(e.target.value)}
+                  placeholder="e.g., 012345678901"
+                  className="font-mono text-sm"
+                  data-testid="input-create-upc"
+                />
+                <p className="text-xs text-muted-foreground">GS1/UPC/GTIN barcode for marketplace identification</p>
               </div>
             </>
           )}
@@ -1666,6 +1694,15 @@ export default function BOM() {
                       <Package className="h-4 w-4 text-blue-600" />
                       <span className="text-sm">Extensiv SKU</span>
                     </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <Checkbox
+                        checked={columnVisibility.upc}
+                        onCheckedChange={(checked) => handleColumnVisibilityChange("upc", !!checked)}
+                        data-testid="checkbox-column-upc"
+                      />
+                      <Package className="h-4 w-4 text-purple-600" />
+                      <span className="text-sm">UPC</span>
+                    </label>
                   </div>
                 </div>
               </PopoverContent>
@@ -1757,6 +1794,14 @@ export default function BOM() {
                       <div className="flex items-center gap-1">
                         <Package className="h-3.5 w-3.5 text-blue-600" />
                         Extensiv SKU
+                      </div>
+                    </th>
+                  )}
+                  {columnVisibility.upc && (
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <Package className="h-3.5 w-3.5 text-purple-600" />
+                        UPC
                       </div>
                     </th>
                   )}

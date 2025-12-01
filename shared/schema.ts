@@ -68,7 +68,15 @@ export const items = pgTable("items", {
   // GHL Integration - Stock risk tracking
   ghlStockRiskOpportunityId: text("ghl_stock_risk_opportunity_id"), // Link to GHL opportunity for stock risk alerts
   ghlStockRiskLastSyncAt: timestamp("ghl_stock_risk_last_sync_at"), // When stock risk was last synced to GHL
-});
+  // Channel SKU mapping fields (House SKU is the canonical 'sku' field)
+  shopifySku: text("shopify_sku"), // Shopify variant SKU (unique when present)
+  amazonSku: text("amazon_sku"), // Amazon seller SKU (unique when present)
+  extensivSku: text("extensiv_sku"), // Extensiv/3PL item code (unique when present)
+}, (table) => ({
+  shopifySkuUniqueIdx: uniqueIndex("items_shopify_sku_unique_idx").on(table.shopifySku).where(sql`shopify_sku IS NOT NULL`),
+  amazonSkuUniqueIdx: uniqueIndex("items_amazon_sku_unique_idx").on(table.amazonSku).where(sql`amazon_sku IS NOT NULL`),
+  extensivSkuUniqueIdx: uniqueIndex("items_extensiv_sku_unique_idx").on(table.extensivSku).where(sql`extensiv_sku IS NOT NULL`),
+}));
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });
 export type InsertItem = z.infer<typeof insertItemSchema>;

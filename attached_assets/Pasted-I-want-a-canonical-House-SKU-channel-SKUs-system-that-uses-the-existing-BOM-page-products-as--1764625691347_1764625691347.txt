@@ -1,0 +1,276 @@
+I want a canonical “House SKU + channel SKUs” system that uses the existing BOM page (/products) as the single master sheet for all products. Do NOT create any new routes/pages. All product management and SKU visibility live on BOM → Finished Products / Stock Inventory, plus an overlay wizard for mapping.
+
+The goals:
+- One product row per real product (House SKU is canonical).
+- Extra fields: shopifySku, amazonSku, extensivSku, stored on the same product model.
+- BOM shows these channel SKUs in a compact way.
+- A mapping wizard lets me match external SKUs (Shopify, Amazon, Extensiv) to House SKUs.
+- All integrations MUST use these mappings and never silently create duplicate products.
+- Integration toggles should be guarded until mapping is reviewed.
+
+==================================================
+A) DATA MODEL – HOUSE SKU + CHANNEL SKUS
+==================================================
+1) In the core product/item model that powers the BOM “Finished Products” and “Stock Inventory” tables:
+
+   - Treat the existing `sku` field as the canonical internal “House SKU”.
+   - Add nullable channel-specific fields:
+
+     - shopifySku: string | null
+     - amazonSku: string | null
+     - extensivSku: string | null
+
+2) Constraints:
+
+   - `sku` (House SKU) is required and unique.
+   - Each channel SKU is unique when present:
+     - unique index on shopifySku where shopifySku IS NOT NULL
+     - unique index on amazonSku where amazonSku IS NOT NULL
+     - unique index on extensivSku where extensivSku IS NOT NULL
+
+3) Migration:
+
+   - Migrate the database/schema to add these fields without dropping existing data.
+   - Leave the channel SKU fields null initially; do NOT auto-populate them from other data.
+
+==================================================
+B) BOM PAGE – MASTER SHEET WITH SOURCE SKUS
+==================================================
+Use the existing BOM page at `/products` as the master sheet. Do NOT create a new “Products” page.
+
+1) Finished Products table:
+
+   - Keep existing columns: Name, SKU (House SKU), Forecast, Hildale Qty, Pivot Qty, Available for Sale, Extensiv Δ, Actions.
+   - Add a new column to the right of SKU:
+
+     Column header: “Source SKUs”.
+
+     Cell layout (small stacked text):
+
+       Shopify: <shopifySku or "—">
+       Amazon:  <amazonSku or "—">
+       Extensiv: <extensivSku or "—">
+
+   - If a channel SKU is null, display “—” or leave blank.
+
+2) Stock Inventory section:
+
+   - If this table is backed by the same product model, add the same “Source SKUs” column with the same layout.
+   - Keep House SKU as the main SKU column; Source SKUs are supplemental.
+
+3) Performance:
+
+   - Ensure BOM queries fetch House SKU and all channel SKU fields in the initial load to avoid per-row extra queries.
+
+==================================================
+C) PRODUCT EDIT / ADD – MANAGE SKUS
+==================================================
+Use the existing Add/Edit Product UI (modal or drawer) and extend it.
+
+1) In the product form:
+
+   - Add a “SKUs” subsection:
+
+     - House SKU (existing `sku` field).
+     - Shopify SKU (bind to product.shopifySku).
+     - Amazon SKU (bind to product.amazonSku).
+     - Extensiv SKU (bind to product.extensivSku).
+
+2) Validation:
+
+   - Enforce uniqueness for channel SKUs:
+     - If a Shopify SKU is already used on another product, show a clear error and block save.
+     - Same for Amazon and Extensiv SKUs.
+   - Do not allow saving if constraints are violated.
+
+==================================================
+D) SKU MAPPING WIZARD (OVERLAY, NO NEW PAGE)
+==================================================
+Provide a mapping flow that runs inside BOM, not a separate page.
+
+1) Add a button at the top-right of BOM (next to Import/Export/Scan) called:
+
+   - “Map SKUs”
+
+2) Clicking “Map SKUs” opens a modal or side drawer with three tabs:
+
+   - Shopify
+   - Amazon
+   - Extensiv
+
+3) Shared behavior for each tab:
+
+   a) Fetch external items:
+
+      - Shopify tab:
+        - Fetch variants with sku, title, variant title, barcode.
+      - Amazon tab:
+        - Fetch seller SKUs and ASINs (basic info).
+      - Extensiv tab:
+        - Fetch item codes/SKUs from Extensiv.
+
+   b) List external SKUs on the left; for each row show:
+      - externalSku
+      - name/title
+      - optional barcode.
+
+   c) Auto-suggestions:
+
+      - For each external SKU:
+        - If externalSku EXACTLY matches a House SKU (`sku`), pre-suggest that mapping.
+        - Optionally: if barcode matches, mark as a “barcode suggestion” (but still require user confirmation).
+
+   d) Manual mapping:
+
+      - Right side for each external SKU:
+        - A search/dropdown of existing products (House SKU + name).
+        - Actions:
+          - “Map to House SKU” (select an internal product).
+          - Optional: “Create new product” for external SKUs that truly represent new products.
+          - “Ignore” (skip for now).
+
+   e) Save behavior:
+
+      - For each confirmed mapping:
+
+        - Shopify tab:
+          product.shopifySku = externalSku.
+        - Amazon tab:
+          product.amazonSku = externalSku.
+        - Extensiv tab:
+          product.extensivSku = externalSku.
+
+      - For “Create new product” (if enabled):
+        - Create a new Product with:
+          - sku = a newly generated House SKU (use a deterministic pattern, e.g. prefix + external sku) or a manually input value.
+          - Set the corresponding channel SKU field equal to externalSku.
+
+      - For “Ignore”:
+        - No changes to that external SKU.
+
+   f) Re-mapping and clearing:
+
+      - Allow remapping:
+        - If a channel SKU is already mapped to a product, we can change it to another product via this UI, subject to uniqueness.
+      - Allow clearing:
+        - Provide a way to clear a mapping (set shopifySku/amazonSku/extensivSku back to null) from either the product form or from the mapping wizard.
+
+4) Unmapped SKUs view:
+
+   - Within each tab, have a section or filter showing “Unmapped SKUs”.
+   - Use this to guide the user through finishing mappings over time.
+
+==================================================
+E) HELPER FUNCTIONS FOR LOOKUPS
+==================================================
+Implement or update helper functions that all integrations must use:
+
+1) Helpers:
+
+   - findProductByShopifySku(shopifySku: string): Product | null
+   - findProductByAmazonSku(amazonSku: string): Product | null
+   - findProductByExtensivSku(extensivSku: string): Product | null
+
+2) Behavior:
+
+   - First, look up by the appropriate channel field.
+   - Optionally, if we want a fallback, we can check barcode mappings (if we have that table), but only if it is deterministic.
+   - Return null if no match. These helpers MUST NOT auto-create products.
+
+==================================================
+F) INTEGRATION BEHAVIOR – USE MAPPINGS, NO DUPLICATES
+==================================================
+All external integrations must respect these mappings and refuse to silently create products.
+
+1) Shopify orders:
+
+   - When importing an order line:
+     - Use `findProductByShopifySku(line.sku)`.
+     - If null:
+       - Create the SalesOrder, but mark this line as “unmapped SKU”.
+       - Option A: Put the whole order into a “Needs SKU mapping” state.
+       - Option B: Flag this in an “Unmapped SKUs” section/tab.
+       - Do NOT create a new Product automatically.
+
+2) Amazon orders:
+
+   - Similar to Shopify, but using `findProductByAmazonSku(sellerSku)` (and optionally ASIN mapping).
+   - No auto-creation without explicit user choice.
+
+3) Extensiv inventory:
+
+   - When syncing inventory snapshots:
+     - For each Extensiv SKU/code, call `findProductByExtensivSku(code)`.
+     - If null:
+       - Record that SKU in an “Unmapped Extensiv SKUs” list and skip.
+       - Do not create products or adjust inventory for unmapped SKUs.
+
+4) Internal flows (BOM, POs, Sales Orders):
+
+   - Continue to use House SKU (`sku`) and productId as the canonical identifier.
+   - Channel SKUs are only used for integration mapping and display/debug info.
+
+==================================================
+G) INTEGRATION TOGGLES GUARDED BY MAPPING
+==================================================
+Guard the heavy sync toggles so mapping is at least reviewed once.
+
+1) For each integration card (Shopify, Amazon, Extensiv):
+
+   - After auth is configured, but before enabling import/sync toggles:
+     - Require the user to either:
+       - Visit the “Map SKUs” wizard for that integration, or
+       - Explicitly confirm they are okay with unmapped SKUs (if we allow this).
+
+2) Examples:
+
+   - Shopify:
+     - Toggle: “Import orders from Shopify”.
+     - Disabled until:
+       - Mapping wizard has been opened and save attempted, or
+       - A “Skip mapping for now” confirmation is stored.
+
+   - Amazon:
+     - Same pattern.
+
+   - Extensiv:
+     - “Sync inventory from Extensiv” should be disabled until we’ve at least run a mapping pass or accepted an explicit warning.
+
+3) Display a clear warning when enabling with incomplete mapping, explaining that unmapped SKUs will not be auto-created and will appear in an “unmapped” list.
+
+==================================================
+H) SAFETY, CONFLICT HANDLING, LOGGING
+==================================================
+1) Conflicts:
+
+   - If the user attempts to map:
+     - One external SKU to two House SKUs, or
+     - Two external SKUs to the same channel SKU field,
+     - Enforce uniqueness and show a clear error message.
+
+2) Logs:
+
+   - Log mapping changes:
+     - product id
+     - old and new shopifySku/amazonSku/extensivSku
+     - timestamp and user.
+   - Log unmapped SKUs encountered during imports for debugging.
+
+3) No hidden side effects:
+
+   - No integration is allowed to auto-create new Product rows based purely on an unseen external SKU.
+   - The only path to new Products from external SKUs is via explicit “Create new product” in the mapping wizard.
+
+==================================================
+I) FINAL EXPECTED BEHAVIOR
+==================================================
+- BOM at /products remains the single master sheet for products.
+- Every product has one required House SKU and optional Shopify/Amazon/Extensiv SKUs.
+- BOM tables show House SKU and all Source SKUs in a compact way.
+- The Add/Edit Product form can manage all SKU fields.
+- A “Map SKUs” overlay in BOM lets us map external SKUs to House SKUs for Shopify, Amazon, and Extensiv.
+- All integrations use these mappings to attach orders and inventory to existing product rows.
+- No integration silently creates new products.
+- Sync toggles are guarded until mapping is reviewed or explicitly skipped.
+
+Implement all of this end-to-end, wiring the model, BOM UI, mapping overlay, helpers, and integration behavior so the SKU system is consistent, non-duplicative, and easy to manage.

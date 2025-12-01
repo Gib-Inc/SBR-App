@@ -72,10 +72,13 @@ export const items = pgTable("items", {
   shopifySku: text("shopify_sku"), // Shopify variant SKU (unique when present)
   amazonSku: text("amazon_sku"), // Amazon seller SKU (unique when present)
   extensivSku: text("extensiv_sku"), // Extensiv/3PL item code (unique when present)
+  // UPC/GTIN for product identification
+  upc: text("upc"), // GS1/UPC/GTIN barcode (unique when present, recommended for finished products)
 }, (table) => ({
   shopifySkuUniqueIdx: uniqueIndex("items_shopify_sku_unique_idx").on(table.shopifySku).where(sql`shopify_sku IS NOT NULL`),
   amazonSkuUniqueIdx: uniqueIndex("items_amazon_sku_unique_idx").on(table.amazonSku).where(sql`amazon_sku IS NOT NULL`),
   extensivSkuUniqueIdx: uniqueIndex("items_extensiv_sku_unique_idx").on(table.extensivSku).where(sql`extensiv_sku IS NOT NULL`),
+  upcUniqueIdx: uniqueIndex("items_upc_unique_idx").on(table.upc).where(sql`upc IS NOT NULL`),
 }));
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

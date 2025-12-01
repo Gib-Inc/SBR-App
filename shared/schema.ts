@@ -65,6 +65,9 @@ export const items = pgTable("items", {
   supplierProductUrl: text("supplier_product_url"), // URL to supplier's product page for price scraping
   costSource: text("cost_source").default("MANUAL"), // 'MANUAL' | 'AUTO_SCRAPED' | 'API'
   lastCostUpdatedAt: timestamp("last_cost_updated_at"), // When cost was last updated
+  // GHL Integration - Stock risk tracking
+  ghlStockRiskOpportunityId: text("ghl_stock_risk_opportunity_id"), // Link to GHL opportunity for stock risk alerts
+  ghlStockRiskLastSyncAt: timestamp("ghl_stock_risk_last_sync_at"), // When stock risk was last synced to GHL
 });
 
 export const insertItemSchema = createInsertSchema(items).omit({ id: true });

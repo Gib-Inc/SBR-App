@@ -1121,6 +1121,10 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   const [category, setCategory] = useState("");
   const [hildaleQty, setHildaleQty] = useState("0");
   const [pivotQty, setPivotQty] = useState("0");
+  // Channel SKU fields (for finished products)
+  const [shopifySku, setShopifySku] = useState("");
+  const [amazonSku, setAmazonSku] = useState("");
+  const [extensivSku, setExtensivSku] = useState("");
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1140,6 +1144,9 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       setCategory("");
       setHildaleQty("0");
       setPivotQty("0");
+      setShopifySku("");
+      setAmazonSku("");
+      setExtensivSku("");
     },
     onError: (error: Error) => {
       toast({
@@ -1162,10 +1169,14 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
     };
     
     if (isFinished) {
-      // Finished products: ONLY pivotQty and hildaleQty
+      // Finished products: ONLY pivotQty and hildaleQty + channel SKUs
       payload.hildaleQty = hildaleQtyNum;
       payload.pivotQty = pivotQtyNum;
       payload.category = null;
+      // Add channel SKUs (only non-empty values)
+      if (shopifySku.trim()) payload.shopifySku = shopifySku.trim();
+      if (amazonSku.trim()) payload.amazonSku = amazonSku.trim();
+      if (extensivSku.trim()) payload.extensivSku = extensivSku.trim();
     } else {
       // Components: currentStock and category
       payload.currentStock = Number(currentStock);
@@ -1221,32 +1232,75 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
             </div>
           )}
           {isFinished && (
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="hildale-qty">Hildale Qty</Label>
-                <Input
-                  id="hildale-qty"
-                  type="number"
-                  value={hildaleQty}
-                  onChange={(e) => setHildaleQty(e.target.value)}
-                  min="0"
-                  data-testid="input-create-hildale-qty"
-                />
-                <p className="text-xs text-muted-foreground">Initial stock at manufacturing site</p>
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="hildale-qty">Hildale Qty</Label>
+                  <Input
+                    id="hildale-qty"
+                    type="number"
+                    value={hildaleQty}
+                    onChange={(e) => setHildaleQty(e.target.value)}
+                    min="0"
+                    data-testid="input-create-hildale-qty"
+                  />
+                  <p className="text-xs text-muted-foreground">Initial stock at manufacturing site</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pivot-qty">Pivot Qty</Label>
+                  <Input
+                    id="pivot-qty"
+                    type="number"
+                    value={pivotQty}
+                    onChange={(e) => setPivotQty(e.target.value)}
+                    min="0"
+                    data-testid="input-create-pivot-qty"
+                  />
+                  <p className="text-xs text-muted-foreground">Initial stock at warehouse</p>
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="pivot-qty">Pivot Qty</Label>
-                <Input
-                  id="pivot-qty"
-                  type="number"
-                  value={pivotQty}
-                  onChange={(e) => setPivotQty(e.target.value)}
-                  min="0"
-                  data-testid="input-create-pivot-qty"
-                />
-                <p className="text-xs text-muted-foreground">Initial stock at warehouse</p>
+              
+              {/* Channel SKU Mappings */}
+              <div className="space-y-3 border-t pt-4">
+                <Label className="text-sm font-medium">Source SKUs (Optional)</Label>
+                <p className="text-xs text-muted-foreground">Map this product to external sales channels</p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="shopify-sku" className="text-xs">Shopify SKU</Label>
+                    <Input
+                      id="shopify-sku"
+                      value={shopifySku}
+                      onChange={(e) => setShopifySku(e.target.value)}
+                      placeholder="e.g., SHOP-001"
+                      className="font-mono text-sm"
+                      data-testid="input-create-shopify-sku"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="amazon-sku" className="text-xs">Amazon SKU</Label>
+                    <Input
+                      id="amazon-sku"
+                      value={amazonSku}
+                      onChange={(e) => setAmazonSku(e.target.value)}
+                      placeholder="e.g., AMZ-001"
+                      className="font-mono text-sm"
+                      data-testid="input-create-amazon-sku"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="extensiv-sku" className="text-xs">Extensiv SKU</Label>
+                    <Input
+                      id="extensiv-sku"
+                      value={extensivSku}
+                      onChange={(e) => setExtensivSku(e.target.value)}
+                      placeholder="e.g., EXT-001"
+                      className="font-mono text-sm"
+                      data-testid="input-create-extensiv-sku"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
+            </>
           )}
           {!isFinished && (
             <div className="space-y-2">

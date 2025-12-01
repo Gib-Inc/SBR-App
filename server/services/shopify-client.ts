@@ -333,6 +333,86 @@ export class ShopifyClient {
   }
 
   /**
+   * Fetch all products with variants including inventory_item_id for SKU mapping
+   * Returns products with their variants containing sku, barcode (UPC), and inventory_item_id
+   */
+  async fetchProductsForMapping(): Promise<Array<{
+    productId: string;
+    productTitle: string;
+    variants: Array<{
+      variantId: string;
+      variantTitle: string;
+      sku: string | null;
+      barcode: string | null; // UPC/GTIN
+      inventoryItemId: string;
+    }>;
+  }>> {
+    try {
+      const results: Array<{
+        productId: string;
+        productTitle: string;
+        variants: Array<{
+          variantId: string;
+          variantTitle: string;
+          sku: string | null;
+          barcode: string | null;
+          inventoryItemId: string;
+        }>;
+      }> = [];
+      
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/products.json?limit=250`;
+      let pageCount = 0;
+      const maxPages = 100;
+      
+      while (nextPageUrl && pageCount < maxPages) {
+        const response = await fetch(nextPageUrl, {
+          headers: this.getHeaders(),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Shopify API error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        const products = data.products || [];
+        
+        for (const product of products) {
+          const variants = (product.variants || []).map((variant: any) => ({
+            variantId: String(variant.id),
+            variantTitle: variant.title || 'Default',
+            sku: variant.sku || null,
+            barcode: variant.barcode || null, // This is typically UPC/GTIN
+            inventoryItemId: String(variant.inventory_item_id),
+          }));
+          
+          if (variants.length > 0) {
+            results.push({
+              productId: String(product.id),
+              productTitle: product.title || 'Unknown Product',
+              variants,
+            });
+          }
+        }
+        
+        pageCount++;
+        
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+        
+        if (!nextPageUrl || products.length < 250) {
+          break;
+        }
+      }
+
+      console.log(`[Shopify] Fetched ${results.length} products for mapping across ${pageCount} pages`);
+      return results;
+    } catch (error: any) {
+      throw new Error(`Failed to fetch Shopify products: ${error.message}`);
+    }
+  }
+
+  /**
    * Fetch recent orders from Shopify
    * @param daysBack - Number of days to look back (default: 7)
    */

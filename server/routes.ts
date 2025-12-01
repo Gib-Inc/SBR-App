@@ -3376,6 +3376,42 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Shopify - Fetch products for SKU mapping
+  app.get("/api/integrations/shopify/products", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get credentials from integration config or environment variables
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+      
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Shopify credentials not configured. Please add shop domain and access token in Settings." 
+        });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      const products = await client.fetchProductsForMapping();
+
+      res.json({
+        success: true,
+        products,
+        totalProducts: products.length,
+        totalVariants: products.reduce((sum, p) => sum + p.variants.length, 0),
+      });
+    } catch (error: any) {
+      console.error('[Shopify] Error fetching products:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to fetch Shopify products" 
+      });
+    }
+  });
+
   // Shopify - Sync Recent Orders
   app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -1,0 +1,323 @@
+Implement a complete, production-ready Shopify integration for the Inventory app, using the existing integrations UI and BOM / Sales Orders pages. Do NOT create a new app; extend the current codebase.
+
+CRITICAL REQUIREMENT
+This app already has an “AI Agent” rules page with a toggle:
+- Shopify Two-Way Sync (on/off)
+
+Behavior:
+- When OFF  →  One-way mode:
+    - We only RECEIVE data from Shopify (orders, product metadata).
+    - We DO NOT push ANY state changes back to Shopify (no inventory updates, no order updates).
+    - We may log “what would have been sent” for debugging, but never call write APIs.
+- When ON   →  Two-way mode:
+    - We still treat this app as the inventory master.
+    - We push inventory quantities (and any other outbound writes we implement) to Shopify.
+
+Every outbound “write to Shopify” must honor this toggle.
+
+========================================================
+A) CONFIGURATION UI & CREDENTIAL STORAGE
+========================================================
+Use the existing Shopify card in the integrations / AI page.
+
+1) Configure dialog
+   - When the user clicks "Configure" on the Shopify card, open a dialog that collects:
+
+     - Shopify Store Domain (e.g. stickerburrroller.myshopify.com)
+     - Admin API access token
+     - Primary Inventory Location ID (Shopify location we will manage)
+     - Feature toggles for this integration:
+       - [x] Import orders from Shopify    (must remain enabled as long as integration is active)
+       - [ ] Push inventory to Shopify     (this checkbox should be disabled/greyed when Shopify Two-Way Sync is OFF in AI rules)
+
+   - Store these securely in the app's credentials store / environment (server side only).
+
+2) Status & actions on the Shopify card
+   - Display:
+     - Connection status: Not Configured / Configured / Error.
+     - Last successful:
+       - Order sync timestamp
+       - Inventory push timestamp
+     - Current mode:
+       - “Mode: 1-Way (Inbound Only)” when Shopify Two-Way Sync toggle is OFF.
+       - “Mode: 2-Way (Inventory Push Enabled)” when toggle is ON and “Push inventory” is checked.
+
+   - Buttons:
+     - Configure
+     - Test Connection
+     - Sync Now
+     - Link to “SKU Mapping” wizard (existing mapping view).
+
+3) Test Connection
+   - On click:
+     - Call a lightweight Shopify Admin API endpoint (e.g. GET shop details).
+     - On success: show success state and update the Shopify card status.
+     - On failure: show a clear error and write an entry to the central Logs table.
+
+========================================================
+B) PRODUCT & SKU/UPC MAPPING BEHAVIOR
+========================================================
+Products in this app use:
+- sku            // House SKU (internal)
+- upc            // GS1/UPC/GTIN (universal identifier)
+- shopifySku     // Shopify variant SKU (nullable)
+- plus any existing product fields.
+
+1) Initial mapping via SKU Mapping wizard
+   - Ensure the Shopify tab in the SKU Mapping wizard:
+
+     - Fetches Shopify products + variants:
+       - variant.id
+       - variant.sku
+       - variant.barcode (UPC/GTIN)
+       - product.title
+       - variant.title
+       - inventory_item_id
+
+     - For each Shopify variant, auto-suggest a match:
+
+       - First by UPC:
+         - If variant.barcode == product.upc → suggest that product.
+       - If no UPC match, try by SKU:
+         - If variant.sku == product.sku (House SKU) OR product.shopifySku → suggest that product.
+
+     - Allow the user to:
+       - Confirm suggested mappings.
+       - Manually select a different internal product.
+       - Create a new product if necessary.
+
+   - When a mapping is confirmed:
+     - Set product.shopifySku = variant.sku.
+     - Store Shopify IDs needed for inventory operations:
+       - product.shopifyVariantId
+       - product.shopifyInventoryItemId
+     - Keep sku (House) and upc unchanged.
+
+   - Never auto-create or auto-map products without explicit user confirmation.
+
+2) Product edit form
+   - In Add/Edit Product for finished products:
+     - Show fields:
+       - SKU (House)
+       - UPC
+       - Shopify SKU (read-only by default if mapped; optionally editable if you allow admin fixes).
+   - BOM tables already show Shopify SKU. Ensure they bind to product.shopifySku as now.
+
+========================================================
+C) ORDER IMPORT FLOW (SHOPIFY → APP)
+========================================================
+Orders from Shopify become Sales Orders in this app. This is allowed in BOTH 1-way and 2-way modes.
+
+1) Triggers
+   - Prefer Shopify webhooks:
+     - orders/create
+     - orders/paid
+     - orders/updated
+     - orders/cancelled
+   - If webhooks aren’t available, support a polling job that pulls orders by updated_at since the last cursor.
+
+2) Sales Order creation/update
+   - When a relevant event arrives (e.g. paid or created):
+
+     - Find or create a SalesOrder record keyed by:
+       - channel: "SHOPIFY"
+       - externalOrderId: Shopify order ID.
+
+     - Populate/update fields:
+       - externalOrderNumber: order.name
+       - status:
+         - NEW / OPEN when created.
+         - CANCELLED if Shopify order is cancelled.
+         - FULFILLED once all lines are fully fulfilled (if we later sync fulfillment).
+       - customerName
+       - customerEmail
+       - customerPhone
+       - shippingAddress fields
+       - orderDate: order.created_at
+       - orderTotal: total_price
+       - currency
+
+       - expectedDeliveryDate:
+         - If Shopify or the shipping integration includes an expected delivery date, store it.
+         - Otherwise leave empty for now.
+
+       - lineItems[]:
+         For each line item in the order:
+           - shopifyVariantId
+           - shopifySku      = line.sku
+           - externalProductName = line.title + variant_title
+           - quantityOrdered = line.quantity
+           - unitPrice       = line.price
+           - lineTotal       = line.price * quantity
+           - Resolve the internal product:
+             - Try product.shopifySku == line.sku.
+             - If not found, try UPC via variant.barcode (if available).
+           - Store:
+             - productId (internal)
+             - houseSku  (internal)
+           - If no match → mark the line as “Unmapped”.
+
+3) Inventory adjustment & backorder logic (always internal)
+   - For each line mapped to an internal product:
+
+     - Adjust on-hand inventory inside THIS app using existing stock logic.
+     - Recompute “Available for Sale” (whatever formula we already use).
+
+     - If quantityOrdered > availableAtOrderTime:
+       - Determine:
+         - fulfillNow = max(available, 0)
+         - backordered = quantityOrdered - fulfillNow
+       - Update the line item:
+         - fulfilledQuantity = fulfillNow
+         - backorderQuantity = backordered
+       - Trigger GHL integration:
+         - Upsert an Opportunity in the Replit pipeline and “Sales Orders” stage showing:
+           - Product
+           - Ordered quantity
+           - Backorder quantity
+           - Shopify order reference.
+       - Update any “Production” status fields as we’ve already defined.
+
+4) Unmapped SKUs
+   - If we cannot map a line to a product:
+     - Still create/update the SalesOrder.
+     - Tag the line as “Unmapped SKU”.
+     - Add it to the Shopify tab’s “Unmapped SKUs” list in the SKU Mapping wizard.
+     - Do NOT change inventory for that line until mapped.
+
+5) GHL contact & opportunity
+   - For each new Shopify order:
+     - Use the existing GHL integration to:
+       - Upsert a contact (name/email/phone), tagged with “Shopify”.
+       - Upsert an opportunity in the Replit pipeline “Sales Orders” stage with:
+         - Order total
+         - Primary product summary
+         - Shopify order ID.
+   - This behavior is the same in 1-way and 2-way modes.
+
+========================================================
+D) INVENTORY SYNC (APP → SHOPIFY) HONORING TWO-WAY TOGGLE
+========================================================
+Inventory push must obey the “Shopify Two-Way Sync” toggle in the AI Agent rules page.
+
+1) Interpretation of the toggle
+   - Add a server-side config flag, e.g. `settings.aiRules.shopifyTwoWaySync: boolean`, bound to the existing toggle UI.
+   - Behavior:
+     - If shopifyTwoWaySync == FALSE:
+       - NO write operations to Shopify are allowed:
+         - No inventory updates
+         - No order updates
+         - No product updates
+       - Instead, any attempt to push inventory should:
+         - Log a “dry run” entry (what would have been sent) and exit.
+     - If shopifyTwoWaySync == TRUE AND “Push inventory to Shopify” is checked in the Shopify config:
+       - Outbound inventory updates are allowed.
+
+2) When we *would* push inventory
+   - Define events that cause an “inventory changed” signal for a product:
+     - Order imported/updated (from any channel).
+     - PO received or partially received.
+     - Return received.
+     - Manual stock adjustment in BOM.
+   - For each event:
+     - Recompute the product’s “Available for Sale” quantity in this app.
+     - If shopifyTwoWaySync == TRUE and pushInventory flag is enabled:
+       - Queue an inventory update for Shopify.
+     - If shopifyTwoWaySync == FALSE:
+       - Optionally log the diff as a dry-run (for example, “Would set Shopify qty for SKU X from 10 → 7”).
+
+3) Implementation of inventory push (only when allowed)
+   - For each product with:
+     - product.shopifyInventoryItemId NOT NULL
+     - known Shopify location ID from configuration
+   - Call Shopify inventory APIs to set quantity:
+     - Use the “available for sale” value from this app as the single source of truth.
+     - Prefer “set absolute quantity” semantics rather than incremental adjustments.
+
+4) Batching & safety
+   - Batch updates to respect Shopify rate limits.
+   - If an inventory push fails:
+     - Log an error with:
+       - productId
+       - shopifyInventoryItemId
+       - target quantity
+       - HTTP status + message.
+     - Do NOT retry endlessly; use a simple retry strategy or leave for manual re-sync.
+
+5) UI feedback
+   - On the Shopify integration card:
+     - Show whether inventory push is actually active:
+       - If shopifyTwoWaySync == FALSE:
+         - Show “Inventory Push: Disabled (1-Way Mode)”.
+       - If TRUE but “Push inventory” is unchecked:
+         - Show “Inventory Push: Off”.
+       - If TRUE and “Push inventory” is checked:
+         - Show “Inventory Push: On”.
+   - On “Sync Now”, show that in 1-way mode we are only importing orders / metadata, not pushing inventory.
+
+========================================================
+E) SYNC COMMANDS & UI
+========================================================
+1) “Sync Now” button on Shopify card
+   - When clicked:
+     - Step 1: Pull recent orders (since last checkpoint) and process them (C).
+     - Step 2: Refresh product/variant metadata (title, SKUs, barcodes) for mapping purposes.
+     - Step 3: If (shopifyTwoWaySync == TRUE AND pushInventory == TRUE) then:
+         - Push inventory changes for mapped products.
+       Else:
+         - Only log what would have been pushed (optional).
+
+   - Summarize results:
+     - Orders imported/updated
+     - Products refreshed
+     - Inventory updates sent (or skipped/dry-run) and any failures.
+
+2) Background sync
+   - If a job scheduler exists:
+     - Run incremental syncs on a schedule (e.g. every 10–15 minutes).
+       - This should also obey shopifyTwoWaySync exactly as described.
+
+========================================================
+F) LOGGING & ERROR HANDLING
+========================================================
+1) Central logs
+   - Log entries for:
+     - Shopify API failures (both read and write attempts).
+     - Dry-run inventory events when shopifyTwoWaySync is FALSE.
+     - Unmapped SKUs detected during order import.
+
+2) Surfacing issues
+   - On the Shopify card and SKU Mapping wizard:
+     - Show counts of:
+       - Unmapped Shopify SKUs.
+       - Last-sync errors.
+
+========================================================
+G) SECURITY & TESTING
+========================================================
+1) Security
+   - Store Admin API tokens only on the server.
+   - Never expose tokens in client-side code, responses, or logs.
+
+2) Test scenario (important for 1-way test mode)
+   - Provide a test path where:
+     - Shopify integration is configured.
+     - Shopify Two-Way Sync is OFF.
+     - Orders and products flow INTO the app.
+     - Inventory computations & “would push” entries appear in logs, but Shopify store remains untouched.
+
+   - After validation, turning Shopify Two-Way Sync ON switches the app into true two-way mode where inventory quantities are actively pushed.
+
+After implementing all of the above, the behavior should be:
+
+- 1-Way Mode (Two-Way toggle OFF):
+  - Shopify → App:
+    - Orders and product metadata import.
+    - Internal inventory and backorder logic runs.
+    - GHL contacts/opportunities are updated.
+  - App → Shopify:
+    - NO writes (inventory, orders, products). Only dry-run logs.
+
+- 2-Way Mode (Two-Way toggle ON + push inventory enabled):
+  - All of the above, plus:
+    - App pushes inventory quantities back to Shopify for mapped products, so Shopify stock always reflects the app’s “Available for Sale”.

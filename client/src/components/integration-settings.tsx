@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -60,7 +61,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const [shopDomain, setShopDomain] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [apiVersion, setApiVersion] = useState("2024-01");
+  const [shopifyLocationId, setShopifyLocationId] = useState("");
   const [syncOrders, setSyncOrders] = useState(true);
+  const [pushInventory, setPushInventory] = useState(false);
   
   // Amazon fields
   const [sellerId, setSellerId] = useState("");
@@ -88,6 +91,17 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
     },
   });
 
+  // Fetch AI Agent settings to check if two-way sync is enabled (for Shopify)
+  const { data: aiAgentSettings } = useQuery<{
+    shopifyTwoWaySync: boolean;
+    shopifySafetyBuffer: number;
+  } | null>({
+    queryKey: ["/api/ai-agent-settings"],
+    enabled: open && integrationType === "SHOPIFY",
+  });
+
+  const shopifyTwoWaySyncEnabled = aiAgentSettings?.shopifyTwoWaySync ?? false;
+
   // Initialize form fields when config loads
   useEffect(() => {
     if (config && config.apiKey) {
@@ -98,7 +112,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         setShopDomain(config.config?.shopDomain || "");
         setAccessToken("");
         setApiVersion(config.config?.apiVersion || "2024-01");
+        setShopifyLocationId(config.config?.locationId || "");
         setSyncOrders(config.config?.syncOrders !== false);
+        setPushInventory(config.config?.pushInventory || false);
       } else if (integrationType === "AMAZON") {
         setSellerId(config.config?.sellerId || "");
         setMarketplaceIds(config.config?.marketplaceIds?.join(", ") || "");
@@ -175,7 +191,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         configData = {
           shopDomain,
           apiVersion,
+          locationId: shopifyLocationId,
           syncOrders,
+          pushInventory,
         };
       } else if (integrationType === "AMAZON") {
         configData = {
@@ -298,6 +316,43 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Shopify Mode Display */}
+          {integrationType === "SHOPIFY" && config && config.apiKey && !isConfigMode && (
+            <div className="space-y-3 p-4 rounded-lg bg-muted/50" data-testid="section-shopify-status">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Sync Mode</span>
+                <Badge 
+                  variant={shopifyTwoWaySyncEnabled ? "default" : "secondary"}
+                  data-testid="badge-shopify-mode"
+                >
+                  {shopifyTwoWaySyncEnabled 
+                    ? (config.config?.pushInventory ? "2-Way (Inventory Push Enabled)" : "2-Way (Push Off)")
+                    : "1-Way (Inbound Only)"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Import Orders</span>
+                <span className="text-sm">{config.config?.syncOrders !== false ? "Enabled" : "Disabled"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Inventory Push</span>
+                <span className="text-sm">
+                  {!shopifyTwoWaySyncEnabled 
+                    ? "Disabled (1-Way Mode)" 
+                    : config.config?.pushInventory 
+                      ? "Enabled" 
+                      : "Disabled"}
+                </span>
+              </div>
+              {config.config?.locationId && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Location ID</span>
+                  <span className="text-sm font-mono">{config.config.locationId}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {config && config.lastSyncAt && !isConfigMode && (
             <div className="text-sm text-muted-foreground" data-testid="text-last-sync">
               Last sync: {format(new Date(config.lastSyncAt), "PPpp")}
@@ -392,15 +447,53 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       data-testid="input-api-version"
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="shopify-location-id" data-testid="label-shopify-location-id">
+                      Inventory Location ID
+                    </Label>
+                    <Input
+                      id="shopify-location-id"
+                      placeholder="Enter your Shopify Location ID"
+                      value={shopifyLocationId}
+                      onChange={(e) => setShopifyLocationId(e.target.value)}
+                      data-testid="input-shopify-location-id"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The Shopify location to manage inventory for. Find this in Shopify Admin → Settings → Locations.
+                    </p>
+                  </div>
                   <div className="flex items-center justify-between">
                     <Label htmlFor="sync-orders" data-testid="label-sync-orders">
-                      Sync Orders
+                      Import Orders from Shopify
                     </Label>
                     <Switch
                       id="sync-orders"
                       checked={syncOrders}
                       onCheckedChange={setSyncOrders}
                       data-testid="switch-sync-orders"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label 
+                        htmlFor="push-inventory" 
+                        className={!shopifyTwoWaySyncEnabled ? "text-muted-foreground" : ""}
+                        data-testid="label-push-inventory"
+                      >
+                        Push Inventory to Shopify
+                      </Label>
+                      {!shopifyTwoWaySyncEnabled && (
+                        <p className="text-xs text-muted-foreground">
+                          Enable "Shopify Two-Way Sync" in AI Agent → Rules to unlock this option
+                        </p>
+                      )}
+                    </div>
+                    <Switch
+                      id="push-inventory"
+                      checked={pushInventory}
+                      onCheckedChange={setPushInventory}
+                      disabled={!shopifyTwoWaySyncEnabled}
+                      data-testid="switch-push-inventory"
                     />
                   </div>
                 </>

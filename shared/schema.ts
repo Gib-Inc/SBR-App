@@ -53,6 +53,7 @@ export const items = pgTable("items", {
   // Shopify integration fields (for two-way inventory sync)
   shopifyProductId: text("shopify_product_id"), // Shopify product ID
   shopifyVariantId: text("shopify_variant_id"), // Shopify variant ID for inventory updates
+  shopifyInventoryItemId: text("shopify_inventory_item_id"), // Shopify inventory item ID (required for inventory_levels/set API)
   shopifyLocationId: text("shopify_location_id"), // Shopify inventory location ID (defaults to env SHOPIFY_LOCATION_ID)
   updatedAt: timestamp("updated_at").defaultNow(), // Last modification timestamp
   // AI Forecast tracking fields

@@ -1706,6 +1706,44 @@ export type InsertAdMetricsDaily = z.infer<typeof insertAdMetricsDailySchema>;
 export type AdMetricsDaily = typeof adMetricsDaily.$inferSelect;
 
 // ============================================================================
+// META ADS PERFORMANCE (Detailed Meta Ads insights for demand signals)
+// ============================================================================
+
+export const metaAdsPerformance = pgTable("meta_ads_performance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").references(() => items.id), // FK → items; nullable if mapping fails
+  sku: text("sku"), // House SKU for easier lookup
+  date: date("date").notNull(), // Metrics date (UTC) YYYY-MM-DD
+  source: text("source").notNull().default("META_ADS"), // Fixed string
+  accountId: text("account_id").notNull(), // Meta Ad Account ID
+  campaignId: text("campaign_id"),
+  campaignName: text("campaign_name"),
+  adSetId: text("ad_set_id"),
+  adSetName: text("ad_set_name"),
+  adId: text("ad_id"),
+  adName: text("ad_name"),
+  impressions: integer("impressions").notNull().default(0),
+  clicks: integer("clicks").notNull().default(0),
+  spend: real("spend").notNull().default(0), // Numeric spend amount
+  conversions: real("conversions").notNull().default(0), // Purchases or primary conversion
+  conversionValue: real("conversion_value").default(0), // Revenue if available
+  currency: text("currency").default("USD"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productDateCampaignIdx: uniqueIndex("meta_ads_perf_product_date_campaign_idx").on(
+    table.productId, table.date, table.campaignId, table.adSetId, table.adId
+  ),
+  dateIdx: index("meta_ads_perf_date_idx").on(table.date),
+  skuIdx: index("meta_ads_perf_sku_idx").on(table.sku),
+  accountIdx: index("meta_ads_perf_account_idx").on(table.accountId),
+}));
+
+export const insertMetaAdsPerformanceSchema = createInsertSchema(metaAdsPerformance).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMetaAdsPerformance = z.infer<typeof insertMetaAdsPerformanceSchema>;
+export type MetaAdsPerformance = typeof metaAdsPerformance.$inferSelect;
+
+// ============================================================================
 // AI SYSTEM RECOMMENDATIONS (Weekly LLM-Generated System Improvement Suggestions)
 // ============================================================================
 

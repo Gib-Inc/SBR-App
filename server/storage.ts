@@ -89,6 +89,8 @@ import {
   type InsertAdSkuMapping,
   type AdMetricsDaily,
   type InsertAdMetricsDaily,
+  type MetaAdsPerformance,
+  type InsertMetaAdsPerformance,
   type AiSystemRecommendation,
   type InsertAiSystemRecommendation,
   type LabelFormat,
@@ -486,6 +488,12 @@ export interface IStorage {
   getAdMetricsByPlatformDateRange(platform: string, startDate: Date, endDate: Date): Promise<AdMetricsDaily[]>;
   getAdMetricsBySkuAndDateRange(sku: string, startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
   upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily>;
+
+  // Meta Ads Performance (Detailed insights for demand signals)
+  getMetaAdsPerformanceBySku(sku: string, days: number): Promise<MetaAdsPerformance[]>;
+  getMetaAdsPerformanceByProductId(productId: string, days: number): Promise<MetaAdsPerformance[]>;
+  upsertMetaAdsPerformance(perf: InsertMetaAdsPerformance): Promise<MetaAdsPerformance>;
+  getAggregatedMetaAdsPerformance(days: number): Promise<Map<string, { sku: string; totalConversions: number; totalRevenue: number; totalSpend: number; daysCovered: number }>>;
 
   // Label Formats (Custom label sizes)
   getLabelFormatsByUserId(userId: string): Promise<LabelFormat[]>;
@@ -3012,6 +3020,106 @@ export class MemStorage implements IStorage {
     return newMetrics;
   }
 
+  // Meta Ads Performance (MemStorage stub - database-backed implementation is primary)
+  private metaAdsPerformance: Map<string, MetaAdsPerformance> = new Map();
+
+  async getMetaAdsPerformanceBySku(sku: string, days: number): Promise<MetaAdsPerformance[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return Array.from(this.metaAdsPerformance.values())
+      .filter(m => m.sku === sku && m.date >= cutoffStr)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  async getMetaAdsPerformanceByProductId(productId: string, days: number): Promise<MetaAdsPerformance[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return Array.from(this.metaAdsPerformance.values())
+      .filter(m => m.productId === productId && m.date >= cutoffStr)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }
+
+  async upsertMetaAdsPerformance(perf: InsertMetaAdsPerformance): Promise<MetaAdsPerformance> {
+    const existing = Array.from(this.metaAdsPerformance.values())
+      .find(m => 
+        m.productId === perf.productId && 
+        m.date === perf.date && 
+        m.campaignId === perf.campaignId &&
+        m.adSetId === perf.adSetId &&
+        m.adId === perf.adId
+      );
+    
+    if (existing) {
+      const updated: MetaAdsPerformance = {
+        ...existing,
+        ...perf,
+        updatedAt: new Date(),
+      };
+      this.metaAdsPerformance.set(existing.id, updated);
+      return updated;
+    }
+
+    const id = randomUUID();
+    const now = new Date();
+    const newPerf: MetaAdsPerformance = {
+      id,
+      productId: perf.productId ?? null,
+      sku: perf.sku ?? null,
+      date: perf.date,
+      source: perf.source ?? 'META_ADS',
+      accountId: perf.accountId,
+      campaignId: perf.campaignId ?? null,
+      campaignName: perf.campaignName ?? null,
+      adSetId: perf.adSetId ?? null,
+      adSetName: perf.adSetName ?? null,
+      adId: perf.adId ?? null,
+      adName: perf.adName ?? null,
+      impressions: perf.impressions ?? 0,
+      clicks: perf.clicks ?? 0,
+      spend: perf.spend ?? 0,
+      conversions: perf.conversions ?? 0,
+      conversionValue: perf.conversionValue ?? null,
+      currency: perf.currency ?? 'USD',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.metaAdsPerformance.set(id, newPerf);
+    return newPerf;
+  }
+
+  async getAggregatedMetaAdsPerformance(days: number): Promise<Map<string, { sku: string; totalConversions: number; totalRevenue: number; totalSpend: number; daysCovered: number }>> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    const results = new Map<string, { sku: string; totalConversions: number; totalRevenue: number; totalSpend: number; daysCovered: number }>();
+    
+    for (const perf of this.metaAdsPerformance.values()) {
+      if (!perf.sku || perf.date < cutoffStr) continue;
+      
+      const existing = results.get(perf.sku);
+      if (existing) {
+        existing.totalConversions += perf.conversions;
+        existing.totalRevenue += perf.conversionValue ?? 0;
+        existing.totalSpend += perf.spend;
+      } else {
+        results.set(perf.sku, {
+          sku: perf.sku,
+          totalConversions: perf.conversions,
+          totalRevenue: perf.conversionValue ?? 0,
+          totalSpend: perf.spend,
+          daysCovered: days,
+        });
+      }
+    }
+    
+    return results;
+  }
+
   // Label Formats
   async getLabelFormatsByUserId(userId: string): Promise<LabelFormat[]> {
     return Array.from(this.labelFormats.values()).filter(f => f.userId === userId);
@@ -5466,6 +5574,105 @@ export class PostgresStorage implements IStorage {
       updatedAt: now,
     }).returning();
     return result[0];
+  }
+
+  // Meta Ads Performance
+  async getMetaAdsPerformanceBySku(sku: string, days: number): Promise<MetaAdsPerformance[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return await this.db.select().from(schema.metaAdsPerformance)
+      .where(and(
+        eq(schema.metaAdsPerformance.sku, sku),
+        gte(schema.metaAdsPerformance.date, cutoffStr)
+      ));
+  }
+
+  async getMetaAdsPerformanceByProductId(productId: string, days: number): Promise<MetaAdsPerformance[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    return await this.db.select().from(schema.metaAdsPerformance)
+      .where(and(
+        eq(schema.metaAdsPerformance.productId, productId),
+        gte(schema.metaAdsPerformance.date, cutoffStr)
+      ));
+  }
+
+  async upsertMetaAdsPerformance(perf: InsertMetaAdsPerformance): Promise<MetaAdsPerformance> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const conditions = [eq(schema.metaAdsPerformance.date, perf.date)];
+    if (perf.productId) conditions.push(eq(schema.metaAdsPerformance.productId, perf.productId));
+    if (perf.campaignId) conditions.push(eq(schema.metaAdsPerformance.campaignId, perf.campaignId));
+    if (perf.adSetId) conditions.push(eq(schema.metaAdsPerformance.adSetId, perf.adSetId));
+    if (perf.adId) conditions.push(eq(schema.metaAdsPerformance.adId, perf.adId));
+    
+    const existing = await this.db.select().from(schema.metaAdsPerformance)
+      .where(and(...conditions));
+    
+    if (existing.length > 0) {
+      const result = await this.db.update(schema.metaAdsPerformance)
+        .set({
+          sku: perf.sku ?? existing[0].sku,
+          impressions: perf.impressions ?? existing[0].impressions,
+          clicks: perf.clicks ?? existing[0].clicks,
+          spend: perf.spend ?? existing[0].spend,
+          conversions: perf.conversions ?? existing[0].conversions,
+          conversionValue: perf.conversionValue ?? existing[0].conversionValue,
+          currency: perf.currency ?? existing[0].currency,
+          campaignName: perf.campaignName ?? existing[0].campaignName,
+          adSetName: perf.adSetName ?? existing[0].adSetName,
+          adName: perf.adName ?? existing[0].adName,
+          updatedAt: now,
+        })
+        .where(eq(schema.metaAdsPerformance.id, existing[0].id))
+        .returning();
+      return result[0];
+    }
+    
+    const result = await this.db.insert(schema.metaAdsPerformance).values({
+      ...perf,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async getAggregatedMetaAdsPerformance(days: number): Promise<Map<string, { sku: string; totalConversions: number; totalRevenue: number; totalSpend: number; daysCovered: number }>> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    
+    const rows = await this.db.select().from(schema.metaAdsPerformance)
+      .where(gte(schema.metaAdsPerformance.date, cutoffStr));
+    
+    const results = new Map<string, { sku: string; totalConversions: number; totalRevenue: number; totalSpend: number; daysCovered: number }>();
+    
+    for (const row of rows) {
+      if (!row.sku) continue;
+      
+      const existing = results.get(row.sku);
+      if (existing) {
+        existing.totalConversions += row.conversions;
+        existing.totalRevenue += row.conversionValue ?? 0;
+        existing.totalSpend += row.spend;
+      } else {
+        results.set(row.sku, {
+          sku: row.sku,
+          totalConversions: row.conversions,
+          totalRevenue: row.conversionValue ?? 0,
+          totalSpend: row.spend,
+          daysCovered: days,
+        });
+      }
+    }
+    
+    return results;
   }
 
   // Label Formats

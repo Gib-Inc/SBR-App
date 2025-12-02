@@ -1,0 +1,230 @@
+Goal:
+Implement a production-ready, READ-ONLY Meta Ads integration that mirrors the behavior of the Google Ads integration, using it ONLY as a demand signal for AI Recommendations. Do NOT redesign the Meta Ads data-source card UI in AI Agent → Data Sources; simply make that card the configuration/entry point for this integration.
+
+Meta Ads must:
+- Pull performance data at the product level (or as close as possible).
+- Feed a “Meta Ads” SourceDecision into the existing RecommendationDetail JSON structure.
+- Populate the “Meta Ads” column in the AI Recommendations table with “Order / Don’t order / Neutral / –”.
+- Never change budgets, bids, or campaign settings in Meta.
+
+This integration must reuse the SourceDecision / RecommendationDetail pattern and AI Recommendations UI implemented for Google Ads.
+
+==================================================
+1) REUSE EXISTING META ADS CARD – DATA SOURCES
+==================================================
+Use the existing “Meta Ads” card in AI Agent → Data Sources for config, status, and sync entry.
+
+1. DO NOT change the card’s layout, labels, or button text.
+2. Behind the scenes, wire:
+   - “Configure” to set up Meta Ads credentials and OAuth.
+   - “Sync” to trigger the Meta Ads performance sync job defined below.
+   - Status / “Last Rotated / Next Required” fields to reflect Meta Ads connection health and last sync time.
+
+3. OAuth & tokens:
+   - Use Meta Marketing API (Facebook Ads) with minimal READ-ONLY scopes (ads_read, read_insights).
+   - Store access/refresh tokens securely on the server.
+   - Never expose tokens in the UI.
+   - If Meta has multiple ad accounts, allow selection of the primary account in the Configure modal, but keep UI minimal.
+
+==================================================
+2) PRODUCT MAPPING – META ADS → HOUSE PRODUCTS
+==================================================
+We need to map Meta Ads performance to internal products (house SKUs).
+
+1. Extend Product model, if not already present, to support Meta mapping hints:
+   - metaCatalogId (optional)
+   - metaProductId (optional)
+   - Alternatively, support mapping via:
+     • Pixel content_ids that equal SKU or UPC, or
+     • URL parameters (e.g., utm_content or a “sku=” param).
+
+2. Mapping strategies (implement in this order of preference):
+   a) Product catalog:
+      - If Meta Ads is using a product catalog, query product-level insights that contain `product_id` or similar ID.
+      - Map Meta product_id → Product via metaProductId or UPC/SKU.
+   b) Pixel / conversion events:
+      - Use Ads Insights or Conversion API data that includes `content_ids`.
+      - If content_ids contains SKU or UPC that matches our product, map accordingly.
+   c) URL-based mapping (fallback):
+      - Parse tracked URLs (if available) for a sku or upc parameter and map.
+
+3. If a Meta record cannot be mapped to any product:
+   - Still store the raw record (if needed) but do NOT attach it to any AI Recommendation.
+   - For unmapped records, they must not affect SourceDecisions.
+
+==================================================
+3) DATA MODEL – META ADS PERFORMANCE
+==================================================
+Create a MetaAdsPerformance table paralleling GoogleAdsPerformance:
+
+Fields:
+- id
+- productId          // FK → Product; nullable if mapping fails
+- date               // metrics date (UTC)
+- source             // fixed string "META_ADS"
+- accountId
+- campaignId
+- campaignName
+- adSetId
+- adSetName
+- adId
+- adName
+- impressions        // integer
+- clicks             // integer
+- spend              // numeric
+- conversions        // numeric (purchases or primary conversion)
+- conversionValue    // numeric (revenue, if available)
+- createdAt
+- updatedAt
+
+Write helper functions to:
+- Upsert or insert rows keyed by (productId, date, campaignId, adSetId, adId).
+- Aggregate performance for each product over the last N days (e.g., 7–14).
+
+==================================================
+4) SYNC LOGIC – META ADS → APP
+==================================================
+Implement a server-side sync job invoked by the existing “Sync” action on the Meta Ads card.
+
+Behavior:
+1. On “Sync”:
+   - Validate that credentials exist and are valid.
+   - Pull last N days (configurable, default 14) of insights for active campaigns/ad sets.
+   - For each result:
+     • Extract date, campaign/adset/ad IDs, impressions, clicks, spend, conversions, conversion value.
+     • Attempt to map it to a productId as defined in section 2.
+     • Insert/update in MetaAdsPerformance.
+
+2. Logging:
+   - Create a log entry (Integration: META_ADS) with:
+     • Sync period (fromDate–toDate),
+     • Number of rows pulled,
+     • Number of rows mapped to products,
+     • Number of unmapped rows.
+   - Update “Last synced” info displayed by the Meta Ads card (using existing card fields).
+
+3. Safety:
+   - Use ONLY insights/read endpoints; no write/update calls.
+   - If API fails, do not break the rest of the AI Agent; just log error and show a non-blocking “Sync failed” message.
+
+==================================================
+5) SOURCEDECISION – META ADS LOGIC
+==================================================
+Re-use the existing RecommendationDetail / SourceDecision JSON pattern.
+
+Reminder structure (already implemented for Google Ads):
+
+interface SourceDecision {
+  source: "GOOGLE_ADS" | "META_ADS" | "SHOPIFY" | "EXTENSIV" | "QUICKBOOKS";
+  status: "ORDER" | "DONT_ORDER" | "NEUTRAL" | "NO_DATA";
+  rationale: string;
+  metrics: Record<string, string | number>;
+}
+
+interface RecommendationDetail {
+  finalDecision: "ORDER" | "DONT_ORDER" | "MONITOR";
+  finalRationale: string;
+  sources: SourceDecision[];
+}
+
+For META_ADS:
+
+1. For each AI Recommendation row (per SKU/product) and its forecast horizon:
+   - Aggregate MetaAdsPerformance over the last M days (e.g., 7–14):
+     • avgConvPerDay = avg(conversions per day).
+     • avgRevenuePerDay = avg(conversionValue per day) if available.
+   - Let:
+     • H = the same daysLeft horizon used for Google Ads projections.
+     • projectedOrdersFromMeta = avgConvPerDay * H.
+     • available = current available-for-sale units.
+   - Define thresholds similar to Google Ads so behavior is predictable:
+     • If no mapped MetaAdsPerformance for this product in the last M days:
+       - status = "NO_DATA".
+     • Else if projectedOrdersFromMeta > available * 0.7:
+       - status = "ORDER".
+     • Else if projectedOrdersFromMeta < available * 0.3:
+       - status = "DONT_ORDER".
+     • Else:
+       - status = "NEUTRAL".
+
+2. Build a SourceDecision with:
+   - source: "META_ADS"
+   - status: as computed above.
+   - rationale examples:
+     • ORDER:  "Meta Ads are generating strong demand (~X orders expected over H days vs Y units available)."
+     • DONT_ORDER: "Meta Ads demand is low relative to current stock (~X expected orders vs Y units available)."
+     • NEUTRAL: "Meta Ads demand is moderate and does not strongly impact reorder needs."
+     • NO_DATA: "No recent Meta Ads data mapped to this SKU."
+   - metrics:
+     • avgConvPerDay
+     • projectedOrdersFromMeta
+     • available
+     • horizonDays = H
+     • lookbackDays = M
+     • spend (optional)
+     • ROAS (optional, if conversionValue is available).
+
+3. Store this SourceDecision in RecommendationDetail.sources for each recommendation row, alongside existing sources (GOOGLE_ADS, SHOPIFY, EXTENSIV, QUICKBOOKS).
+
+==================================================
+6) AI RECOMMENDATIONS TABLE – META ADS COLUMN
+==================================================
+The AI Recommendations table already has a “Meta Ads” column placeholder. Make it functional:
+
+1. For each row:
+   - Look up the SourceDecision where source === "META_ADS".
+   - Render:
+     • status "ORDER" → pill “Order”.
+     • status "DONT_ORDER" → pill “Don’t order”.
+     • status "NEUTRAL" → pill “Neutral”.
+     • status "NO_DATA" or missing → “–”.
+
+2. The existing row click → details slide-over must show a "Meta Ads" section:
+   - Title: "Meta Ads signal".
+   - Status pill.
+   - Metrics in a small table (avgConvPerDay, projectedOrdersFromMeta, available, lookbackDays, horizonDays, etc.).
+   - Rationale text.
+   - If status is NO_DATA, show a subtle message like “No recent Meta Ads data mapped to this SKU.”
+
+==================================================
+7) AI PIPELINE INTEGRATION
+==================================================
+Update the AI/LLM pipeline that generates RecommendationDetail so that:
+
+1. For each product:
+   - It pulls:
+     • inventory metrics (Hildale/Pivot, days left, etc.),
+     • Google Ads projections (already implemented),
+     • Meta Ads projections (this prompt),
+     • and any other available sources.
+
+2. It uses deterministic thresholds (from sections 5 & the Google Ads prompt) to set the status for each SourceDecision.
+
+3. It calls the LLM to:
+   - Turn these metrics into human-readable rationales per source.
+   - Synthesize finalDecision and finalRationale, taking Meta Ads into account alongside other sources, but WITHOUT ever using the LLM to send actions back to Meta.
+
+==================================================
+8) TESTS / VERIFICATION
+==================================================
+Validate at least:
+
+1) Configuration:
+   - Connecting Meta Ads via the existing Data Sources card works.
+   - “Sync” completes and writes MetaAdsPerformance rows.
+
+2) AI Recommendations:
+   - For products with Meta traffic, the “Meta Ads” column shows “Order / Don’t order / Neutral” based on the thresholds.
+   - For products without Meta data, the column shows “–”.
+
+3) Details panel:
+   - Clicking a recommendation row shows a “Meta Ads” section with metrics and rationale.
+   - Status/rationale are consistent with the computed metrics and thresholds.
+
+4) Safety:
+   - There are no API calls that modify campaigns, budgets, or ad sets.
+   - Removing or disconnecting Meta Ads credentials does not break core inventory or recommendations; it only sets Meta status to “NO_DATA”.
+
+End state:
+- Meta Ads is a read-only demand signal, wired through the existing Meta Ads card.
+- The AI Recommendations table and details panel clearly show how Meta Ads demand contributed to “Order / Don’t order / Monitor”, without ever changing ads behavior directly.

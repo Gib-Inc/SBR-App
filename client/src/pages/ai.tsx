@@ -1463,6 +1463,7 @@ function RulesTab() {
 }
 
 function QuickBooksDemandHistoryTab() {
+  const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [yearFilter, setYearFilter] = useState<string>("all");
   const [monthFilter, setMonthFilter] = useState<string>("all");
@@ -1476,7 +1477,7 @@ function QuickBooksDemandHistoryTab() {
   queryParams.set("page", String(page));
   queryParams.set("pageSize", String(pageSize));
   
-  const { data, isLoading, isFetching } = useQuery<QBDemandHistoryResponse>({
+  const { data, isLoading, isFetching, error } = useQuery<QBDemandHistoryResponse>({
     queryKey: ["/api/ai/insights/qb-demand-history", search, yearFilter, monthFilter, page],
     queryFn: async () => {
       const response = await fetch(`/api/ai/insights/qb-demand-history?${queryParams.toString()}`, {
@@ -1492,6 +1493,8 @@ function QuickBooksDemandHistoryTab() {
     "July", "August", "September", "October", "November", "December"
   ];
 
+  const shortMonthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -1501,186 +1504,227 @@ function QuickBooksDemandHistoryTab() {
     }).format(value);
   };
 
-  if (isLoading) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <Skeleton className="h-64 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
+  const formatRelativeTime = (dateStr: string | undefined) => {
+    if (!dateStr) return "-";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return "just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  };
 
   const hasData = data && data.items.length > 0;
   const hasYears = data && data.years.length > 0;
+  const isFiltered = search || yearFilter !== "all" || monthFilter !== "all";
+  
+  const lastSyncedAt = data?.items?.[0]?.updatedAt;
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Database className="h-5 w-5" />
-                QuickBooks Demand History
-              </CardTitle>
-              <CardDescription>
-                Historical sales data from QuickBooks for demand forecasting and trend analysis.
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search SKU or product..."
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                  className="pl-8 w-48"
-                  data-testid="input-qb-search"
-                />
-              </div>
-              <Select 
-                value={yearFilter} 
-                onValueChange={(v) => {
-                  setYearFilter(v);
-                  setPage(1);
-                }}
+    <Card>
+      <CardHeader className="pb-4">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5" />
+              QuickBooks Demand History
+            </CardTitle>
+            <CardDescription>
+              Read-only historical demand imported from QuickBooks for forecasting.
+            </CardDescription>
+          </div>
+          {lastSyncedAt && (
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              Last synced: {formatRelativeTime(lastSyncedAt)}
+            </span>
+          )}
+        </div>
+        
+        <div className="flex items-center gap-2 flex-wrap mt-4">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by SKU or product..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              className="pl-8 w-56"
+              data-testid="input-qb-search"
+            />
+          </div>
+          <Select 
+            value={yearFilter} 
+            onValueChange={(v) => {
+              setYearFilter(v);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-32" data-testid="select-qb-year">
+              <SelectValue placeholder="All years" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All years</SelectItem>
+              {hasYears && data.years.map(year => (
+                <SelectItem key={year} value={String(year)}>{year}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select 
+            value={monthFilter} 
+            onValueChange={(v) => {
+              setMonthFilter(v);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-36" data-testid="select-qb-month">
+              <SelectValue placeholder="All months" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All months</SelectItem>
+              {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+                <SelectItem key={m} value={String(m)}>{monthNames[m]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {isFetching && !isLoading && (
+            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        {isLoading ? (
+          <div className="p-6">
+            <Skeleton className="h-64 w-full" />
+          </div>
+        ) : error ? (
+          <div className="h-32 flex items-center justify-center text-muted-foreground">
+            <div className="text-center">
+              <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">Failed to load demand history</p>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="mt-2"
+                onClick={() => window.location.reload()}
+                data-testid="button-qb-retry"
               >
-                <SelectTrigger className="w-28" data-testid="select-qb-year">
-                  <SelectValue placeholder="Year" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Years</SelectItem>
-                  {hasYears && data.years.map(year => (
-                    <SelectItem key={year} value={String(year)}>{year}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select 
-                value={monthFilter} 
-                onValueChange={(v) => {
-                  setMonthFilter(v);
-                  setPage(1);
-                }}
-              >
-                <SelectTrigger className="w-32" data-testid="select-qb-month">
-                  <SelectValue placeholder="Month" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Months</SelectItem>
-                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
-                    <SelectItem key={m} value={String(m)}>{monthNames[m]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                Retry
+              </Button>
             </div>
           </div>
-        </CardHeader>
-      </Card>
+        ) : !hasData && !isFiltered ? (
+          <div className="py-16 text-center">
+            <Database className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+            <p className="text-lg font-medium text-foreground">No QuickBooks demand history</p>
+            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+              Connect QuickBooks and run "Sync Demand Now" from the integrations page to populate demand history.
+            </p>
+            <Button 
+              variant="outline" 
+              className="mt-4"
+              onClick={() => navigate("/settings")}
+              data-testid="button-open-integrations"
+            >
+              <Settings2 className="mr-2 h-4 w-4" />
+              Open Integrations
+            </Button>
+          </div>
+        ) : !hasData && isFiltered ? (
+          <div className="h-32 flex items-center justify-center text-muted-foreground">
+            <p>No data matches your filters. Try adjusting the search criteria.</p>
+          </div>
+        ) : (
+          <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
+            <table className="w-full min-w-[900px]">
+              <thead className="bg-muted sticky top-0 z-10">
+                <tr className="border-b">
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Year</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Month</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Sold</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Revenue</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Last Synced</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.items.map((item) => (
+                  <tr 
+                    key={item.id} 
+                    className="border-b last:border-b-0 hover-elevate h-12"
+                    data-testid={`row-qb-demand-${item.id}`}
+                  >
+                    <td className="p-3 align-middle whitespace-nowrap max-w-[250px] truncate" title={item.productName ?? ""}>
+                      <span className="font-medium">{item.productName ?? "-"}</span>
+                    </td>
+                    <td className="p-3 align-middle font-mono text-sm whitespace-nowrap">
+                      {item.sku}
+                    </td>
+                    <td className="p-3 align-middle text-center whitespace-nowrap">
+                      {item.year}
+                    </td>
+                    <td className="p-3 align-middle text-center whitespace-nowrap">
+                      {shortMonthNames[item.month] || item.month}
+                    </td>
+                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap">
+                      {item.totalQty.toLocaleString()}
+                    </td>
+                    <td className="p-3 align-middle text-right whitespace-nowrap">
+                      {formatCurrency(item.totalRevenue)}
+                    </td>
+                    <td className="p-3 align-middle text-right text-muted-foreground whitespace-nowrap">
+                      {formatRelativeTime(item.updatedAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
 
-      {!hasData ? (
-        <Card>
-          <CardContent className="py-12">
-            <div className="text-center text-muted-foreground">
-              <Database className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p className="text-lg font-medium">No demand history data available</p>
-              <p className="text-sm mt-2">
-                {search || yearFilter !== "all" || monthFilter !== "all"
-                  ? "No data matches your filters. Try adjusting the search criteria."
-                  : "QuickBooks sales data has not been synced yet. Configure the QuickBooks integration to start syncing demand history."
-                }
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <Card>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50">
-                    <tr className="h-11 border-b">
-                      <th className="px-3 text-left font-medium whitespace-nowrap">SKU</th>
-                      <th className="px-3 text-left font-medium whitespace-nowrap">Product Name</th>
-                      <th className="px-3 text-center font-medium whitespace-nowrap">Period</th>
-                      <th className="px-3 text-right font-medium whitespace-nowrap">Qty Sold</th>
-                      <th className="px-3 text-right font-medium whitespace-nowrap">Revenue</th>
-                      <th className="px-3 text-right font-medium whitespace-nowrap">Avg Price</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.items.map((item) => (
-                      <tr 
-                        key={item.id} 
-                        className="h-11 border-b hover-elevate"
-                        data-testid={`row-qb-demand-${item.id}`}
-                      >
-                        <td className="px-3 align-middle font-mono text-sm whitespace-nowrap">
-                          {item.sku}
-                        </td>
-                        <td className="px-3 align-middle whitespace-nowrap max-w-[200px] truncate" title={item.productName ?? ""}>
-                          {item.productName ?? "-"}
-                        </td>
-                        <td className="px-3 align-middle text-center whitespace-nowrap">
-                          <span className="font-medium">{monthNames[item.month]?.substring(0, 3) ?? item.month}</span>
-                          <span className="text-muted-foreground ml-1">{item.year}</span>
-                        </td>
-                        <td className="px-3 align-middle text-right font-medium whitespace-nowrap">
-                          {item.totalQty.toLocaleString()}
-                        </td>
-                        <td className="px-3 align-middle text-right whitespace-nowrap">
-                          {formatCurrency(item.totalRevenue)}
-                        </td>
-                        <td className="px-3 align-middle text-right text-muted-foreground whitespace-nowrap">
-                          {item.totalQty > 0 ? formatCurrency(item.totalRevenue / item.totalQty) : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-
-          {data.totalPages > 1 && (
-            <div className="flex items-center justify-between px-2">
-              <p className="text-sm text-muted-foreground">
-                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, data.total)} of {data.total} records
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1 || isFetching}
-                  data-testid="button-qb-prev-page"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Previous
-                </Button>
-                <span className="text-sm">
-                  Page {page} of {data.totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
-                  disabled={page >= data.totalPages || isFetching}
-                  data-testid="button-qb-next-page"
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-        </>
+      {hasData && data.totalPages > 1 && (
+        <CardFooter className="border-t pt-4 flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, data.total)} of {data.total} records
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1 || isFetching}
+              data-testid="button-qb-prev-page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Page {page} of {data.totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
+              disabled={page >= data.totalPages || isFetching}
+              data-testid="button-qb-next-page"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardFooter>
       )}
-    </div>
+    </Card>
   );
 }
 

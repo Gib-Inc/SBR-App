@@ -1,0 +1,340 @@
+Complete the QuickBooks Online integration so it is fully usable in production for:
+- importing historical demand for forecasting,
+- posting completed refunds back to QuickBooks,
+- giving a clear Insights view in the AI Agent.
+
+Quick design principles:
+- QuickBooks is a FINANCIAL + HISTORY source only.
+- Do NOT use QuickBooks as inventory master; Hildale/Pivot quantities stay in our own DB + Extensiv.
+- Integration must be one-click visible, testable, and auditable via the Logs tab.
+
+==================================================
+1) QUICKBOOKS INTEGRATION CARD & CONFIG
+==================================================
+1.1 Add/confirm a “QuickBooks Online” integration card in the Data Sources / Integrations area (where Shopify/Extensiv are):
+
+Card states:
+- Not Configured
+- Connected
+- Error
+
+Card content:
+- Icon + title: “QuickBooks Online”
+- Subtitle: “Financial system & demand history (read-mostly).”
+- Fields:
+  • Connection status pill.
+  • “Last demand sync: <timestamp or ‘Never’>”
+  • “Last returns sync: <timestamp or ‘Event-based’>”
+- Buttons:
+  • “Connect / Configure”
+  • “Test Connection”
+  • “Sync Demand Now”
+  • “Open QuickBooks” → opens QuickBooks in a new tab (company homepage is fine; if we can deep-link to transactions or items, use that).
+
+1.2 Configure flow (OAuth2):
+- “Connect / Configure” starts QuickBooks OAuth2 (Intuit) with:
+  • client id / client secret (server env vars),
+  • redirect URL,
+  • scopes needed for:
+      – reading Items, Sales Receipts, Invoices, Credit Memos, Refund Receipts
+      – creating Credit Memos or Refund Receipts for refunds.
+- Store securely on the server:
+  • access token
+  • refresh token
+  • realmId/companyId
+- Implement token refresh logic.
+- “Test Connection” calls a lightweight QB endpoint (e.g. company info) and updates card status.
+
+Security:
+- Never log tokens/secret values.
+- Keep all QuickBooks communication server-side.
+
+==================================================
+2) DATA MODEL EXTENSIONS
+==================================================
+2.1 Product mapping to QuickBooks
+Extend Product model:
+
+- quickbooksItemId       // string | null, QB itemRef.id
+- quickbooksItemName     // optional display name
+- quickbooksItemSku      // optional copy of QB item SKU (for debugging)
+- upc                    // GS1 UPC already used elsewhere (important for auto-matching)
+
+2.2 Demand history storage
+Create table QuickBooksDemandHistory:
+
+- id
+- productId (FK → Product)
+- quickbooksItemId
+- year (int)
+- month (int 1–12)
+- qtySold (number)        // positive units sold
+- qtyReturned (number)    // positive units returned
+- netQty (number)         // qtySold - qtyReturned
+- revenue (number)        // net revenue for that month
+- lastSyncedAt (timestamp)
+
+Index this table on (productId, year, month).
+
+2.3 Returns linkage
+Extend Return model (whatever we use for refunds):
+
+- quickbooksRefundId    // QB Credit Memo / Refund Receipt id | null
+- quickbooksRefundType  // "CREDIT_MEMO" | "REFUND_RECEIPT" | null
+
+==================================================
+3) SKU MAPPING – QUICKBOOKS TAB
+==================================================
+3.1 Add a “QuickBooks” tab to the existing SKU Mapping wizard:
+
+LEFT side list:
+- QuickBooks items (paged):
+  • item name
+  • item SKU if set
+  • barcode/UPC if available
+  • type (Inventory/Non-Inventory, etc.)
+
+RIGHT side list:
+- Our Products:
+  • product name
+  • internal SKU
+  • UPC
+
+Auto-matching rules:
+- If QB item barcode/UPC equals product.upc → high-confidence suggestion.
+- Else if QB item SKU equals product.sku → medium-confidence suggestion.
+- Otherwise show as “Unmapped”.
+
+User workflow:
+- User can:
+  • Accept suggestions (bulk or one-by-one).
+  • Manually map a QB item to a Product.
+- Saving mappings:
+  • For each confirmed pair, set:
+      product.quickbooksItemId    = qbItem.id
+      product.quickbooksItemName  = qbItem.name
+      product.quickbooksItemSku   = qbItem.sku (if present)
+
+Do not auto-create new products from QuickBooks items in this version.
+
+==================================================
+4) DEMAND HISTORY SYNC (QB → APP)
+==================================================
+4.1 Sync trigger
+Implement:
+- Manual button: “Sync Demand Now” on the QuickBooks card.
+- Background job (e.g. nightly) that runs the same logic if QuickBooks is connected.
+
+Config:
+- History window in months: read from AI Agent Rules (see section 5), default 24 months.
+- Only process products where product.quickbooksItemId is set.
+
+4.2 Data pulled from QuickBooks
+For each mapped QuickBooks item in the selected history window:
+
+- Items endpoint (once) to confirm mapping.
+- Transactions:
+  • Sales Receipts
+  • Invoices
+  • Credit Memos
+  • Refund Receipts
+
+For each transaction line:
+- Identify itemRef.id == product.quickbooksItemId.
+- Determine sign:
+  • Sales Receipt / Invoice → positive quantity (sale) and positive line amount.
+  • Credit Memo / Refund Receipt → negative quantity (return) and negative amount.
+
+Aggregate by (productId, year, month):
+- qtySold      = sum of positive quantities.
+- qtyReturned  = absolute sum of negative quantities.
+- netQty       = qtySold - qtyReturned.
+- revenue      = sum of line amounts (sales minus returns).
+
+Upsert into QuickBooksDemandHistory:
+- If (productId, year, month) exists → update fields and lastSyncedAt.
+- Else → insert new row.
+
+4.3 Logs and status
+- After each sync, log a summary entry into the Logs system:
+  • total products processed
+  • time window
+  • number of error rows
+- Update “Last demand sync” timestamp on the QuickBooks card.
+
+==================================================
+5) AI AGENT RULES – USING QB HISTORY
+==================================================
+In AI Agent → Rules tab, add a “QuickBooks Demand History” section:
+
+Components:
+- Toggle: “Use QuickBooks demand history for forecasting”
+  • When OFF: existing internal forecasting logic only (no QB influence).
+  • When ON: forecasting engine should consult QuickBooksDemandHistory wherever available.
+- Numeric input: “History window (months)” (e.g. 12–36, default 24).
+- Tooltip: explain that this uses historical monthly sales and returns from QuickBooks to adjust seasonality and growth.
+
+Forecasting adjustments (server-side):
+- For each product:
+  • Read its QuickBooksDemandHistory rows within the window.
+  • Compute:
+      – monthly average demand,
+      – seasonality factor for current month vs average,
+      – year-over-year growth where previous-year month exists.
+  • Provide a function such as:
+      getQuickBooksForecast(productId) → {
+        dailyDemand,
+        lastYearMonthQty,
+        thisYearMonthQty,
+        yoyGrowthPercent
+      }
+- Integrate this into the existing forecast / reorder logic:
+  • If QB history exists AND toggle is ON: base forecast should use QB-derived dailyDemand (possibly blended with internal data).
+  • If no QB data or toggle OFF: keep current forecast behavior.
+
+==================================================
+6) AI AGENT – INSIGHTS TAB (INTERNAL TABS)
+==================================================
+6.1 Internal tab control
+Inside AI Agent → Insights:
+
+- Add internal tabs:
+  • “AI Recommendations”
+  • “QuickBooks Demand History”
+
+Default to “AI Recommendations”.
+
+6.2 AI Recommendations (existing)
+- Move current AI Recommendations table and controls into this internal tab with no behavior changes.
+
+6.3 QuickBooks Demand History internal tab
+- Use the shared table component (same style as BOM, Purchase Orders, AI Recommendations).
+- Layout:
+
+Header:
+- Title: “QuickBooks Demand History”
+- Subtitle: “Read-only historical demand imported from QuickBooks for forecasting.”
+- Right-aligned: “Last synced: <timestamp from latest QuickBooksDemandHistory or sync log>”
+- Button (optional): “Open QuickBooks” → opens the QB company in a new tab.
+
+Filters (same visual style as other tables):
+- Search input: “Search by SKU or product…”
+- Year dropdown: “All years” + list of years in history.
+- Month dropdown: “All months” + Jan–Dec.
+- Optional toggle: “Mapped only” (default ON).
+
+Table (read-only):
+- Columns:
+  • Product      – name
+  • SKU          – internal house SKU
+  • Year
+  • Month
+  • Qty Sold     – qtySold
+  • Qty Returned – qtyReturned
+  • Net Qty      – netQty
+  • Revenue      – revenue (formatted currency)
+  • Last Synced  – lastSyncedAt
+
+Behavior:
+- Same pagination and scroll behavior as other data tables.
+- No row actions in V1.
+- If QuickBooks not configured OR no history:
+  • Show standardized empty state:
+    “No QuickBooks demand history.
+     Connect QuickBooks and run ‘Sync Demand Now’ from the integrations page to populate demand history.”
+    with an “Open Integrations” button.
+
+API:
+- Implement GET /api/ai/insights/qb-demand-history with:
+  • search, year, month, mappedOnly, page, pageSize.
+  • Returns paginated QuickBooksDemandHistory rows joined with Product info.
+
+==================================================
+7) RETURNS → QUICKBOOKS (APP → QB)
+==================================================
+7.1 Trigger
+When a Return in the app reaches a “Refunded” / “Completed” terminal status:
+
+Preconditions:
+- The return is linked to an original sale that is represented in QuickBooks (or at least we know the customer info + items + refund amounts).
+- Products in the return are mapped to QuickBooks items (product.quickbooksItemId present).
+
+7.2 Creating financial docs in QuickBooks
+For each completed return:
+
+- Decide document type (configurable but default to Credit Memo):
+  • If we can link to original invoice → create Credit Memo.
+  • Otherwise, use Refund Receipt.
+
+- For each returned line:
+  • itemRef.id = product.quickbooksItemId
+  • qty = returned quantity (positive number)
+  • amount = refund amount (line-level)
+
+- Create the document via QuickBooks API:
+  • Associate with the correct customer if possible.
+
+- On success:
+  • Save quickbooksRefundId and quickbooksRefundType on the Return.
+  • Log success in Logs (type “QuickBooks Refund”, includes return id and QB doc id).
+
+- On failure:
+  • Do NOT block internal return completion.
+  • Log an error entry with details.
+  • Optionally, flag the return row with a small “QB error” indicator the Logs tab can surface later.
+
+7.3 No inventory push
+- Do NOT update QuickBooks inventory quantities.
+- Our Hildale/Pivot/Extensiv sync remains the single source of inventory truth; QuickBooks is used only for:
+  • revenue & COGS correctness,
+  • historical demand for forecasting.
+
+==================================================
+8) LOGS & MONITORING
+==================================================
+8.1 Logs tab
+- All QuickBooks actions must produce log entries visible in the Logs tab:
+  • Demand sync started / completed.
+  • Number of products / months updated.
+  • Any per-item error counts.
+  • Refund posting successes and failures.
+
+8.2 Error handling
+- Show non-blocking snackbars or banners when:
+  • Sync Demand Now fails.
+  • Test Connection fails.
+
+==================================================
+9) TESTING SCENARIOS
+==================================================
+Implement and verify at least:
+
+1) Connect QuickBooks:
+   - OAuth flow completes; card shows “Connected”.
+   - Test Connection works.
+
+2) SKU mapping:
+   - Pull QB items.
+   - Auto-suggest by UPC and SKU.
+   - Save mappings; Products now have quickbooksItemId populated.
+
+3) Demand sync:
+   - Run “Sync Demand Now”.
+   - Verify QuickBooksDemandHistory is populated with reasonable numbers.
+   - Insights → QuickBooks Demand History displays those rows using the shared table design.
+   - Forecast side effects: products with QB history now use QB-derived data when the Rules toggle is ON.
+
+4) Returns integration:
+   - Complete a return for a product mapped to QuickBooks.
+   - Verify QuickBooks Credit Memo/Refund Receipt created.
+   - Verify Return record has quickbooksRefundId and logs show success.
+
+5) Safety:
+   - Confirm there is NO code path that writes inventory quantities to QuickBooks.
+   - If QuickBooks is disconnected, all core inventory/PO/returns flows still function; only QB-specific features show “not connected” states.
+
+End result:
+QuickBooks is fully integrated as a reliable financial + demand-history data source:
+- It feeds seasonality-aware forecasts and AI Recommendations.
+- It receives accurate refund records for returns.
+- It remains clearly separate from inventory source-of-truth logic.

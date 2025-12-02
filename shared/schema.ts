@@ -728,6 +728,44 @@ export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
 // AI RECOMMENDATIONS (Decision Engine Inventory Recommendations)
 // ============================================================================
 
+// Source Decision Types for multi-source AI recommendations
+export const SourceDecisionStatus = {
+  ORDER: "ORDER",
+  DONT_ORDER: "DONT_ORDER",
+  NEUTRAL: "NEUTRAL",
+  NO_DATA: "NO_DATA",
+} as const;
+
+export type SourceDecisionStatusType = typeof SourceDecisionStatus[keyof typeof SourceDecisionStatus];
+
+export const DataSourceType = {
+  GOOGLE_ADS: "GOOGLE_ADS",
+  META_ADS: "META_ADS",
+  SHOPIFY: "SHOPIFY",
+  EXTENSIV: "EXTENSIV",
+  QUICKBOOKS: "QUICKBOOKS",
+} as const;
+
+export type DataSourceTypeValue = typeof DataSourceType[keyof typeof DataSourceType];
+
+// Zod schemas for type-safe validation
+export const sourceDecisionSchema = z.object({
+  source: z.enum(["GOOGLE_ADS", "META_ADS", "SHOPIFY", "EXTENSIV", "QUICKBOOKS"]),
+  status: z.enum(["ORDER", "DONT_ORDER", "NEUTRAL", "NO_DATA"]),
+  rationale: z.string(),
+  metrics: z.record(z.union([z.string(), z.number()])),
+});
+
+export type SourceDecision = z.infer<typeof sourceDecisionSchema>;
+
+export const recommendationDetailSchema = z.object({
+  finalDecision: z.enum(["ORDER", "DONT_ORDER", "MONITOR"]),
+  finalRationale: z.string(),
+  sources: z.array(sourceDecisionSchema),
+});
+
+export type RecommendationDetail = z.infer<typeof recommendationDetailSchema>;
+
 export const aiRecommendations = pgTable("ai_recommendations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   // Required columns (NOT NULL in DB)
@@ -748,6 +786,7 @@ export const aiRecommendations = pgTable("ai_recommendations", {
   status: text("status").default("NEW"), // 'NEW', 'ACCEPTED', 'DISMISSED'
   reasonSummary: text("reason_summary"), // Short explanation
   sourceSignals: jsonb("source_signals"), // {velocity, ads, quickbooks, extensiv, shopify, amazon, returns}
+  sourceDecisionsJson: jsonb("source_decisions_json"), // RecommendationDetail with per-source ORDER/DONT_ORDER decisions
   adMultiplier: real("ad_multiplier").default(1.0), // Ad demand multiplier
   baseVelocity: real("base_velocity"), // Raw sales velocity before ad adjustment
   adjustedVelocity: real("adjusted_velocity"), // Velocity after ad multiplier

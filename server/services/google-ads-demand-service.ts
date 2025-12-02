@@ -314,7 +314,7 @@ export class GoogleAdsDemandService {
     return {
       finalDecision,
       finalRationale,
-      sources,
+      sourceDecisions: sources,
     };
   }
 

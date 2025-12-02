@@ -366,7 +366,7 @@ export class MetaAdsDemandService {
           const updatedDetail = {
             finalDecision,
             finalRationale,
-            sources,
+            sourceDecisions: sources,
           };
 
           await storage.updateAIRecommendation(rec.id, {

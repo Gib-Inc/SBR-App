@@ -4495,9 +4495,9 @@ Total: $${orderTotal.toFixed(2)}
       for (const returnRequest of returns) {
         try {
           // Get return items
-          const returnItems = await storage.getReturnItemsByReturnId(returnRequest.id);
+          const returnItems = await storage.getReturnItemsByRequestId(returnRequest.id);
           const itemsList = returnItems.map(item => 
-            `- ${item.sku}: ${item.quantity} units (Reason: ${item.reason || 'Not specified'})`
+            `- ${item.sku}: ${item.qtyRequested} units (Reason: ${item.itemReason || 'Not specified'})`
           ).join('\n');
 
           // Use correct field names from schema: rmaNumber, customerName, etc.
@@ -4525,6 +4525,8 @@ Notes: ${returnRequest.resolutionNotes || 'None'}
 
           // Create or find contact for the return (required for V2 API)
           let contactId: string | undefined;
+          console.log(`[GHL Sync] Processing return ${rmaDisplay} for ${customerName}`);
+          
           if (customerName && customerName !== 'Unknown') {
             const contactResult = await client.createOrFindContact(
               customerName,
@@ -4533,17 +4535,22 @@ Notes: ${returnRequest.resolutionNotes || 'None'}
             );
             if (contactResult.success && contactResult.contactId) {
               contactId = contactResult.contactId;
+              console.log(`[GHL Sync] Return ${rmaDisplay}: contact ${contactId}`);
+            } else {
+              console.log(`[GHL Sync] Return ${rmaDisplay}: contact creation failed - ${contactResult.error}`);
             }
           }
           
           // Use system contact as fallback
           if (!contactId) {
             contactId = systemContactId;
+            console.log(`[GHL Sync] Return ${rmaDisplay}: using system contact ${contactId}`);
           }
 
           if (!contactId) {
             syncResults.returns.failed++;
             syncResults.returns.errors.push(`Return ${rmaDisplay}: No contact available`);
+            console.error(`[GHL Sync] Return ${rmaDisplay}: No contact available`);
             continue;
           }
 
@@ -4675,6 +4682,8 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
         
         for (const po of purchaseOrders) {
           try {
+            console.log(`[GHL Sync] Processing PO ${po.poNumber} with status ${po.status}`);
+            
             // Determine stage based on PO status
             let stageId: string;
             if (po.status === 'RECEIVED' || po.status === 'CLOSED') {
@@ -4685,6 +4694,7 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
               stageId = GHL_CONFIG.stages.PO_SENT;
             } else {
               // DRAFT, APPROVAL_PENDING, APPROVED - skip syncing these for now
+              console.log(`[GHL Sync] Skipping PO ${po.poNumber} with status ${po.status}`);
               continue;
             }
 

@@ -8,6 +8,8 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  * 
  * This system uses PATTERN B: INTERNAL-DRIVEN inventory movements.
  * 
+ * ABSOLUTE RULE: Sales Orders ONLY impact Pivot inventory, NEVER Hildale inventory.
+ * 
  * Core Principle:
  * - Sales Orders in THIS app are the canonical source of stock movements
  * - Shopify/Amazon/external channels FEED order data into our Sales Orders
@@ -16,17 +18,17 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  * Movement Rules:
  * 
  * SALES_ORDER_CREATED (from Shopify/Amazon/Direct):
- *   - For Pivot-fulfilled orders (Shopify/Amazon): decrements availableForSaleQty
- *   - For Hildale orders: no movement at create time (movement happens at ship)
+ *   - ALL sales orders decrement pivotQty/availableForSaleQty ONLY
+ *   - NEVER touches hildaleQty regardless of fulfillment source
  *   - ONE movement per order line - no double counting
  * 
  * SALES_ORDER_SHIPPED:
- *   - For Pivot orders: no additional movement (already decremented at create)
- *   - For Hildale orders: decrements hildaleQty
+ *   - No additional movement (stock already decremented at create)
+ *   - NEVER touches hildaleQty
  * 
  * SALES_ORDER_CANCELLED:
- *   - For Pivot orders: increments availableForSaleQty (restores stock)
- *   - For Hildale orders: no movement (nothing was decremented)
+ *   - Restores pivotQty/availableForSaleQty
+ *   - NEVER touches hildaleQty
  * 
  * RETURN_RECEIVED:
  *   - Returns ALWAYS go to HILDALE only (not Pivot, not availableForSale)
@@ -36,14 +38,26 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  *   - Extensiv is READ-ONLY - no write-back for returns
  * 
  * PURCHASE_ORDER_RECEIVED:
- *   - Increments pivotQty AND availableForSaleQty for finished products
+ *   - Increments hildaleQty ONLY for finished products (POs always go to Hildale)
  *   - Increments currentStock for components
+ *   - NEVER touches pivotQty (Pivot stock comes from Extensiv sync or transfers)
  * 
  * EXTENSIV_SYNC:
  *   - READ-ONLY sync from Extensiv/3PL warehouse
  *   - Updates pivotQty to match Extensiv snapshot
  *   - Adjusts availableForSaleQty by delta (newPivotQty - oldPivotQty)
  *   - NO write-back to Extensiv ever
+ * 
+ * TRANSFER (Hildale → Pivot):
+ *   - Decrements hildaleQty and increments pivotQty/availableForSaleQty
+ *   - Only way to move stock from Hildale to sellable Pivot inventory
+ * 
+ * HILDALE INVENTORY CHANGES ONLY FROM:
+ *   - PO receipts into Hildale
+ *   - Production/BOM builds
+ *   - Hildale → Pivot transfers (decrement)
+ *   - Manual adjustments in Hildale
+ *   - Returns received (RESTOCK disposition)
  * 
  * IDEMPOTENCY:
  * - Unique constraint on (channel, externalOrderId) prevents duplicate imports
@@ -144,10 +158,12 @@ export class InventoryMovement {
 
       switch (params.eventType) {
         case "PURCHASE_ORDER_RECEIVED":
+          // PO receipts ALWAYS go to Hildale warehouse (not Pivot)
+          // Finished products become available for sale only after Hildale → Pivot transfer
           quantityDelta = params.quantity;
           if (isFinished) {
-            updates.pivotQty = beforeState.pivotQty + params.quantity;
-            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
+            updates.hildaleQty = beforeState.hildaleQty + params.quantity;
+            // DO NOT touch pivotQty or availableForSaleQty - those come from Extensiv sync or transfers
           } else {
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
@@ -167,33 +183,20 @@ export class InventoryMovement {
           break;
 
         case "SALES_ORDER_CREATED":
-          if (isFinished && isPivotFulfilled) {
+          // ABSOLUTE RULE: Sales ONLY impact Pivot inventory (pivotQty), NEVER hildaleQty
+          // All sales are fulfilled from Pivot/3PL warehouse
+          if (isFinished) {
             quantityDelta = -params.quantity;
-            updates.availableForSaleQty = beforeState.availableForSaleQty - params.quantity;
+            updates.pivotQty = Math.max(0, beforeState.pivotQty - params.quantity);
+            updates.availableForSaleQty = Math.max(0, beforeState.availableForSaleQty - params.quantity);
           }
           break;
 
         case "SALES_ORDER_SHIPPED":
-          if (isFinished) {
-            if (isPivotFulfilled) {
-              quantityDelta = 0;
-            } else {
-              quantityDelta = -params.quantity;
-              if (beforeState.hildaleQty >= params.quantity) {
-                updates.hildaleQty = beforeState.hildaleQty - params.quantity;
-              } else {
-                return {
-                  success: false,
-                  itemId: params.itemId,
-                  sku: item.sku,
-                  beforeQty: beforeState.onHand,
-                  afterQty: beforeState.onHand,
-                  quantityChanged: 0,
-                  error: `Insufficient Hildale stock for ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
-                };
-              }
-            }
-          } else {
+          // No-op for finished products - stock already decremented at SALES_ORDER_CREATED
+          // NEVER touches hildaleQty - this is an absolute rule
+          if (!isFinished) {
+            // For components (rare direct sales), decrement currentStock
             quantityDelta = -params.quantity;
             if (beforeState.currentStock >= params.quantity) {
               updates.currentStock = beforeState.currentStock - params.quantity;
@@ -209,11 +212,15 @@ export class InventoryMovement {
               };
             }
           }
+          // For finished products: quantityDelta stays 0, no updates to any qty fields
           break;
 
         case "SALES_ORDER_CANCELLED":
-          if (isFinished && isPivotFulfilled) {
+          // ABSOLUTE RULE: Sales ONLY impact Pivot inventory (pivotQty), NEVER hildaleQty
+          // Restore the stock that was decremented at create
+          if (isFinished) {
             quantityDelta = params.quantity;
+            updates.pivotQty = beforeState.pivotQty + params.quantity;
             updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           }
           break;
@@ -255,7 +262,26 @@ export class InventoryMovement {
           break;
 
         case "TRANSFER":
-          quantityDelta = 0;
+          // Hildale → Pivot transfer: decrements hildaleQty, increments pivotQty + availableForSaleQty
+          // This is the ONLY way to move stock from Hildale to sellable Pivot inventory
+          if (isFinished) {
+            if (beforeState.hildaleQty >= params.quantity) {
+              updates.hildaleQty = beforeState.hildaleQty - params.quantity;
+              updates.pivotQty = beforeState.pivotQty + params.quantity;
+              updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
+              quantityDelta = 0; // Net change is zero (moving between locations)
+            } else {
+              return {
+                success: false,
+                itemId: params.itemId,
+                sku: item.sku,
+                beforeQty: beforeState.onHand,
+                afterQty: beforeState.onHand,
+                quantityChanged: 0,
+                error: `Insufficient Hildale stock for transfer of ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+              };
+            }
+          }
           break;
       }
 

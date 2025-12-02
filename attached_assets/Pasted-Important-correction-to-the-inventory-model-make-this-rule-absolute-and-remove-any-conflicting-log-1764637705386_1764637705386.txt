@@ -1,0 +1,35 @@
+Important correction to the inventory model – make this rule absolute and remove any conflicting logic:
+
+1) Sales Orders must ONLY impact Pivot inventory, NEVER Hildale inventory.
+   - When any Sales Order is created/confirmed/shipped (regardless of channel: Shopify, Amazon, etc.):
+     • Decrement `pivotQty` (or reserve against it, then finalize on shipment).
+     • Do NOT decrement `hildaleQty` under any circumstance from sales events.
+   - If any existing code reduces `hildaleQty` in response to Sales Order status changes, remove that behavior and switch it to operate only on `pivotQty`.
+
+2) Hildale inventory changes must come only from:
+   - Purchase Orders received into Hildale.
+   - Production/manufacturing events (BOM builds that convert raw materials into finished goods at Hildale).
+   - Internal transfers FROM Hildale TO Pivot (these should decrement `hildaleQty` and increment `pivotQty` together as one transaction).
+   - Manual adjustments / stock corrections explicitly made in Hildale (never triggered by sales).
+
+3) Pivot inventory changes:
+   - External (Extensiv) snapshot sync: sets `pivotQty` to Extensiv on-hand for mapped SKUs.
+   - Sales Orders: reduce `pivotQty` (or reservations) only.
+   - Internal transfers from Hildale: increase `pivotQty` when Hildale sends finished product to Pivot.
+   - Never adjust `pivotQty` directly from POs (POs are always to Hildale).
+
+4) Implementation tasks:
+   - Audit all existing Sales Order handlers, webhooks, and background jobs:
+     • Confirm that only `pivotQty` is read/updated when sales are processed.
+     • Remove or rewrite any logic that touches `hildaleQty` on sales.
+   - Audit all HildaleQty mutations and ensure they originate only from:
+     • PO receipts into Hildale,
+     • production/BOM builds,
+     • Hildale→Pivot transfer flows,
+     • explicit manual adjustments.
+   - Add tests:
+     • Creating and shipping a Sales Order changes `pivotQty` but leaves `hildaleQty` unchanged.
+     • Creating a Hildale→Pivot transfer changes both `hildaleQty` (down) and `pivotQty` (up).
+     • PO receipts into Hildale change `hildaleQty` but not `pivotQty`.
+
+This rule (“Sales only impact Pivot; Hildale only changes through POs, production, and transfers”) overrides any previous instructions that suggested sales could adjust HildaleQty.

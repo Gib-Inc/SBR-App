@@ -33,7 +33,14 @@ Preferred communication style: Simple, everyday language.
 
 ### Features & Design Decisions
 
-*   **Inventory Tracking**: Detailed inventory location fields (`hildaleQty`, `pivotQty`, `availableForSaleQty`) and a robust `InventoryMovement` system tracking all changes via `InventoryTransaction`.
+*   **Inventory Tracking**: Dual-warehouse model with strict inventory rules:
+    *   `hildaleQty`: Buffer stock at Hildale production warehouse (NOT sellable)
+    *   `pivotQty`: Sellable stock at Pivot 3PL (canonical for marketplace sync)
+    *   `availableForSaleQty`: Derived cache from pivotQty minus allocations
+    *   **ABSOLUTE RULE**: Sales orders ONLY impact `pivotQty`, NEVER `hildaleQty`
+    *   `hildaleQty` changes only from: PO receipts, production builds, Hildale→Pivot transfers, returns, manual adjustments
+    *   `TRANSFER` event type moves stock from Hildale → Pivot (makes it sellable)
+    *   Robust `InventoryMovement` system tracking all changes via `InventoryTransaction`
 *   **Forecasting & Planning**: Constraint-based planning for stockout prediction and production capacity, LLM-powered multi-period forecasting for reorder recommendations.
 *   **Order Management**: Multi-channel order synchronization (Shopify, Amazon) with duplicate prevention and SKU mapping.
 *   **Purchase Order (PO) System**:

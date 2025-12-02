@@ -1905,13 +1905,13 @@ export default function BOM() {
           </Card>
         ) : (
           <div className="overflow-x-auto overflow-y-visible rounded-md border">
-            <table className="w-full min-w-[1400px]">
+            <table className="w-full table-auto">
               <thead className="bg-muted/50">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
                   {columnVisibility.shopifySku && (
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">
                       <div className="flex items-center gap-1">
                         <SiShopify className="h-3.5 w-3.5 text-green-600" />
                         Shopify SKU
@@ -1919,7 +1919,7 @@ export default function BOM() {
                     </th>
                   )}
                   {columnVisibility.amazonSku && (
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">
                       <div className="flex items-center gap-1">
                         <SiAmazon className="h-3.5 w-3.5 text-orange-500" />
                         Amazon SKU
@@ -1927,7 +1927,7 @@ export default function BOM() {
                     </th>
                   )}
                   {columnVisibility.extensivSku && (
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">
                       <div className="flex items-center gap-1">
                         <Package className="h-3.5 w-3.5 text-blue-600" />
                         Extensiv SKU
@@ -1935,19 +1935,19 @@ export default function BOM() {
                     </th>
                   )}
                   {columnVisibility.upc && (
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">
                       <div className="flex items-center gap-1">
                         <Package className="h-3.5 w-3.5 text-purple-600" />
                         UPC
                       </div>
                     </th>
                   )}
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Forecast</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Available for Sale</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorders</th>
-                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Forecast</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Hildale Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Pivot Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Avail</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorders</th>
+                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -2013,20 +2013,20 @@ export default function BOM() {
           </Card>
         ) : (
           <div className="overflow-x-auto overflow-y-visible rounded-md border">
-            <table className="w-full min-w-[1200px]">
+            <table className="w-full table-auto">
               <thead className="bg-muted/50">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier SKU</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Unit Cost</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">MOQ</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Lead Time (days)</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Stock</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">AI Reorder</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Category</th>
-                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier SKU</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Unit Cost</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">MOQ</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Stock</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">AI Reorder</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Category</th>
+                  <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>

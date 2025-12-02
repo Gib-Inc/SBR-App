@@ -158,21 +158,21 @@ export class GoHighLevelClient {
   }
 
   /**
-   * Fetch a contact by phone or email
+   * Fetch a contact by phone or email using V2 API
+   * V2 uses the `query` parameter for general search, not direct email/phone params
    */
   async getContactByPhoneOrEmail(phone?: string, email?: string): Promise<GHLContact | null> {
     try {
-      let searchQuery = '';
-      if (email) {
-        searchQuery = `email=${encodeURIComponent(email)}`;
-      } else if (phone) {
-        searchQuery = `phone=${encodeURIComponent(phone)}`;
-      } else {
-        throw new Error('Either phone or email must be provided');
+      // V2 API uses 'query' parameter for searching, not direct email/phone params
+      const searchValue = email || phone;
+      if (!searchValue) {
+        console.log('[GoHighLevelClient] No email or phone provided for contact search');
+        return null;
       }
 
+      // Use the query parameter for V2 API contact search
       const response = await fetch(
-        `${this.baseUrl}/contacts?locationId=${this.locationId}&${searchQuery}`,
+        `${this.baseUrl}/contacts/?locationId=${this.locationId}&query=${encodeURIComponent(searchValue)}&limit=1`,
         {
           headers: this.getHeaders(),
         }
@@ -188,6 +188,7 @@ export class GoHighLevelClient {
       const contacts = data.contacts || [];
       
       if (contacts.length === 0) {
+        console.log(`[GoHighLevelClient] No contact found for query: ${searchValue}`);
         return null;
       }
 
@@ -412,6 +413,7 @@ export class GoHighLevelClient {
   /**
    * Create or update an opportunity in a pipeline
    * Used for draft PO creation from stock warnings
+   * V2 API format - customFields must be array of {key, value} objects
    */
   async createOpportunity(
     pipelineId: string,
@@ -431,38 +433,76 @@ export class GoHighLevelClient {
         locationId: this.locationId,
       };
 
-      // Add notes to the opportunity
-      if (notes) {
-        opportunityData.notes = notes;
+      // V2 API doesn't support notes directly - put them in the name if needed
+      // Or we can skip notes for now as they're not a standard V2 field
+      console.log(`[GoHighLevelClient] Creating opportunity: ${name} in pipeline ${pipelineId}, stage ${stageId}`);
+
+      // V2 API: customFields must be an array of {key, value} objects
+      // Only add if we have meaningful custom fields to pass
+      if (customFields && Object.keys(customFields).length > 0) {
+        // Filter out undefined/null values and convert to V2 format
+        const customFieldsArray = Object.entries(customFields)
+          .filter(([_, value]) => value !== undefined && value !== null)
+          .map(([key, value]) => ({
+            key,
+            field_value: String(value),
+          }));
+        
+        if (customFieldsArray.length > 0) {
+          opportunityData.customFields = customFieldsArray;
+        }
       }
 
-      // Add custom fields if provided
-      if (customFields) {
-        opportunityData.customFields = customFields;
-      }
-
-      const response = await fetch(`${this.baseUrl}/opportunities`, {
+      const response = await fetch(`${this.baseUrl}/opportunities/`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(opportunityData),
       });
 
+      const responseText = await response.text();
+      
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[GoHighLevelClient] Failed to create opportunity:', errorText);
+        console.error('[GoHighLevelClient] Failed to create opportunity:', responseText);
+        let errorMessage = `${response.status} ${response.statusText}`;
+        try {
+          const errorData = JSON.parse(responseText);
+          errorMessage = errorData.message || errorData.error || errorMessage;
+          if (Array.isArray(errorData.message)) {
+            errorMessage = errorData.message.join(', ');
+          }
+        } catch { /* use default error message */ }
         return {
           success: false,
-          error: `Failed to create opportunity: ${response.status} ${response.statusText}`,
+          error: `Failed to create opportunity: ${errorMessage}`,
         };
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        console.error('[GoHighLevelClient] Failed to parse opportunity response:', responseText);
+        return {
+          success: false,
+          error: 'Invalid response from GHL API',
+        };
+      }
+      
       const opportunityId = data.opportunity?.id || data.id;
+      
+      if (!opportunityId) {
+        console.error('[GoHighLevelClient] No opportunity ID in response:', data);
+        return {
+          success: false,
+          error: 'No opportunity ID returned from GHL API',
+        };
+      }
       
       // Build deep link URL to the opportunity
       // GHL opportunity URL format: https://app.gohighlevel.com/v2/location/{locationId}/opportunities/{opportunityId}
       const opportunityUrl = `https://app.gohighlevel.com/v2/location/${this.locationId}/opportunities/${opportunityId}`;
 
+      console.log(`[GoHighLevelClient] Created opportunity: ${opportunityId}`);
       return {
         success: true,
         opportunityId,

@@ -4639,9 +4639,9 @@ Priority: ${priority}
 Reorder Point: ${item.reorderPoint || 'Not set'}
             `.trim();
 
-            // Include SKU in name so deduplication can find existing alerts
-            // Format: "Stock Alert: [SKU] Name (X days)" - SKU enables unique matching
-            const stockAlertName = `Stock Alert: [${item.sku}] ${item.name} (${Math.round(item.daysOfCover)} days)`;
+            // Use item name for matching (both old format and new format contain this)
+            // Format: "Stock Alert: Name (X days)" - consistent format for deduplication
+            const stockAlertName = `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`;
             const opportunityResult = await client.createOrUpdateOpportunity(
               pipelineId,
               stageId,
@@ -4655,7 +4655,7 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
                 priority,
               },
               systemContactId!, // Use system contact for stock warnings (required for V2)
-              item.sku // Unique identifier for search - now also appears in name for matching
+              item.name // Search by item name since that's what's in existing opportunity names
             );
 
             if (opportunityResult.success) {

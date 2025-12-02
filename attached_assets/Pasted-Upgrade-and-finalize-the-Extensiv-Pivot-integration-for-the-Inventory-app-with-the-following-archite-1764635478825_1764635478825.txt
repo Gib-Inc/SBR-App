@@ -1,0 +1,283 @@
+Upgrade and finalize the Extensiv/Pivot integration for the Inventory app with the following architecture. Do NOT create a new app or new main pages; extend the existing codebase.
+
+========================================================
+0) CORE PRINCIPLES
+========================================================
+- Extensiv/Pivot is the physical system of record for Pivot inventory only (finished goods at the 3PL).
+- “Pivot Qty” on the BOM page is the single quantity column for Pivot/Extensiv. Remove any separate Extensiv quantity column and wire everything to Pivot Qty.
+- Hildale Qty is our internal warehouse count.
+- Purchase Orders always ship to Hildale, never to Pivot.
+- Extensiv two-way integration is only for finished goods fulfillment (customer orders), not raw-material POs.
+
+========================================================
+1) SETTINGS – EXTENSIV TWO-WAY SYNC & PIVOT/HILDALE RULES
+========================================================
+In the AI Agent “Rules” tab:
+
+1.1 Add/ensure these controls exist:
+
+- Toggle: “Extensiv Two-Way Sync”
+  • OFF → 1-Way (Inbound Only)
+  • ON  → 2-Way (Orders Enabled)
+
+- Numeric fields for rebalancing rules:
+  • “Pivot Low Threshold (days)” – e.g. 5
+  • “Hildale High Threshold (days)” – e.g. 20
+
+Definitions:
+- Days of cover at Pivot = Pivot Qty / ForecastDaily
+- Days of cover at Hildale = Hildale Qty / ForecastDaily
+  (ForecastDaily can be derived from the existing Forecast field; if Forecast is days-based already, adjust accordingly.)
+
+1.2 Behavior of “Extensiv Two-Way Sync”:
+- OFF:
+  • We only READ inventory and activity from Extensiv.
+  • We NEVER send orders or updates to Extensiv.
+  • We may log “would have written” actions as dry-run entries.
+- ON:
+  • We are allowed to create outbound fulfillment orders in Extensiv for mapped SKUs.
+  • We still never overwrite on-hand counts directly; we rely on orders/receipts and periodic on-hand snapshots.
+
+Persist these in server-side settings, e.g.:
+
+- settings.aiRules.extensivTwoWaySync: boolean
+- settings.aiRules.pivotLowDaysThreshold: number
+- settings.aiRules.hildaleHighDaysThreshold: number
+
+All write calls to Extensiv must check `extensivTwoWaySync`.
+
+========================================================
+2) EXTENSIV CONFIG CARD & CREDENTIALS
+========================================================
+Use the existing Extensiv/Pivot card in the integrations page.
+
+2.1 Configure dialog:
+- Fields:
+  • API base URL
+  • Extensiv Account/Client ID
+  • API Key / Secret
+  • Primary Warehouse ID for Pivot
+  • Optional default “Ship-From” name
+  • Checkbox: “Push orders to Extensiv (requires Extensiv Two-Way Sync)”
+
+- Store credentials securely server-side only.
+
+2.2 Card UI:
+- Show:
+  • Connection status: Not Configured / Configured / Error
+  • Last inventory sync time
+  • Last activity sync time
+  • Mode label:
+    – “Mode: 1-Way (Inbound Only)” when Two-Way is OFF
+    – “Mode: 2-Way (Orders Enabled)” when Two-Way is ON and push checkbox is checked
+- Buttons:
+  • Configure
+  • Test Connection
+  • Sync Now
+  • “Open SKU Mapping (Extensiv)” shortcut
+
+2.3 Test Connection:
+- Use a lightweight Extensiv endpoint (e.g. list warehouses).
+- On success: mark as Configured.
+- On failure: show reason and log to Logs table.
+
+========================================================
+3) PRODUCT MODEL & SKU MAPPING – EXTENSIV
+========================================================
+3.1 Product model should include (if not already):
+
+- sku                 // House SKU
+- upc                 // GS1 UPC
+- extensivSku         // Extensiv item code (nullable)
+- extensivWarehouseId // optional override (nullable)
+- hildaleQty          // Hildale warehouse quantity
+- pivotQty            // Pivot warehouse quantity (driven by Extensiv)
+- forecastDaily or a way to derive daily demand
+
+3.2 BOM page – Finished Products grid:
+
+- Columns: Forecast | Hildale Qty | Pivot Qty | Available for Sale | Backorders | Actions
+- Remove any dedicated “Extensiv” quantity column; all Pivot/Extensiv inventory is represented by Pivot Qty.
+- Ensure Available for Sale uses both Hildale and Pivot correctly (existing logic is fine; just re-compute after updates).
+
+3.3 SKU Mapping wizard – Extensiv tab:
+
+- Fetch Extensiv item master for the configured Pivot warehouse:
+  • itemCode (Extensiv SKU)
+  • description
+  • upc/barcode
+  • current on-hand quantity
+
+- For each Extensiv item, auto-suggest an internal product:
+  • Prefer UPC match: Extensiv.upc == product.upc
+  • Fallback: itemCode == product.sku or product.extensivSku
+
+- UI: left = Extensiv item (itemCode, description, upc, on-hand); right = internal product (name, sku, upc, HildaleQty, PivotQty).
+
+- When user confirms mapping:
+  • Set product.extensivSku and product.extensivWarehouseId (if used).
+  • Do NOT auto-create products without confirmation.
+
+- Keep a list of unmapped Extensiv items for later mapping and log them.
+
+========================================================
+4) INVENTORY IMPORT (EXTENSIV → PIVOT QTY)
+========================================================
+This is allowed in both 1-Way and 2-Way modes.
+
+4.1 Inventory sync:
+
+- On “Sync Now” or scheduled sync:
+  • For each product with extensivSku:
+    – Fetch on-hand quantity for that SKU in the configured warehouse.
+    – Set `product.pivotQty = extensivOnHand`.
+    – Recompute:
+       AvailableForSale = function(HildaleQty, PivotQty, reserved/backordered)
+  • For unmapped Extensiv items: leave BOM unchanged; add to “Unmapped” list and log.
+
+4.2 Activity sync (optional):
+
+- Optionally pull shipments/adjustments from Extensiv and store as rows in a “Warehouse Activity / Logs” table for diagnostics.
+- Do NOT adjust quantities directly from activity; treat the periodic on-hand snapshot as the authority and write it to Pivot Qty.
+
+========================================================
+5) SALES ORDERS, PIVOT DEDUCTION & GHL ALERTS
+========================================================
+5.1 Sales Order model:
+
+- Ensure each Sales Order has:
+  • channel (Shopify/Amazon/etc)
+  • fulfillmentSource: HILDALE or PIVOT_EXTENSIV
+  • line items with productId, qty
+
+5.2 Behavior when a sale is created/confirmed:
+
+- Always:
+  • If fulfillmentSource == HILDALE:
+      – Deduct from Hildale Qty.
+  • If fulfillmentSource == PIVOT_EXTENSIV:
+      – Deduct from Pivot Qty (local reservation) immediately when order is confirmed.
+      – On next Extensiv inventory sync, Pivot Qty will be corrected to Extensiv on-hand.
+
+- After updating quantities, compute days of cover:
+
+  pivotDays = pivotQty / forecastDaily (guard against divide by zero)
+  hildaleDays = hildaleQty / forecastDaily
+
+- If BOTH:
+  • pivotDays < settings.aiRules.pivotLowDaysThreshold
+  AND
+  • hildaleDays > settings.aiRules.hildaleHighDaysThreshold
+
+  THEN:
+  • Trigger a “Rebalance needed” event for that product:
+      – Create or update a GHL opportunity using the existing GHL connection, in the Replit pipeline and appropriate “Stock Order Now” / “Stock warning” stage.
+      – Include:
+         · Product name/SKU
+         · Hildale Qty, Pivot Qty
+         · pivotDays, hildaleDays
+         · Recommended transfer quantity (e.g. enough units to bring Pivot up to the medium threshold but not exceed Hildale high threshold).
+
+  • Log this event in Logs for auditing.
+
+5.3 Outbound Pivot fulfillment to Extensiv (only if Extensiv Two-Way Sync is ON and push checkbox is enabled):
+
+- For Sales Orders where fulfillmentSource == PIVOT_EXTENSIV:
+
+  • If Extensiv Two-Way Sync == FALSE:
+      – Do NOT create Extensiv orders.
+      – Log a dry-run entry describing what would have been created.
+
+  • If Extensiv Two-Way Sync == TRUE:
+      – Create an outbound order/shipment in Extensiv:
+          · Customer name/address
+          · Our Sales Order ID + channel as reference
+          · Line items by extensivSku and quantity
+      – Store salesOrder.extensivOrderId.
+      – Set Sales Order status → “Pending Pivot Fulfillment”.
+
+- When activity sync later finds the Extensiv shipment for that order:
+  • Update Sales Order status → SHIPPED.
+  • On next inventory sync, Pivot Qty is updated from Extensiv again (single source of truth).
+
+========================================================
+6) PURCHASE ORDERS – ALWAYS SHIP TO HILDALE
+========================================================
+6.1 PO model:
+
+- Remove any “Ship To: Pivot/Extensiv” behavior from the Extensiv integration.
+- POs are always considered inbound to Hildale only.
+
+6.2 Behavior:
+
+- Creating/sending a PO:
+  • No PO data is written to Extensiv.
+  • Receive events for POs should only affect Hildale Qty.
+  • Extensiv/Pivot is not used for raw materials; it only holds finished goods for customer fulfillment.
+
+- The previous logic about creating Extensiv inbound receipts/ASNs from POs should be removed or disabled.
+
+========================================================
+7) SYNC NOW & BACKGROUND JOB
+========================================================
+7.1 “Sync Now” on Extensiv card should:
+
+- Step 1: Inventory
+  • Pull on-hand quantities for all mapped SKUs.
+  • Update `pivotQty` for each product and recompute Available for Sale.
+
+- Step 2: Activity (optional)
+  • Pull recent shipments for orders with salesOrder.extensivOrderId.
+  • Update those Sales Orders’ statuses to SHIPPED where applicable.
+
+- Step 3: Outbound Orders (only if Extensiv Two-Way Sync == TRUE and push checkbox checked)
+  • For any Sales Orders with fulfillmentSource == PIVOT_EXTENSIV and missing extensivOrderId, create Extensiv orders as described above.
+
+- Step 4: Summary
+  • Show counts of products updated, orders imported, orders pushed, and any errors.
+
+7.2 Background scheduler (if available):
+
+- Run inventory sync on a cadence (e.g. every 15–30 minutes).
+- Run activity sync.
+- Run outbound order push only if Extensiv Two-Way Sync is enabled.
+
+========================================================
+8) LOGGING, SECURITY & TESTING
+========================================================
+8.1 Logs:
+
+- Log:
+  • Extensiv API failures (read/write).
+  • Dry-run entries when 2-Way is off.
+  • Unmapped Extensiv SKUs detected during sync.
+  • Rebalance alerts sent to GHL (with product and thresholds used).
+
+8.2 Security:
+
+- Keep all Extensiv credentials server-side only.
+- Never expose keys in client or logs.
+
+8.3 Test scenarios:
+
+- Scenario A – 1-Way Mode:
+  • Extensiv configured; Extensiv Two-Way Sync OFF.
+  • Run “Sync Now”:
+      – Pivot Qty matches Extensiv on-hand for mapped SKUs.
+      – No Extensiv orders created; only dry-run logs.
+  • Create Sales Orders (HILDALE and PIVOT_EXTENSIV) and verify:
+      – Hildale Qty/Pivot Qty deductions occur locally.
+      – Rebalance alerts fire when pivotDays/hildaleDays cross thresholds and GHL opportunities are created.
+
+- Scenario B – 2-Way Mode:
+  • Extensiv Two-Way Sync ON, push orders enabled.
+  • Create Sales Orders with fulfillmentSource == PIVOT_EXTENSIV.
+  • Run “Sync Now”:
+      – Extensiv orders are created.
+      – When Extensiv ships, activity sync updates Sales Orders to SHIPPED.
+      – Pivot Qty updates to Extensiv on-hand on subsequent inventory syncs.
+
+With these changes:
+- Pivot Qty is the single, Extensiv-backed quantity column.
+- Sales immediately adjust Pivot/Hildale quantities and drive smart GHL alerts when Pivot is low and Hildale is heavy.
+- POs are strictly for Hildale; Extensiv only handles finished-goods customer fulfillment.

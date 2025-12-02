@@ -56,6 +56,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   // Form state for different integration types
   const [apiKey, setApiKey] = useState("");
   const [pivotWarehouseId, setPivotWarehouseId] = useState("1");
+  const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://api.skubana.com/v1");
+  const [extensivPushOrders, setExtensivPushOrders] = useState(false);
   
   // Shopify fields
   const [shopDomain, setShopDomain] = useState("");
@@ -93,19 +95,23 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
     },
   });
 
-  // Fetch AI Agent settings to check if two-way sync is enabled (for Shopify and Amazon)
+  // Fetch AI Agent settings to check if two-way sync is enabled (for Shopify, Amazon, and Extensiv)
   const { data: aiAgentSettings } = useQuery<{
     shopifyTwoWaySync: boolean;
     shopifySafetyBuffer: number;
     amazonTwoWaySync: boolean;
     amazonSafetyBuffer: number;
+    extensivTwoWaySync: boolean;
+    pivotLowDaysThreshold: number;
+    hildaleHighDaysThreshold: number;
   } | null>({
     queryKey: ["/api/ai-agent-settings"],
-    enabled: open && (integrationType === "SHOPIFY" || integrationType === "AMAZON"),
+    enabled: open && (integrationType === "SHOPIFY" || integrationType === "AMAZON" || integrationType === "EXTENSIV"),
   });
 
   const shopifyTwoWaySyncEnabled = aiAgentSettings?.shopifyTwoWaySync ?? false;
   const amazonTwoWaySyncEnabled = aiAgentSettings?.amazonTwoWaySync ?? false;
+  const extensivTwoWaySyncEnabled = aiAgentSettings?.extensivTwoWaySync ?? false;
 
   // Initialize form fields when config loads
   useEffect(() => {
@@ -113,6 +119,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
       setApiKey("");
       if (integrationType === "EXTENSIV") {
         setPivotWarehouseId(config.config?.pivotWarehouseId || "1");
+        setExtensivBaseUrl(config.config?.baseUrl || "https://api.skubana.com/v1");
+        setExtensivPushOrders(config.config?.pushOrders || false);
       } else if (integrationType === "SHOPIFY") {
         setShopDomain(config.config?.shopDomain || "");
         setAccessToken("");
@@ -193,7 +201,11 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
       let configData: any = {};
       
       if (integrationType === "EXTENSIV") {
-        configData = { pivotWarehouseId };
+        configData = { 
+          pivotWarehouseId,
+          baseUrl: extensivBaseUrl,
+          pushOrders: extensivPushOrders,
+        };
       } else if (integrationType === "SHOPIFY") {
         configData = {
           shopDomain,
@@ -405,6 +417,43 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
             </div>
           )}
 
+          {/* Extensiv Mode Display */}
+          {integrationType === "EXTENSIV" && config && config.apiKey && !isConfigMode && (
+            <div className="space-y-3 p-4 rounded-lg bg-muted/50" data-testid="section-extensiv-status">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Sync Mode</span>
+                <Badge 
+                  variant={extensivTwoWaySyncEnabled ? "default" : "secondary"}
+                  data-testid="badge-extensiv-mode"
+                >
+                  {extensivTwoWaySyncEnabled 
+                    ? (config.config?.pushOrders ? "2-Way (Orders Enabled)" : "2-Way (Push Off)")
+                    : "1-Way (Inbound Only)"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Inventory Sync</span>
+                <span className="text-sm">Enabled (always)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Push Orders</span>
+                <span className="text-sm">
+                  {!extensivTwoWaySyncEnabled 
+                    ? "Disabled (1-Way Mode)" 
+                    : config.config?.pushOrders 
+                      ? "Enabled" 
+                      : "Disabled"}
+                </span>
+              </div>
+              {config.config?.pivotWarehouseId && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Warehouse ID</span>
+                  <span className="text-sm font-mono">{config.config.pivotWarehouseId}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {config && config.lastSyncAt && !isConfigMode && (
             <div className="text-sm text-muted-foreground" data-testid="text-last-sync">
               Last sync: {format(new Date(config.lastSyncAt), "PPpp")}
@@ -446,6 +495,18 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="extensiv-base-url" data-testid="label-base-url">
+                      API Base URL
+                    </Label>
+                    <Input
+                      id="extensiv-base-url"
+                      placeholder="https://api.skubana.com/v1"
+                      value={extensivBaseUrl}
+                      onChange={(e) => setExtensivBaseUrl(e.target.value)}
+                      data-testid="input-base-url"
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="warehouse-id" data-testid="label-warehouse-id">
                       Pivot Warehouse ID
                     </Label>
@@ -455,6 +516,32 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       value={pivotWarehouseId}
                       onChange={(e) => setPivotWarehouseId(e.target.value)}
                       data-testid="input-warehouse-id"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      The Extensiv warehouse ID for your Pivot 3PL location.
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label 
+                        htmlFor="extensiv-push-orders" 
+                        className={!extensivTwoWaySyncEnabled ? "text-muted-foreground" : ""}
+                        data-testid="label-push-orders"
+                      >
+                        Push Orders to Extensiv
+                      </Label>
+                      {!extensivTwoWaySyncEnabled && (
+                        <p className="text-xs text-muted-foreground">
+                          Enable "Extensiv Two-Way Sync" in AI Agent → Rules to unlock this option
+                        </p>
+                      )}
+                    </div>
+                    <Switch
+                      id="extensiv-push-orders"
+                      checked={extensivPushOrders}
+                      onCheckedChange={setExtensivPushOrders}
+                      disabled={!extensivTwoWaySyncEnabled}
+                      data-testid="switch-push-orders"
                     />
                   </div>
                 </>

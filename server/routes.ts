@@ -514,6 +514,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         expectedDate.setDate(expectedDate.getDate() + maxLeadTime);
         
         // Create the Purchase Order in our system
+        // PO Hildale-only routing: Components/raw materials always go to Hildale warehouse
         const poNumber = await storage.getNextPONumber();
         const po = await storage.createPurchaseOrder({
           poNumber,
@@ -523,7 +524,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           supplierAddress: null,
           buyerCompanyName: 'Sticker Bud Roller',
           buyerAddress: null,
-          shipToLocation: null,
+          shipToLocation: 'HILDALE',
           currency: 'USD',
           paymentTerms: 'Net 30',
           incoterms: null,
@@ -3338,6 +3339,51 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Extensiv - Fetch products for SKU mapping
+  app.get("/api/integrations/extensiv/products", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get API key from integration config or environment variable
+      const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      const pivotWarehouseId = (config?.config as any)?.pivotWarehouseId || '1';
+      const baseUrl = (config?.config as any)?.baseUrl || 'https://api.skubana.com/v1';
+      
+      if (!apiKey) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Extensiv API key not configured. Please add it in Settings or set EXTENSIV_API_KEY environment variable." 
+        });
+      }
+
+      const client = new ExtensivClient(apiKey, baseUrl);
+      const items = await client.getAllInventory(pivotWarehouseId);
+      
+      // Transform to consistent format for SKU mapping wizard
+      const products = items.map(item => ({
+        sku: item.sku,
+        name: item.name || item.sku,
+        quantity: item.quantity,
+        upc: item.upc || null,
+        warehouseId: pivotWarehouseId,
+      }));
+
+      res.json({
+        success: true,
+        products,
+        totalProducts: products.length,
+        warehouseId: pivotWarehouseId,
+      });
+    } catch (error: any) {
+      console.error('[Extensiv] Error fetching products:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to fetch Extensiv products" 
+      });
+    }
+  });
+
   // Shopify - Test Connection
   app.post("/api/integrations/shopify/test", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -3482,7 +3528,38 @@ TOTAL: $${subtotal.toFixed(2)}
             });
             updatedCount++;
           } else {
-            // Create new sales order
+            // Determine fulfillment source using FulfillmentDecisionService
+            // This decides whether to ship from Hildale or Pivot/Extensiv based on inventory thresholds
+            let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'HILDALE';
+            try {
+              const { FulfillmentDecisionService } = await import('./services/fulfillment-decision-service');
+              const fulfillmentService = new FulfillmentDecisionService();
+              
+              // Pre-scan line items to get product IDs for fulfillment decision
+              const productIds: string[] = [];
+              for (const lineItem of orderData.lineItems) {
+                let product = await storage.getItemBySku(lineItem.sku);
+                if (!product) {
+                  product = await storage.findProductByShopifySku(lineItem.sku);
+                }
+                if (product && product.type === 'finished_product') {
+                  productIds.push(product.id);
+                }
+              }
+              
+              if (productIds.length > 0 && req.user?.id) {
+                const orderDecision = await fulfillmentService.decideOrderFulfillment(
+                  productIds,
+                  req.user.id
+                );
+                fulfillmentSource = orderDecision.source;
+                console.log(`[Shopify] Fulfillment decision for order ${orderData.externalOrderId}: ${fulfillmentSource}`);
+              }
+            } catch (fulfillmentError) {
+              console.warn('[Shopify] Fulfillment decision failed, defaulting to HILDALE:', fulfillmentError);
+            }
+
+            // Create new sales order with fulfillment source
             const salesOrder = await storage.createSalesOrder({
               externalOrderId: orderData.externalOrderId,
               externalCustomerId: orderData.externalCustomerId,
@@ -3497,6 +3574,7 @@ TOTAL: $${subtotal.toFixed(2)}
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
+              fulfillmentSource,
             });
 
             // Create order lines
@@ -3786,7 +3864,38 @@ TOTAL: $${subtotal.toFixed(2)}
             });
             updatedCount++;
           } else {
-            // Create new sales order
+            // Determine fulfillment source using FulfillmentDecisionService
+            // This decides whether to ship from Hildale or Pivot/Extensiv based on inventory thresholds
+            let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'HILDALE';
+            try {
+              const { FulfillmentDecisionService } = await import('./services/fulfillment-decision-service');
+              const fulfillmentService = new FulfillmentDecisionService();
+              
+              // Pre-scan line items to get product IDs for fulfillment decision
+              const productIds: string[] = [];
+              for (const lineItem of orderData.lineItems) {
+                let product = await storage.getItemBySku(lineItem.sku);
+                if (!product) {
+                  product = await storage.findProductByAmazonSku(lineItem.sku);
+                }
+                if (product && product.type === 'finished_product') {
+                  productIds.push(product.id);
+                }
+              }
+              
+              if (productIds.length > 0 && req.user?.id) {
+                const orderDecision = await fulfillmentService.decideOrderFulfillment(
+                  productIds,
+                  req.user.id
+                );
+                fulfillmentSource = orderDecision.source;
+                console.log(`[Amazon] Fulfillment decision for order ${orderData.externalOrderId}: ${fulfillmentSource}`);
+              }
+            } catch (fulfillmentError) {
+              console.warn('[Amazon] Fulfillment decision failed, defaulting to HILDALE:', fulfillmentError);
+            }
+
+            // Create new sales order with fulfillment source
             const salesOrder = await storage.createSalesOrder({
               externalOrderId: orderData.externalOrderId,
               externalCustomerId: orderData.externalCustomerId,
@@ -3801,6 +3910,7 @@ TOTAL: $${subtotal.toFixed(2)}
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
+              fulfillmentSource,
             });
 
             // Create order lines
@@ -6273,6 +6383,12 @@ TOTAL: $${subtotal.toFixed(2)}
         poData.poNumber = `PO-${year}-${String(nextSequence).padStart(4, '0')}`;
       }
       
+      // PO Hildale-only routing: Always route POs to Hildale warehouse
+      // Pivot/Extensiv is a 3PL for fulfillment only - components/raw materials always go to Hildale
+      if (!poData.shipToLocation) {
+        poData.shipToLocation = 'HILDALE';
+      }
+      
       const validatedPO = insertPurchaseOrderSchema.parse(poData);
       const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
       createdPOId = purchaseOrder.id;
@@ -6465,11 +6581,13 @@ TOTAL: $${subtotal.toFixed(2)}
       const nextSequence = existingPOsThisYear.length + 1;
       const poNumber = `PO-${year}-${String(nextSequence).padStart(4, '0')}`;
 
-      // Create the PO
+      // Create the PO with Hildale-only routing
+      // Components/raw materials always go to Hildale warehouse (not Pivot/Extensiv 3PL)
       const purchaseOrder = await storage.createPurchaseOrder({
         poNumber,
         supplierId: finalSupplierId,
         status: 'DRAFT',
+        shipToLocation: 'HILDALE',
       });
       createdPOId = purchaseOrder.id;
 
@@ -7663,7 +7781,44 @@ TOTAL: $${subtotal.toFixed(2)}
           action: 'updated',
         });
       } else if (topic === 'orders/create') {
-        // Create new order
+        // Determine fulfillment source using FulfillmentDecisionService
+        // For webhook orders, we determine based on the line items
+        let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'HILDALE';
+        try {
+          const { FulfillmentDecisionService } = await import('./services/fulfillment-decision-service');
+          const fulfillmentService = new FulfillmentDecisionService();
+          const items = await storage.getAllItems();
+          
+          // Pre-scan line items to get product IDs for fulfillment decision
+          const productIds: string[] = [];
+          for (const lineItem of lineItems) {
+            if (!lineItem.sku) continue;
+            const matchedItem = items.find(i => 
+              i.shopifySku === lineItem.sku || i.sku === lineItem.sku
+            );
+            if (matchedItem && matchedItem.type === 'finished_product') {
+              productIds.push(matchedItem.id);
+            }
+          }
+          
+          if (productIds.length > 0) {
+            // Find first admin user for context
+            const adminUsers = await storage.getAllUsers();
+            const adminUser = adminUsers.find(u => u.role === 'admin') || adminUsers[0];
+            if (adminUser) {
+              const orderDecision = await fulfillmentService.decideOrderFulfillment(
+                productIds,
+                adminUser.id
+              );
+              fulfillmentSource = orderDecision.source;
+              console.log(`[Shopify Webhook] Fulfillment decision for order ${orderNumber}: ${fulfillmentSource}`);
+            }
+          }
+        } catch (fulfillmentError) {
+          console.warn('[Shopify Webhook] Fulfillment decision failed, defaulting to HILDALE:', fulfillmentError);
+        }
+
+        // Create new order with fulfillment source
         const newOrder = await storage.createSalesOrder({
           channel: 'SHOPIFY',
           externalOrderId,
@@ -7679,9 +7834,10 @@ TOTAL: $${subtotal.toFixed(2)}
           lineItems,
           sourceUrl: `https://${shopDomain}/admin/orders/${order.id}`,
           rawPayload: order,
+          fulfillmentSource,
         });
 
-        console.log(`[Shopify Webhook] Created order ${orderNumber} (${newOrder.id})`);
+        console.log(`[Shopify Webhook] Created order ${orderNumber} (${newOrder.id}) fulfillmentSource=${fulfillmentSource}`);
         
         // Log the order creation
         await logService.logShopifyWebhookReceived({
@@ -10947,7 +11103,8 @@ Generate only the email body text, no subject line.`;
       const validFields = [
         'autoSendCriticalPos', 'criticalRescueDays', 'criticalThresholdDays',
         'highThresholdDays', 'mediumThresholdDays', 'shopifyTwoWaySync', 'shopifySafetyBuffer',
-        'amazonTwoWaySync', 'amazonSafetyBuffer'
+        'amazonTwoWaySync', 'amazonSafetyBuffer',
+        'extensivTwoWaySync', 'pivotLowDaysThreshold', 'hildaleHighDaysThreshold'
       ];
       const updateData: Record<string, any> = {};
       for (const field of validFields) {

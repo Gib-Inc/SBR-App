@@ -50,6 +50,22 @@ interface ShopifyProductsResponse {
   message?: string;
 }
 
+interface ExtensivProduct {
+  sku: string;
+  name: string;
+  quantity: number;
+  upc: string | null;
+  warehouseId: string;
+}
+
+interface ExtensivProductsResponse {
+  success: boolean;
+  products: ExtensivProduct[];
+  totalProducts: number;
+  warehouseId: string;
+  message?: string;
+}
+
 interface SkuMappingWizardProps {
   isOpen: boolean;
   onClose: () => void;
@@ -317,6 +333,142 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     );
   }, [allShopifyVariants, shopifySearchQuery]);
 
+  // === EXTENSIV TAB LOGIC ===
+  const [extensivSearchQuery, setExtensivSearchQuery] = useState("");
+  
+  // Fetch Extensiv products
+  const { data: extensivProducts, isLoading: isLoadingExtensiv, refetch: refetchExtensiv } = useQuery<ExtensivProductsResponse>({
+    queryKey: ["/api/integrations/extensiv/products"],
+    enabled: activeTab === "extensiv",
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+
+  // Precompute maps for O(1) lookups - optimized for large catalogs
+  const { extensivByUpc, extensivBySku } = useMemo(() => {
+    const byUpc = new Map<string, ExtensivProduct>();
+    const bySku = new Map<string, ExtensivProduct>();
+    
+    if (extensivProducts?.products) {
+      for (const product of extensivProducts.products) {
+        if (product.upc) {
+          byUpc.set(product.upc, product);
+        }
+        bySku.set(product.sku, product);
+      }
+    }
+    
+    return { extensivByUpc: byUpc, extensivBySku: bySku };
+  }, [extensivProducts]);
+
+  // Auto-suggest Extensiv matches for a product (O(1) lookup)
+  const getExtensivSuggestedMatch = (item: Item) => {
+    // First try UPC match (highest priority)
+    if (item.upc) {
+      const upcMatch = extensivByUpc.get(item.upc);
+      if (upcMatch) return { product: upcMatch, matchType: 'UPC' as const };
+    }
+    
+    // Then try SKU match (internal SKU or existing extensivSku)
+    const skuMatch = extensivBySku.get(item.sku) || 
+                     (item.extensivSku ? extensivBySku.get(item.extensivSku) : null);
+    if (skuMatch) return { product: skuMatch, matchType: 'SKU' as const };
+    
+    return null;
+  };
+
+  // Link product to Extensiv SKU
+  const linkToExtensivMutation = useMutation({
+    mutationFn: async (data: { itemId: string; extensivSku: string }) => {
+      const response = await apiRequest("PATCH", `/api/items/${data.itemId}`, {
+        extensivSku: data.extensivSku,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Linked to Extensiv",
+        description: "Product successfully linked to Extensiv SKU",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Link Failed",
+        description: error.message || "Failed to link product",
+      });
+    },
+  });
+
+  // Unlink product from Extensiv
+  const unlinkFromExtensivMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      const response = await apiRequest("PATCH", `/api/items/${itemId}`, {
+        extensivSku: null,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Unlinked from Extensiv",
+        description: "Product unlinked from Extensiv",
+      });
+    },
+  });
+
+  // Get all suggested Extensiv matches for bulk apply
+  const getAllExtensivSuggestedMatches = () => {
+    return filteredProducts
+      .filter(item => !item.extensivSku) // Only unmapped items
+      .map(item => ({ item, match: getExtensivSuggestedMatch(item) }))
+      .filter((entry): entry is { item: Item; match: NonNullable<ReturnType<typeof getExtensivSuggestedMatch>> } => 
+        entry.match !== null
+      );
+  };
+
+  // Bulk apply all Extensiv suggested matches
+  const [isApplyingAllExtensiv, setIsApplyingAllExtensiv] = useState(false);
+  
+  const applyAllExtensivSuggestedMatches = async () => {
+    const matches = getAllExtensivSuggestedMatches();
+    if (matches.length === 0) return;
+    
+    setIsApplyingAllExtensiv(true);
+    try {
+      for (const { item, match } of matches) {
+        await linkToExtensivMutation.mutateAsync({
+          itemId: item.id,
+          extensivSku: match.product.sku,
+        });
+      }
+      toast({
+        title: "All Matches Applied",
+        description: `Successfully linked ${matches.length} product${matches.length > 1 ? 's' : ''} to Extensiv`,
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Bulk Apply Failed",
+        description: "Some products could not be linked. Please try again.",
+      });
+    } finally {
+      setIsApplyingAllExtensiv(false);
+    }
+  };
+
+  // Filter Extensiv products by search
+  const filteredExtensivProducts = useMemo(() => {
+    if (!extensivProducts?.products) return [];
+    if (!extensivSearchQuery) return extensivProducts.products;
+    const query = extensivSearchQuery.toLowerCase();
+    return extensivProducts.products.filter(p => 
+      p.name.toLowerCase().includes(query) ||
+      p.sku.toLowerCase().includes(query) ||
+      (p.upc?.toLowerCase().includes(query))
+    );
+  }, [extensivProducts, extensivSearchQuery]);
+
   // Render enhanced Shopify tab
   const renderShopifyTab = () => {
     const mappedCount = finishedProducts.filter(p => p.shopifyVariantId).length;
@@ -511,6 +663,225 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     );
   };
 
+  // Render enhanced Extensiv tab with auto-matching
+  const renderExtensivTab = () => {
+    const mappedCount = finishedProducts.filter(p => p.extensivSku).length;
+    const unmappedCount = finishedProducts.length - mappedCount;
+
+    if (isLoadingExtensiv) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-muted-foreground">Loading Extensiv products...</span>
+        </div>
+      );
+    }
+
+    if (!extensivProducts?.success) {
+      return (
+        <div className="text-center py-8">
+          <svg className="h-12 w-12 text-blue-500 mx-auto mb-3" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+          </svg>
+          <p className="font-medium">Connect Extensiv to Enable Auto-Matching</p>
+          <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
+            {extensivProducts?.message?.includes("not configured") 
+              ? "Add your Extensiv API credentials in AI Agent → Data Sources to automatically match products by UPC and SKU."
+              : extensivProducts?.message || "Configure Extensiv integration to enable product matching."}
+          </p>
+          <div className="flex justify-center gap-2">
+            <Button variant="outline" onClick={() => refetchExtensiv()} data-testid="button-retry-extensiv">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const suggestedMatches = getAllExtensivSuggestedMatches();
+    const suggestedCount = suggestedMatches.length;
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="gap-1">
+              <CheckCircle className="h-3 w-3 text-green-500" />
+              {mappedCount} Linked
+            </Badge>
+            <Badge variant="outline" className="gap-1">
+              <XCircle className="h-3 w-3 text-orange-500" />
+              {unmappedCount} Unmapped
+            </Badge>
+            {suggestedCount > 0 && (
+              <Badge variant="default" className="gap-1 bg-blue-500">
+                <Sparkles className="h-3 w-3" />
+                {suggestedCount} Suggested
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {suggestedCount > 0 && (
+              <Button
+                size="sm"
+                onClick={applyAllExtensivSuggestedMatches}
+                disabled={isApplyingAllExtensiv}
+                data-testid="button-apply-all-extensiv"
+              >
+                {isApplyingAllExtensiv ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-1" />
+                )}
+                Apply All Suggested
+              </Button>
+            )}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => refetchExtensiv()}
+              data-testid="button-refresh-extensiv"
+            >
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        <div className="text-xs text-muted-foreground">
+          {extensivProducts.totalProducts} items in Extensiv (Warehouse: {extensivProducts.warehouseId})
+        </div>
+
+        <ScrollArea className="h-[400px] pr-4">
+          <div className="space-y-2">
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                {searchQuery ? "No products match your search" : "No finished products found"}
+              </div>
+            ) : (
+              filteredProducts.map((item) => {
+                const isLinked = !!item.extensivSku;
+                const suggestedMatch = !isLinked ? getExtensivSuggestedMatch(item) : null;
+                const linkedProduct = isLinked && extensivProducts.products 
+                  ? extensivProducts.products.find(p => p.sku === item.extensivSku)
+                  : null;
+
+                return (
+                  <Card key={item.id}>
+                    <CardContent className="p-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{item.name}</div>
+                          <div className="text-sm text-muted-foreground font-mono">{item.sku}</div>
+                          {item.upc && (
+                            <div className="text-xs text-muted-foreground">UPC: {item.upc}</div>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          {isLinked ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800">
+                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300">
+                                  <Link2 className="h-4 w-4" />
+                                  <span className="font-medium truncate">
+                                    {linkedProduct?.name || item.extensivSku}
+                                  </span>
+                                </div>
+                                {linkedProduct && (
+                                  <div className="text-xs text-green-600 dark:text-green-400">
+                                    SKU: {linkedProduct.sku} | Qty: {linkedProduct.quantity}
+                                  </div>
+                                )}
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => unlinkFromExtensivMutation.mutate(item.id)}
+                                disabled={unlinkFromExtensivMutation.isPending}
+                                data-testid={`button-unlink-extensiv-${item.id}`}
+                              >
+                                <Unlink className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : suggestedMatch ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
+                                <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300">
+                                  <Sparkles className="h-4 w-4" />
+                                  <span className="font-medium truncate">{suggestedMatch.product.name}</span>
+                                  <Badge variant="secondary" className="text-xs ml-auto">{suggestedMatch.matchType}</Badge>
+                                </div>
+                                <div className="text-xs text-blue-600 dark:text-blue-400">
+                                  SKU: {suggestedMatch.product.sku} | Qty: {suggestedMatch.product.quantity}
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                onClick={() => linkToExtensivMutation.mutate({
+                                  itemId: item.id,
+                                  extensivSku: suggestedMatch.product.sku,
+                                })}
+                                disabled={linkToExtensivMutation.isPending}
+                                data-testid={`button-accept-extensiv-match-${item.id}`}
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <Select
+                              value=""
+                              onValueChange={(sku) => {
+                                if (sku) {
+                                  linkToExtensivMutation.mutate({
+                                    itemId: item.id,
+                                    extensivSku: sku,
+                                  });
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-full" data-testid={`select-extensiv-sku-${item.id}`}>
+                                <SelectValue placeholder="Select Extensiv product..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <div className="p-2">
+                                  <Input
+                                    placeholder="Search products..."
+                                    value={extensivSearchQuery}
+                                    onChange={(e) => setExtensivSearchQuery(e.target.value)}
+                                    className="mb-2"
+                                  />
+                                </div>
+                                <ScrollArea className="h-[200px]">
+                                  {filteredExtensivProducts.slice(0, 50).map((product) => (
+                                    <SelectItem key={product.sku} value={product.sku}>
+                                      <div className="flex flex-col">
+                                        <span className="truncate">{product.name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          SKU: {product.sku}
+                                          {product.upc && ` | UPC: ${product.upc}`}
+                                          {` | Qty: ${product.quantity}`}
+                                        </span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </ScrollArea>
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  };
+
   const renderChannelTab = (
     channel: "shopifySku" | "amazonSku" | "extensivSku",
     channelLabel: string,
@@ -661,7 +1032,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
             </TabsContent>
 
             <TabsContent value="extensiv" className="mt-4">
-              {renderChannelTab("extensivSku", "Extensiv", "Enter Extensiv Item ID")}
+              {renderExtensivTab()}
             </TabsContent>
           </Tabs>
         </div>

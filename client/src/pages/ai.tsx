@@ -631,6 +631,9 @@ interface AiAgentSettings {
   shopifySafetyBuffer: number;
   amazonTwoWaySync: boolean;
   amazonSafetyBuffer: number;
+  extensivTwoWaySync: boolean;
+  pivotLowDaysThreshold: number;
+  hildaleHighDaysThreshold: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -679,6 +682,9 @@ function RulesTab() {
   const [shopifySafetyBuffer, setShopifySafetyBuffer] = useState(0);
   const [amazonTwoWaySync, setAmazonTwoWaySync] = useState(false);
   const [amazonSafetyBuffer, setAmazonSafetyBuffer] = useState(0);
+  const [extensivTwoWaySync, setExtensivTwoWaySync] = useState(false);
+  const [pivotLowDaysThreshold, setPivotLowDaysThreshold] = useState(5);
+  const [hildaleHighDaysThreshold, setHildaleHighDaysThreshold] = useState(20);
   
   // Sync form with fetched rules
   useEffect(() => {
@@ -706,6 +712,9 @@ function RulesTab() {
       setShopifySafetyBuffer(aiAgentSettings.shopifySafetyBuffer || 0);
       setAmazonTwoWaySync(aiAgentSettings.amazonTwoWaySync || false);
       setAmazonSafetyBuffer(aiAgentSettings.amazonSafetyBuffer || 0);
+      setExtensivTwoWaySync(aiAgentSettings.extensivTwoWaySync || false);
+      setPivotLowDaysThreshold(aiAgentSettings.pivotLowDaysThreshold || 5);
+      setHildaleHighDaysThreshold(aiAgentSettings.hildaleHighDaysThreshold || 20);
     }
   }, [aiAgentSettings]);
   
@@ -714,7 +723,7 @@ function RulesTab() {
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
       features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
-      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number };
     }) => {
       // Save rules, features, and agent settings in parallel
       await Promise.all([
@@ -759,6 +768,9 @@ function RulesTab() {
         shopifySafetyBuffer,
         amazonTwoWaySync,
         amazonSafetyBuffer,
+        extensivTwoWaySync,
+        pivotLowDaysThreshold,
+        hildaleHighDaysThreshold,
       },
     });
   };
@@ -1321,6 +1333,94 @@ function RulesTab() {
                     </div>
                   </div>
                 )}
+              </div>
+              
+              {/* Extensiv/Pivot Two-Way Sync */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="extensiv-two-way-sync">Extensiv/Pivot Two-Way Sync</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-extensiv-sync-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Enable two-way sync with Extensiv/Pivot 3PL warehouse. When OFF, only reads inventory from Extensiv. When ON, can push fulfillment orders to Extensiv for mapped products.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Switch
+                    id="extensiv-two-way-sync"
+                    checked={extensivTwoWaySync}
+                    onCheckedChange={setExtensivTwoWaySync}
+                    data-testid="switch-extensiv-sync"
+                  />
+                </div>
+                
+                <div className="text-xs text-muted-foreground">
+                  Mode: {extensivTwoWaySync ? "2-Way (Orders Enabled)" : "1-Way (Inbound Only)"}
+                </div>
+                
+                <div className="space-y-4 border-t pt-4">
+                  <h4 className="text-sm font-medium">Rebalancing Thresholds</h4>
+                  <p className="text-xs text-muted-foreground">
+                    When Pivot inventory is low AND Hildale inventory is high, a rebalancing alert will be triggered in GoHighLevel.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="pivot-low-threshold">Pivot Low Threshold</Label>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-pivot-threshold-info" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs">
+                            <p>Days of cover at Pivot below which a rebalance alert triggers. If Pivot has less than this many days of stock, and Hildale has excess, we recommend transferring inventory.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="pivot-low-threshold"
+                          type="number"
+                          min={1}
+                          max={30}
+                          value={pivotLowDaysThreshold}
+                          onChange={(e) => setPivotLowDaysThreshold(parseInt(e.target.value) || 5)}
+                          data-testid="input-pivot-threshold"
+                        />
+                        <span className="text-sm text-muted-foreground whitespace-nowrap">days</span>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="hildale-high-threshold">Hildale High Threshold</Label>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-hildale-threshold-info" />
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs">
+                            <p>Days of cover at Hildale above which a rebalance alert triggers. If Hildale has more than this many days of stock, excess can be transferred to Pivot.</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          id="hildale-high-threshold"
+                          type="number"
+                          min={1}
+                          max={90}
+                          value={hildaleHighDaysThreshold}
+                          onChange={(e) => setHildaleHighDaysThreshold(parseInt(e.target.value) || 20)}
+                          data-testid="input-hildale-threshold"
+                        />
+                        <span className="text-sm text-muted-foreground whitespace-nowrap">days</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

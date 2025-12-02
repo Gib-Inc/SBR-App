@@ -3068,6 +3068,11 @@ export class MemStorage implements IStorage {
       mediumThresholdDays: settings.mediumThresholdDays ?? 14,
       shopifyTwoWaySync: settings.shopifyTwoWaySync ?? false,
       shopifySafetyBuffer: settings.shopifySafetyBuffer ?? 0,
+      amazonTwoWaySync: settings.amazonTwoWaySync ?? false,
+      amazonSafetyBuffer: settings.amazonSafetyBuffer ?? 0,
+      extensivTwoWaySync: settings.extensivTwoWaySync ?? false,
+      pivotLowDaysThreshold: settings.pivotLowDaysThreshold ?? 5,
+      hildaleHighDaysThreshold: settings.hildaleHighDaysThreshold ?? 20,
       createdAt: now,
       updatedAt: now,
     };

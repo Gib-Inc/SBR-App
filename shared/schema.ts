@@ -73,6 +73,7 @@ export const items = pgTable("items", {
   shopifySku: text("shopify_sku"), // Shopify variant SKU (unique when present)
   amazonSku: text("amazon_sku"), // Amazon seller SKU (unique when present)
   extensivSku: text("extensiv_sku"), // Extensiv/3PL item code (unique when present)
+  extensivWarehouseId: text("extensiv_warehouse_id"), // Extensiv warehouse ID override for this item
   // UPC/GTIN for product identification
   upc: text("upc"), // GS1/UPC/GTIN barcode (unique when present, recommended for finished products)
 }, (table) => ({
@@ -1291,6 +1292,13 @@ export const SalesOrderReturnStatus = {
 } as const;
 export type SalesOrderReturnStatus = typeof SalesOrderReturnStatus[keyof typeof SalesOrderReturnStatus];
 
+// Fulfillment Source - where order ships from
+export const FulfillmentSource = {
+  HILDALE: "HILDALE", // Ship from our Hildale warehouse
+  PIVOT_EXTENSIV: "PIVOT_EXTENSIV", // Ship from Pivot/Extensiv 3PL warehouse
+} as const;
+export type FulfillmentSource = typeof FulfillmentSource[keyof typeof FulfillmentSource];
+
 export const salesOrders = pgTable("sales_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
@@ -1313,6 +1321,10 @@ export const salesOrders = pgTable("sales_orders", {
   ghlConversationUrl: text("ghl_conversation_url"), // Deep link to GHL conversations for this contact
   notes: text("notes"),
   rawPayload: jsonb("raw_payload"), // Store original external order data for debugging
+  // Fulfillment source tracking
+  fulfillmentSource: text("fulfillment_source").notNull().default('HILDALE'), // 'HILDALE' or 'PIVOT_EXTENSIV' - where order ships from
+  extensivOrderId: text("extensiv_order_id"), // Extensiv order ID when pushed to 3PL for fulfillment
+  extensivOrderStatus: text("extensiv_order_status"), // Status from Extensiv: 'PENDING', 'PROCESSING', 'SHIPPED'
   // Return tracking fields
   returnStatus: text("return_status").notNull().default('NONE'), // See SalesOrderReturnStatus
   totalReturnQty: integer("total_return_qty").notNull().default(0), // Sum of all return item quantities
@@ -1746,6 +1758,13 @@ export const SystemLogType = {
   AMAZON_INVENTORY_PUSH: "AMAZON_INVENTORY_PUSH",
   AMAZON_SKU_MISMATCH: "AMAZON_SKU_MISMATCH",
   EXTENSIV_SYNC_ERROR: "EXTENSIV_SYNC_ERROR",
+  EXTENSIV_SYNC_INFO: "EXTENSIV_SYNC_INFO",
+  EXTENSIV_INVENTORY_IMPORT: "EXTENSIV_INVENTORY_IMPORT",
+  EXTENSIV_ORDER_PUSH: "EXTENSIV_ORDER_PUSH",
+  EXTENSIV_ORDER_PUSH_DRY_RUN: "EXTENSIV_ORDER_PUSH_DRY_RUN",
+  EXTENSIV_SKU_UNMAPPED: "EXTENSIV_SKU_UNMAPPED",
+  EXTENSIV_REBALANCE_ALERT: "EXTENSIV_REBALANCE_ALERT",
+  EXTENSIV_ACTIVITY_SYNC: "EXTENSIV_ACTIVITY_SYNC",
   SHIPPO_ERROR: "SHIPPO_ERROR",
   GHL_SYNC_ERROR: "GHL_SYNC_ERROR",
   GHL_SYNC_INFO: "GHL_SYNC_INFO",
@@ -1818,6 +1837,10 @@ export const aiAgentSettings = pgTable("ai_agent_settings", {
   // Amazon sync settings
   amazonTwoWaySync: boolean("amazon_two_way_sync").notNull().default(false), // Master toggle for Amazon inventory push
   amazonSafetyBuffer: integer("amazon_safety_buffer").notNull().default(0), // Safety buffer for Amazon availability
+  // Extensiv/Pivot sync settings
+  extensivTwoWaySync: boolean("extensiv_two_way_sync").notNull().default(false), // OFF=1-Way (Inbound Only), ON=2-Way (Orders Enabled)
+  pivotLowDaysThreshold: integer("pivot_low_days_threshold").notNull().default(5), // Days of cover at Pivot below which rebalance alert triggers
+  hildaleHighDaysThreshold: integer("hildale_high_days_threshold").notNull().default(20), // Days of cover at Hildale above which rebalance alert triggers
   // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),

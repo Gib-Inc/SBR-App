@@ -1945,7 +1945,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Pivot Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Avail</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Available for Sale</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorders</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>

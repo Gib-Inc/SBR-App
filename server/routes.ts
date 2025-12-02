@@ -797,6 +797,37 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/ai/insights/qb-demand-history - Get paginated QuickBooks demand history
+  app.get("/api/ai/insights/qb-demand-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const search = req.query.search as string | undefined;
+      const year = req.query.year ? parseInt(req.query.year as string, 10) : undefined;
+      const month = req.query.month ? parseInt(req.query.month as string, 10) : undefined;
+      const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+      const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 25;
+
+      const result = await storage.getQuickbooksDemandHistory({
+        search,
+        year,
+        month,
+        page,
+        pageSize,
+      });
+
+      res.json({
+        items: result.items,
+        total: result.total,
+        years: result.years,
+        page,
+        pageSize,
+        totalPages: Math.ceil(result.total / pageSize),
+      });
+    } catch (error: any) {
+      console.error("[QB Demand History] Error fetching demand history:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch demand history" });
+    }
+  });
+
   // GET /api/ai/recommendations/:id/linked-pos - Get POs linked to a recommendation
   app.get("/api/ai/recommendations/:id/linked-pos", requireAuth, async (req: Request, res: Response) => {
     try {

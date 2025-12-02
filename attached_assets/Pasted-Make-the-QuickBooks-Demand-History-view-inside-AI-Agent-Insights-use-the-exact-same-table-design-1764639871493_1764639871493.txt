@@ -1,0 +1,96 @@
+Make the “QuickBooks Demand History” view inside AI Agent → Insights use the exact same table design system as the other data tables (BOM, Purchase Orders, AI Recommendations).
+
+Requirements:
+
+1) Location and structure
+- Keep the existing AI Agent layout:
+  • Top tabs: Data Sources, Rules, LLM Config, Insights, Logs.
+  • Inside Insights, keep the internal tab switcher with:
+      – “AI Recommendations”
+      – “QuickBooks Demand History”
+- Only modify the “QuickBooks Demand History” internal tab contents.
+
+2) Shared table component
+- Use the same reusable data-table component used by:
+  • BOM Finished Products table
+  • Purchase Orders table
+  • AI Recommendations table
+- This includes:
+  • Table header style
+  • Row hover states
+  • Pagination footer
+  • Column alignment and typography
+  • Scroll behavior (horizontal scroll when many columns).
+
+3) QuickBooks Demand History table layout
+- At the top of this tab (above the table), add:
+  • Title: “QuickBooks Demand History”
+  • Subtext: “Read-only historical demand imported from QuickBooks for forecasting.”
+  • Small right-aligned text: “Last synced: <timestamp from the most recent record or sync log>”
+
+- Filters row (same design pattern as other tables):
+  • Search input (left): placeholder “Search by SKU or product…”
+  • Year dropdown (center): “All years” + list of years in data.
+  • Month dropdown (center): “All months” + Jan–Dec.
+  • Optional toggle (right): “Mapped only” to show only products mapped to QuickBooks.
+
+- Table columns (all read-only):
+  1) Product
+     - Show product name.
+  2) SKU
+     - Show internal house SKU.
+  3) Year
+  4) Month
+     - Show month name (e.g., “Nov”) or MM.
+  5) Qty Sold
+     - From QuickBooksDemandHistory.qtySold.
+  6) Qty Returned
+     - From QuickBooksDemandHistory.qtyReturned.
+  7) Net Qty
+     - From QuickBooksDemandHistory.netQty.
+ 8) Revenue
+     - From QuickBooksDemandHistory.revenue formatted in company currency.
+ 9) Last Synced
+     - From QuickBooksDemandHistory.lastSyncedAt (relative or datetime).
+
+- Behavior:
+  • No row actions and no “…” menu; this is strictly read-only.
+  • Support pagination with the same footer control as other tables.
+  • Support horizontal scrolling if necessary (same scroll behavior as BOM/PO tables).
+  • Sorting by Year, Month, Net Qty and Revenue if simple to reuse existing sort hooks; otherwise leave static but keep design identical.
+
+4) Data source
+- Backed by the existing QuickBooksDemandHistory table (or equivalent) populated by the QuickBooks sync.
+- API (if not already created):
+  GET /api/ai/insights/qb-demand-history
+    Query params:
+      - search (optional, matches SKU or product name)
+      - year (optional)
+      - month (optional)
+      - mappedOnly (optional boolean)
+      - page, pageSize
+    Returns paginated list of:
+      - productName
+      - sku
+      - year
+      - month
+      - qtySold
+      - qtyReturned
+      - netQty
+      - revenue
+      - lastSyncedAt
+
+5) Empty state & errors
+- If QuickBooks is not configured or no demand data exists:
+  • Centered empty-state in this tab with the SAME visual style as other empty states:
+    – Title: “No QuickBooks demand history”
+    – Body: “Connect QuickBooks and run ‘Sync Demand Now’ from the integrations page to populate demand history.”
+    – Button: “Open Integrations” → routes to the integrations/settings section.
+- Any API error should show the standard table error state used elsewhere (brief message + retry).
+
+6) Non-goals
+- Do NOT modify the AI Recommendations table.
+- Do NOT add any write actions from this view; it must not create/update transactions in QuickBooks or change inventory.
+- Keep all styling consistent with existing tables; this view should look and feel like the same data-grid system everywhere else in the app.
+
+Implement this so that the QuickBooks Demand History tab feels like “just another table” in the app, sharing the exact styles and UX patterns, with only the content and filters differing.

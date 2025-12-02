@@ -4639,7 +4639,9 @@ Priority: ${priority}
 Reorder Point: ${item.reorderPoint || 'Not set'}
             `.trim();
 
-            const stockAlertName = `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`;
+            // Include SKU in name so deduplication can find existing alerts
+            // Format: "Stock Alert: [SKU] Name (X days)" - SKU enables unique matching
+            const stockAlertName = `Stock Alert: [${item.sku}] ${item.name} (${Math.round(item.daysOfCover)} days)`;
             const opportunityResult = await client.createOrUpdateOpportunity(
               pipelineId,
               stageId,
@@ -4653,7 +4655,7 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
                 priority,
               },
               systemContactId!, // Use system contact for stock warnings (required for V2)
-              item.sku // Unique identifier for search
+              item.sku // Unique identifier for search - now also appears in name for matching
             );
 
             if (opportunityResult.success) {

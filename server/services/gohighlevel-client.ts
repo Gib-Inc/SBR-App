@@ -3,6 +3,8 @@
  * Handles communication with GHL API for CRM integration, contacts, and task/ticket management
  */
 
+import { logService } from "./log-service";
+
 export interface GHLContact {
   id: string;
   firstName?: string;
@@ -252,6 +254,21 @@ export class GoHighLevelClient {
       const data = await response.json();
       const taskId = data.task?.id || data.id;
 
+      // Log the task creation
+      await logService.logGhlOperation({
+        operation: 'CREATE_TASK',
+        entityType: 'TASK',
+        entityId: taskId,
+        entityName: title,
+        success: true,
+        details: { 
+          orderId: payload.orderId, 
+          returnId: payload.returnId, 
+          poId: payload.poId,
+          assignedTo: payload.assignedTo,
+        },
+      });
+
       return {
         success: true,
         taskId,
@@ -259,6 +276,16 @@ export class GoHighLevelClient {
       };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error creating task:', error);
+      
+      // Log the failure
+      await logService.logGhlOperation({
+        operation: 'CREATE_TASK',
+        entityType: 'TASK',
+        entityName: title,
+        success: false,
+        error: error.message,
+      });
+      
       return {
         success: false,
         message: error.message || 'Failed to create task',
@@ -366,6 +393,17 @@ export class GoHighLevelClient {
       const existingContact = await this.getContactByPhoneOrEmail(phone, email);
       if (existingContact) {
         console.log(`[GoHighLevelClient] Found existing contact: ${existingContact.id}`);
+        
+        // Log the find
+        await logService.logGhlOperation({
+          operation: 'FIND_CONTACT',
+          entityType: 'CONTACT',
+          entityId: existingContact.id,
+          entityName: name,
+          success: true,
+          details: { email, phone, source: 'existing' },
+        });
+        
         return {
           success: true,
           contactId: existingContact.id,
@@ -426,12 +464,33 @@ export class GoHighLevelClient {
       const contactId = data.contact?.id || data.id;
       console.log(`[GoHighLevelClient] Created contact with ID: ${contactId}`);
       
+      // Log the contact creation
+      await logService.logGhlOperation({
+        operation: 'CREATE_CONTACT',
+        entityType: 'CONTACT',
+        entityId: contactId,
+        entityName: name,
+        success: true,
+        details: { email, phone, source: 'new' },
+      });
+      
       return {
         success: true,
         contactId,
       };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error creating contact:', error);
+      
+      // Log the failure
+      await logService.logGhlOperation({
+        operation: 'CREATE_CONTACT',
+        entityType: 'CONTACT',
+        entityName: name,
+        success: false,
+        error: error.message,
+        details: { email, phone },
+      });
+      
       return {
         success: false,
         error: error.message || 'Failed to create contact',
@@ -543,6 +602,17 @@ export class GoHighLevelClient {
       const opportunityUrl = `https://app.gohighlevel.com/v2/location/${this.locationId}/opportunities/${opportunityId}`;
 
       console.log(`[GoHighLevelClient] Created opportunity: ${opportunityId}`);
+      
+      // Log the opportunity creation
+      await logService.logGhlOperation({
+        operation: 'CREATE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityId: opportunityId,
+        entityName: name,
+        success: true,
+        details: { pipelineId, stageId, monetaryValue, contactId },
+      });
+      
       return {
         success: true,
         opportunityId,
@@ -550,6 +620,16 @@ export class GoHighLevelClient {
       };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error creating opportunity:', error);
+      
+      // Log the failure
+      await logService.logGhlOperation({
+        operation: 'CREATE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityName: name,
+        success: false,
+        error: error.message,
+      });
+      
       return {
         success: false,
         error: error.message || 'Failed to create opportunity',
@@ -654,12 +734,33 @@ export class GoHighLevelClient {
       }
 
       console.log(`[GoHighLevelClient] Updated opportunity: ${opportunityId}`);
+      
+      // Log the update
+      await logService.logGhlOperation({
+        operation: 'UPDATE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityId: opportunityId,
+        entityName: updates.name,
+        success: true,
+        details: { stageId: updates.pipelineStageId, monetaryValue: updates.monetaryValue },
+      });
+      
       return {
         success: true,
         opportunityId,
       };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error updating opportunity:', error);
+      
+      // Log the failure
+      await logService.logGhlOperation({
+        operation: 'UPDATE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityId: opportunityId,
+        success: false,
+        error: error.message,
+      });
+      
       return {
         success: false,
         error: error.message || 'Failed to update opportunity',
@@ -689,9 +790,28 @@ export class GoHighLevelClient {
       }
 
       console.log(`[GoHighLevelClient] Deleted opportunity: ${opportunityId}`);
+      
+      // Log the deletion
+      await logService.logGhlOperation({
+        operation: 'DELETE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityId: opportunityId,
+        success: true,
+      });
+      
       return { success: true };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error deleting opportunity:', error);
+      
+      // Log the failure
+      await logService.logGhlOperation({
+        operation: 'DELETE_OPPORTUNITY',
+        entityType: 'OPPORTUNITY',
+        entityId: opportunityId,
+        success: false,
+        error: error.message,
+      });
+      
       return {
         success: false,
         error: error.message || 'Failed to delete opportunity',

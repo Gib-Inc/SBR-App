@@ -349,6 +349,61 @@ class LogService {
     });
   }
 
+  async logGhlOperation(params: {
+    operation: 'CREATE_OPPORTUNITY' | 'UPDATE_OPPORTUNITY' | 'DELETE_OPPORTUNITY' | 
+               'CREATE_CONTACT' | 'FIND_CONTACT' | 'SEARCH_OPPORTUNITIES' |
+               'CREATE_TASK' | 'UPDATE_TASK' | 'COMPLETE_TASK' | 'ASSIGN_TASK' |
+               'SYNC_START' | 'SYNC_COMPLETE' | 'API_CALL';
+    entityType: 'OPPORTUNITY' | 'CONTACT' | 'TASK' | 'PIPELINE' | 'STAGE';
+    entityId?: string;
+    entityName?: string;
+    success: boolean;
+    error?: string;
+    details?: Record<string, any>;
+  }): Promise<void> {
+    const operationText = {
+      CREATE_OPPORTUNITY: 'Created opportunity',
+      UPDATE_OPPORTUNITY: 'Updated opportunity',
+      DELETE_OPPORTUNITY: 'Deleted opportunity',
+      CREATE_CONTACT: 'Created contact',
+      FIND_CONTACT: 'Found contact',
+      SEARCH_OPPORTUNITIES: 'Searched opportunities',
+      CREATE_TASK: 'Created task',
+      UPDATE_TASK: 'Updated task',
+      COMPLETE_TASK: 'Completed task',
+      ASSIGN_TASK: 'Assigned task',
+      SYNC_START: 'Sync started',
+      SYNC_COMPLETE: 'Sync completed',
+      API_CALL: 'API call',
+    }[params.operation];
+
+    const entityLabel = params.entityName 
+      ? `"${params.entityName}"${params.entityId ? ` (${params.entityId})` : ''}`
+      : params.entityId || '';
+
+    const message = params.success
+      ? `GHL: ${operationText}${entityLabel ? ': ' + entityLabel : ''}`
+      : `GHL: ${operationText} failed${entityLabel ? ': ' + entityLabel : ''}${params.error ? ' - ' + params.error : ''}`;
+
+    await this.logSystemEvent({
+      type: params.success ? SystemLogType.GHL_SYNC_INFO : SystemLogType.GHL_SYNC_ERROR,
+      entityType: SystemLogEntityType.INTEGRATION,
+      entityId: params.entityId || null,
+      severity: params.success ? SystemLogSeverity.INFO : SystemLogSeverity.ERROR,
+      code: `GHL_${params.operation}`,
+      message,
+      details: {
+        operation: params.operation,
+        entityType: params.entityType,
+        entityId: params.entityId,
+        entityName: params.entityName,
+        success: params.success,
+        error: params.error,
+        ...params.details,
+      },
+    });
+  }
+
   async logGhlSync(params: {
     action: 'SYNC' | 'CLEANUP' | 'CREATE' | 'UPDATE' | 'DELETE';
     category: 'SALES_ORDERS' | 'RETURNS' | 'STOCK_WARNINGS' | 'PURCHASE_ORDERS' | 'ALL';

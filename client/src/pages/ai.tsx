@@ -1758,17 +1758,17 @@ function QuickBooksDemandHistoryTab() {
           </div>
         ) : (
           <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
-            <table className="w-full min-w-[1100px]">
+            <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Period</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Sold</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returned</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Net Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Revenue</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Synced</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Period</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Sold</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Returned</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Net Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Revenue</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Synced</th>
                 </tr>
               </thead>
               <tbody>
@@ -2227,25 +2227,25 @@ function InsightsTab() {
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full table-auto text-sm">
               <thead className="bg-muted/50">
                 <tr className="h-11 border-b">
-                  <th className="px-3 text-left font-medium whitespace-nowrap">SKU</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap w-px">SKU</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap">Product</th>
-                  <th className="px-3 text-left font-medium whitespace-nowrap">Type</th>
-                  <th className="px-3 text-left font-medium whitespace-nowrap">Risk</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">Days Left</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">Avail</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">Gap%</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap">G.Ads</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap">Meta</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap">Shopify</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap">QB</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">On PO</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">Rec Qty</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap">Velocity</th>
-                  <th className="px-3 text-left font-medium whitespace-nowrap">Status</th>
-                  <th className="px-3 text-center font-medium whitespace-nowrap sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap w-px">Type</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap w-px">Risk</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Days Left</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Avail</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Gap%</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px">G.Ads</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px">Meta</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px">Shopify</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px">QB</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">On PO</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Rec Qty</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Velocity</th>
+                  <th className="px-3 text-left font-medium whitespace-nowrap w-px">Status</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -3464,14 +3464,14 @@ function LogsTab() {
           
           {/* Logs Table */}
           <div className="rounded-md border overflow-auto max-h-[500px]">
-            <table className="w-full text-sm">
+            <table className="w-full table-auto text-sm">
               <thead className="bg-muted/50 sticky top-0 z-10">
                 <tr>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Timestamp</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Event</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Entity</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Source</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Status</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Event</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Entity</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Source</th>
+                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Status</th>
                   <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Description</th>
                 </tr>
               </thead>

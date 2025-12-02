@@ -71,14 +71,14 @@ export function TransactionHistoryDialog({ isOpen, onClose, item }: TransactionH
                 No transactions found for this item.
               </div>
             ) : (
-              <table className="w-full text-sm">
+              <table className="w-full table-auto text-sm">
                 <thead className="sticky top-0 bg-muted/50 border-b">
                   <tr>
-                    <th className="px-3 py-2 text-left">Date/Time</th>
-                    <th className="px-3 py-2 text-left">Type</th>
-                    <th className="px-3 py-2 text-left">Location</th>
-                    <th className="px-3 py-2 text-right">Quantity</th>
-                    <th className="px-3 py-2 text-left">Notes</th>
+                    <th className="px-3 py-2 text-left whitespace-nowrap w-px">Date/Time</th>
+                    <th className="px-3 py-2 text-left whitespace-nowrap w-px">Type</th>
+                    <th className="px-3 py-2 text-left whitespace-nowrap w-px">Location</th>
+                    <th className="px-3 py-2 text-right whitespace-nowrap w-px">Quantity</th>
+                    <th className="px-3 py-2 text-left whitespace-nowrap">Notes</th>
                   </tr>
                 </thead>
                 <tbody>

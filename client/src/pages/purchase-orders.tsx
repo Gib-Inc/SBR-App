@@ -647,18 +647,18 @@ export default function PurchaseOrders() {
         </CardHeader>
         <CardContent className="p-0">
           <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">PO Number</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">PO Number</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Email</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Items</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total</th>
-                  <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Email</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Items</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order Date</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Expected</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total</th>
+                  <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -912,15 +912,15 @@ export default function PurchaseOrders() {
                 <h4 className="font-medium mb-2">Line Items ({poDetails.lines?.length || 0})</h4>
                 {poDetails.lines && poDetails.lines.length > 0 ? (
                   <div className="overflow-x-auto rounded-md border">
-                    <table className="w-full min-w-[700px]">
+                    <table className="w-full table-auto">
                       <thead className="bg-muted/50">
                         <tr className="border-b">
                           <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Item</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Ordered</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Received</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Unit Cost</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Line Total</th>
-                          <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Qty Ordered</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Qty Received</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Unit Cost</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Line Total</th>
+                          <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                         </tr>
                       </thead>
                       <tbody>

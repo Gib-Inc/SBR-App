@@ -309,16 +309,16 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="rounded-md border overflow-auto">
-              <table className="w-full text-sm">
+              <table className="w-full table-auto text-sm">
                 <thead className="bg-muted/50 sticky top-0 z-10">
                   <tr>
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
-                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Risk</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Stock</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Days Left</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Capacity</th>
-                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Action</th>
-                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Why</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Risk</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Stock</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Days Left</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Capacity</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Action</th>
+                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap w-px">Why</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -461,14 +461,14 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="rounded-md border overflow-auto">
-              <table className="w-full text-sm">
+              <table className="w-full table-auto text-sm">
                 <thead className="bg-muted/50 sticky top-0 z-10">
                   <tr>
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Item</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Current Usage</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Forecast</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Confidence</th>
-                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap">Trend</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Current Usage</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Forecast</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Confidence</th>
+                    <th className="h-11 px-3 text-center font-medium text-muted-foreground whitespace-nowrap w-px">Trend</th>
                   </tr>
                 </thead>
                 <tbody>

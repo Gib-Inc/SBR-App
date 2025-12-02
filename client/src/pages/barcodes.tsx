@@ -579,18 +579,18 @@ function BarcodeItemsSection({
       <CardContent className="p-6">
         <h3 className="mb-4 text-lg font-semibold">{title}</h3>
         <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border">
-          <table className="w-full min-w-[900px]">
+          <table className="w-full table-auto">
             <thead className="bg-muted sticky top-0 z-10">
               <tr className="border-b">
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Barcode</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Barcode</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">UPC</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Role</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Format</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Last Updated</th>
-                <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">UPC</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Role</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Channel</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Format</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Last Updated</th>
+                <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1319,18 +1319,18 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
           </Badge>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full table-auto text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Tracking #</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Type</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Carrier</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Tracking #</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Type</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Carrier</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
                 <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Cost</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
-                <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Actions</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Cost</th>
+                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
+                <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Actions</th>
               </tr>
             </thead>
             <tbody>

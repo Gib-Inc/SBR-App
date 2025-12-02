@@ -151,13 +151,13 @@ export function ProductionDialog({ isOpen, onClose, item }: ProductionDialogProp
             ) : (
               <div className="space-y-2">
                 <div className="rounded border">
-                  <table className="w-full text-sm">
+                  <table className="w-full table-auto text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
-                        <th className="px-3 py-2 text-left">Component</th>
-                        <th className="px-3 py-2 text-right">Required</th>
-                        <th className="px-3 py-2 text-right">Available</th>
-                        <th className="px-3 py-2 text-center">Status</th>
+                        <th className="px-3 py-2 text-left whitespace-nowrap">Component</th>
+                        <th className="px-3 py-2 text-right whitespace-nowrap w-px">Required</th>
+                        <th className="px-3 py-2 text-right whitespace-nowrap w-px">Available</th>
+                        <th className="px-3 py-2 text-center whitespace-nowrap w-px">Status</th>
                       </tr>
                     </thead>
                     <tbody>

@@ -651,22 +651,22 @@ export default function SalesOrders() {
           </div>
 
           <div className="overflow-x-auto rounded-md border">
-            <table className="w-full">
+            <table className="w-full table-auto">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order ID</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Channel</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Production</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Expected Delivery</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Order Total</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Total Units</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backordered</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Components</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Production</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order Date</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Delivery</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Units</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorder</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Components</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Returns</th>
+                  <th className="sticky right-0 z-10 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -933,15 +933,15 @@ export default function SalesOrders() {
                 <div>
                   <Label className="text-sm font-medium mb-2 block">Line Items</Label>
                   <div className="border rounded-md overflow-hidden">
-                    <table className="w-full">
+                    <table className="w-full table-auto">
                       <thead className="bg-muted/50">
                         <tr className="border-b">
-                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
+                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
                           <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Ordered</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Fulfilled</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returned</th>
-                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorder</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Ordered</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Fulfilled</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Returned</th>
+                          <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorder</th>
                         </tr>
                       </thead>
                       <tbody>

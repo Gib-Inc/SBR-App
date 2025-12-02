@@ -2292,12 +2292,12 @@ export default function BOM() {
                     These channel SKUs were configured but could not be found via API lookup
                   </p>
                   <div className="rounded-md border overflow-hidden">
-                    <table className="w-full text-sm">
+                    <table className="w-full table-auto text-sm">
                       <thead className="bg-muted/50">
                         <tr className="border-b">
-                          <th className="p-2 text-left">Channel</th>
-                          <th className="p-2 text-left">Channel SKU</th>
-                          <th className="p-2 text-left">Product Name</th>
+                          <th className="p-2 text-left whitespace-nowrap w-px">Channel</th>
+                          <th className="p-2 text-left whitespace-nowrap w-px">Channel SKU</th>
+                          <th className="p-2 text-left whitespace-nowrap">Product Name</th>
                         </tr>
                       </thead>
                       <tbody>

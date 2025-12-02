@@ -251,17 +251,17 @@ export default function Returns() {
             </div>
           ) : (
             <div className="overflow-auto max-h-[calc(100vh-320px)] rounded-md">
-              <table className="w-full min-w-[800px]">
+              <table className="w-full table-auto">
                 <thead className="bg-muted sticky top-0 z-10">
                   <tr className="border-b">
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Channel</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Source</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order ID</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Channel</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Source</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Resolution</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Created</th>
-                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Resolution</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                   </tr>
                 </thead>
               <tbody>
@@ -503,16 +503,16 @@ function ReturnDetailsModal({
           <div>
             <h3 className="font-semibold mb-3">Return Items</h3>
             <div className="rounded-md border overflow-auto">
-              <table className="w-full text-sm">
+              <table className="w-full table-auto text-sm">
                 <thead className="bg-muted/50 sticky top-0 z-10">
                   <tr>
-                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">SKU</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Ordered</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Requested</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Approved</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Received</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap w-px">SKU</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Ordered</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Requested</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Approved</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Received</th>
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Reason</th>
-                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Disposition</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Disposition</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -714,13 +714,13 @@ function ReturnReceiptModal({
           <div>
             <h3 className="font-semibold mb-3">Line Items</h3>
             <div className="rounded-md border overflow-auto">
-              <table className="w-full text-sm">
+              <table className="w-full table-auto text-sm">
                 <thead className="bg-muted/50 sticky top-0 z-10">
                   <tr>
-                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">SKU</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Ordered</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Requested</th>
-                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap">Qty Received</th>
+                    <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap w-px">SKU</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Qty Ordered</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Qty Requested</th>
+                    <th className="h-11 px-3 text-right font-medium text-muted-foreground whitespace-nowrap w-px">Qty Received</th>
                     <th className="h-11 px-3 text-left font-medium text-muted-foreground whitespace-nowrap">Disposition</th>
                   </tr>
                 </thead>

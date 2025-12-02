@@ -435,14 +435,14 @@ export function ScanInventoryModal({
             <div className="space-y-2">
               <h3 className="font-medium">Recent Scans (This Session)</h3>
               <div className="rounded-lg border max-h-64 overflow-auto">
-                <table className="w-full">
+                <table className="w-full table-auto">
                   <thead className="bg-muted/50 sticky top-0">
                     <tr>
-                      <th className="text-left p-2 text-sm font-medium">Time</th>
-                      <th className="text-left p-2 text-sm font-medium">Item</th>
-                      <th className="text-left p-2 text-sm font-medium">SKU</th>
-                      <th className="text-right p-2 text-sm font-medium">Qty</th>
-                      <th className="text-left p-2 text-sm font-medium">Status</th>
+                      <th className="text-left p-2 text-sm font-medium whitespace-nowrap w-px">Time</th>
+                      <th className="text-left p-2 text-sm font-medium whitespace-nowrap">Item</th>
+                      <th className="text-left p-2 text-sm font-medium whitespace-nowrap w-px">SKU</th>
+                      <th className="text-right p-2 text-sm font-medium whitespace-nowrap w-px">Qty</th>
+                      <th className="text-left p-2 text-sm font-medium whitespace-nowrap w-px">Status</th>
                     </tr>
                   </thead>
                   <tbody>

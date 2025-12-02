@@ -4380,6 +4380,7 @@ TOTAL: $${subtotal.toFixed(2)}
         salesOrders: { synced: 0, failed: 0, errors: [] as string[] },
         returns: { synced: 0, failed: 0, errors: [] as string[] },
         stockWarnings: { synced: 0, failed: 0, errors: [] as string[] },
+        purchaseOrders: { synced: 0, failed: 0, errors: [] as string[] },
       };
 
       // ========== 0. CREATE SYSTEM CONTACT FOR NON-CUSTOMER ITEMS ==========
@@ -4476,41 +4477,42 @@ Total: $${orderTotal.toFixed(2)}
       
       for (const returnRequest of returns) {
         try {
-          // Get linked sales order for customer info
-          const salesOrder = returnRequest.salesOrderId
-            ? await storage.getSalesOrderById(returnRequest.salesOrderId)
-            : null;
-
           // Get return items
           const returnItems = await storage.getReturnItemsByReturnId(returnRequest.id);
           const itemsList = returnItems.map(item => 
             `- ${item.sku}: ${item.quantity} units (Reason: ${item.reason || 'Not specified'})`
           ).join('\n');
 
+          // Use correct field names from schema: rmaNumber, customerName, etc.
+          const rmaDisplay = returnRequest.rmaNumber || returnRequest.id;
+          const customerName = returnRequest.customerName || 'Unknown';
+          
           const description = `
-Return Request: ${returnRequest.returnNumber || returnRequest.id}
-Customer: ${salesOrder?.customerName || 'Unknown'}
-${salesOrder?.customerEmail ? `Email: ${salesOrder.customerEmail}` : ''}
-${salesOrder?.customerPhone ? `Phone: ${salesOrder.customerPhone}` : ''}
-Channel: ${salesOrder?.channel || 'Unknown'}
+Return Request: ${rmaDisplay}
+Order: ${returnRequest.orderNumber || returnRequest.externalOrderId || 'N/A'}
+Customer: ${customerName}
+${returnRequest.customerEmail ? `Email: ${returnRequest.customerEmail}` : ''}
+${returnRequest.customerPhone ? `Phone: ${returnRequest.customerPhone}` : ''}
+Channel: ${returnRequest.salesChannel || 'Unknown'}
 Status: ${returnRequest.status}
 Resolution Requested: ${returnRequest.resolutionRequested || 'N/A'}
+Reason: ${returnRequest.reason || 'Not specified'}
 
 Items:
 ${itemsList || 'No items'}
 
-Notes: ${returnRequest.customerNotes || 'None'}
+Notes: ${returnRequest.resolutionNotes || 'None'}
           `.trim();
 
-          const title = `Return ${returnRequest.returnNumber || returnRequest.id} - ${salesOrder?.customerName || 'Customer'}`;
+          const title = `Return ${rmaDisplay} - ${customerName}`;
 
           // Create or find contact for the return (required for V2 API)
           let contactId: string | undefined;
-          if (salesOrder && salesOrder.customerName) {
+          if (customerName && customerName !== 'Unknown') {
             const contactResult = await client.createOrFindContact(
-              salesOrder.customerName,
-              salesOrder.customerEmail || undefined,
-              salesOrder.customerPhone || undefined
+              customerName,
+              returnRequest.customerEmail || undefined,
+              returnRequest.customerPhone || undefined
             );
             if (contactResult.success && contactResult.contactId) {
               contactId = contactResult.contactId;
@@ -4524,7 +4526,7 @@ Notes: ${returnRequest.customerNotes || 'None'}
 
           if (!contactId) {
             syncResults.returns.failed++;
-            syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: No contact available`);
+            syncResults.returns.errors.push(`Return ${rmaDisplay}: No contact available`);
             continue;
           }
 
@@ -4543,7 +4545,7 @@ Notes: ${returnRequest.customerNotes || 'None'}
             description,
             {
               returnId: returnRequest.id,
-              returnNumber: returnRequest.returnNumber,
+              rmaNumber: returnRequest.rmaNumber,
               status: returnRequest.status,
             },
             contactId // Pass contactId (required for V2)
@@ -4553,11 +4555,11 @@ Notes: ${returnRequest.customerNotes || 'None'}
             syncResults.returns.synced++;
           } else {
             syncResults.returns.failed++;
-            syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: ${opportunityResult.error}`);
+            syncResults.returns.errors.push(`Return ${rmaDisplay}: ${opportunityResult.error}`);
           }
         } catch (error: any) {
           syncResults.returns.failed++;
-          syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: ${error.message}`);
+          syncResults.returns.errors.push(`Return ${returnRequest.rmaNumber || returnRequest.id}: ${error.message}`);
         }
       }
       console.log(`[GHL Sync] Returns: ${syncResults.returns.synced} synced, ${syncResults.returns.failed} failed`);
@@ -4637,14 +4639,102 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
       }
       console.log(`[GHL Sync] Stock warnings: ${syncResults.stockWarnings.synced} synced, ${syncResults.stockWarnings.failed} failed`);
 
+      // ========== 4. SYNC PURCHASE ORDERS ==========
+      console.log('[GHL Sync] Starting purchase orders sync...');
+      
+      // POs require a contact - use system contact or supplier contact
+      if (!systemContactId) {
+        console.error('[GHL Sync] Cannot sync purchase orders: no system contact available');
+        syncResults.purchaseOrders.errors.push('No system contact available for purchase orders');
+      } else {
+        const purchaseOrders = await storage.getAllPurchaseOrders();
+        
+        for (const po of purchaseOrders) {
+          try {
+            // Determine stage based on PO status
+            let stageId: string;
+            if (po.status === 'RECEIVED' || po.status === 'CLOSED') {
+              stageId = GHL_CONFIG.stages.PO_DELIVERED;
+            } else if (po.status === 'PARTIAL_RECEIVED') {
+              stageId = GHL_CONFIG.stages.PO_PAID; // Treat partial as in-transit/paid
+            } else if (po.status === 'SENT' || po.status === 'ACKNOWLEDGED') {
+              stageId = GHL_CONFIG.stages.PO_SENT;
+            } else {
+              // DRAFT, APPROVAL_PENDING, APPROVED - skip syncing these for now
+              continue;
+            }
+
+            // Get supplier name for display
+            let supplierName = 'Unknown Supplier';
+            if (po.supplierId) {
+              const supplier = await storage.getSupplierById(po.supplierId);
+              if (supplier) {
+                supplierName = supplier.name;
+              }
+            }
+
+            // Get PO lines for summary
+            const poLines = await storage.getPurchaseOrderLinesByPOId(po.id);
+            const itemsList = poLines.map(line => 
+              `- ${line.itemName || line.sku}: ${line.quantity} units @ $${Number(line.unitCost || 0).toFixed(2)}`
+            ).join('\n');
+
+            const poTotal = Number(po.totalAmount || 0);
+            const description = `
+Purchase Order: ${po.poNumber}
+Supplier: ${supplierName}
+Status: ${po.status}
+Total: $${poTotal.toFixed(2)}
+Order Date: ${po.orderDate ? new Date(po.orderDate).toLocaleDateString() : 'N/A'}
+Expected Delivery: ${po.expectedDeliveryDate ? new Date(po.expectedDeliveryDate).toLocaleDateString() : 'N/A'}
+
+Items:
+${itemsList || 'No items'}
+
+Notes: ${po.notes || 'None'}
+            `.trim();
+
+            const title = `PO ${po.poNumber} - ${supplierName}`;
+
+            // Create opportunity for PO
+            const opportunityResult = await client.createOpportunity(
+              pipelineId,
+              stageId,
+              title,
+              poTotal,
+              description,
+              {
+                poId: po.id,
+                poNumber: po.poNumber,
+                status: po.status,
+                supplierId: po.supplierId,
+              },
+              systemContactId // Use system contact for POs (required for V2)
+            );
+
+            if (opportunityResult.success) {
+              syncResults.purchaseOrders.synced++;
+            } else {
+              syncResults.purchaseOrders.failed++;
+              syncResults.purchaseOrders.errors.push(`PO ${po.poNumber}: ${opportunityResult.error}`);
+            }
+          } catch (error: any) {
+            syncResults.purchaseOrders.failed++;
+            syncResults.purchaseOrders.errors.push(`PO ${po.poNumber}: ${error.message}`);
+          }
+        }
+      }
+      console.log(`[GHL Sync] Purchase orders: ${syncResults.purchaseOrders.synced} synced, ${syncResults.purchaseOrders.failed} failed`);
+
       // Build summary message
-      const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced;
-      const totalFailed = syncResults.salesOrders.failed + syncResults.returns.failed + syncResults.stockWarnings.failed;
+      const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced;
+      const totalFailed = syncResults.salesOrders.failed + syncResults.returns.failed + syncResults.stockWarnings.failed + syncResults.purchaseOrders.failed;
       
       const summaryMessage = `Synced ${totalSynced} items to GoHighLevel: ` +
         `${syncResults.salesOrders.synced} sales orders, ` +
         `${syncResults.returns.synced} returns, ` +
-        `${syncResults.stockWarnings.synced} stock warnings` +
+        `${syncResults.stockWarnings.synced} stock warnings, ` +
+        `${syncResults.purchaseOrders.synced} purchase orders` +
         (totalFailed > 0 ? ` (${totalFailed} failed)` : '');
 
       // Update integration config status

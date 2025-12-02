@@ -4798,6 +4798,10 @@ Notes: ${po.notes || 'None'}
       const syncUser = await storage.getUser(req.session.userId!);
       
       try {
+        // Fetch data needed for cleanup (re-fetch since previous variables are scoped)
+        const allItemsForCleanup = await storage.getAllItems();
+        const allPOsForCleanup = await storage.getAllPurchaseOrders();
+        
         // Get all opportunities in the pipeline
         const allOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
         
@@ -4807,9 +4811,9 @@ Notes: ${po.notes || 'None'}
           
           // Build sets of valid identifiers from app data
           const validSalesOrderIds = new Set(salesOrders.map(so => so.orderNumber));
-          const validReturnIds = new Set(returnRequests.map(r => r.rmaNumber || r.id));
+          const validReturnIds = new Set(returns.map(r => r.rmaNumber || r.id));
           const validStockAlertNames = new Set(
-            items
+            allItemsForCleanup
               .filter(item => {
                 const stock = item.type === "finished_product" 
                   ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
@@ -4820,7 +4824,7 @@ Notes: ${po.notes || 'None'}
               .map(item => item.name)
           );
           const validPONumbers = new Set(
-            purchaseOrders
+            allPOsForCleanup
               .filter(po => !['DRAFT', 'APPROVAL_PENDING', 'APPROVED', 'CANCELLED'].includes(po.status))
               .map(po => po.poNumber)
           );

@@ -42,9 +42,8 @@ export default function IntegrationsPage() {
   // Test connection mutation
   const testConnectionMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("/api/integrations/extensiv/test", {
-        method: "POST",
-      });
+      const response = await apiRequest("POST", "/api/integrations/extensiv/test");
+      return await response.json();
     },
     onSuccess: (data: any) => {
       toast({
@@ -66,9 +65,8 @@ export default function IntegrationsPage() {
   // Sync mutation
   const syncMutation = useMutation({
     mutationFn: async () => {
-      return await apiRequest("/api/integrations/extensiv/sync", {
-        method: "POST",
-      });
+      const response = await apiRequest("POST", "/api/integrations/extensiv/sync");
+      return await response.json();
     },
     onSuccess: (data: any) => {
       toast({
@@ -92,20 +90,16 @@ export default function IntegrationsPage() {
   const saveConfigMutation = useMutation({
     mutationFn: async (apiKey: string) => {
       if (config) {
-        return await apiRequest(`/api/integration-configs/${config.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ apiKey }),
-        });
+        const response = await apiRequest("PATCH", `/api/integration-configs/${config.id}`, { apiKey });
+        return await response.json();
       } else {
-        return await apiRequest("/api/integration-configs", {
-          method: "POST",
-          body: JSON.stringify({
-            provider: "EXTENSIV",
-            accountName: "Pivot Warehouse",
-            apiKey,
-            config: { pivotWarehouseId: "1" },
-          }),
+        const response = await apiRequest("POST", "/api/integration-configs", {
+          provider: "EXTENSIV",
+          accountName: "Pivot Warehouse",
+          apiKey,
+          config: { pivotWarehouseId: "1" },
         });
+        return await response.json();
       }
     },
     onSuccess: () => {

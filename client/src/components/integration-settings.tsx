@@ -151,7 +151,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const testConnectionMutation = useMutation({
     mutationFn: async () => {
       const endpoint = integrationType.toLowerCase();
-      return await apiRequest("POST", `/api/integrations/${endpoint}/test`);
+      const response = await apiRequest("POST", `/api/integrations/${endpoint}/test`);
+      return await response.json();
     },
     onSuccess: (data: any) => {
       toast({
@@ -174,7 +175,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const syncMutation = useMutation({
     mutationFn: async () => {
       const endpoint = integrationType.toLowerCase();
-      return await apiRequest("POST", `/api/integrations/${endpoint}/sync`);
+      const response = await apiRequest("POST", `/api/integrations/${endpoint}/sync`);
+      return await response.json();
     },
     onSuccess: (data: any) => {
       toast({

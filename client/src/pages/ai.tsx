@@ -169,6 +169,28 @@ interface LinkedPO {
   supplierName?: string;
 }
 
+interface QuickbooksSalesSnapshot {
+  id: string;
+  sku: string;
+  productName: string | null;
+  year: number;
+  month: number;
+  totalQty: number;
+  totalRevenue: number;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface QBDemandHistoryResponse {
+  items: QuickbooksSalesSnapshot[];
+  total: number;
+  years: number[];
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
   const { data, isLoading } = useQuery<{ linkedPOs: LinkedPO[] }>({
     queryKey: ["/api/ai/recommendations", recommendationId, "linked-pos"],
@@ -1440,8 +1462,231 @@ function RulesTab() {
   );
 }
 
+function QuickBooksDemandHistoryTab() {
+  const [search, setSearch] = useState("");
+  const [yearFilter, setYearFilter] = useState<string>("all");
+  const [monthFilter, setMonthFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+  const pageSize = 25;
+  
+  const queryParams = new URLSearchParams();
+  if (search) queryParams.set("search", search);
+  if (yearFilter !== "all") queryParams.set("year", yearFilter);
+  if (monthFilter !== "all") queryParams.set("month", monthFilter);
+  queryParams.set("page", String(page));
+  queryParams.set("pageSize", String(pageSize));
+  
+  const { data, isLoading, isFetching } = useQuery<QBDemandHistoryResponse>({
+    queryKey: ["/api/ai/insights/qb-demand-history", search, yearFilter, monthFilter, page],
+    queryFn: async () => {
+      const response = await fetch(`/api/ai/insights/qb-demand-history?${queryParams.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch demand history");
+      return response.json();
+    },
+  });
+
+  const monthNames = [
+    "", "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <Skeleton className="h-64 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const hasData = data && data.items.length > 0;
+  const hasYears = data && data.years.length > 0;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5" />
+                QuickBooks Demand History
+              </CardTitle>
+              <CardDescription>
+                Historical sales data from QuickBooks for demand forecasting and trend analysis.
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search SKU or product..."
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  className="pl-8 w-48"
+                  data-testid="input-qb-search"
+                />
+              </div>
+              <Select 
+                value={yearFilter} 
+                onValueChange={(v) => {
+                  setYearFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-28" data-testid="select-qb-year">
+                  <SelectValue placeholder="Year" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Years</SelectItem>
+                  {hasYears && data.years.map(year => (
+                    <SelectItem key={year} value={String(year)}>{year}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select 
+                value={monthFilter} 
+                onValueChange={(v) => {
+                  setMonthFilter(v);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="w-32" data-testid="select-qb-month">
+                  <SelectValue placeholder="Month" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Months</SelectItem>
+                  {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+                    <SelectItem key={m} value={String(m)}>{monthNames[m]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
+      </Card>
+
+      {!hasData ? (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center text-muted-foreground">
+              <Database className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p className="text-lg font-medium">No demand history data available</p>
+              <p className="text-sm mt-2">
+                {search || yearFilter !== "all" || monthFilter !== "all"
+                  ? "No data matches your filters. Try adjusting the search criteria."
+                  : "QuickBooks sales data has not been synced yet. Configure the QuickBooks integration to start syncing demand history."
+                }
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50">
+                    <tr className="h-11 border-b">
+                      <th className="px-3 text-left font-medium whitespace-nowrap">SKU</th>
+                      <th className="px-3 text-left font-medium whitespace-nowrap">Product Name</th>
+                      <th className="px-3 text-center font-medium whitespace-nowrap">Period</th>
+                      <th className="px-3 text-right font-medium whitespace-nowrap">Qty Sold</th>
+                      <th className="px-3 text-right font-medium whitespace-nowrap">Revenue</th>
+                      <th className="px-3 text-right font-medium whitespace-nowrap">Avg Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.items.map((item) => (
+                      <tr 
+                        key={item.id} 
+                        className="h-11 border-b hover-elevate"
+                        data-testid={`row-qb-demand-${item.id}`}
+                      >
+                        <td className="px-3 align-middle font-mono text-sm whitespace-nowrap">
+                          {item.sku}
+                        </td>
+                        <td className="px-3 align-middle whitespace-nowrap max-w-[200px] truncate" title={item.productName ?? ""}>
+                          {item.productName ?? "-"}
+                        </td>
+                        <td className="px-3 align-middle text-center whitespace-nowrap">
+                          <span className="font-medium">{monthNames[item.month]?.substring(0, 3) ?? item.month}</span>
+                          <span className="text-muted-foreground ml-1">{item.year}</span>
+                        </td>
+                        <td className="px-3 align-middle text-right font-medium whitespace-nowrap">
+                          {item.totalQty.toLocaleString()}
+                        </td>
+                        <td className="px-3 align-middle text-right whitespace-nowrap">
+                          {formatCurrency(item.totalRevenue)}
+                        </td>
+                        <td className="px-3 align-middle text-right text-muted-foreground whitespace-nowrap">
+                          {item.totalQty > 0 ? formatCurrency(item.totalRevenue / item.totalQty) : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {data.totalPages > 1 && (
+            <div className="flex items-center justify-between px-2">
+              <p className="text-sm text-muted-foreground">
+                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, data.total)} of {data.total} records
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1 || isFetching}
+                  data-testid="button-qb-prev-page"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Previous
+                </Button>
+                <span className="text-sm">
+                  Page {page} of {data.totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
+                  disabled={page >= data.totalPages || isFetching}
+                  data-testid="button-qb-next-page"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function InsightsTab() {
   const { toast } = useToast();
+  const [insightsSubTab, setInsightsSubTab] = useState<string>("recommendations");
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -1623,80 +1868,94 @@ function InsightsTab() {
     return "text-green-600";
   };
   
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <Card className="mt-8">
-          <CardContent className="pt-6">
-            <Skeleton className="h-64 w-full" />
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-  
   return (
-    <div className="space-y-4">
-      {/* AI Recommendations Header */}
-      <Card className="mt-8">
-        <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <CardTitle>AI Recommendations</CardTitle>
-              <CardDescription>
-                Actionable inventory recommendations. Accept or dismiss to track decisions.
-                {recsData?.fetchedAt && (
-                  <span className="block text-xs mt-1">
-                    Data as of: {new Date(recsData.fetchedAt).toLocaleString()}
-                  </span>
-                )}
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-28" data-testid="select-status-filter">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="NEW">New</SelectItem>
-                  <SelectItem value="ACCEPTED">Accepted</SelectItem>
-                  <SelectItem value="DISMISSED">Dismissed</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-28" data-testid="select-risk-filter">
-                  <Filter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Risk" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Risks</SelectItem>
-                  <SelectItem value="HIGH">High</SelectItem>
-                  <SelectItem value="MEDIUM">Medium</SelectItem>
-                  <SelectItem value="LOW">Low</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-36" data-testid="select-type-filter">
-                  <SelectValue placeholder="Type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  <SelectItem value="REORDER">Reorder</SelectItem>
-                  <SelectItem value="ADS_SPIKE">Ads Spike</SelectItem>
-                  <SelectItem value="CHECK_VARIANCE">Variance</SelectItem>
-                  <SelectItem value="HIGH_RETURNS">Returns</SelectItem>
-                  <SelectItem value="MONITOR">Monitor</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => refreshMutation.mutate()}
-                disabled={refreshMutation.isPending || isFetching}
-                data-testid="button-refresh-recommendations"
-              >
+    <div className="space-y-4 mt-8">
+      {/* Internal Tabs Switcher */}
+      <Tabs value={insightsSubTab} onValueChange={setInsightsSubTab}>
+        <TabsList className="mb-4">
+          <TabsTrigger value="recommendations" data-testid="tab-ai-recommendations" className="gap-2">
+            <Brain className="h-4 w-4" />
+            AI Recommendations
+          </TabsTrigger>
+          <TabsTrigger value="qb-demand" data-testid="tab-qb-demand" className="gap-2">
+            <Database className="h-4 w-4" />
+            QuickBooks Demand History
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="qb-demand">
+          <QuickBooksDemandHistoryTab />
+        </TabsContent>
+
+        <TabsContent value="recommendations">
+          {isLoading ? (
+            <Card>
+              <CardContent className="pt-6">
+                <Skeleton className="h-64 w-full" />
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {/* AI Recommendations Header */}
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <CardTitle>AI Recommendations</CardTitle>
+                      <CardDescription>
+                        Actionable inventory recommendations. Accept or dismiss to track decisions.
+                        {recsData?.fetchedAt && (
+                          <span className="block text-xs mt-1">
+                            Data as of: {new Date(recsData.fetchedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Select value={statusFilter} onValueChange={setStatusFilter}>
+                        <SelectTrigger className="w-28" data-testid="select-status-filter">
+                          <SelectValue placeholder="Status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="all">All</SelectItem>
+                          <SelectItem value="NEW">New</SelectItem>
+                          <SelectItem value="ACCEPTED">Accepted</SelectItem>
+                          <SelectItem value="DISMISSED">Dismissed</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={riskFilter} onValueChange={setRiskFilter}>
+                        <SelectTrigger className="w-28" data-testid="select-risk-filter">
+                          <Filter className="h-4 w-4 mr-2" />
+                          <SelectValue placeholder="Risk" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Risks</SelectItem>
+                          <SelectItem value="HIGH">High</SelectItem>
+                          <SelectItem value="MEDIUM">Medium</SelectItem>
+                          <SelectItem value="LOW">Low</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Select value={typeFilter} onValueChange={setTypeFilter}>
+                        <SelectTrigger className="w-36" data-testid="select-type-filter">
+                          <SelectValue placeholder="Type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Types</SelectItem>
+                          <SelectItem value="REORDER">Reorder</SelectItem>
+                          <SelectItem value="ADS_SPIKE">Ads Spike</SelectItem>
+                          <SelectItem value="CHECK_VARIANCE">Variance</SelectItem>
+                          <SelectItem value="HIGH_RETURNS">Returns</SelectItem>
+                          <SelectItem value="MONITOR">Monitor</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => refreshMutation.mutate()}
+                        disabled={refreshMutation.isPending || isFetching}
+                        data-testid="button-refresh-recommendations"
+                      >
                 <RefreshCw className={`mr-2 h-4 w-4 ${refreshMutation.isPending || isFetching ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
@@ -2030,6 +2289,10 @@ function InsightsTab() {
       
       {/* AI System Suggestions Section */}
       <SystemSuggestionsSection />
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

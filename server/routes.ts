@@ -5182,6 +5182,78 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Meta Ads - Sync Demand Signals for AI Recommendations
+  app.post("/api/ads/meta/sync-demand", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { metaAdsDemandService } = await import('./services/meta-ads-demand-service');
+      
+      const initialized = await metaAdsDemandService.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Meta Ads not configured or not connected',
+        });
+      }
+      
+      const result = await metaAdsDemandService.syncDemandSignals();
+      
+      res.json({
+        success: result.success,
+        itemsProcessed: result.itemsProcessed,
+        itemsWithData: result.itemsWithData,
+        rowsStored: result.rowsStored,
+        errors: result.errors,
+        message: result.success 
+          ? `Updated demand signals for ${result.itemsProcessed} recommendations (${result.itemsWithData} with Meta Ads data, ${result.rowsStored} rows stored)`
+          : 'Failed to sync Meta Ads demand signals',
+      });
+    } catch (error: any) {
+      console.error('[Meta Ads] Demand sync error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to sync Meta Ads demand signals',
+      });
+    }
+  });
+
+  // Meta Ads - Sync Performance Data only (without updating AI recommendations)
+  app.post("/api/ads/meta/sync-performance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { metaAdsDemandService } = await import('./services/meta-ads-demand-service');
+      
+      const initialized = await metaAdsDemandService.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Meta Ads not configured or not connected',
+        });
+      }
+      
+      const result = await metaAdsDemandService.syncPerformanceData();
+      
+      res.json({
+        success: result.success,
+        rowsStored: result.rowsStored,
+        rowsMapped: result.rowsMapped,
+        rowsUnmapped: result.rowsUnmapped,
+        errors: result.errors,
+        message: result.success 
+          ? `Synced ${result.rowsStored} rows (${result.rowsMapped} mapped, ${result.rowsUnmapped} unmapped)`
+          : 'Failed to sync Meta Ads performance data',
+      });
+    } catch (error: any) {
+      console.error('[Meta Ads] Performance sync error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to sync Meta Ads performance data',
+      });
+    }
+  });
+
   // Ad Metrics - Sync All
   app.post("/api/ads/sync", requireAuth, async (req: Request, res: Response) => {
     try {

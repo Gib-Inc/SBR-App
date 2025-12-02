@@ -3156,33 +3156,6 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
   
-  // GoHighLevel - Sync sales history
-  app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
-    try {
-      // Stub implementation - would call GoHighLevel API
-      // In a real implementation, you'd make the API call here and catch errors
-      
-      // Simulate successful connection
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "gohighlevel",
-        lastSuccessAt: new Date(),
-        lastStatus: "connected",
-        lastAlertAt: null,
-        errorMessage: null,
-      });
-      
-      res.json({ success: true, message: "Sales history sync initiated (stub)" });
-    } catch (error: any) {
-      // Record failure in integration health
-      await storage.createOrUpdateIntegrationHealth({
-        integrationName: "gohighlevel",
-        lastStatus: "failed",
-        errorMessage: error.message || "Integration sync failed",
-      });
-      res.status(500).json({ error: error.message || "Integration sync failed" });
-    }
-  });
-
   // Extensiv - Test Connection
   app.post("/api/integrations/extensiv/test", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -4363,7 +4336,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // GoHighLevel - Sync (placeholder)
+  // GoHighLevel - Comprehensive Sync (pushes all data to GHL)
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -4398,23 +4371,257 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
-      // For now, just test connection as a sync placeholder
-      const result = await client.sync();
+      // Import GHL config for pipeline stages
+      const { GHL_CONFIG } = await import("./config/ghl-config");
+      const pipelineId = (config?.config as any)?.purchasePipelineId || GHL_CONFIG.pipelineId;
       
+      // Track sync results
+      const syncResults = {
+        salesOrders: { synced: 0, failed: 0, errors: [] as string[] },
+        returns: { synced: 0, failed: 0, errors: [] as string[] },
+        stockWarnings: { synced: 0, failed: 0, errors: [] as string[] },
+      };
+
+      // ========== 1. SYNC SALES ORDERS ==========
+      console.log('[GHL Sync] Starting sales orders sync...');
+      const salesOrders = await storage.getAllSalesOrders();
+      
+      for (const order of salesOrders) {
+        try {
+          // Create or find contact for the customer
+          let contactId: string | undefined;
+          if (order.customerName) {
+            const contactResult = await client.createOrFindContact(
+              order.customerName,
+              order.customerEmail || undefined,
+              order.customerPhone || undefined
+            );
+            if (contactResult.success) {
+              contactId = contactResult.contactId;
+            }
+          }
+
+          // Create opportunity for the sales order
+          const orderTotal = order.totalAmount ? Number(order.totalAmount) : 0;
+          const notes = `
+Order: ${order.orderNumber || order.externalOrderId || order.id}
+Channel: ${order.channel || 'Unknown'}
+Status: ${order.status || 'Unknown'}
+Customer: ${order.customerName || 'Unknown'}
+${order.customerEmail ? `Email: ${order.customerEmail}` : ''}
+${order.customerPhone ? `Phone: ${order.customerPhone}` : ''}
+Order Date: ${order.orderDate ? new Date(order.orderDate).toLocaleDateString() : 'N/A'}
+Total: $${orderTotal.toFixed(2)}
+          `.trim();
+
+          const opportunityResult = await client.createOpportunity(
+            pipelineId,
+            GHL_CONFIG.stages.SALES_ORDERS,
+            `Order ${order.orderNumber || order.externalOrderId || order.id} - ${order.customerName || 'Customer'}`,
+            orderTotal,
+            notes,
+            {
+              orderId: order.id,
+              orderNumber: order.orderNumber || order.externalOrderId,
+              channel: order.channel,
+              status: order.status,
+              contactId,
+            }
+          );
+
+          if (opportunityResult.success) {
+            syncResults.salesOrders.synced++;
+          } else {
+            syncResults.salesOrders.failed++;
+            syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: ${opportunityResult.error}`);
+          }
+        } catch (error: any) {
+          syncResults.salesOrders.failed++;
+          syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: ${error.message}`);
+        }
+      }
+      console.log(`[GHL Sync] Sales orders: ${syncResults.salesOrders.synced} synced, ${syncResults.salesOrders.failed} failed`);
+
+      // ========== 2. SYNC RETURNS ==========
+      console.log('[GHL Sync] Starting returns sync...');
+      const returns = await storage.getAllReturnRequests();
+      
+      for (const returnRequest of returns) {
+        try {
+          // Get linked sales order for customer info
+          const salesOrder = returnRequest.salesOrderId
+            ? await storage.getSalesOrderById(returnRequest.salesOrderId)
+            : null;
+
+          // Get return items
+          const returnItems = await storage.getReturnItemsByReturnId(returnRequest.id);
+          const itemsList = returnItems.map(item => 
+            `- ${item.sku}: ${item.quantity} units (Reason: ${item.reason || 'Not specified'})`
+          ).join('\n');
+
+          const description = `
+Return Request: ${returnRequest.returnNumber || returnRequest.id}
+Customer: ${salesOrder?.customerName || 'Unknown'}
+${salesOrder?.customerEmail ? `Email: ${salesOrder.customerEmail}` : ''}
+${salesOrder?.customerPhone ? `Phone: ${salesOrder.customerPhone}` : ''}
+Channel: ${salesOrder?.channel || 'Unknown'}
+Status: ${returnRequest.status}
+Resolution Requested: ${returnRequest.resolutionRequested || 'N/A'}
+
+Items:
+${itemsList || 'No items'}
+
+Notes: ${returnRequest.customerNotes || 'None'}
+          `.trim();
+
+          const title = `Return ${returnRequest.returnNumber || returnRequest.id} - ${salesOrder?.customerName || 'Customer'}`;
+
+          // Try to find contact
+          let contactId: string | undefined;
+          if (salesOrder) {
+            const contact = await client.getContactByPhoneOrEmail(
+              salesOrder.customerPhone || undefined,
+              salesOrder.customerEmail || undefined
+            );
+            contactId = contact?.id;
+          }
+
+          // Determine stage based on return status
+          let stageId = GHL_CONFIG.stages.REFUND_PROCESSING;
+          if (returnRequest.status === 'REFUNDED' || returnRequest.status === 'CLOSED') {
+            stageId = GHL_CONFIG.stages.REFUNDED;
+          }
+
+          // Create opportunity for return
+          const opportunityResult = await client.createOpportunity(
+            pipelineId,
+            stageId,
+            title,
+            0, // Returns don't have monetary value
+            description,
+            {
+              returnId: returnRequest.id,
+              returnNumber: returnRequest.returnNumber,
+              status: returnRequest.status,
+              contactId,
+            }
+          );
+
+          if (opportunityResult.success) {
+            syncResults.returns.synced++;
+          } else {
+            syncResults.returns.failed++;
+            syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: ${opportunityResult.error}`);
+          }
+        } catch (error: any) {
+          syncResults.returns.failed++;
+          syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: ${error.message}`);
+        }
+      }
+      console.log(`[GHL Sync] Returns: ${syncResults.returns.synced} synced, ${syncResults.returns.failed} failed`);
+
+      // ========== 3. SYNC STOCK WARNINGS ==========
+      console.log('[GHL Sync] Starting stock warnings sync...');
+      const items = await storage.getAllItems();
+      const atRiskItems = items
+        .map(item => {
+          const stock = item.type === "finished_product" 
+            ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+            : item.currentStock;
+          const daysOfCover = item.dailyUsage > 0 ? stock / item.dailyUsage : Infinity;
+          return { ...item, daysOfCover, currentStock: stock };
+        })
+        .filter(item => item.daysOfCover <= 30 && item.daysOfCover !== Infinity)
+        .sort((a, b) => a.daysOfCover - b.daysOfCover);
+
+      for (const item of atRiskItems) {
+        try {
+          // Determine stage based on days of cover
+          let stageId: string;
+          let priority: string;
+          if (item.daysOfCover <= 7) {
+            stageId = GHL_CONFIG.stages.STOCK_ORDER_NOW;
+            priority = 'CRITICAL';
+          } else if (item.daysOfCover <= 14) {
+            stageId = GHL_CONFIG.stages.STOCK_14_21;
+            priority = 'HIGH';
+          } else {
+            stageId = GHL_CONFIG.stages.STOCK_21_30;
+            priority = 'MEDIUM';
+          }
+
+          const notes = `
+Stock Warning: ${item.name}
+SKU: ${item.sku}
+Current Stock: ${item.currentStock}
+Days of Cover: ${Math.round(item.daysOfCover)} days
+Daily Usage: ${item.dailyUsage}
+Priority: ${priority}
+Reorder Point: ${item.reorderPoint || 'Not set'}
+          `.trim();
+
+          const opportunityResult = await client.createOpportunity(
+            pipelineId,
+            stageId,
+            `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`,
+            0,
+            notes,
+            {
+              itemId: item.id,
+              sku: item.sku,
+              daysOfCover: item.daysOfCover,
+              priority,
+            }
+          );
+
+          if (opportunityResult.success) {
+            syncResults.stockWarnings.synced++;
+          } else {
+            syncResults.stockWarnings.failed++;
+            syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${opportunityResult.error}`);
+          }
+        } catch (error: any) {
+          syncResults.stockWarnings.failed++;
+          syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${error.message}`);
+        }
+      }
+      console.log(`[GHL Sync] Stock warnings: ${syncResults.stockWarnings.synced} synced, ${syncResults.stockWarnings.failed} failed`);
+
+      // Build summary message
+      const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced;
+      const totalFailed = syncResults.salesOrders.failed + syncResults.returns.failed + syncResults.stockWarnings.failed;
+      
+      const summaryMessage = `Synced ${totalSynced} items to GoHighLevel: ` +
+        `${syncResults.salesOrders.synced} sales orders, ` +
+        `${syncResults.returns.synced} returns, ` +
+        `${syncResults.stockWarnings.synced} stock warnings` +
+        (totalFailed > 0 ? ` (${totalFailed} failed)` : '');
+
       // Update integration config status
       if (config) {
         await storage.updateIntegrationConfig(config.id, {
           lastSyncAt: new Date(),
-          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
-          lastSyncMessage: result.message,
+          lastSyncStatus: totalFailed === 0 ? 'SUCCESS' : 'PARTIAL',
+          lastSyncMessage: summaryMessage,
         });
       }
 
+      // Update integration health
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: "gohighlevel",
+        lastSuccessAt: new Date(),
+        lastStatus: totalFailed === 0 ? "connected" : "partial",
+        lastAlertAt: null,
+        errorMessage: totalFailed > 0 ? `${totalFailed} items failed to sync` : null,
+      });
+
       res.json({
-        success: result.success,
-        message: result.message,
+        success: true,
+        message: summaryMessage,
+        details: syncResults,
       });
     } catch (error: any) {
+      console.error('[GHL Sync] Error:', error);
       const userId = req.session.userId!;
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
       

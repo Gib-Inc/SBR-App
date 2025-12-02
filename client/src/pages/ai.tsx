@@ -132,6 +132,8 @@ interface SourceDecisionMetrics {
   conversions?: number;
   spend?: number;
   roas?: number;
+  avgConvPerDay?: number;
+  totalSpend?: number;
   projectedCoverageDays?: number;
   velocityTrend?: number;
   salesVelocity?: number;
@@ -1951,6 +1953,35 @@ function InsightsTab() {
       });
     },
   });
+
+  // Sync Meta Ads demand signals mutation
+  const syncMetaAdsMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/ads/meta/sync-demand", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || "Failed to sync Meta Ads demand");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+      toast({
+        title: "Meta Ads Synced",
+        description: data.message || `Updated ${data.itemsProcessed} recommendations with demand signals.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync Meta Ads demand signals",
+        variant: "destructive",
+      });
+    },
+  });
   
   // Handler to create PO from recommendation
   const handleCreatePO = async (rec: PersistedRecommendation) => {
@@ -2167,11 +2198,14 @@ function InsightsTab() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => syncGoogleAdsMutation.mutate()}
-                        disabled={syncGoogleAdsMutation.isPending}
-                        data-testid="button-sync-google-ads"
+                        onClick={() => {
+                          syncGoogleAdsMutation.mutate();
+                          syncMetaAdsMutation.mutate();
+                        }}
+                        disabled={syncGoogleAdsMutation.isPending || syncMetaAdsMutation.isPending}
+                        data-testid="button-sync-all-ads"
                       >
-                        <TrendingUp className={`mr-2 h-4 w-4 ${syncGoogleAdsMutation.isPending ? "animate-spin" : ""}`} />
+                        <TrendingUp className={`mr-2 h-4 w-4 ${(syncGoogleAdsMutation.isPending || syncMetaAdsMutation.isPending) ? "animate-spin" : ""}`} />
                         Sync Ads
                       </Button>
                       <Button
@@ -2204,6 +2238,7 @@ function InsightsTab() {
                   <th className="px-3 text-right font-medium whitespace-nowrap">Avail</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Gap%</th>
                   <th className="px-3 text-center font-medium whitespace-nowrap">G.Ads</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap">Meta</th>
                   <th className="px-3 text-center font-medium whitespace-nowrap">Shopify</th>
                   <th className="px-3 text-center font-medium whitespace-nowrap">QB</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">On PO</th>
@@ -2216,7 +2251,7 @@ function InsightsTab() {
               <tbody>
                 {filteredRecommendations.length === 0 ? (
                   <tr>
-                    <td colSpan={15} className="text-center text-muted-foreground py-8">
+                    <td colSpan={16} className="text-center text-muted-foreground py-8">
                       {recsData?.recommendations.length === 0 
                         ? "No actionable recommendations. Click Refresh to generate new recommendations."
                         : "No items match the selected filters."
@@ -2280,6 +2315,36 @@ function InsightsTab() {
                                 {decision.metrics.conversions !== undefined && (
                                   <div className="text-xs text-muted-foreground mt-1">
                                     {decision.metrics.conversions} conversions, {decision.metrics.projectedCoverageDays?.toFixed(0)}d coverage
+                                  </div>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 align-middle text-center whitespace-nowrap">
+                        {(() => {
+                          const decision = getSourceDecision(rec, "META_ADS");
+                          return decision ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Badge 
+                                    variant={getSourceDecisionBadgeVariant(decision.status)}
+                                    className="cursor-pointer text-xs px-1.5"
+                                    onClick={(e) => { e.stopPropagation(); setSheetItem(rec); }}
+                                  >
+                                    {getSourceDecisionBadgeText(decision.status)}
+                                  </Badge>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <div className="text-sm">{decision.rationale}</div>
+                                {decision.metrics.avgConvPerDay !== undefined && (
+                                  <div className="text-xs text-muted-foreground mt-1">
+                                    {decision.metrics.avgConvPerDay?.toFixed(1)} conv/day, ROAS {decision.metrics.roas?.toFixed(1)}
                                   </div>
                                 )}
                               </TooltipContent>

@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -125,6 +126,37 @@ interface InsightsResponse {
   };
 }
 
+type SourceDecisionStatus = "ORDER" | "DONT_ORDER" | "NEUTRAL" | "NO_DATA";
+
+interface SourceDecisionMetrics {
+  conversions?: number;
+  spend?: number;
+  roas?: number;
+  projectedCoverageDays?: number;
+  velocityTrend?: number;
+  salesVelocity?: number;
+  orderCount?: number;
+  avgOrderValue?: number;
+}
+
+interface SourceDecision {
+  source: string;
+  status: SourceDecisionStatus;
+  rationale: string;
+  metrics: SourceDecisionMetrics;
+  updatedAt: string;
+}
+
+interface RecommendationDetail {
+  sku: string;
+  itemId: string;
+  productName: string;
+  sourceDecisions: SourceDecision[];
+  llmSynthesis?: string;
+  finalRecommendation: "ORDER" | "MONITOR" | "OK";
+  synthesizedAt?: string;
+}
+
 interface PersistedRecommendation {
   id: string;
   sku: string;
@@ -140,6 +172,7 @@ interface PersistedRecommendation {
   status: "NEW" | "ACCEPTED" | "DISMISSED";
   reasonSummary: string | null;
   sourceSignals: Record<string, unknown> | null;
+  sourceDecisionsJson: RecommendationDetail | null;
   adMultiplier: number | null;
   baseVelocity: number | null;
   adjustedVelocity: number | null;
@@ -1818,6 +1851,7 @@ function InsightsTab() {
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [selectedItem, setSelectedItem] = useState<PersistedRecommendation | null>(null);
+  const [sheetItem, setSheetItem] = useState<PersistedRecommendation | null>(null);
   const [createPOOpen, setCreatePOOpen] = useState(false);
   const [createPOData, setCreatePOData] = useState<{
     supplierId?: string;
@@ -1884,6 +1918,35 @@ function InsightsTab() {
       toast({
         title: "Update Failed",
         description: error.message || "Failed to update recommendation status",
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Sync Google Ads demand signals mutation
+  const syncGoogleAdsMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/ads/google/sync-demand", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || "Failed to sync Google Ads demand");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+      toast({
+        title: "Google Ads Synced",
+        description: data.message || `Updated ${data.itemsProcessed} recommendations with demand signals.`,
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Sync Failed",
+        description: error.message || "Failed to sync Google Ads demand signals",
         variant: "destructive",
       });
     },
@@ -1979,6 +2042,31 @@ function InsightsTab() {
       case "MONITOR": return "text-blue-600 dark:text-blue-400";
       default: return "";
     }
+  };
+  
+  const getSourceDecisionBadgeVariant = (status: SourceDecisionStatus): "default" | "secondary" | "outline" | "destructive" => {
+    switch (status) {
+      case "ORDER": return "default";
+      case "DONT_ORDER": return "destructive";
+      case "NEUTRAL": return "secondary";
+      case "NO_DATA": return "outline";
+      default: return "outline";
+    }
+  };
+  
+  const getSourceDecisionBadgeText = (status: SourceDecisionStatus): string => {
+    switch (status) {
+      case "ORDER": return "Order";
+      case "DONT_ORDER": return "Hold";
+      case "NEUTRAL": return "Neutral";
+      case "NO_DATA": return "N/A";
+      default: return "N/A";
+    }
+  };
+  
+  const getSourceDecision = (rec: PersistedRecommendation, source: string): SourceDecision | undefined => {
+    if (!rec.sourceDecisionsJson?.sourceDecisions) return undefined;
+    return rec.sourceDecisionsJson.sourceDecisions.find(d => d.source === source);
   };
   
   const formatStockGap = (gap: number | null): string => {
@@ -2079,6 +2167,16 @@ function InsightsTab() {
                       <Button
                         variant="outline"
                         size="sm"
+                        onClick={() => syncGoogleAdsMutation.mutate()}
+                        disabled={syncGoogleAdsMutation.isPending}
+                        data-testid="button-sync-google-ads"
+                      >
+                        <TrendingUp className={`mr-2 h-4 w-4 ${syncGoogleAdsMutation.isPending ? "animate-spin" : ""}`} />
+                        Sync Ads
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => refreshMutation.mutate()}
                         disabled={refreshMutation.isPending || isFetching}
                         data-testid="button-refresh-recommendations"
@@ -2105,6 +2203,9 @@ function InsightsTab() {
                   <th className="px-3 text-right font-medium whitespace-nowrap">Days Left</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Avail</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Gap%</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap">G.Ads</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap">Shopify</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap">QB</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">On PO</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Rec Qty</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap">Velocity</th>
@@ -2115,7 +2216,7 @@ function InsightsTab() {
               <tbody>
                 {filteredRecommendations.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="text-center text-muted-foreground py-8">
+                    <td colSpan={15} className="text-center text-muted-foreground py-8">
                       {recsData?.recommendations.length === 0 
                         ? "No actionable recommendations. Click Refresh to generate new recommendations."
                         : "No items match the selected filters."
@@ -2157,6 +2258,86 @@ function InsightsTab() {
                       </td>
                       <td className={`px-3 align-middle text-right whitespace-nowrap ${getStockGapColor(rec.stockGapPercent)}`}>
                         {formatStockGap(rec.stockGapPercent)}
+                      </td>
+                      <td className="px-3 align-middle text-center whitespace-nowrap">
+                        {(() => {
+                          const decision = getSourceDecision(rec, "GOOGLE_ADS");
+                          return decision ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Badge 
+                                    variant={getSourceDecisionBadgeVariant(decision.status)}
+                                    className="cursor-pointer text-xs px-1.5"
+                                    onClick={(e) => { e.stopPropagation(); setSheetItem(rec); }}
+                                  >
+                                    {getSourceDecisionBadgeText(decision.status)}
+                                  </Badge>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <div className="text-sm">{decision.rationale}</div>
+                                {decision.metrics.conversions !== undefined && (
+                                  <div className="text-xs text-muted-foreground mt-1">
+                                    {decision.metrics.conversions} conversions, {decision.metrics.projectedCoverageDays?.toFixed(0)}d coverage
+                                  </div>
+                                )}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 align-middle text-center whitespace-nowrap">
+                        {(() => {
+                          const decision = getSourceDecision(rec, "SHOPIFY");
+                          return decision ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Badge 
+                                    variant={getSourceDecisionBadgeVariant(decision.status)}
+                                    className="cursor-pointer text-xs px-1.5"
+                                    onClick={(e) => { e.stopPropagation(); setSheetItem(rec); }}
+                                  >
+                                    {getSourceDecisionBadgeText(decision.status)}
+                                  </Badge>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <div className="text-sm">{decision.rationale}</div>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 align-middle text-center whitespace-nowrap">
+                        {(() => {
+                          const decision = getSourceDecision(rec, "QUICKBOOKS");
+                          return decision ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Badge 
+                                    variant={getSourceDecisionBadgeVariant(decision.status)}
+                                    className="cursor-pointer text-xs px-1.5"
+                                    onClick={(e) => { e.stopPropagation(); setSheetItem(rec); }}
+                                  >
+                                    {getSourceDecisionBadgeText(decision.status)}
+                                  </Badge>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-xs">
+                                <div className="text-sm">{decision.rationale}</div>
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">-</span>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 align-middle text-right whitespace-nowrap">
                         {rec.qtyOnPo ?? 0}
@@ -2401,6 +2582,127 @@ function InsightsTab() {
           )}
         </DialogContent>
       </Dialog>
+      
+      {/* Source Decisions Slide-over Sheet */}
+      <Sheet open={!!sheetItem} onOpenChange={(open) => !open && setSheetItem(null)}>
+        <SheetContent className="w-[450px] sm:w-[540px]">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5" />
+              Source Signals Breakdown
+            </SheetTitle>
+            <SheetDescription>
+              {sheetItem?.productName} ({sheetItem?.sku})
+            </SheetDescription>
+          </SheetHeader>
+          {sheetItem && (
+            <div className="mt-6 space-y-6">
+              {/* Final recommendation banner */}
+              <div className="p-4 rounded-lg bg-muted">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">Final Recommendation</span>
+                  <Badge variant={
+                    sheetItem.recommendationType === "REORDER" ? "default" :
+                    sheetItem.recommendationType === "MONITOR" ? "secondary" : "outline"
+                  }>
+                    {sheetItem.recommendationType?.replace("_", " ") || "N/A"}
+                  </Badge>
+                </div>
+                {sheetItem.sourceDecisionsJson?.llmSynthesis && (
+                  <p className="text-sm text-muted-foreground">
+                    {sheetItem.sourceDecisionsJson.llmSynthesis}
+                  </p>
+                )}
+              </div>
+              
+              {/* Source decisions list */}
+              <div className="space-y-4">
+                <h4 className="text-sm font-medium">Source Signals</h4>
+                {sheetItem.sourceDecisionsJson?.sourceDecisions ? (
+                  sheetItem.sourceDecisionsJson.sourceDecisions.map((decision) => (
+                    <div key={decision.source} className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-sm">
+                          {decision.source === "GOOGLE_ADS" ? "Google Ads" :
+                           decision.source === "META_ADS" ? "Meta Ads" :
+                           decision.source === "SHOPIFY" ? "Shopify" :
+                           decision.source === "EXTENSIV" ? "Extensiv" :
+                           decision.source === "QUICKBOOKS" ? "QuickBooks" :
+                           decision.source}
+                        </span>
+                        <Badge variant={getSourceDecisionBadgeVariant(decision.status)}>
+                          {getSourceDecisionBadgeText(decision.status)}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        {decision.rationale}
+                      </p>
+                      {/* Metrics */}
+                      {Object.keys(decision.metrics).length > 0 && (
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          {decision.metrics.conversions !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Conversions:</span>{" "}
+                              <span className="font-medium">{decision.metrics.conversions}</span>
+                            </div>
+                          )}
+                          {decision.metrics.spend !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Spend:</span>{" "}
+                              <span className="font-medium">${decision.metrics.spend.toFixed(2)}</span>
+                            </div>
+                          )}
+                          {decision.metrics.roas !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">ROAS:</span>{" "}
+                              <span className="font-medium">{decision.metrics.roas.toFixed(2)}x</span>
+                            </div>
+                          )}
+                          {decision.metrics.projectedCoverageDays !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Coverage:</span>{" "}
+                              <span className="font-medium">{decision.metrics.projectedCoverageDays.toFixed(0)} days</span>
+                            </div>
+                          )}
+                          {decision.metrics.velocityTrend !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Velocity Trend:</span>{" "}
+                              <span className={`font-medium ${decision.metrics.velocityTrend > 0 ? "text-green-600" : decision.metrics.velocityTrend < 0 ? "text-red-600" : ""}`}>
+                                {decision.metrics.velocityTrend > 0 ? "+" : ""}{(decision.metrics.velocityTrend * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                          )}
+                          {decision.metrics.salesVelocity !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Sales Velocity:</span>{" "}
+                              <span className="font-medium">{decision.metrics.salesVelocity.toFixed(1)}/day</span>
+                            </div>
+                          )}
+                          {decision.metrics.orderCount !== undefined && (
+                            <div>
+                              <span className="text-muted-foreground">Orders:</span>{" "}
+                              <span className="font-medium">{decision.metrics.orderCount}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Updated: {new Date(decision.updatedAt).toLocaleString()}
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <TrendingUp className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>No source signals available</p>
+                    <p className="text-sm mt-1">Click "Sync Ads" to fetch demand signals from connected platforms.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
       
       {/* Create PO Sheet */}
       <CreatePOSheet

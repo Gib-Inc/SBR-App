@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
@@ -2914,10 +2914,22 @@ function LogsTab() {
     "INTEGRATION_SYNC",
     "SHOPIFY_SYNC",
     "AMAZON_SYNC",
+    "CONNECTION_TEST",
+    "SALES_SYNC",
+    "SALES_SYNC_ERROR",
+    "DEMAND_HISTORY_SYNC",
+    "DEMAND_HISTORY_SYNC_ERROR",
+    "TOKEN_REFRESH",
+    "TOKEN_REFRESH_ERROR",
+    "BILL_CREATED",
+    "BILL_CREATE_ERROR",
+    "REFUND_CREATED",
+    "REFUND_CREATE_ERROR",
+    "VENDOR_CREATED",
   ];
   
-  const entityTypes = ["PO", "ORDER", "RETURN", "ITEM", "SUPPLIER"];
-  const sources = ["SYSTEM", "USER", "SHOPIFY", "AMAZON", "GHL", "EXTENSIV"];
+  const entityTypes = ["PO", "ORDER", "RETURN", "ITEM", "SUPPLIER", "PURCHASE_ORDER", "RETURN_REQUEST"];
+  const sources = ["SYSTEM", "USER", "SHOPIFY", "AMAZON", "GHL", "EXTENSIV", "QUICKBOOKS"];
   const statuses = ["SUCCESS", "FAILED", "PENDING", "INFO"];
   
   const getStatusBadgeVariant = (status: string | null) => {
@@ -2930,10 +2942,11 @@ function LogsTab() {
   };
   
   const getEventIcon = (eventType: string) => {
+    if (eventType.includes("BILL") || eventType.includes("REFUND") || eventType.includes("TOKEN") || eventType.includes("VENDOR")) return <DollarSign className="h-4 w-4" />;
     if (eventType.includes("PO")) return <FileText className="h-4 w-4" />;
     if (eventType.includes("RETURN")) return <RotateCcw className="h-4 w-4" />;
-    if (eventType.includes("ORDER") || eventType.includes("SALES")) return <ShoppingBag className="h-4 w-4" />;
-    if (eventType.includes("SYNC")) return <RefreshCw className="h-4 w-4" />;
+    if (eventType.includes("ORDER") || eventType.includes("SALES") || eventType.includes("DEMAND")) return <ShoppingBag className="h-4 w-4" />;
+    if (eventType.includes("SYNC") || eventType.includes("CONNECTION")) return <RefreshCw className="h-4 w-4" />;
     return <Info className="h-4 w-4" />;
   };
   

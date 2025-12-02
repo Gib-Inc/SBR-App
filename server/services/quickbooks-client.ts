@@ -242,14 +242,36 @@ export class QuickBooksClient {
         refreshToken: tokens.refresh_token,
         accessTokenExpiresAt,
         refreshTokenExpiresAt,
+        tokenLastRotatedAt: now,
       });
 
       // Reload auth
       this.auth = await this.storage.getQuickbooksAuth(this.userId);
       console.log('[QuickBooks] Tokens refreshed successfully');
+      
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'TOKEN_REFRESH',
+        status: 'INFO',
+        description: `QuickBooks OAuth tokens refreshed successfully`,
+        details: {
+          accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
+          refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString(),
+        },
+      });
+      
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error('[QuickBooks] Token refresh error:', error);
+      
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'TOKEN_REFRESH_ERROR',
+        status: 'ERROR',
+        description: `QuickBooks token refresh failed: ${error.message || 'Unknown error'}`,
+        details: { error: error.message },
+      });
+      
       return false;
     }
   }
@@ -1106,6 +1128,233 @@ export class QuickBooksClient {
       tokenLastRotatedAt: auth.tokenLastRotatedAt || undefined,
       tokenNextRotationAt: auth.tokenNextRotationAt || undefined,
     };
+  }
+
+  /**
+   * Create a Credit Memo in QuickBooks for a return
+   * This records the refund/credit for accounting purposes
+   * 
+   * @param returnRequest - The return request to create a refund for
+   * @param returnItems - The items being returned
+   * @param items - Map of item SKUs to Item objects for price lookup
+   * @returns Result with refundId and type
+   */
+  async createRefundFromReturn(
+    returnRequest: {
+      id: string;
+      rmaNumber: string | null;
+      customerName: string;
+      customerEmail?: string | null;
+      externalOrderId: string;
+      salesChannel: string;
+    },
+    returnItems: Array<{
+      sku: string;
+      quantityReturned: number;
+      reason?: string | null;
+    }>,
+    items: Map<string, { id: string; sku: string; name: string; price?: number | null }>
+  ): Promise<{ 
+    success: boolean; 
+    refundId?: string; 
+    refundNumber?: string; 
+    refundType?: 'CREDIT_MEMO' | 'REFUND_RECEIPT';
+    totalAmount?: number;
+    error?: string 
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, error: 'QuickBooks not connected' };
+      }
+
+      // Build line items for the credit memo
+      const creditMemoLines: Array<{
+        Amount: number;
+        Description: string;
+        DetailType: string;
+        SalesItemLineDetail?: {
+          ItemRef: { value: string };
+          Qty: number;
+          UnitPrice: number;
+        };
+      }> = [];
+      
+      let totalAmount = 0;
+
+      for (const returnItem of returnItems) {
+        const item = items.get(returnItem.sku);
+        if (!item) {
+          console.warn(`[QuickBooks] Item not found for SKU: ${returnItem.sku}, skipping`);
+          continue;
+        }
+
+        const unitPrice = item.price || 0;
+        const amount = returnItem.quantityReturned * unitPrice;
+        totalAmount += amount;
+
+        // Try to find mapped QB item
+        const itemLookup = await this.findItemOrFallback(returnItem.sku, item.id);
+
+        if (itemLookup.itemId && !itemLookup.useAccount) {
+          creditMemoLines.push({
+            Amount: amount,
+            Description: returnItem.reason || `Return: ${item.name} (${item.sku})`,
+            DetailType: 'SalesItemLineDetail',
+            SalesItemLineDetail: {
+              ItemRef: { value: itemLookup.itemId },
+              Qty: returnItem.quantityReturned,
+              UnitPrice: unitPrice,
+            },
+          });
+        } else {
+          // Fallback to simple line without item reference
+          creditMemoLines.push({
+            Amount: amount,
+            Description: `Return: ${item.name} (SKU: ${item.sku}) - Qty: ${returnItem.quantityReturned} @ $${unitPrice.toFixed(2)}${returnItem.reason ? ` - Reason: ${returnItem.reason}` : ''}`,
+            DetailType: 'SalesItemLineDetail',
+            SalesItemLineDetail: {
+              ItemRef: { value: '1' }, // Default services item
+              Qty: 1,
+              UnitPrice: amount,
+            },
+          });
+        }
+      }
+
+      if (creditMemoLines.length === 0) {
+        await AuditLogger.logEvent({
+          source: 'QUICKBOOKS',
+          eventType: 'REFUND_CREATE_ERROR',
+          entityType: 'RETURN_REQUEST',
+          entityId: returnRequest.id,
+          entityLabel: returnRequest.rmaNumber || returnRequest.id,
+          status: 'ERROR',
+          description: `Cannot create refund: no valid items with mapped SKUs`,
+          details: { returnItemCount: returnItems.length },
+        });
+        return { success: false, error: 'No valid items to create refund for. Ensure items have QuickBooks mappings.' };
+      }
+
+      if (totalAmount <= 0) {
+        await AuditLogger.logEvent({
+          source: 'QUICKBOOKS',
+          eventType: 'REFUND_CREATE_ERROR',
+          entityType: 'RETURN_REQUEST',
+          entityId: returnRequest.id,
+          entityLabel: returnRequest.rmaNumber || returnRequest.id,
+          status: 'ERROR',
+          description: `Cannot create refund: total amount is zero or negative`,
+          details: { totalAmount },
+        });
+        return { success: false, error: 'Cannot create refund: total amount must be greater than zero.' };
+      }
+
+      // Find or create customer in QuickBooks
+      const customerId = await this.findOrCreateCustomer(
+        returnRequest.customerName,
+        returnRequest.customerEmail || undefined
+      );
+
+      // Create Credit Memo
+      const creditMemoData = {
+        CustomerRef: { value: customerId },
+        TxnDate: new Date().toISOString().split('T')[0],
+        Line: creditMemoLines,
+        PrivateNote: `RMA: ${returnRequest.rmaNumber || 'N/A'} | Order: ${returnRequest.externalOrderId} | Channel: ${returnRequest.salesChannel}`,
+      };
+
+      const createResult = await this.apiRequest<{ CreditMemo: QBCreditMemo }>('/creditmemo', {
+        method: 'POST',
+        body: JSON.stringify(creditMemoData),
+      });
+
+      const newCreditMemo = createResult.CreditMemo;
+
+      // Log success
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'REFUND_CREATED',
+        entityType: 'RETURN_REQUEST',
+        entityId: returnRequest.id,
+        entityLabel: returnRequest.rmaNumber || returnRequest.id,
+        status: 'INFO',
+        description: `Created QuickBooks Credit Memo ${newCreditMemo.DocNumber || newCreditMemo.Id} for RMA ${returnRequest.rmaNumber || 'N/A'}`,
+        details: {
+          quickbooksRefundId: newCreditMemo.Id,
+          refundNumber: newCreditMemo.DocNumber,
+          refundType: 'CREDIT_MEMO',
+          totalAmount: newCreditMemo.TotalAmt || totalAmount,
+          customerId,
+          lineCount: creditMemoLines.length,
+          externalOrderId: returnRequest.externalOrderId,
+          salesChannel: returnRequest.salesChannel,
+        },
+      });
+
+      return {
+        success: true,
+        refundId: newCreditMemo.Id,
+        refundNumber: newCreditMemo.DocNumber,
+        refundType: 'CREDIT_MEMO',
+        totalAmount: newCreditMemo.TotalAmt || totalAmount,
+      };
+    } catch (error: any) {
+      // Log error
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'REFUND_CREATE_ERROR',
+        entityType: 'RETURN_REQUEST',
+        entityId: returnRequest.id,
+        entityLabel: returnRequest.rmaNumber || returnRequest.id,
+        status: 'ERROR',
+        description: `Failed to create QuickBooks refund for RMA ${returnRequest.rmaNumber || 'N/A'}: ${error.message}`,
+        details: { error: error.message },
+      });
+
+      return {
+        success: false,
+        error: error.message || 'Failed to create refund',
+      };
+    }
+  }
+
+  /**
+   * Find or create a customer in QuickBooks
+   */
+  private async findOrCreateCustomer(displayName: string, email?: string): Promise<string> {
+    try {
+      // Search for existing customer by display name
+      const searchQuery = encodeURIComponent(
+        `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`
+      );
+      const searchResult = await this.apiRequest<{ QueryResponse: { Customer?: Array<{ Id: string }> } }>(
+        `/query?query=${searchQuery}`
+      );
+
+      if (searchResult.QueryResponse?.Customer?.[0]) {
+        return searchResult.QueryResponse.Customer[0].Id;
+      }
+
+      // Create new customer
+      const customerData: { DisplayName: string; PrimaryEmailAddr?: { Address: string } } = {
+        DisplayName: displayName,
+      };
+      if (email) {
+        customerData.PrimaryEmailAddr = { Address: email };
+      }
+
+      const createResult = await this.apiRequest<{ Customer: { Id: string } }>('/customer', {
+        method: 'POST',
+        body: JSON.stringify(customerData),
+      });
+
+      return createResult.Customer.Id;
+    } catch (error: any) {
+      console.error('[QuickBooks] Failed to find/create customer:', error.message);
+      // Fall back to a default customer ID (typically '1' is the default)
+      return '1';
+    }
   }
 }
 

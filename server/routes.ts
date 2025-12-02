@@ -9992,6 +9992,103 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Post refund to QuickBooks (create Credit Memo)
+  // POST /api/returns/:id/post-to-quickbooks
+  app.post("/api/returns/:id/post-to-quickbooks", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const userId = req.session.userId!;
+      
+      // Check if QuickBooks is configured
+      const { QuickBooksClient, isQuickBooksConfigured } = await import("./services/quickbooks-client");
+      if (!isQuickBooksConfigured()) {
+        return res.status(400).json({ error: "QuickBooks is not configured. Please set up QuickBooks integration first." });
+      }
+      
+      // Get return request
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+      
+      // Check if already posted to QB
+      if (returnRequest.quickbooksRefundId) {
+        return res.status(400).json({ 
+          error: "Return already posted to QuickBooks",
+          quickbooksRefundId: returnRequest.quickbooksRefundId,
+          quickbooksRefundType: returnRequest.quickbooksRefundType
+        });
+      }
+      
+      // Get return items
+      const returnItems = await storage.getReturnItemsByRequestId(id);
+      if (returnItems.length === 0) {
+        return res.status(400).json({ error: "No items found for this return" });
+      }
+      
+      // Build item map for price lookup
+      const itemSkus = returnItems.map(ri => ri.sku);
+      const allItems = await storage.getAllItems();
+      const itemMap = new Map<string, { id: string; sku: string; name: string; price?: number | null }>();
+      
+      for (const item of allItems) {
+        if (itemSkus.includes(item.sku)) {
+          itemMap.set(item.sku, {
+            id: item.id,
+            sku: item.sku,
+            name: item.name,
+            price: item.price,
+          });
+        }
+      }
+      
+      // Create QuickBooks client and post refund
+      const qbClient = new QuickBooksClient(storage, userId);
+      const result = await qbClient.createRefundFromReturn(
+        {
+          id: returnRequest.id,
+          rmaNumber: returnRequest.rmaNumber,
+          customerName: returnRequest.customerName,
+          customerEmail: returnRequest.customerEmail,
+          externalOrderId: returnRequest.externalOrderId,
+          salesChannel: returnRequest.salesChannel,
+        },
+        returnItems.map(ri => ({
+          sku: ri.sku,
+          quantityReturned: ri.qtyReturned || 0,
+          reason: ri.reason,
+        })),
+        itemMap
+      );
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || "Failed to create QuickBooks refund" });
+      }
+      
+      // Update return request with QB refund info
+      await storage.updateReturnRequest(id, {
+        quickbooksRefundId: result.refundId,
+        quickbooksRefundType: result.refundType,
+        quickbooksRefundCreatedAt: new Date(),
+      });
+      
+      // Get updated return details
+      const returnDetails = await returnsService.getReturnWithDetails(id);
+      
+      res.json({
+        success: true,
+        quickbooksRefundId: result.refundId,
+        quickbooksRefundNumber: result.refundNumber,
+        quickbooksRefundType: result.refundType,
+        totalAmount: result.totalAmount,
+        return: returnDetails,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error posting to QuickBooks:", error);
+      res.status(500).json({ error: error.message || "Failed to post refund to QuickBooks" });
+    }
+  });
+
   // Get return events (audit log)
   // GET /api/returns/:id/events
   app.get("/api/returns/:id/events", requireAuth, async (req: Request, res: Response) => {

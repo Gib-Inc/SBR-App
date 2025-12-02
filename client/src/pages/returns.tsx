@@ -53,6 +53,9 @@ interface ReturnRequest {
   receiptPrintCount: number;
   createdAt: string;
   updatedAt: string;
+  quickbooksRefundId: string | null;
+  quickbooksRefundType: string | null;
+  quickbooksRefundCreatedAt: string | null;
 }
 
 interface ReturnItem {
@@ -158,6 +161,35 @@ export default function Returns() {
       toast({
         variant: "destructive",
         title: "Failed to print receipt",
+        description: error.message,
+      });
+    },
+  });
+
+  const postToQuickBooksMutation = useMutation({
+    mutationFn: async (returnId: string) => {
+      const res = await apiRequest("POST", `/api/returns/${returnId}/post-to-quickbooks`, {});
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to post to QuickBooks");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
+      if (selectedReturnId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/returns/${selectedReturnId}`] });
+      }
+      const amount = typeof data.totalAmount === 'number' ? `$${data.totalAmount.toFixed(2)}` : '';
+      toast({ 
+        title: "Posted to QuickBooks", 
+        description: `Credit Memo ${data.quickbooksRefundNumber || data.quickbooksRefundId} created${amount ? ` (${amount})` : ''}` 
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to post to QuickBooks",
         description: error.message,
       });
     },
@@ -371,6 +403,8 @@ export default function Returns() {
           onClose={() => setSelectedReturnId(null)}
           onIssueLabel={() => issueLabelMutation.mutate(selectedReturnId)}
           isIssuingLabel={issueLabelMutation.isPending}
+          onPostToQuickBooks={() => postToQuickBooksMutation.mutate(selectedReturnId!)}
+          isPostingToQuickBooks={postToQuickBooksMutation.isPending}
         />
       )}
 
@@ -399,6 +433,8 @@ interface ReturnDetailsModalProps {
   onClose: () => void;
   onIssueLabel: () => void;
   isIssuingLabel: boolean;
+  onPostToQuickBooks: () => void;
+  isPostingToQuickBooks: boolean;
 }
 
 function ReturnDetailsModal({
@@ -406,6 +442,8 @@ function ReturnDetailsModal({
   onClose,
   onIssueLabel,
   isIssuingLabel,
+  onPostToQuickBooks,
+  isPostingToQuickBooks,
 }: ReturnDetailsModalProps) {
   const { returnRequest, items, shipments } = returnDetails;
 
@@ -540,6 +578,24 @@ function ReturnDetailsModal({
             </div>
           )}
 
+          {/* QuickBooks Info */}
+          {returnRequest.quickbooksRefundId && (
+            <div className="p-3 bg-green-50 dark:bg-green-950 rounded-md border border-green-200 dark:border-green-800">
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 text-green-600" />
+                <span className="text-sm font-medium text-green-800 dark:text-green-200">
+                  Posted to QuickBooks
+                </span>
+              </div>
+              <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                {returnRequest.quickbooksRefundType} #{returnRequest.quickbooksRefundId}
+                {returnRequest.quickbooksRefundCreatedAt && (
+                  <span> · {format(new Date(returnRequest.quickbooksRefundCreatedAt), 'MMM d, yyyy')}</span>
+                )}
+              </p>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             {returnRequest.status === 'OPEN' && (
               <Button
@@ -548,6 +604,17 @@ function ReturnDetailsModal({
                 data-testid="button-issue-label"
               >
                 Issue Return Label
+              </Button>
+            )}
+            {!returnRequest.quickbooksRefundId && ['RECEIVED_AT_WAREHOUSE', 'RETURNED', 'REFUND_ISSUE_PENDING', 'REFUNDED', 'CLOSED'].includes(returnRequest.status) && (
+              <Button
+                onClick={onPostToQuickBooks}
+                disabled={isPostingToQuickBooks || isIssuingLabel}
+                variant="outline"
+                data-testid="button-post-to-quickbooks"
+              >
+                <Receipt className="h-4 w-4 mr-1" />
+                {isPostingToQuickBooks ? 'Posting...' : 'Post to QuickBooks'}
               </Button>
             )}
             <Button variant="outline" onClick={onClose} data-testid="button-close">

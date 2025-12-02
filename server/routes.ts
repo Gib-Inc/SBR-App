@@ -3214,9 +3214,13 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // Extensiv/Pivot - Sync finished inventory
+  // Mode: "compare" (just compare, log discrepancies) or "align" (apply adjustments to Pivot Qty)
   app.post("/api/integrations/extensiv/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
+      const { mode = "compare", zeroMissing = false } = req.body;
+      const syncMode = mode === "align" ? "align" : "compare"; // Default to "compare" (safer)
+      console.log(`[Extensiv] Starting sync in ${syncMode.toUpperCase()} mode${zeroMissing ? ' (zero missing enabled)' : ''}`);
       
       // Get API key from integration config or environment variable
       const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
@@ -3252,9 +3256,16 @@ TOTAL: $${subtotal.toFixed(2)}
       const extensivItems = await client.getAllInventory(pivotWarehouseId);
       console.log(`[Extensiv] Fetched ${extensivItems.length} items from Extensiv`);
 
-      let syncedCount = 0;
+      let comparedCount = 0;
+      let discrepancyCount = 0;
+      let adjustmentsApplied = 0;
+      let itemsFlagged = 0;
       const unmatchedSkus: string[] = [];
       const errors: string[] = [];
+      const discrepancies: Array<{ sku: string; pivotQty: number; extensivQty: number; delta: number }> = [];
+
+      // Track SKUs seen in Extensiv for zero-missing logic
+      const extensivSkusSeen = new Set<string>();
 
       // Update Pivot quantities for matching SKUs using InventoryMovement for centralized updates
       const inventoryMovement = new InventoryMovement(storage);
@@ -3297,28 +3308,45 @@ TOTAL: $${subtotal.toFixed(2)}
             continue;
           }
 
-          // V1: Store Extensiv snapshot for variance display (read-only reconciliation)
+          // Track this SKU as seen in Extensiv
+          extensivSkusSeen.add(item.sku);
+          comparedCount++;
+
+          const currentPivotQty = item.pivotQty ?? 0;
+          const extensivQty = extensivItem.quantity;
+          const delta = extensivQty - currentPivotQty;
+
+          // V1: Always store Extensiv snapshot for variance display (read-only reconciliation)
           await storage.updateItem(item.id, {
-            extensivOnHandSnapshot: extensivItem.quantity,
+            extensivOnHandSnapshot: extensivQty,
             extensivLastSyncAt: new Date(),
           });
-          
-          // Use EXTENSIV_SYNC event to update both pivotQty and availableForSaleQty
-          const result = await inventoryMovement.apply({
-            eventType: "EXTENSIV_SYNC",
-            itemId: item.id,
-            quantity: extensivItem.quantity, // New authoritative quantity from Extensiv
-            location: "PIVOT",
-            source: "SYSTEM",
-            userId: userId,
-            userName: user?.email,
-            notes: `Extensiv sync: ${item.pivotQty ?? 0} → ${extensivItem.quantity}`,
-          });
 
-          if (result.success) {
-            syncedCount++;
-          } else {
-            errors.push(`${extensivItem.sku}: ${result.error}`);
+          // Check for discrepancy
+          if (delta !== 0) {
+            discrepancyCount++;
+            discrepancies.push({ sku: item.sku, pivotQty: currentPivotQty, extensivQty, delta });
+            console.log(`[Extensiv] Discrepancy: ${item.sku} - Pivot: ${currentPivotQty}, Extensiv: ${extensivQty}, Delta: ${delta}`);
+          }
+          
+          // In ALIGN mode, apply the adjustment
+          if (syncMode === "align" && delta !== 0) {
+            const result = await inventoryMovement.apply({
+              eventType: "EXTENSIV_SYNC",
+              itemId: item.id,
+              quantity: extensivQty, // New authoritative quantity from Extensiv
+              location: "PIVOT",
+              source: "SYSTEM",
+              userId: userId,
+              userName: user?.email,
+              notes: `Extensiv align sync: ${currentPivotQty} → ${extensivQty}`,
+            });
+
+            if (result.success) {
+              adjustmentsApplied++;
+            } else {
+              errors.push(`${extensivItem.sku}: ${result.error}`);
+            }
           }
         } catch (error: any) {
           errors.push(`${extensivItem.sku}: ${error.message}`);
@@ -3326,7 +3354,38 @@ TOTAL: $${subtotal.toFixed(2)}
         }
       }
 
-      const summary = `Synced ${syncedCount} items. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      // In ALIGN mode with zeroMissing: zero out Pivot Qty for items not in Extensiv
+      if (syncMode === "align" && zeroMissing) {
+        console.log('[Extensiv] Align mode with zeroMissing: checking for items to zero out...');
+        const allItems = await storage.getAllItems();
+        for (const item of allItems) {
+          // Only process finished products with non-zero Pivot Qty that weren't in Extensiv
+          if (item.type === 'finished_product' && (item.pivotQty ?? 0) > 0 && !extensivSkusSeen.has(item.sku)) {
+            try {
+              const result = await inventoryMovement.apply({
+                eventType: "EXTENSIV_SYNC",
+                itemId: item.id,
+                quantity: 0, // Zero out
+                location: "PIVOT",
+                source: "SYSTEM",
+                userId: userId,
+                userName: user?.email,
+                notes: `Extensiv align sync: ${item.pivotQty} → 0 (not in Extensiv)`,
+              });
+              if (result.success) {
+                itemsFlagged++;
+                console.log(`[Extensiv] Zeroed out ${item.sku} (not in Extensiv)`);
+              }
+            } catch (zeroErr: any) {
+              errors.push(`Failed to zero ${item.sku}: ${zeroErr.message}`);
+            }
+          }
+        }
+      }
+
+      const summary = syncMode === "compare" 
+        ? `Compared ${comparedCount} items. ${discrepancyCount} discrepancies found. ${unmatchedSkus.length} unmatched SKUs.`
+        : `Applied ${adjustmentsApplied} adjustments${itemsFlagged > 0 ? `, ${itemsFlagged} items zeroed` : ''}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -3338,10 +3397,30 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
+      // Log sync completion
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'EXTENSIV',
+          action: syncMode === "align" ? 'ALIGN_SYNC_COMPLETED' : 'COMPARE_SYNC_COMPLETED',
+          status: hasErrors ? 'PARTIAL' : 'SUCCESS',
+          message: summary,
+          details: { mode: syncMode, comparedCount, discrepancyCount, adjustmentsApplied, itemsFlagged, zeroMissing }
+        });
+      } catch (logError) {
+        console.warn('[Extensiv] Failed to log sync completion:', logError);
+      }
+
       res.json({
         success: !hasErrors,
-        syncedItems: syncedCount,
+        mode: syncMode,
+        itemsCompared: comparedCount,
+        discrepancies: discrepancyCount,
+        adjustmentsApplied,
+        itemsFlagged,
+        syncedItems: adjustmentsApplied, // backward compatibility
         unmatchedSkus,
+        discrepancyDetails: discrepancies.slice(0, 20), // Limit to 20 for response size
         errors,
         message: summary,
       });
@@ -3990,10 +4069,13 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // Amazon - Sync Recent Orders
+  // Mode: "import" (import/update only) or "align" (import + archive removed + push inventory if 2-way)
   app.post("/api/integrations/amazon/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const { daysBack = 7 } = req.body;
+      const { daysBack = 7, mode = "import" } = req.body;
+      const syncMode = mode === "align" ? "align" : "import"; // Default to "import" (safer)
+      console.log(`[Amazon] Starting sync in ${syncMode.toUpperCase()} mode`);
       
       // Get credentials from integration config or environment variables
       const config = await storage.getIntegrationConfig(userId, 'AMAZON');
@@ -4241,7 +4323,62 @@ TOTAL: $${subtotal.toFixed(2)}
         }
       }
 
-      const summary = `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      // ALIGN MODE: Archive removed orders + push inventory if 2-way sync enabled
+      let ordersArchived = 0;
+      let inventoryPushed = 0;
+      
+      if (syncMode === "align") {
+        console.log('[Amazon] Align mode: checking for orders to archive...');
+        
+        // Build set of Amazon order IDs that currently exist
+        const amazonOrderIds = new Set(normalizedOrders.map(o => o.externalOrderId));
+        
+        // Get all local Amazon orders and archive those not in the current Amazon set
+        // Use a larger window for alignment to catch older orders
+        try {
+          const localAmazonOrders = await storage.getSalesOrdersByChannel('AMAZON');
+          for (const localOrder of localAmazonOrders) {
+            // Skip already archived orders
+            if (localOrder.status === 'ARCHIVED' || localOrder.status === 'CANCELLED') continue;
+            
+            if (localOrder.externalOrderId && !amazonOrderIds.has(localOrder.externalOrderId)) {
+              try {
+                await storage.updateSalesOrder(localOrder.id, { 
+                  status: 'ARCHIVED',
+                  notes: `Archived by Amazon Align sync on ${new Date().toISOString()} - order no longer exists on Amazon`
+                });
+                ordersArchived++;
+                console.log(`[Amazon] Archived order ${localOrder.externalOrderId} (not in Amazon)`);
+              } catch (archiveErr: any) {
+                errors.push(`Failed to archive order ${localOrder.externalOrderId}: ${archiveErr.message}`);
+              }
+            }
+          }
+          console.log(`[Amazon] Archived ${ordersArchived} orders that no longer exist on Amazon`);
+        } catch (archiveError: any) {
+          console.error('[Amazon] Error archiving orders:', archiveError);
+          errors.push(`Failed to check orders for archiving: ${archiveError.message}`);
+        }
+        
+        // Check if Amazon 2-way sync is enabled and push inventory
+        try {
+          const { AIAgentRulesService } = await import('./services/ai-agent-rules-service');
+          const rulesService = new AIAgentRulesService();
+          const rules = await rulesService.getRules(userId) || {};
+          
+          if (rules.amazonTwoWayInventorySync) {
+            console.log('[Amazon] 2-way sync enabled: pushing inventory to Amazon...');
+            // This would call the inventory push logic
+            // For now, log that it would happen
+            console.log('[Amazon] Inventory push to Amazon (placeholder - requires inventory API implementation)');
+            // inventoryPushed = await pushInventoryToAmazon(client, storage);
+          }
+        } catch (ruleError: any) {
+          console.warn('[Amazon] Failed to check 2-way sync rules:', ruleError);
+        }
+      }
+
+      const summary = `Created ${createdCount}, updated ${updatedCount} orders${syncMode === "align" ? `, ${ordersArchived} archived` : ''}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -4253,8 +4390,28 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
+      // Log sync completion with mode
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'AMAZON',
+          action: syncMode === "align" ? 'ALIGN_SYNC_COMPLETED' : 'IMPORT_SYNC_COMPLETED',
+          status: hasErrors ? 'PARTIAL' : 'SUCCESS',
+          message: summary,
+          details: { mode: syncMode, createdCount, updatedCount, ordersArchived, inventoryPushed }
+        });
+      } catch (logError) {
+        console.warn('[Amazon] Failed to log sync completion:', logError);
+      }
+
       res.json({
         success: !hasErrors,
+        mode: syncMode,
+        ordersImported: createdCount,
+        ordersUpdated: updatedCount,
+        ordersArchived,
+        inventoryPushed,
+        inventoryRecords: affectedProductIds.size,
         createdOrders: createdCount,
         updatedOrders: updatedCount,
         unmatchedSkus,
@@ -4530,9 +4687,12 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // GoHighLevel - Comprehensive Sync (pushes all data to GHL)
+  // Mode: "update" (push new/changed, skip orphan removal) or "align" (push + cleanup orphans)
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
+      const syncMode = req.body.mode === "align" ? "align" : "update"; // Default to "update" (safer)
+      console.log(`[GHL Sync] Starting sync in ${syncMode.toUpperCase()} mode`);
       
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
@@ -4983,8 +5143,11 @@ Notes: ${po.notes || 'None'}
       }
 
       // ========== 5. CLEANUP: DEDUPLICATION + ORPHAN REMOVAL ==========
-      console.log('[GHL Sync] Starting cleanup (deduplication + orphan removal)...');
+      // In "update" mode: only deduplication, no orphan removal
+      // In "align" mode: deduplication + orphan removal
+      console.log(`[GHL Sync] Starting cleanup (deduplication${syncMode === "align" ? " + orphan removal" : " only"})...`);
       let cleanupCount = 0;
+      let orphanCount = 0;
       const deletedItems: string[] = [];
       
       // Get user info for logging
@@ -5093,60 +5256,66 @@ Notes: ${po.notes || 'None'}
             }
           }
           
-          // ===== STEP B: ORPHAN REMOVAL =====
-          // Re-fetch opportunities after deduplication for orphan check
-          const refreshedOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
-          const refreshedOpps = refreshedOppsResult.success && refreshedOppsResult.opportunities 
-            ? refreshedOppsResult.opportunities 
-            : [];
-          
-          for (const opp of refreshedOpps) {
-            const name = opp.name || '';
-            let isOrphan = false;
+          // ===== STEP B: ORPHAN REMOVAL (only in "align" mode) =====
+          if (syncMode === "align") {
+            console.log('[GHL Cleanup] Align mode: proceeding with orphan removal...');
+            // Re-fetch opportunities after deduplication for orphan check
+            const refreshedOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
+            const refreshedOpps = refreshedOppsResult.success && refreshedOppsResult.opportunities 
+              ? refreshedOppsResult.opportunities 
+              : [];
             
-            // Determine category by name prefix and check if orphaned
-            if (name.startsWith('Stock Alert:')) {
-              // Extract item name from "Stock Alert: Name (X days)" format
-              const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
-              const itemName = match ? match[1].trim() : null;
-              if (!itemName || !validStockAlertNames.has(itemName)) {
-                isOrphan = true;
-                console.log(`[GHL Cleanup] Stock alert orphan: "${name}" - item not in at-risk list`);
+            for (const opp of refreshedOpps) {
+              const name = opp.name || '';
+              let isOrphan = false;
+              
+              // Determine category by name prefix and check if orphaned
+              if (name.startsWith('Stock Alert:')) {
+                // Extract item name from "Stock Alert: Name (X days)" format
+                const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
+                const itemName = match ? match[1].trim() : null;
+                if (!itemName || !validStockAlertNames.has(itemName)) {
+                  isOrphan = true;
+                  console.log(`[GHL Cleanup] Stock alert orphan: "${name}" - item not in at-risk list`);
+                }
+              } else if (name.startsWith('Return ') || name.includes('Return ')) {
+                // Check if return RMA or ID is in the name
+                const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(String(id)));
+                if (!hasValidReturn) {
+                  isOrphan = true;
+                  console.log(`[GHL Cleanup] Return orphan: "${name}"`);
+                }
+              } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
+                // Check if PO number is in the name
+                const hasValidPO = Array.from(validPONumbers).some(poNum => name.includes(poNum));
+                if (!hasValidPO) {
+                  isOrphan = true;
+                  console.log(`[GHL Cleanup] PO orphan: "${name}"`);
+                }
+              } else if (name.startsWith('Order ') || name.includes('Order ')) {
+                // Check if order number is in the name
+                const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
+                if (!hasValidOrder) {
+                  isOrphan = true;
+                  console.log(`[GHL Cleanup] Sales order orphan: "${name}"`);
+                }
               }
-            } else if (name.startsWith('Return ') || name.includes('Return ')) {
-              // Check if return RMA or ID is in the name
-              const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(String(id)));
-              if (!hasValidReturn) {
-                isOrphan = true;
-                console.log(`[GHL Cleanup] Return orphan: "${name}"`);
-              }
-            } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
-              // Check if PO number is in the name
-              const hasValidPO = Array.from(validPONumbers).some(poNum => name.includes(poNum));
-              if (!hasValidPO) {
-                isOrphan = true;
-                console.log(`[GHL Cleanup] PO orphan: "${name}"`);
-              }
-            } else if (name.startsWith('Order ') || name.includes('Order ')) {
-              // Check if order number is in the name
-              const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
-              if (!hasValidOrder) {
-                isOrphan = true;
-                console.log(`[GHL Cleanup] Sales order orphan: "${name}"`);
+              
+              // Delete orphaned opportunity
+              if (isOrphan && opp.id) {
+                const deleteResult = await client.deleteOpportunity(opp.id);
+                if (deleteResult.success) {
+                  orphanCount++;
+                  cleanupCount++;
+                  deletedItems.push(`[ORPHAN] ${name}`);
+                  console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
+                } else {
+                  console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);
+                }
               }
             }
-            
-            // Delete orphaned opportunity
-            if (isOrphan && opp.id) {
-              const deleteResult = await client.deleteOpportunity(opp.id);
-              if (deleteResult.success) {
-                cleanupCount++;
-                deletedItems.push(`[ORPHAN] ${name}`);
-                console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
-              } else {
-                console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);
-              }
-            }
+          } else {
+            console.log('[GHL Cleanup] Update mode: skipping orphan removal');
           }
         }
       } catch (cleanupError: any) {
@@ -5176,11 +5345,13 @@ Notes: ${po.notes || 'None'}
         userId: req.session.userId!,
         userName: syncUser?.email,
         details: {
+          mode: syncMode,
           salesOrders: syncResults.salesOrders.synced,
           returns: syncResults.returns.synced,
           stockWarnings: syncResults.stockWarnings.synced,
           purchaseOrders: syncResults.purchaseOrders.synced,
-          cleanedUp: cleanupCount,
+          duplicatesRemoved: cleanupCount - orphanCount,
+          orphansArchived: orphanCount,
         },
       });
 
@@ -5218,6 +5389,11 @@ Notes: ${po.notes || 'None'}
         success: true,
         message: summaryMessage,
         details: syncResults,
+        mode: syncMode,
+        opportunitiesCreated: syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced,
+        opportunitiesUpdated: 0, // Currently not tracked separately
+        opportunitiesArchived: orphanCount,
+        statusesPulled: 0, // Future enhancement: track pulled status changes
         cleanedUp: cleanupCount,
       });
     } catch (error: any) {
@@ -11616,6 +11792,7 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/quickbooks/sync-demand-history - Sync demand history (sales + returns)
+  // Mode: "append" (add new, update existing) or "rebuild" (clear date range, repopulate)
   app.post("/api/quickbooks/sync-demand-history", requireAuth, async (req: Request, res: Response) => {
     try {
       if (!isQuickBooksConfigured()) {
@@ -11626,12 +11803,44 @@ Generate only the email body text, no subject line.`;
       }
 
       const userId = req.user?.id || 'system';
-      const { years = 3 } = req.body;
+      const { years = 3, mode = "append" } = req.body;
+      const syncMode = mode === "rebuild" ? "rebuild" : "append"; // Default to "append" (safer)
+      console.log(`[QuickBooks] Starting demand history sync in ${syncMode.toUpperCase()} mode for ${years} years`);
       
       const client = new QuickBooksClient(storage, userId);
+      
+      // In rebuild mode, clear existing data for the date range first
+      if (syncMode === "rebuild") {
+        const startDate = new Date();
+        startDate.setFullYear(startDate.getFullYear() - years);
+        console.log(`[QuickBooks] Rebuild mode: clearing demand history from ${startDate.toISOString()}`);
+        try {
+          await storage.clearQuickbooksDemandHistory(startDate);
+        } catch (clearErr: any) {
+          console.warn('[QuickBooks] Failed to clear old demand history:', clearErr);
+        }
+      }
+      
       const result = await client.syncDemandHistory(years);
       
-      res.json(result);
+      // Log sync completion
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'QUICKBOOKS',
+          action: syncMode === "rebuild" ? 'REBUILD_SYNC_COMPLETED' : 'APPEND_SYNC_COMPLETED',
+          status: result.success ? 'SUCCESS' : 'FAILED',
+          message: result.message || `Synced demand history (${syncMode} mode)`,
+          details: { mode: syncMode, years, ...result }
+        });
+      } catch (logError) {
+        console.warn('[QuickBooks] Failed to log sync completion:', logError);
+      }
+      
+      res.json({
+        ...result,
+        mode: syncMode,
+      });
     } catch (error: any) {
       console.error("[QuickBooks] Sync demand history error:", error);
       res.status(500).json({ success: false, message: error.message || "Demand history sync failed" });

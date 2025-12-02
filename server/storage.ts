@@ -455,6 +455,7 @@ export interface IStorage {
     pageSize?: number;
   }): Promise<{ items: QuickbooksDemandHistory[]; total: number; years: number[] }>;
   upsertQuickbooksDemandHistory(data: Omit<InsertQuickbooksDemandHistory, 'id'>): Promise<{ item: QuickbooksDemandHistory; isNew: boolean }>;
+  clearQuickbooksDemandHistory(fromDate: Date): Promise<number>;
 
   // QuickBooks Vendor Mappings
   getQuickbooksVendorMapping(supplierId: string): Promise<QuickbooksVendorMapping | null>;
@@ -2841,6 +2842,11 @@ export class MemStorage implements IStorage {
 
   async upsertQuickbooksDemandHistory(_data: Omit<InsertQuickbooksDemandHistory, 'id'>): Promise<{ item: QuickbooksDemandHistory; isNew: boolean }> {
     throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  async clearQuickbooksDemandHistory(_fromDate: Date): Promise<number> {
+    // MemStorage doesn't persist QuickBooks data
+    return 0;
   }
 
   // QuickBooks Vendor Mappings (not supported in MemStorage)
@@ -5373,6 +5379,29 @@ export class PostgresStorage implements IStorage {
       }).returning();
       return { item: inserted[0], isNew: true };
     }
+  }
+
+  async clearQuickbooksDemandHistory(fromDate: Date): Promise<number> {
+    // Delete demand history records from the given date onwards
+    // We'll use year/month from the date for the comparison
+    const fromYear = fromDate.getFullYear();
+    const fromMonth = fromDate.getMonth() + 1; // JS months are 0-indexed
+    
+    // Delete records where (year > fromYear) OR (year = fromYear AND month >= fromMonth)
+    const result = await this.db.delete(schema.quickbooksDemandHistory)
+      .where(
+        or(
+          gt(schema.quickbooksDemandHistory.year, fromYear),
+          and(
+            eq(schema.quickbooksDemandHistory.year, fromYear),
+            gte(schema.quickbooksDemandHistory.month, fromMonth)
+          )
+        )
+      )
+      .returning({ id: schema.quickbooksDemandHistory.id });
+    
+    console.log(`[Storage] Cleared ${result.length} QuickBooks demand history records from ${fromYear}-${fromMonth}`);
+    return result.length;
   }
 
   // QuickBooks Vendor Mappings

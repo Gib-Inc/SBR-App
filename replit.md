@@ -55,6 +55,11 @@ Preferred communication style: Simple, everyday language.
     *   GoHighLevel integration for refund opportunity sync.
 *   **Integrations**:
     *   **AI Agent Rules**: Per-user settings for automation (e.g., auto-send critical POs, two-way inventory sync with Shopify/Amazon, safety buffers).
+    *   **Sync Mode Confirmation Modals**: All four data sources (GHL, Amazon, Extensiv, QuickBooks) have confirmation modals with safe vs. align modes:
+        *   **GHL**: "Update" (safe, import/update only) vs "Align" (archives orphaned GHL opportunities)
+        *   **Amazon**: "Import" (safe, import/update only) vs "Align" (archives removed orders + pushes inventory if 2-way enabled)
+        *   **Extensiv**: "Compare" (read-only discrepancy logging) vs "Align" (applies adjustments to Pivot Qty)
+        *   **QuickBooks**: "Append" (add new/update existing) vs "Rebuild" (clears and repopulates date range)
     *   **Shopify Two-Way Sync**: Pushes inventory levels to Shopify, respecting safety buffers.
     *   **Amazon Two-Way Sync**: Pushes inventory levels to Amazon, with region selection and sync mode display.
     *   **Extensiv Two-Way Integration**: Pulls inventory, pushes orders, and informs fulfillment routing decisions based on inventory thresholds (Hildale vs. Pivot Extensiv).

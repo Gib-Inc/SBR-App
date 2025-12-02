@@ -3660,6 +3660,24 @@ export default function AIAgent() {
   const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
   const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
   const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
+  
+  // GHL Sync Modal state
+  const [showGhlSyncModal, setShowGhlSyncModal] = useState(false);
+  const [ghlSyncMode, setGhlSyncMode] = useState<"update" | "align">("update");
+  
+  // Amazon Sync Modal state
+  const [showAmazonSyncModal, setShowAmazonSyncModal] = useState(false);
+  const [amazonSyncMode, setAmazonSyncMode] = useState<"import" | "align">("import");
+  
+  // Extensiv/Pivot Sync Modal state
+  const [showExtensivSyncModal, setShowExtensivSyncModal] = useState(false);
+  const [extensivSyncMode, setExtensivSyncMode] = useState<"compare" | "align">("compare");
+  const [extensivZeroMissing, setExtensivZeroMissing] = useState(false);
+  
+  // QuickBooks Sync Modal state
+  const [showQuickBooksSyncModal, setShowQuickBooksSyncModal] = useState(false);
+  const [quickbooksSyncMode, setQuickbooksSyncMode] = useState<"append" | "rebuild">("append");
+  const [quickbooksRebuildMonths, setQuickbooksRebuildMonths] = useState(24);
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
@@ -3896,8 +3914,11 @@ export default function AIAgent() {
   };
 
   const handleSync = async (source: string) => {
+    // QuickBooks - show modal
     if (source === "quickbooks") {
-      handleQuickBooksSync();
+      setQuickbooksSyncMode("append");
+      setQuickbooksRebuildMonths(24);
+      setShowQuickBooksSyncModal(true);
       return;
     }
     if (source === "stripe") {
@@ -3908,13 +3929,33 @@ export default function AIAgent() {
       });
       return;
     }
-    // For Shopify, show the sync options modal instead of syncing directly
+    // Shopify - show sync options modal
     if (source === "shopify") {
-      setShopifySyncMode("merge"); // Reset to default
+      setShopifySyncMode("merge");
       setShowShopifySyncModal(true);
       return;
     }
+    // GoHighLevel - show sync options modal
+    if (source === "gohighlevel") {
+      setGhlSyncMode("update");
+      setShowGhlSyncModal(true);
+      return;
+    }
+    // Amazon - show sync options modal
+    if (source === "amazon") {
+      setAmazonSyncMode("import");
+      setShowAmazonSyncModal(true);
+      return;
+    }
+    // Extensiv/Pivot - show sync options modal
+    if (source === "extensiv") {
+      setExtensivSyncMode("compare");
+      setExtensivZeroMissing(false);
+      setShowExtensivSyncModal(true);
+      return;
+    }
     
+    // Generic sync for other sources (should not happen in practice)
     setSyncingSource(source);
     try {
       await apiRequest("POST", `/api/integrations/${source}/sync`, {});
@@ -3974,6 +4015,210 @@ export default function AIAgent() {
     } catch (error: any) {
       toast({
         title: "Shopify sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // GoHighLevel Sync Handler
+  const handleGhlSync = async () => {
+    setShowGhlSyncModal(false);
+    setSyncingSource("gohighlevel");
+    
+    toast({
+      title: "GoHighLevel sync started...",
+      description: ghlSyncMode === "update" ? "Updating opportunities" : "Aligning and cleaning up GHL",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/gohighlevel/sync`, { mode: ghlSyncMode });
+      const result = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/GOHIGHLEVEL"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/logs"] });
+      
+      if (result.success) {
+        if (ghlSyncMode === "update") {
+          toast({
+            title: "GoHighLevel sync completed",
+            description: `${result.opportunitiesCreated || 0} created, ${result.opportunitiesUpdated || 0} updated, ${result.statusesPulled || 0} status changes pulled`,
+          });
+        } else {
+          toast({
+            title: "GoHighLevel sync completed (Align mode)",
+            description: `${result.opportunitiesCreated || 0} created, ${result.opportunitiesUpdated || 0} updated, ${result.opportunitiesArchived || 0} orphaned closed`,
+          });
+        }
+      } else {
+        toast({
+          title: "GoHighLevel sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "GoHighLevel sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // Amazon Sync Handler
+  const handleAmazonSync = async () => {
+    setShowAmazonSyncModal(false);
+    setSyncingSource("amazon");
+    
+    toast({
+      title: "Amazon sync started...",
+      description: amazonSyncMode === "import" ? "Importing Amazon orders" : "Aligning Amazon channel",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/amazon/sync`, { mode: amazonSyncMode });
+      const result = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/AMAZON"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/logs"] });
+      
+      if (result.success) {
+        if (amazonSyncMode === "import") {
+          toast({
+            title: "Amazon sync completed",
+            description: `${result.ordersImported || 0} orders imported, ${result.ordersUpdated || 0} updated, ${result.inventoryRecords || 0} inventory records`,
+          });
+        } else {
+          toast({
+            title: "Amazon sync completed (Align mode)",
+            description: `${result.ordersImported || 0} imported, ${result.ordersUpdated || 0} updated, ${result.ordersArchived || 0} archived, ${result.inventoryPushed || 0} inventory pushed`,
+          });
+        }
+      } else {
+        toast({
+          title: "Amazon sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Amazon sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // Extensiv/Pivot Sync Handler
+  const handleExtensivSync = async () => {
+    setShowExtensivSyncModal(false);
+    setSyncingSource("extensiv");
+    
+    toast({
+      title: "Extensiv sync started...",
+      description: extensivSyncMode === "compare" ? "Comparing inventory" : "Aligning Pivot quantities",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/extensiv/sync`, { 
+        mode: extensivSyncMode,
+        zeroMissing: extensivZeroMissing 
+      });
+      const result = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/EXTENSIV"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/logs"] });
+      
+      if (result.success) {
+        if (extensivSyncMode === "compare") {
+          toast({
+            title: "Extensiv sync completed",
+            description: `${result.itemsCompared || 0} items compared, ${result.discrepancies || 0} discrepancies found`,
+          });
+        } else {
+          toast({
+            title: "Extensiv sync completed (Align mode)",
+            description: `${result.adjustmentsApplied || 0} Pivot Qty adjustments applied, ${result.itemsFlagged || 0} items flagged`,
+          });
+        }
+      } else {
+        toast({
+          title: "Extensiv sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Extensiv sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  // QuickBooks Sync Handler (updated with modal support)
+  const handleQuickBooksSyncWithModal = async () => {
+    setShowQuickBooksSyncModal(false);
+    setSyncingSource("quickbooks");
+    
+    // Convert months to years (round up to nearest year)
+    const years = Math.max(1, Math.ceil(quickbooksRebuildMonths / 12));
+    
+    toast({
+      title: "QuickBooks sync started...",
+      description: quickbooksSyncMode === "append" ? "Appending demand history" : `Rebuilding last ${years} year(s) of demand history`,
+    });
+    
+    try {
+      const response = await apiRequest("POST", "/api/quickbooks/sync-demand-history", { 
+        mode: quickbooksSyncMode,
+        years: years
+      });
+      const result = await response.json();
+      
+      refetchQbStatus();
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/logs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/quickbooks/demand-history"] });
+      
+      if (result.success !== false) {
+        if (quickbooksSyncMode === "append") {
+          toast({
+            title: "QuickBooks sync completed",
+            description: result.message || `Demand history updated for ${years} year(s)`,
+          });
+        } else {
+          toast({
+            title: "QuickBooks sync completed (Rebuild mode)",
+            description: result.message || `Demand history rebuilt for ${years} year(s)`,
+          });
+        }
+      } else {
+        toast({
+          title: "QuickBooks sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "QuickBooks sync failed",
         description: error.message || "See Logs for details",
         variant: "destructive",
       });
@@ -4419,6 +4664,319 @@ export default function AIAgent() {
               onClick={handleShopifySync}
               data-testid="button-start-shopify-sync"
             >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Start Sync
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* GoHighLevel Sync Options Modal */}
+      <Dialog open={showGhlSyncModal} onOpenChange={setShowGhlSyncModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-ghl-sync-options">Sync GoHighLevel</DialogTitle>
+            <DialogDescription>
+              Sync PO/Refund/Stock Warning opportunities with GoHighLevel CRM.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>This sync updates opportunities in your configured GHL pipeline stages:</p>
+              <ul className="list-disc list-inside text-xs space-y-1 ml-2">
+                <li>PO lifecycle (Sent, Delivered, Paid)</li>
+                <li>Refund lifecycle (Processing, Refunded)</li>
+                <li>Stock warnings (21-30 days, 14-21 days, Order Now)</li>
+              </ul>
+            </div>
+            
+            <RadioGroup 
+              value={ghlSyncMode} 
+              onValueChange={(value: "update" | "align") => setGhlSyncMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${ghlSyncMode === "update" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setGhlSyncMode("update")}
+              >
+                <RadioGroupItem value="update" id="ghl-update" data-testid="radio-ghl-update" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="ghl-update" className="text-sm font-medium cursor-pointer">
+                    Update only (recommended)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Push new/changed POs, Refunds, and Stock Warnings to GHL. Pull back any status changes made in GHL.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Orphaned GHL opportunities (no matching app record) are logged but not deleted.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${ghlSyncMode === "align" ? "border-amber-500 bg-amber-500/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setGhlSyncMode("align")}
+              >
+                <RadioGroupItem value="align" id="ghl-align" data-testid="radio-ghl-align" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="ghl-align" className="text-sm font-medium cursor-pointer">
+                    Align GHL and clean up orphans
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Same as above, plus: archive/close GHL opportunities that have no matching app record.
+                  </p>
+                  <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
+                    <AlertTriangle className="h-3 w-3" />
+                    This closes stale GHL opportunities only. App data is never deleted.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowGhlSyncModal(false)} data-testid="button-cancel-ghl-sync">
+              Cancel
+            </Button>
+            <Button onClick={handleGhlSync} data-testid="button-start-ghl-sync">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Start Sync
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Amazon Sync Options Modal */}
+      <Dialog open={showAmazonSyncModal} onOpenChange={setShowAmazonSyncModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-amazon-sync-options">Sync Amazon Orders & Inventory</DialogTitle>
+            <DialogDescription>
+              Import orders from Amazon Seller Central and optionally sync inventory.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>Orders are always imported from Amazon. Inventory push to Amazon only happens if "Amazon 2-Way Sync" is enabled in Rules.</p>
+            </div>
+            
+            <RadioGroup 
+              value={amazonSyncMode} 
+              onValueChange={(value: "import" | "align") => setAmazonSyncMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${amazonSyncMode === "import" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setAmazonSyncMode("import")}
+              >
+                <RadioGroupItem value="import" id="amazon-import" data-testid="radio-amazon-import" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="amazon-import" className="text-sm font-medium cursor-pointer">
+                    Import new/updated orders only (safe mode)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Import new Amazon orders since last sync. Update statuses for existing orders.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    No Sales Orders in this app are deleted, even if removed from Amazon.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${amazonSyncMode === "align" ? "border-amber-500 bg-amber-500/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setAmazonSyncMode("align")}
+              >
+                <RadioGroupItem value="align" id="amazon-align" data-testid="radio-amazon-align" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="amazon-align" className="text-sm font-medium cursor-pointer">
+                    Align Amazon channel and clean up
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Same as above, plus: mark Amazon orders as ARCHIVED if they no longer exist on Amazon.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    If 2-way sync is ON, push updated Pivot Qty to Amazon for mapped SKUs.
+                  </p>
+                  <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
+                    <AlertTriangle className="h-3 w-3" />
+                    Orders are archived, not deleted. Only Amazon channel is affected.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowAmazonSyncModal(false)} data-testid="button-cancel-amazon-sync">
+              Cancel
+            </Button>
+            <Button onClick={handleAmazonSync} data-testid="button-start-amazon-sync">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Start Sync
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Extensiv/Pivot Sync Options Modal */}
+      <Dialog open={showExtensivSyncModal} onOpenChange={setShowExtensivSyncModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-extensiv-sync-options">Sync Pivot (Extensiv) Inventory</DialogTitle>
+            <DialogDescription>
+              Sync finished goods inventory with Pivot 3PL via Extensiv.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>Extensiv is the source of truth for Pivot Qty (3PL inventory). This sync only adjusts Pivot Qty column; Hildale Qty is never changed by Extensiv.</p>
+            </div>
+            
+            <RadioGroup 
+              value={extensivSyncMode} 
+              onValueChange={(value: "compare" | "align") => setExtensivSyncMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${extensivSyncMode === "compare" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setExtensivSyncMode("compare")}
+              >
+                <RadioGroupItem value="compare" id="extensiv-compare" data-testid="radio-extensiv-compare" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="extensiv-compare" className="text-sm font-medium cursor-pointer">
+                    Import and compare (no automatic overrides)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Pull current on-hand from Extensiv. Log any differences but do NOT overwrite Pivot Qty.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Useful for auditing discrepancies before applying changes.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${extensivSyncMode === "align" ? "border-amber-500 bg-amber-500/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setExtensivSyncMode("align")}
+              >
+                <RadioGroupItem value="align" id="extensiv-align" data-testid="radio-extensiv-align" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="extensiv-align" className="text-sm font-medium cursor-pointer">
+                    Align Pivot Qty with Extensiv (apply adjustments)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Set Pivot Qty equal to Extensiv qty for each mapped SKU. Adjustments are logged.
+                  </p>
+                  <div className="flex items-center space-x-2 mt-3 pt-2 border-t">
+                    <Switch
+                      id="extensiv-zero-missing"
+                      checked={extensivZeroMissing}
+                      onCheckedChange={setExtensivZeroMissing}
+                      data-testid="switch-extensiv-zero-missing"
+                    />
+                    <Label htmlFor="extensiv-zero-missing" className="text-xs cursor-pointer">
+                      Zero out Pivot for items not present in Extensiv
+                    </Label>
+                  </div>
+                  <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
+                    <AlertTriangle className="h-3 w-3" />
+                    Products, SKUs, orders, and BOM rows are never deleted.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowExtensivSyncModal(false)} data-testid="button-cancel-extensiv-sync">
+              Cancel
+            </Button>
+            <Button onClick={handleExtensivSync} data-testid="button-start-extensiv-sync">
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Start Sync
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* QuickBooks Sync Options Modal */}
+      <Dialog open={showQuickBooksSyncModal} onOpenChange={setShowQuickBooksSyncModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-quickbooks-sync-options">Sync QuickBooks Demand & Vendor Data</DialogTitle>
+            <DialogDescription>
+              Import historical sales, POs/bills, and refunds to build demand history.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>QuickBooks is used to build demand history for forecasting. No core inventory tables (BOM, Barcodes, Sales Orders, POs) are modified.</p>
+            </div>
+            
+            <RadioGroup 
+              value={quickbooksSyncMode} 
+              onValueChange={(value: "append" | "rebuild") => setQuickbooksSyncMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${quickbooksSyncMode === "append" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setQuickbooksSyncMode("append")}
+              >
+                <RadioGroupItem value="append" id="qb-append" data-testid="radio-qb-append" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="qb-append" className="text-sm font-medium cursor-pointer">
+                    Append / update history (safe mode)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Import new transactions since last sync. Update existing demand history rows.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Existing history is preserved even if transactions were removed in QuickBooks.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${quickbooksSyncMode === "rebuild" ? "border-amber-500 bg-amber-500/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setQuickbooksSyncMode("rebuild")}
+              >
+                <RadioGroupItem value="rebuild" id="qb-rebuild" data-testid="radio-qb-rebuild" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="qb-rebuild" className="text-sm font-medium cursor-pointer">
+                    Rebuild QuickBooks Demand History
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Recalculate demand history for the selected date range from QuickBooks transactions.
+                  </p>
+                  <div className="flex items-center gap-2 mt-3 pt-2 border-t">
+                    <Label htmlFor="qb-months" className="text-xs whitespace-nowrap">
+                      Rebuild last
+                    </Label>
+                    <Select 
+                      value={String(quickbooksRebuildMonths)} 
+                      onValueChange={(v) => setQuickbooksRebuildMonths(Number(v))}
+                    >
+                      <SelectTrigger className="w-24 h-8" data-testid="select-qb-months">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="12">12 months</SelectItem>
+                        <SelectItem value="24">24 months</SelectItem>
+                        <SelectItem value="36">36 months</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
+                    <AlertTriangle className="h-3 w-3" />
+                    Demand history rows in this range are recalculated. Vendors may be marked inactive.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowQuickBooksSyncModal(false)} data-testid="button-cancel-qb-sync">
+              Cancel
+            </Button>
+            <Button onClick={handleQuickBooksSyncWithModal} data-testid="button-start-qb-sync">
               <RefreshCw className="mr-2 h-4 w-4" />
               Start Sync
             </Button>

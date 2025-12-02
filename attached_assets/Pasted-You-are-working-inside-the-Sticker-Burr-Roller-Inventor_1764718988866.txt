@@ -1,0 +1,239 @@
+You are working inside the Sticker Burr Roller Inventory web app in Replit.
+
+GOAL
+Implement per-source “Sync” confirmation flows for:
+- GoHighLevel (GHL)
+- Amazon Seller Central
+- Extensiv / Pivot (3PL)
+- QuickBooks Online
+
+Each source must:
+- Use a dedicated confirmation modal when the user clicks its Sync button in AI Agent → Data Sources.
+- Be explicit about WHAT data is synced, in WHICH direction, and WHAT happens to app records that don’t exist in the external system.
+- Never touch unrelated tables (e.g., barcodes) and never silently delete core app data.
+
+GENERAL PATTERN
+For each source:
+- Keep the existing Data Source card UI (Configure / Sync).
+- When Sync is clicked:
+  - Open a modal with a short explanation.
+  - Offer a choice between:
+    A) Safe / Append-Only mode (no deletions, only imports/updates).
+    B) Align / Cleanup mode (optionally remove or archive local data that no longer exists in the external source, within that source’s scope ONLY).
+  - Show exactly which tables/fields are impacted.
+  - Require explicit confirmation before running the sync.
+- After running, log the result to AI Agent → Logs (source, time, counts, and any warnings).
+
+────────────────────────────────
+1) GOHIGHLEVEL (GHL) SYNC FLOW
+────────────────────────────────
+Purpose of GHL in this app:
+- GHL is NOT the inventory system of record.
+- GHL is used for:
+  - PO pipeline visibility (PO Sent / Paid / Delivered stages).
+  - Refund / return tasks and notifications.
+  - Stock-risk / “Stock Warning” opportunities for humans and AI agents.
+
+Canonical direction:
+- Replit app → GHL (primary)
+- GHL → Replit (limited: only to pull opportunity status changes, if any).
+
+Data that MAY sync with GHL:
+- Opportunities in ONE dedicated pipeline (already configured via LocationId / PipelineId / StageIds):
+  - PO lifecycle opportunities:
+    - Stage “PO Sent” (id: f87df3cc-07d1-45e0-bb14-e54f15d32726)
+    - Stage “PO Delivered” (id: c1935d57-59cb-47e5-b182-7b209f514f82)
+    - Stage “PO Paid” (id: c7d0dc4f-41bf-4e13-bd99-f6110e90ec2f)
+  - Refund lifecycle opportunities:
+    - Stage “Processing Refund” (id: d946f5f8-e469-47df-9f06-99223fc3e497)
+    - Stage “Refunded” (id: 801a89fa-8f39-4b67-960b-ed1614833594)
+  - Sales orders / general pipeline:
+    - Stage “Sales Orders” (id: 4eab2cae-426e-4ff3-9304-560416a41b04)
+  - Stock warning stages (risk buckets):
+    - Stage “(Stock) 21–30 Days” (id: 85ead3ad-da5f-4659-bb35-43a3ea03b268)
+    - Stage “(Stock) 14–21 Days” (id: eea14324-ac58-4b95-a259-6762e1a3796b)
+    - Stage “(Stock) Order Now” (id: a62574d0-2d31-4de4-86dd-a9192cc30130)
+- Each relevant PO / Refund / Stock-Warning record in the app already has, or should have:
+  - ghlOpportunityId
+  - pipelineId, stageId
+  - basic descriptive fields (name, amount, product, link back to app).
+
+GHL Sync modal behavior:
+- When user clicks Sync on the GHL card:
+  - Open “Sync GoHighLevel” modal with:
+    - Summary text: “This sync updates opportunities in your Replit PO/Refund/Stock pipelines and mirrors them into GoHighLevel, then pulls back any status changes.”
+  - Present two modes (radio / toggle):
+    1. “Update only (recommended)”:
+       - Push any new or changed POs / Refunds / Stock Warnings from the app to GHL.
+       - If a GHL opportunity exists but the app record is missing, DO NOT delete the app data. Just log it as “orphaned in GHL”.
+       - Pull back status/stage changes for existing opportunities (e.g., user moved something in GHL).
+    2. “Align GHL and clean up GHL only”:
+       - Same as above, PLUS:
+         - If there are GHL opportunities in the configured pipeline that have no matching app record (no matching ghlOpportunityId):
+           - Archive / mark them as “Closed - orphaned” in GHL.
+           - Do NOT delete or alter any app records.
+- Implementation notes:
+  - GHL is never allowed to delete or overwrite core tables (BOM, Sales Orders, POs, Returns).
+  - All destructive actions are on GHL side only (archiving or closing stale opportunities).
+  - Log counts: opportunities created, updated, archived, and any API errors.
+
+────────────────────────────────
+2) AMAZON SELLER CENTRAL SYNC FLOW
+────────────────────────────────
+Purpose:
+- Amazon is an incoming sales channel and an optional inventory source.
+- Orders always flow Amazon → App.
+- Inventory can be:
+  - One-way (Amazon → App, read only), OR
+  - Two-way later via the “Amazon 2-Way Sync” toggle in AI Agent → Rules.
+
+Data that MAY sync with Amazon:
+- Sales Orders table:
+  - Channel = AMAZON
+  - External key: amazonOrderId (and optionally line item IDs).
+  - Fields: customer info, items, qty, prices, order status.
+- Inventory mapping:
+  - By SKU or UPC (house SKU ↔ Amazon listing).
+  - Pivot Qty is the quantity used for Amazon fulfillment when 2-way sync is ON.
+
+Amazon Sync modal behavior:
+- When user clicks Sync on the Amazon card:
+  - Open “Sync Amazon Orders & Inventory” modal.
+  - Show text explaining:
+    - Orders are always imported from Amazon.
+    - Inventory push back to Amazon only happens if “Amazon 2-Way Sync” is enabled in Rules.
+  - Provide choices:
+    1. “Import new / updated Amazon orders only (safe mode)”:
+       - Import new Amazon orders since last sync.
+       - Update statuses for existing Amazon orders.
+       - DO NOT delete any Sales Orders in the app, even if they no longer exist on Amazon.
+       - If Amazon inventory is used:
+         - Import Amazon stock levels for mapped SKUs.
+         - Update internal Amazon-facing inventory snapshot (for AI only), but DO NOT change Pivot or Hildale quantities directly.
+    2. “Align Amazon channel and clean up Amazon orders”:
+       - Same as above, PLUS:
+         - For Sales Orders where Channel=AMAZON and we have an amazonOrderId that no longer exists on Amazon (canceled or removed):
+           - Mark those orders as CANCELLED or ARCHIVED in the app, but DO NOT delete the rows.
+       - If “Amazon 2-Way Sync” is ON:
+         - After adjusting internal Pivot Qty from app logic, push updated inventory back to Amazon for mapped SKUs.
+         - Never write inventory for SKUs that are not mapped.
+- Implementation constraints:
+  - Only touch Sales Orders with Channel=AMAZON.
+  - Never touch Shopify Sales Orders or other channels as part of Amazon sync.
+  - Log: number of orders imported, updated, archived, and inventory records pushed or pulled.
+
+────────────────────────────────
+3) EXTENSIV / PIVOT SYNC FLOW
+────────────────────────────────
+Purpose:
+- Extensiv represents the external 3PL “Pivot” warehouse.
+- Extensiv is the system of record for on-hand units at Pivot.
+- The BOM table has:
+  - Hildale Qty (internal plant / raw + finished on-hand).
+  - Pivot Qty (3PL finished goods on-hand).
+- Sales reduce Pivot Qty.
+- Internal transfers from Hildale to Pivot adjust both Hildale and Pivot.
+
+Data that MAY sync with Extensiv:
+- Inventory levels for finished products at Pivot:
+  - Keyed by house SKU or UPC mapped to Extensiv SKUs.
+- Optionally inbound/outbound shipment events for logging, but core is inventory levels.
+
+Extensiv Sync modal behavior:
+- When user clicks Sync on the Extensiv/Pivot card:
+  - Open “Sync Pivot (Extensiv) Inventory” modal.
+  - Explain:
+    - Extensiv is the source of truth for Pivot Qty.
+    - We only adjust the Pivot Qty column and related logs; we do NOT touch Hildale Qty directly from Extensiv.
+  - Provide choices:
+    1. “Import and compare (no automatic overrides)”:
+       - Pull current on-hand units from Extensiv for each mapped SKU.
+       - Show or log any differences between Extensiv qty and current Pivot Qty.
+       - Update an internal “Extensiv snapshot” / delta column (e.g., ExtensivΔ), but DO NOT automatically overwrite Pivot Qty.
+       - Use AI Agent logs / warnings to highlight large mismatches.
+    2. “Align Pivot Qty with Extensiv (apply adjustments)”:
+       - For each mapped SKU:
+         - Compute delta = extensivQty – pivotQty.
+         - Apply an inventory adjustment transaction that sets Pivot Qty equal to Extensiv qty.
+         - Log these adjustments into Logs and/or a dedicated “Inventory Adjustments” log.
+       - For SKUs that exist in Pivot Qty but NOT in Extensiv:
+         - Option A: leave Pivot Qty unchanged but flag as “not in Extensiv” in Logs.
+         - Option B (if you choose): set Pivot Qty to 0 only if user explicitly confirms in the modal (include a sub-option: “Also zero out Pivot for items not present in Extensiv”).
+- Implementation constraints:
+  - Extensiv sync NEVER deletes products, SKUs, orders, or BOM rows.
+  - It only affects Pivot Qty and related adjustment logs.
+  - Hildale Qty is never modified from Extensiv; Hildale may only change via internal transfers or POs.
+
+────────────────────────────────
+4) QUICKBOOKS ONLINE SYNC FLOW
+────────────────────────────────
+Purpose:
+- QuickBooks is the financial system of record.
+- We use it ONLY to:
+  - Build “QuickBooks Demand History” (monthly demand / revenue per SKU).
+  - Understand historical POs, bills, refunds, and returns for forecasting.
+- QuickBooks does NOT control inventory quantities directly in this app.
+
+Data that MAY sync with QuickBooks:
+- From QuickBooks → App:
+  - Sales-related transactions:
+    - Invoices / Sales Receipts mapped to SKUs or products.
+  - Cost / purchasing transactions:
+    - Bills, Vendor Bills, and POs that can be mapped to SKUs and suppliers.
+  - Refunds / returns:
+    - Credit memos / refund receipts tied to SKUs.
+  - Suppliers/Vendors:
+    - Vendor list with names, IDs, and optionally payment terms.
+- To be stored in:
+  - AI Agent → Insights → QuickBooks Demand History table:
+    - Columns like: Month, Year, SKU, Units Sold, Revenue, Units Returned, Net Demand, etc.
+  - Optionally a Supplier financial info table (vendorId, name, avg cost, terms).
+- We DO NOT push data back to QuickBooks in V1 (read-only integration).
+
+QuickBooks Sync modal behavior:
+- When user clicks Sync on the QuickBooks card:
+  - Open “Sync QuickBooks Demand & Vendor Data” modal.
+  - Show text explaining:
+    - This sync imports historical sales, POs/bills, and refunds to rebuild or update QuickBooks Demand History.
+    - No core inventory tables (BOM, Barcodes, Sales Orders, POs) are deleted.
+  - Provide choices:
+    1. “Append / update history (safe mode)”:
+       - Import new transactions since last sync.
+       - Update any existing Demand History rows that correspond to updated QB transactions.
+       - Keep existing Demand History rows even if the underlying transaction was removed in QuickBooks; just log inconsistencies.
+       - Refresh vendor list (add/update vendors) but do not delete local vendors.
+    2. “Rebuild QuickBooks Demand History for a date range”:
+       - Ask for a date range (e.g., last 12 or 24 months) or use a sensible default.
+       - For that range:
+         - Pull all relevant transactions again from QuickBooks.
+         - Recalculate Demand History rows (Month, SKU, Units, Revenue, Returns, Net).
+         - Remove Demand History rows in that date range that no longer correspond to any QuickBooks transaction.
+       - Vendor list:
+         - Optionally remove local vendors that no longer exist in QuickBooks, OR just mark them as inactive (recommended).
+- Implementation constraints:
+  - QuickBooks sync touches ONLY:
+    - QuickBooks Demand History table.
+    - Vendor/supplier financial metadata (if you have a table for this).
+  - It MUST NOT modify:
+    - BOM products, Sales Orders, Returns, Barcodes, or POs in the core app.
+  - Log: number of transactions imported, date range, rows rebuilt, and any inconsistencies.
+
+────────────────────────────────
+5) LOGGING & SAFETY (ALL SOURCES)
+────────────────────────────────
+For GHL, Amazon, Extensiv, and QuickBooks sync:
+- For each sync run, create a log entry in AI Agent → Logs with:
+  - Source (GHL / Amazon / Extensiv / QuickBooks).
+  - Mode used (Safe / Align / Rebuild, etc.).
+  - Summary of:
+    - Records imported / updated / archived.
+    - Inventory adjustments made (if any).
+    - Any errors or warnings from APIs.
+- Ensure each modal clearly says:
+  - “This operation cannot be undone automatically. Changes are logged in AI Agent → Logs.”
+
+Implement all of the above so each data source behaves according to its role:
+- GHL: workflow visibility & notifications; no app data deletion.
+- Amazon: channel-specific orders & optional inventory push; no cross-channel damage.
+- Extensiv: authoritative Pivot inventory; safe adjustments only.
+- QuickBooks: read-only financial history feeding forecasting; no direct inventory edits.

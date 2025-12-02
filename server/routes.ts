@@ -5147,6 +5147,41 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Google Ads - Sync Demand Signals for AI Recommendations
+  app.post("/api/ads/google/sync-demand", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { googleAdsDemandService } = await import('./services/google-ads-demand-service');
+      
+      const initialized = await googleAdsDemandService.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Google Ads not configured or not enabled',
+        });
+      }
+      
+      const result = await googleAdsDemandService.syncDemandSignals();
+      
+      res.json({
+        success: result.success,
+        itemsProcessed: result.itemsProcessed,
+        itemsWithData: result.itemsWithData,
+        errors: result.errors,
+        message: result.success 
+          ? `Updated demand signals for ${result.itemsProcessed} recommendations (${result.itemsWithData} with Google Ads data)`
+          : 'Failed to sync demand signals',
+      });
+    } catch (error: any) {
+      console.error('[Google Ads] Demand sync error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to sync Google Ads demand signals',
+      });
+    }
+  });
+
   // Ad Metrics - Sync All
   app.post("/api/ads/sync", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -1,0 +1,188 @@
+You are working in my Inventory app Replit project. Focus ONLY on the Shopify integration and related sync logic. Do NOT modify any other data sources (Amazon, Extensiv, GHL, QuickBooks, etc.).
+
+GOAL
+Update the Shopify “Sync” behavior under:
+AI Agent → Data Sources → Shopify
+
+Right now, clicking the Shopify “Sync” button immediately syncs. I want a controlled, two-mode sync with a confirmation modal:
+
+- Mode 1: Import only (NO deletions in this app)
+- Mode 2: Replace with Shopify (delete local Shopify records that no longer exist in Shopify)
+
+Implement this fully in both the UI and backend.
+
+------------------------------------------------
+1) NEW SHOPIFY “SYNC OPTIONS” MODAL
+------------------------------------------------
+Location: AI Agent → Data Sources → Shopify card.
+
+A. When the user clicks the Shopify **Sync** button:
+   - Do NOT start a sync immediately.
+   - Instead open a modal dialog.
+
+B. Modal layout:
+
+   - Title:  “Shopify Sync Options”
+   - Subtitle/helper text: “Choose how to reconcile Shopify with this inventory app.”
+
+   - Body: question at the top:
+     “Do you want to remove any data that doesn’t match Shopify?”
+
+   - Below the question, show two radio options (or segmented control):
+
+     1) Option A (DEFAULT SELECTED):
+        Label: “Import only (recommended)”
+        Description: “Import Shopify orders and inventory without deleting anything that only exists in this app.”
+
+     2) Option B (DESTRUCTIVE):
+        Label: “Replace with Shopify (destructive)”
+        Description: “Make this app match Shopify by removing local Shopify records that no longer exist in Shopify.”
+        Under this, show a small red warning label:
+        “This may delete test or outdated Shopify records stored only in this app.”
+
+   - Footer buttons:
+     - Primary button: “Start Sync”
+     - Secondary button: “Cancel” (closes the modal and does nothing)
+
+C. Behavior:
+   - Default selection is “Import only (recommended)”.
+   - “Start Sync” triggers a call to the backend sync function with a new parameter:
+       - mode = "merge"   → Import only
+       - mode = "replace" → Replace with Shopify
+   - After pressing “Start Sync”:
+       - Close the modal.
+       - Disable the Shopify Sync button in the card.
+       - Show a spinner / “Syncing…” state on the card until sync is finished.
+
+D. Toasts / notifications:
+   - On sync start: small toast “Shopify sync started…”
+   - On success, mode = merge:
+       “Shopify sync completed. X orders updated, Y inventory records updated.”
+   - On success, mode = replace:
+       “Shopify sync completed in Replace mode. X orders updated, Y orders removed, Z inventory records updated.”
+   - On failure:
+       “Shopify sync failed. See Logs for details.”
+   Use the app’s existing toast/alert components and visual style.
+
+------------------------------------------------
+2) BACKEND: SHOPIFY SYNC LOGIC WITH MODES
+------------------------------------------------
+Find the current Shopify sync implementation (whatever is called today when the Sync button is pressed). Refactor it into a function that accepts a sync mode.
+
+Conceptual signature (do not change language/framework, just align logic):
+
+   syncShopify({
+     mode: "merge" | "replace",
+     shopDomain,
+     accessToken,
+     apiVersion,
+     locationConfig,  // existing structure for Shopify locations
+   }) => {
+     return {
+       mode,
+       ordersUpdated,
+       ordersArchived,          // only for replace
+       inventoryUpdated,
+       inventoryMappingsCleared // only for replace, if applicable
+     }
+   }
+
+If no mode is passed, default to "merge" for safety.
+
+A. COMMON BEHAVIOR (both modes):
+   - Authenticate to Shopify using existing configuration (shop domain, access token, API version).
+   - Fetch relevant Shopify data:
+     - Orders (for the date range / pagination we already use):
+       * Shopify order ID
+       * Created/updated timestamps
+       * Status (financial/fulfillment), customer info
+       * Line items (SKUs or variant IDs, quantities, prices)
+     - Inventory levels for the configured locations:
+       * Inventory item / SKU / variant mapping
+       * Available quantities per location
+
+   - For orders:
+     * Upsert into our Sales Orders table where channel = SHOPIFY.
+       - If order already exists (by Shopify order ID + channel), update it.
+       - If not, create it.
+     * Map Shopify line items to our products using whatever mapping we already use (SKU, UPC, etc.).
+     * DO NOT touch non-Shopify channels.
+
+   - For inventory:
+     * Update our internal inventory records that are tied to Shopify (e.g., fields we already use to track Shopify stock).
+     * Respect any one-way vs two-way settings that already exist — this sync is about pulling data into the app, not pushing back to Shopify.
+
+B. MODE “MERGE” (Import only):
+   - Behavior:
+     * Only import/update Shopify orders and inventory.
+     * Do NOT delete or archive any existing records in this app.
+       - That means:
+         - Keep local test Shopify orders, even if they don’t exist in Shopify.
+         - Keep any extra inventory rows.
+   - Record counts for the toast:
+     * ordersUpdated = number of new or updated Shopify orders.
+     * ordersArchived = 0.
+     * inventoryUpdated = number of products/rows whose Shopify-related inventory fields were updated.
+     * inventoryMappingsCleared = 0.
+
+C. MODE “REPLACE” (Replace with Shopify):
+   - Behavior:
+     * Same import/update as “merge”.
+     * PLUS an extra step to remove local Shopify data that no longer exists in Shopify.
+
+   - For orders (channel = SHOPIFY only):
+     * After fetching all Shopify order IDs in the synced scope, compare against our local Sales Orders table where channel = SHOPIFY.
+     * Any local Shopify order that does NOT appear in Shopify’s data set should be:
+       - Marked as archived / soft-deleted using existing pattern (preferred), OR
+       - Hard deleted only if that’s the current app convention.
+     * Make sure non-Shopify orders are untouched.
+
+   - For inventory:
+     * If there are Shopify-linked inventory records that refer to products or variants that Shopify no longer knows about:
+       - Clear or archive those Shopify-specific mappings (e.g., unset the Shopify SKU / variant link or mark them inactive).
+       - Do NOT delete the base product itself, just break the link to Shopify.
+     * Count these as `inventoryMappingsCleared`.
+
+   - Record counts for the toast:
+     * ordersUpdated = number of Shopify orders created or updated.
+     * ordersArchived = number of Shopify orders archived/removed.
+     * inventoryUpdated = number of items whose Shopify inventory values were updated.
+     * inventoryMappingsCleared = number of Shopify links we cleaned up.
+
+D. Logging:
+   - Log each sync run with:
+     * mode ("merge" or "replace"),
+     * timestamp,
+     * summary counts (ordersUpdated, ordersArchived, inventoryUpdated, inventoryMappingsCleared),
+     * any Shopify errors.
+   - Ensure these logs are viewable under the existing AI Agent → Logs section or wherever sync logs are currently surfaced.
+
+------------------------------------------------
+3) UI CONSISTENCY & ERROR STATES
+------------------------------------------------
+- If Shopify credentials are missing or invalid, the modal can still open, but the “Start Sync” action should:
+  * Validate credentials.
+  * If invalid, abort sync and show a clear error: “Shopify connection failed. Check your shop domain, access token, or API version.”
+- The Shopify card should:
+  * Continue to show its “Connected / Not Configured” state as it does now.
+  * “Sync” should always trigger the new modal behavior.
+
+------------------------------------------------
+4) FINAL VERIFICATION
+------------------------------------------------
+After implementing everything, verify:
+
+1) Clicking Shopify **Sync** always shows the “Shopify Sync Options” modal.
+2) Choosing “Import only (recommended)” and pressing “Start Sync”:
+   - Performs a sync in merge mode.
+   - Updates orders and inventory from Shopify.
+   - Does NOT delete local Shopify orders or mappings.
+3) Choosing “Replace with Shopify (destructive)”:
+   - Performs a sync in replace mode.
+   - Updates orders and inventory.
+   - Archives/removes ONLY Shopify-channel orders that don’t exist in Shopify.
+   - Cleans up Shopify-specific inventory mappings that are no longer valid.
+4) Toast messages match the counts returned from the sync function.
+5) Non-Shopify data (Amazon, manual, etc.) is untouched.
+
+Implement all of this now so that the Shopify sync behavior is production-ready and safe to use.

@@ -10,6 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -3657,6 +3658,8 @@ export default function AIAgent() {
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
   const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | null>(null);
   const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
+  const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
+  const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
@@ -3905,6 +3908,12 @@ export default function AIAgent() {
       });
       return;
     }
+    // For Shopify, show the sync options modal instead of syncing directly
+    if (source === "shopify") {
+      setShopifySyncMode("merge"); // Reset to default
+      setShowShopifySyncModal(true);
+      return;
+    }
     
     setSyncingSource(source);
     try {
@@ -3918,6 +3927,54 @@ export default function AIAgent() {
       toast({
         title: "Sync Failed",
         description: error.message || "Failed to sync data source",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingSource(null);
+    }
+  };
+
+  const handleShopifySync = async () => {
+    setShowShopifySyncModal(false);
+    setSyncingSource("shopify");
+    
+    toast({
+      title: "Shopify sync started...",
+      description: shopifySyncMode === "merge" ? "Importing Shopify data" : "Replacing with Shopify data",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/shopify/sync`, { mode: shopifySyncMode });
+      const result = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/SHOPIFY"] });
+      
+      if (result.success) {
+        if (shopifySyncMode === "merge") {
+          toast({
+            title: "Shopify sync completed",
+            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} orders updated, ${result.inventoryUpdated || 0} inventory records updated`,
+          });
+        } else {
+          toast({
+            title: "Shopify sync completed (Replace mode)",
+            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} updated, ${result.ordersArchived || 0} removed, ${result.inventoryUpdated || 0} inventory updated, ${result.inventoryMappingsCleared || 0} mappings cleared`,
+          });
+        }
+      } else {
+        toast({
+          title: "Shopify sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Shopify sync failed",
+        description: error.message || "See Logs for details",
         variant: "destructive",
       });
     } finally {
@@ -4293,6 +4350,77 @@ export default function AIAgent() {
           <div className="flex justify-end">
             <Button onClick={() => setShowPhantomV2Modal(false)} data-testid="button-close-phantom-v2-modal">
               Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Shopify Sync Options Modal */}
+      <Dialog open={showShopifySyncModal} onOpenChange={setShowShopifySyncModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-shopify-sync-options">Shopify Sync Options</DialogTitle>
+            <DialogDescription>
+              Choose how to reconcile Shopify with this inventory app.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <p className="text-sm font-medium">Do you want to remove any data that doesn't match Shopify?</p>
+            
+            <RadioGroup 
+              value={shopifySyncMode} 
+              onValueChange={(value: "merge" | "replace") => setShopifySyncMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${shopifySyncMode === "merge" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setShopifySyncMode("merge")}
+              >
+                <RadioGroupItem value="merge" id="sync-merge" data-testid="radio-sync-merge" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="sync-merge" className="text-sm font-medium cursor-pointer">
+                    Import only (recommended)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Import Shopify orders and inventory without deleting anything that only exists in this app.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${shopifySyncMode === "replace" ? "border-destructive bg-destructive/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setShopifySyncMode("replace")}
+              >
+                <RadioGroupItem value="replace" id="sync-replace" data-testid="radio-sync-replace" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="sync-replace" className="text-sm font-medium cursor-pointer">
+                    Replace with Shopify (destructive)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Make this app match Shopify by removing local Shopify records that no longer exist in Shopify.
+                  </p>
+                  <p className="text-xs text-destructive flex items-center gap-1 mt-2">
+                    <AlertTriangle className="h-3 w-3" />
+                    This may delete test or outdated Shopify records stored only in this app.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => setShowShopifySyncModal(false)}
+              data-testid="button-cancel-shopify-sync"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleShopifySync}
+              data-testid="button-start-shopify-sync"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Start Sync
             </Button>
           </div>
         </DialogContent>

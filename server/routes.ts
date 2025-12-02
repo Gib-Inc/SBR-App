@@ -4789,8 +4789,8 @@ Notes: ${po.notes || 'None'}
         console.log(`[GHL Sync] PO errors: ${syncResults.purchaseOrders.errors.join('; ')}`);
       }
 
-      // ========== 5. CLEANUP ORPHANED OPPORTUNITIES ==========
-      console.log('[GHL Sync] Starting cleanup of orphaned opportunities...');
+      // ========== 5. CLEANUP: DEDUPLICATION + ORPHAN REMOVAL ==========
+      console.log('[GHL Sync] Starting cleanup (deduplication + orphan removal)...');
       let cleanupCount = 0;
       const deletedItems: string[] = [];
       
@@ -4825,8 +4825,85 @@ Notes: ${po.notes || 'None'}
               .map(po => po.poNumber)
           );
           
-          // Check each opportunity for orphan status
+          // ===== STEP A: DEDUPLICATION =====
+          // Group opportunities by their entity key to find duplicates
+          const oppsByKey: Record<string, Array<{ id: string; name: string; createdAt?: string }>> = {};
+          
           for (const opp of allOpps) {
+            const name = opp.name || '';
+            let key: string | null = null;
+            
+            // Extract unique key based on opportunity type
+            if (name.startsWith('Stock Alert:')) {
+              // Key by item name extracted from "Stock Alert: Name (X days)"
+              const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
+              if (match) {
+                key = `stock:${match[1].trim()}`;
+              }
+            } else if (name.startsWith('Return ') || name.includes('Return ')) {
+              // Key by return ID - extract from name like "Return b007..." or "Return RMA-..."
+              const returnMatch = name.match(/Return\s+([a-zA-Z0-9-]+)/);
+              if (returnMatch) {
+                key = `return:${returnMatch[1]}`;
+              }
+            } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
+              // Key by PO number
+              const poMatch = name.match(/PO[- ]?(\d+)/);
+              if (poMatch) {
+                key = `po:${poMatch[1]}`;
+              }
+            } else if (name.startsWith('Order ') || name.includes('Order ')) {
+              // Key by order number
+              const orderMatch = name.match(/Order\s+([A-Z]+-\d+-[A-Za-z0-9]+|\S+)/);
+              if (orderMatch) {
+                key = `order:${orderMatch[1]}`;
+              }
+            }
+            
+            if (key && opp.id) {
+              if (!oppsByKey[key]) {
+                oppsByKey[key] = [];
+              }
+              oppsByKey[key].push({ id: opp.id, name, createdAt: opp.createdAt || opp.dateAdded });
+            }
+          }
+          
+          // Delete duplicates, keeping only the first (or oldest) one
+          for (const [key, opps] of Object.entries(oppsByKey)) {
+            if (opps.length > 1) {
+              console.log(`[GHL Cleanup] Found ${opps.length} duplicates for ${key}`);
+              
+              // Sort by createdAt (oldest first) or keep first in array
+              const sorted = opps.sort((a, b) => {
+                if (a.createdAt && b.createdAt) {
+                  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+                }
+                return 0;
+              });
+              
+              // Keep the first one, delete the rest
+              for (let i = 1; i < sorted.length; i++) {
+                const dupe = sorted[i];
+                const deleteResult = await client.deleteOpportunity(dupe.id);
+                if (deleteResult.success) {
+                  cleanupCount++;
+                  deletedItems.push(`[DUPLICATE] ${dupe.name}`);
+                  console.log(`[GHL Cleanup] Deleted duplicate: "${dupe.name}" (${dupe.id})`);
+                } else {
+                  console.error(`[GHL Cleanup] Failed to delete duplicate "${dupe.name}": ${deleteResult.error}`);
+                }
+              }
+            }
+          }
+          
+          // ===== STEP B: ORPHAN REMOVAL =====
+          // Re-fetch opportunities after deduplication for orphan check
+          const refreshedOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
+          const refreshedOpps = refreshedOppsResult.success && refreshedOppsResult.opportunities 
+            ? refreshedOppsResult.opportunities 
+            : [];
+          
+          for (const opp of refreshedOpps) {
             const name = opp.name || '';
             let isOrphan = false;
             
@@ -4839,9 +4916,9 @@ Notes: ${po.notes || 'None'}
                 isOrphan = true;
                 console.log(`[GHL Cleanup] Stock alert orphan: "${name}" - item not in at-risk list`);
               }
-            } else if (name.startsWith('Return ') || name.includes('Return cddade') || name.includes('Return 0ce') || name.includes('Return b007') || name.includes('Return ee31')) {
+            } else if (name.startsWith('Return ') || name.includes('Return ')) {
               // Check if return RMA or ID is in the name
-              const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(id));
+              const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(String(id)));
               if (!hasValidReturn) {
                 isOrphan = true;
                 console.log(`[GHL Cleanup] Return orphan: "${name}"`);
@@ -4853,7 +4930,7 @@ Notes: ${po.notes || 'None'}
                 isOrphan = true;
                 console.log(`[GHL Cleanup] PO orphan: "${name}"`);
               }
-            } else if (name.startsWith('Order ') || name.includes('Order AMZ-') || name.includes('Order SHOP-')) {
+            } else if (name.startsWith('Order ') || name.includes('Order ')) {
               // Check if order number is in the name
               const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
               if (!hasValidOrder) {
@@ -4867,7 +4944,7 @@ Notes: ${po.notes || 'None'}
               const deleteResult = await client.deleteOpportunity(opp.id);
               if (deleteResult.success) {
                 cleanupCount++;
-                deletedItems.push(name);
+                deletedItems.push(`[ORPHAN] ${name}`);
                 console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
               } else {
                 console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);

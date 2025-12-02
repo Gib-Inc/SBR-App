@@ -18,8 +18,10 @@ export async function createGhlTaskForReturn(
   try {
     // Get GHL config
     const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-    const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
-    const apiKey = config?.apiKey;
+    // V2 API uses a different base URL
+    const baseUrl = 'https://services.leadconnectorhq.com';
+    // Check environment variable first, then fall back to stored config
+    const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
     const locationId = (config?.config as any)?.locationId;
     
     if (!apiKey || !locationId) {
@@ -114,8 +116,10 @@ export async function createGhlTaskForDispute(
   try {
     // Get GHL config
     const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-    const baseUrl = (config?.config as any)?.baseUrl || 'https://rest.gohighlevel.com/v1';
-    const apiKey = config?.apiKey;
+    // V2 API uses a different base URL
+    const baseUrl = 'https://services.leadconnectorhq.com';
+    // Check environment variable first, then fall back to stored config
+    const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
     const locationId = (config?.config as any)?.locationId;
     
     if (!apiKey || !locationId) {

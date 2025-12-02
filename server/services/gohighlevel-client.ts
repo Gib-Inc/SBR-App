@@ -49,7 +49,7 @@ export class GoHighLevelClient {
     return {
       'Authorization': `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',
-      'Version': '2021-07-28', // GHL API version
+      'Version': '2021-07-28', // GHL API v2 version header
     };
   }
 

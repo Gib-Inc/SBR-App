@@ -364,8 +364,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get GHL configuration (optional - we can still create POs without GHL)
       const ghlConfig = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
-      const apiKey = ghlConfig?.apiKey;
+      // V2 API uses a different base URL
+      const baseUrl = 'https://services.leadconnectorhq.com';
+      // Check environment variable first, then fall back to stored config
+      const apiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
       const locationId = (ghlConfig?.config as any)?.locationId;
       const pipelineId = (ghlConfig?.config as any)?.purchasePipelineId || process.env.GHL_PURCHASE_PIPELINE_ID;
       const stageDraftId = (ghlConfig?.config as any)?.purchaseStageDraftId || process.env.GHL_PURCHASE_STAGE_DRAFT_ID;
@@ -4308,8 +4310,10 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
-      const apiKey = config?.apiKey;
+      // V2 API uses a different base URL
+      const baseUrl = 'https://services.leadconnectorhq.com';
+      // Check environment variable first, then fall back to stored config
+      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       
       // Return specific error codes for missing credentials
@@ -4366,8 +4370,10 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
-      const baseUrl = 'https://rest.gohighlevel.com/v1';  // Fixed default, no longer configurable
-      const apiKey = config?.apiKey;
+      // V2 API uses a different base URL
+      const baseUrl = 'https://services.leadconnectorhq.com';
+      // Check environment variable first, then fall back to stored config
+      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       
       if (!apiKey || !locationId) {

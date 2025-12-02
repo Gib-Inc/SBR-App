@@ -360,9 +360,12 @@ export class GoHighLevelClient {
     phone?: string
   ): Promise<{ success: boolean; contactId?: string; error?: string }> {
     try {
+      console.log(`[GoHighLevelClient] createOrFindContact: name=${name}, email=${email}, phone=${phone}`);
+      
       // First try to find existing contact
       const existingContact = await this.getContactByPhoneOrEmail(phone, email);
       if (existingContact) {
+        console.log(`[GoHighLevelClient] Found existing contact: ${existingContact.id}`);
         return {
           success: true,
           contactId: existingContact.id,
@@ -374,32 +377,58 @@ export class GoHighLevelClient {
       const firstName = nameParts[0] || name;
       const lastName = nameParts.slice(1).join(' ') || '';
 
-      const response = await fetch(`${this.baseUrl}/contacts`, {
+      console.log(`[GoHighLevelClient] Creating new contact: ${firstName} ${lastName}`);
+      
+      const contactData: any = {
+        firstName,
+        lastName,
+        locationId: this.locationId,
+        source: 'Inventory Management System',
+      };
+      
+      // Only add email/phone if valid (avoid .local domains)
+      if (email && !email.endsWith('.local')) {
+        contactData.email = email;
+      }
+      if (phone) {
+        contactData.phone = phone;
+      }
+
+      // V2 API: POST to /contacts/ (with trailing slash)
+      const response = await fetch(`${this.baseUrl}/contacts/`, {
         method: 'POST',
         headers: this.getHeaders(),
-        body: JSON.stringify({
-          firstName,
-          lastName,
-          email,
-          phone,
-          locationId: this.locationId,
-          source: 'Inventory Management System',
-        }),
+        body: JSON.stringify(contactData),
       });
 
+      const responseText = await response.text();
+      console.log(`[GoHighLevelClient] Create contact response: ${response.status} - ${responseText.substring(0, 200)}`);
+
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[GoHighLevelClient] Failed to create contact:', errorText);
+        console.error('[GoHighLevelClient] Failed to create contact:', responseText);
         return {
           success: false,
-          error: `Failed to create contact: ${response.status}`,
+          error: `Failed to create contact: ${response.status} - ${responseText.substring(0, 100)}`,
         };
       }
 
-      const data = await response.json();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        console.error('[GoHighLevelClient] Failed to parse contact response:', responseText);
+        return {
+          success: false,
+          error: 'Invalid response from GHL API',
+        };
+      }
+      
+      const contactId = data.contact?.id || data.id;
+      console.log(`[GoHighLevelClient] Created contact with ID: ${contactId}`);
+      
       return {
         success: true,
-        contactId: data.contact?.id || data.id,
+        contactId,
       };
     } catch (error: any) {
       console.error('[GoHighLevelClient] Error creating contact:', error);

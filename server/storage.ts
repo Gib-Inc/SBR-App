@@ -75,6 +75,8 @@ import {
   type InsertQuickbooksAuth,
   type QuickbooksSalesSnapshot,
   type InsertQuickbooksSalesSnapshot,
+  type QuickbooksDemandHistory,
+  type InsertQuickbooksDemandHistory,
   type QuickbooksVendorMapping,
   type InsertQuickbooksVendorMapping,
   type QuickbooksItemMapping,
@@ -429,7 +431,7 @@ export interface IStorage {
   getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]>;
   updateIntegrationConfigHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null; consecutiveFailures?: number; lastSyncStatus?: string }): Promise<void>;
 
-  // QuickBooks Sales Snapshots
+  // QuickBooks Sales Snapshots (Legacy)
   getQuickbooksSalesSnapshotsBySku(sku: string): Promise<QuickbooksSalesSnapshot[]>;
   getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]>;
   getQuickbooksDemandHistory(params: {
@@ -440,6 +442,16 @@ export interface IStorage {
     pageSize?: number;
   }): Promise<{ items: QuickbooksSalesSnapshot[]; total: number; years: number[] }>;
   upsertQuickbooksSalesSnapshot(snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }>;
+
+  // QuickBooks Demand History (New - with returns tracking)
+  getQuickbooksDemandHistoryItems(params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksDemandHistory[]; total: number; years: number[] }>;
+  upsertQuickbooksDemandHistory(data: Omit<InsertQuickbooksDemandHistory, 'id'>): Promise<{ item: QuickbooksDemandHistory; isNew: boolean }>;
 
   // QuickBooks Vendor Mappings
   getQuickbooksVendorMapping(supplierId: string): Promise<QuickbooksVendorMapping | null>;
@@ -2802,6 +2814,20 @@ export class MemStorage implements IStorage {
     throw new Error('QuickBooks not supported in MemStorage');
   }
 
+  async getQuickbooksDemandHistoryItems(_params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksDemandHistory[]; total: number; years: number[] }> {
+    return { items: [], total: 0, years: [] };
+  }
+
+  async upsertQuickbooksDemandHistory(_data: Omit<InsertQuickbooksDemandHistory, 'id'>): Promise<{ item: QuickbooksDemandHistory; isNew: boolean }> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+
   // QuickBooks Vendor Mappings (not supported in MemStorage)
   async getQuickbooksVendorMapping(_supplierId: string): Promise<QuickbooksVendorMapping | null> {
     return null;
@@ -5146,6 +5172,86 @@ export class PostgresStorage implements IStorage {
         updatedAt: now,
       }).returning();
       return { snapshot: inserted[0], isNew: true };
+    }
+  }
+
+  async getQuickbooksDemandHistoryItems(params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksDemandHistory[]; total: number; years: number[] }> {
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 25;
+    const offset = (page - 1) * pageSize;
+
+    const conditions: any[] = [];
+    
+    if (params.search) {
+      const searchPattern = `%${params.search}%`;
+      conditions.push(or(
+        ilike(schema.quickbooksDemandHistory.sku, searchPattern),
+        ilike(schema.quickbooksDemandHistory.productName, searchPattern)
+      ));
+    }
+    
+    if (params.year) {
+      conditions.push(eq(schema.quickbooksDemandHistory.year, params.year));
+    }
+    
+    if (params.month) {
+      conditions.push(eq(schema.quickbooksDemandHistory.month, params.month));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [items, countResult, yearsResult] = await Promise.all([
+      this.db.select().from(schema.quickbooksDemandHistory)
+        .where(whereClause)
+        .orderBy(desc(schema.quickbooksDemandHistory.year), desc(schema.quickbooksDemandHistory.month), schema.quickbooksDemandHistory.sku)
+        .limit(pageSize)
+        .offset(offset),
+      this.db.select({ count: count() }).from(schema.quickbooksDemandHistory).where(whereClause),
+      this.db.selectDistinct({ year: schema.quickbooksDemandHistory.year }).from(schema.quickbooksDemandHistory).orderBy(desc(schema.quickbooksDemandHistory.year)),
+    ]);
+
+    return {
+      items,
+      total: countResult[0]?.count || 0,
+      years: yearsResult.map(r => r.year),
+    };
+  }
+
+  async upsertQuickbooksDemandHistory(data: Omit<InsertQuickbooksDemandHistory, 'id'>): Promise<{ item: QuickbooksDemandHistory; isNew: boolean }> {
+    const existing = await this.db.select().from(schema.quickbooksDemandHistory)
+      .where(and(
+        eq(schema.quickbooksDemandHistory.quickbooksItemId, data.quickbooksItemId),
+        eq(schema.quickbooksDemandHistory.year, data.year),
+        eq(schema.quickbooksDemandHistory.month, data.month)
+      ));
+
+    if (existing[0]) {
+      const updated = await this.db.update(schema.quickbooksDemandHistory)
+        .set({
+          ...data,
+          updatedAt: new Date(),
+          lastSyncedAt: new Date(),
+        })
+        .where(eq(schema.quickbooksDemandHistory.id, existing[0].id))
+        .returning();
+      return { item: updated[0], isNew: false };
+    } else {
+      const id = randomUUID();
+      const now = new Date();
+      const inserted = await this.db.insert(schema.quickbooksDemandHistory).values({
+        ...data,
+        id,
+        createdAt: now,
+        updatedAt: now,
+        lastSyncedAt: now,
+      }).returning();
+      return { item: inserted[0], isNew: true };
     }
   }
 

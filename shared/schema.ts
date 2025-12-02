@@ -1877,6 +1877,9 @@ export const aiAgentSettings = pgTable("ai_agent_settings", {
   extensivTwoWaySync: boolean("extensiv_two_way_sync").notNull().default(false), // OFF=1-Way (Inbound Only), ON=2-Way (Orders Enabled)
   pivotLowDaysThreshold: integer("pivot_low_days_threshold").notNull().default(5), // Days of cover at Pivot below which rebalance alert triggers
   hildaleHighDaysThreshold: integer("hildale_high_days_threshold").notNull().default(20), // Days of cover at Hildale above which rebalance alert triggers
+  // QuickBooks demand history settings
+  quickbooksIncludeHistory: boolean("quickbooks_include_history").notNull().default(false), // Include QB demand history in AI forecasting
+  quickbooksHistoryMonths: integer("quickbooks_history_months").notNull().default(12), // Months of history to include for AI analysis
   // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),

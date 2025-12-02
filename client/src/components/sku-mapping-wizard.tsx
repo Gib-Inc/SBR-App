@@ -9,8 +9,8 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles } from "lucide-react";
-import { SiShopify, SiAmazon } from "react-icons/si";
+import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles, BookOpen } from "lucide-react";
+import { SiShopify, SiAmazon, SiQuickbooks } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -26,6 +26,9 @@ interface Item {
   shopifyInventoryItemId: string | null;
   amazonSku: string | null;
   extensivSku: string | null;
+  quickbooksItemId: string | null;
+  quickbooksItemName: string | null;
+  quickbooksItemSku: string | null;
 }
 
 interface ShopifyVariant {
@@ -100,7 +103,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     },
   });
 
-  const handleSkuChange = (itemId: string, channel: "shopifySku" | "amazonSku" | "extensivSku", value: string) => {
+  const handleSkuChange = (itemId: string, channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId", value: string) => {
     setPendingChanges((prev) => ({
       ...prev,
       [itemId]: {
@@ -110,7 +113,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     }));
   };
 
-  const getCurrentValue = (item: Item, channel: "shopifySku" | "amazonSku" | "extensivSku"): string => {
+  const getCurrentValue = (item: Item, channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId"): string => {
     if (pendingChanges[item.id]?.[channel] !== undefined) {
       return pendingChanges[item.id][channel] || "";
     }
@@ -154,7 +157,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
       item.sku.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const getMappingStats = (channel: "shopifySku" | "amazonSku" | "extensivSku") => {
+  const getMappingStats = (channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId") => {
     const mapped = finishedProducts.filter((item) => item[channel]).length;
     const unmapped = finishedProducts.length - mapped;
     return { mapped, unmapped, total: finishedProducts.length };
@@ -883,7 +886,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
   };
 
   const renderChannelTab = (
-    channel: "shopifySku" | "amazonSku" | "extensivSku",
+    channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId",
     channelLabel: string,
     placeholder: string
   ) => {
@@ -1006,7 +1009,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="shopify" className="gap-2" data-testid="tab-shopify-sku">
                 <SiShopify className="h-4 w-4" />
                 Shopify
@@ -1021,6 +1024,10 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                 </svg>
                 Extensiv
               </TabsTrigger>
+              <TabsTrigger value="quickbooks" className="gap-2" data-testid="tab-quickbooks-sku">
+                <SiQuickbooks className="h-4 w-4" />
+                QuickBooks
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="shopify" className="mt-4">
@@ -1033,6 +1040,10 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
 
             <TabsContent value="extensiv" className="mt-4">
               {renderExtensivTab()}
+            </TabsContent>
+
+            <TabsContent value="quickbooks" className="mt-4">
+              {renderChannelTab("quickbooksItemId", "QuickBooks", "Enter QuickBooks Item ID")}
             </TabsContent>
           </Tabs>
         </div>

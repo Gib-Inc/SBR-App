@@ -797,7 +797,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // GET /api/ai/insights/qb-demand-history - Get paginated QuickBooks demand history
+  // GET /api/ai/insights/qb-demand-history - Get paginated QuickBooks demand history (new table with returns)
   app.get("/api/ai/insights/qb-demand-history", requireAuth, async (req: Request, res: Response) => {
     try {
       const search = req.query.search as string | undefined;
@@ -806,7 +806,7 @@ TOTAL: $${subtotal.toFixed(2)}
       const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
       const pageSize = req.query.pageSize ? parseInt(req.query.pageSize as string, 10) : 25;
 
-      const result = await storage.getQuickbooksDemandHistory({
+      const result = await storage.getQuickbooksDemandHistoryItems({
         search,
         year,
         month,
@@ -10790,7 +10790,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // POST /api/quickbooks/sync-sales - Sync historical sales data
+  // POST /api/quickbooks/sync-sales - Sync historical sales data (legacy snapshots)
   app.post("/api/quickbooks/sync-sales", requireAuth, async (req: Request, res: Response) => {
     try {
       if (!isQuickBooksConfigured()) {
@@ -10810,6 +10810,49 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[QuickBooks] Sync sales error:", error);
       res.status(500).json({ success: false, message: error.message || "Sales sync failed" });
+    }
+  });
+
+  // POST /api/quickbooks/sync-demand-history - Sync demand history (sales + returns)
+  app.post("/api/quickbooks/sync-demand-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (!isQuickBooksConfigured()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'QuickBooks not configured'
+        });
+      }
+
+      const userId = req.user?.id || 'system';
+      const { years = 3 } = req.body;
+      
+      const client = new QuickBooksClient(storage, userId);
+      const result = await client.syncDemandHistory(years);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Sync demand history error:", error);
+      res.status(500).json({ success: false, message: error.message || "Demand history sync failed" });
+    }
+  });
+
+  // GET /api/quickbooks/demand-history - Get demand history records
+  app.get("/api/quickbooks/demand-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { search, year, month, page, pageSize } = req.query;
+      
+      const result = await storage.getQuickbooksDemandHistoryItems({
+        search: search as string | undefined,
+        year: year ? parseInt(year as string) : undefined,
+        month: month ? parseInt(month as string) : undefined,
+        page: page ? parseInt(page as string) : 1,
+        pageSize: pageSize ? parseInt(pageSize as string) : 25,
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Get demand history error:", error);
+      res.status(500).json({ error: error.message || "Failed to get demand history" });
     }
   });
 

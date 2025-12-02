@@ -183,8 +183,25 @@ interface QuickbooksSalesSnapshot {
   updatedAt: string;
 }
 
+interface QBDemandHistoryItem {
+  id: string;
+  productId?: string;
+  quickbooksItemId: string;
+  sku: string;
+  productName?: string;
+  year: number;
+  month: number;
+  qtySold: number;
+  qtyReturned: number;
+  netQty: number;
+  revenue: number;
+  lastSyncedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 interface QBDemandHistoryResponse {
-  items: QuickbooksSalesSnapshot[];
+  items: QBDemandHistoryItem[];
   total: number;
   years: number[];
   page: number;
@@ -708,6 +725,8 @@ function RulesTab() {
   const [extensivTwoWaySync, setExtensivTwoWaySync] = useState(false);
   const [pivotLowDaysThreshold, setPivotLowDaysThreshold] = useState(5);
   const [hildaleHighDaysThreshold, setHildaleHighDaysThreshold] = useState(20);
+  const [quickbooksIncludeHistory, setQuickbooksIncludeHistory] = useState(false);
+  const [quickbooksHistoryMonths, setQuickbooksHistoryMonths] = useState(12);
   
   // Sync form with fetched rules
   useEffect(() => {
@@ -738,6 +757,8 @@ function RulesTab() {
       setExtensivTwoWaySync(aiAgentSettings.extensivTwoWaySync || false);
       setPivotLowDaysThreshold(aiAgentSettings.pivotLowDaysThreshold || 5);
       setHildaleHighDaysThreshold(aiAgentSettings.hildaleHighDaysThreshold || 20);
+      setQuickbooksIncludeHistory(aiAgentSettings.quickbooksIncludeHistory || false);
+      setQuickbooksHistoryMonths(aiAgentSettings.quickbooksHistoryMonths || 12);
     }
   }, [aiAgentSettings]);
   
@@ -746,7 +767,7 @@ function RulesTab() {
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
       features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
-      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number };
     }) => {
       // Save rules, features, and agent settings in parallel
       await Promise.all([
@@ -794,6 +815,8 @@ function RulesTab() {
         extensivTwoWaySync,
         pivotLowDaysThreshold,
         hildaleHighDaysThreshold,
+        quickbooksIncludeHistory,
+        quickbooksHistoryMonths,
       },
     });
   };
@@ -1445,6 +1468,61 @@ function RulesTab() {
                   </div>
                 </div>
               </div>
+              
+              {/* QuickBooks Demand History for AI Forecasting */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="quickbooks-include-history">Include QuickBooks Demand History</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-qb-history-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>When enabled, the AI forecasting engine will include historical sales and returns data synced from QuickBooks Online to improve demand predictions.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Switch
+                    id="quickbooks-include-history"
+                    checked={quickbooksIncludeHistory}
+                    onCheckedChange={setQuickbooksIncludeHistory}
+                    data-testid="switch-qb-include-history"
+                  />
+                </div>
+                
+                <div className="text-xs text-muted-foreground">
+                  QuickBooks History: {quickbooksIncludeHistory ? "Included in AI Forecasting" : "Not Used"}
+                </div>
+                
+                {quickbooksIncludeHistory && (
+                  <div className="space-y-2 pl-2 border-l-2 border-primary/20">
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="quickbooks-history-months">History Window</Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-qb-months-info" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p>Number of months of QuickBooks demand history to include in AI analysis. More months gives better seasonal insights but may include outdated patterns.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="quickbooks-history-months"
+                        type="number"
+                        min={3}
+                        max={36}
+                        value={quickbooksHistoryMonths}
+                        onChange={(e) => setQuickbooksHistoryMonths(parseInt(e.target.value) || 12)}
+                        data-testid="input-qb-history-months"
+                      />
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">months</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </CardContent>
@@ -1525,7 +1603,7 @@ function QuickBooksDemandHistoryTab() {
   const hasYears = data && data.years.length > 0;
   const isFiltered = search || yearFilter !== "all" || monthFilter !== "all";
   
-  const lastSyncedAt = data?.items?.[0]?.updatedAt;
+  const lastSyncedAt = data?.items?.[0]?.lastSyncedAt || data?.items?.[0]?.updatedAt;
 
   return (
     <Card>
@@ -1645,16 +1723,17 @@ function QuickBooksDemandHistoryTab() {
           </div>
         ) : (
           <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[1100px]">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">SKU</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Year</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Month</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Qty Sold</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">Period</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Sold</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Returned</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Net Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Revenue</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Last Synced</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Synced</th>
                 </tr>
               </thead>
               <tbody>
@@ -1664,26 +1743,29 @@ function QuickBooksDemandHistoryTab() {
                     className="border-b last:border-b-0 hover-elevate h-12"
                     data-testid={`row-qb-demand-${item.id}`}
                   >
-                    <td className="p-3 align-middle whitespace-nowrap max-w-[250px] truncate" title={item.productName ?? ""}>
+                    <td className="p-3 align-middle whitespace-nowrap max-w-[200px] truncate" title={item.productName ?? ""}>
                       <span className="font-medium">{item.productName ?? "-"}</span>
                     </td>
                     <td className="p-3 align-middle font-mono text-sm whitespace-nowrap">
                       {item.sku}
                     </td>
                     <td className="p-3 align-middle text-center whitespace-nowrap">
-                      {item.year}
+                      {shortMonthNames[item.month]} {item.year}
                     </td>
-                    <td className="p-3 align-middle text-center whitespace-nowrap">
-                      {shortMonthNames[item.month] || item.month}
+                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap text-green-600 dark:text-green-400">
+                      +{item.qtySold.toLocaleString()}
                     </td>
-                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap">
-                      {item.totalQty.toLocaleString()}
+                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap text-red-600 dark:text-red-400">
+                      {item.qtyReturned > 0 ? `-${item.qtyReturned.toLocaleString()}` : "0"}
+                    </td>
+                    <td className="p-3 align-middle text-right font-bold whitespace-nowrap">
+                      {item.netQty.toLocaleString()}
                     </td>
                     <td className="p-3 align-middle text-right whitespace-nowrap">
-                      {formatCurrency(item.totalRevenue)}
+                      {formatCurrency(item.revenue)}
                     </td>
-                    <td className="p-3 align-middle text-right text-muted-foreground whitespace-nowrap">
-                      {formatRelativeTime(item.updatedAt)}
+                    <td className="p-3 align-middle text-right text-muted-foreground whitespace-nowrap text-xs">
+                      {formatRelativeTime(item.lastSyncedAt || item.updatedAt)}
                     </td>
                   </tr>
                 ))}
@@ -3671,6 +3753,14 @@ export default function AIAgent() {
                           </div>
                           {(source as any).showRotation && (
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs border-t pt-2 mt-1" data-testid={`rotation-info-${source.id}`}>
+                              {(source as any).lastSyncAt && (
+                                <>
+                                  <div className="text-muted-foreground">Last Synced</div>
+                                  <div className="text-right font-medium" data-testid={`last-synced-${source.id}`}>
+                                    {formatRotationDate((source as any).lastSyncAt)}
+                                  </div>
+                                </>
+                              )}
                               <div className="text-muted-foreground">Last Rotated</div>
                               <div className="text-right font-medium" data-testid={`last-rotated-${source.id}`}>
                                 {formatRotationDate((source as any).lastRotatedAt)}

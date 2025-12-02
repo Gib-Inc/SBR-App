@@ -100,6 +100,25 @@ interface QBBill {
   }>;
 }
 
+// CreditMemo and RefundReceipt for tracking returns
+interface QBCreditMemo {
+  Id: string;
+  DocNumber?: string;
+  TxnDate: string;
+  Line: QBLineItem[];
+  TotalAmt?: number;
+  CustomerRef?: { value: string; name?: string };
+}
+
+interface QBRefundReceipt {
+  Id: string;
+  DocNumber?: string;
+  TxnDate: string;
+  Line: QBLineItem[];
+  TotalAmt?: number;
+  CustomerRef?: { value: string; name?: string };
+}
+
 // Normalized sales line for aggregation
 interface NormalizedSalesLine {
   sku: string;
@@ -109,6 +128,19 @@ interface NormalizedSalesLine {
   date: Date;
   source: 'invoice' | 'salesreceipt';
   docNumber: string;
+  quickbooksItemId: string;
+}
+
+// Normalized returns line for aggregation
+interface NormalizedReturnsLine {
+  sku: string;
+  productName: string;
+  qty: number;
+  amount: number;
+  date: Date;
+  source: 'creditmemo' | 'refundreceipt';
+  docNumber: string;
+  quickbooksItemId: string;
 }
 
 export class QuickBooksClient {
@@ -210,7 +242,6 @@ export class QuickBooksClient {
         refreshToken: tokens.refresh_token,
         accessTokenExpiresAt,
         refreshTokenExpiresAt,
-        updatedAt: now,
       });
 
       // Reload auth
@@ -325,17 +356,18 @@ export class QuickBooksClient {
         for (const line of invoice.Line || []) {
           if (line.SalesItemLineDetail) {
             const detail = line.SalesItemLineDetail;
-            const sku = detail.ItemRef?.value || 'UNKNOWN';
+            const quickbooksItemId = detail.ItemRef?.value || 'UNKNOWN';
             const productName = detail.ItemRef?.name || line.Description || 'Unknown Product';
             
             results.push({
-              sku,
+              sku: quickbooksItemId,
               productName,
               qty: detail.Qty || 1,
               amount: line.Amount || 0,
               date: txnDate,
               source: 'invoice',
               docNumber: invoice.DocNumber || invoice.Id,
+              quickbooksItemId,
             });
           }
         }
@@ -358,17 +390,18 @@ export class QuickBooksClient {
         for (const line of receipt.Line || []) {
           if (line.SalesItemLineDetail) {
             const detail = line.SalesItemLineDetail;
-            const sku = detail.ItemRef?.value || 'UNKNOWN';
+            const quickbooksItemId = detail.ItemRef?.value || 'UNKNOWN';
             const productName = detail.ItemRef?.name || line.Description || 'Unknown Product';
             
             results.push({
-              sku,
+              sku: quickbooksItemId,
               productName,
               qty: detail.Qty || 1,
               amount: line.Amount || 0,
               date: txnDate,
               source: 'salesreceipt',
               docNumber: receipt.DocNumber || receipt.Id,
+              quickbooksItemId,
             });
           }
         }
@@ -439,7 +472,7 @@ export class QuickBooksClient {
       let created = 0;
       let updated = 0;
 
-      for (const agg of aggregations.values()) {
+      for (const agg of Array.from(aggregations.values())) {
         const result = await this.storage.upsertQuickbooksSalesSnapshot({
           sku: agg.sku,
           productName: agg.productName,
@@ -508,6 +541,268 @@ export class QuickBooksClient {
         message: error.message || 'Sales sync failed',
         snapshotsCreated: 0,
         snapshotsUpdated: 0,
+      };
+    }
+  }
+
+  /**
+   * Fetch historical returns data from QuickBooks (READ-ONLY)
+   * Returns normalized line-level data from CreditMemos and RefundReceipts
+   */
+  async fetchReturnsHistory(startDate: Date, endDate: Date): Promise<NormalizedReturnsLine[]> {
+    const initialized = await this.initialize();
+    if (!initialized) {
+      throw new Error('QuickBooks not connected');
+    }
+
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+    const results: NormalizedReturnsLine[] = [];
+
+    // Fetch CreditMemos
+    try {
+      const creditMemoQuery = encodeURIComponent(
+        `SELECT * FROM CreditMemo WHERE TxnDate >= '${startStr}' AND TxnDate <= '${endStr}' MAXRESULTS 1000`
+      );
+      const creditMemoData = await this.apiRequest<{ QueryResponse: { CreditMemo?: QBCreditMemo[] } }>(
+        `/query?query=${creditMemoQuery}`
+      );
+
+      for (const memo of creditMemoData.QueryResponse?.CreditMemo || []) {
+        const txnDate = new Date(memo.TxnDate);
+        for (const line of memo.Line || []) {
+          if (line.SalesItemLineDetail) {
+            const detail = line.SalesItemLineDetail;
+            const quickbooksItemId = detail.ItemRef?.value || 'UNKNOWN';
+            const productName = detail.ItemRef?.name || line.Description || 'Unknown Product';
+            
+            results.push({
+              sku: quickbooksItemId,
+              productName,
+              qty: detail.Qty || 1,
+              amount: line.Amount || 0,
+              date: txnDate,
+              source: 'creditmemo',
+              docNumber: memo.DocNumber || memo.Id,
+              quickbooksItemId,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[QuickBooks] Error fetching credit memos:', error);
+    }
+
+    // Fetch RefundReceipts
+    try {
+      const refundQuery = encodeURIComponent(
+        `SELECT * FROM RefundReceipt WHERE TxnDate >= '${startStr}' AND TxnDate <= '${endStr}' MAXRESULTS 1000`
+      );
+      const refundData = await this.apiRequest<{ QueryResponse: { RefundReceipt?: QBRefundReceipt[] } }>(
+        `/query?query=${refundQuery}`
+      );
+
+      for (const refund of refundData.QueryResponse?.RefundReceipt || []) {
+        const txnDate = new Date(refund.TxnDate);
+        for (const line of refund.Line || []) {
+          if (line.SalesItemLineDetail) {
+            const detail = line.SalesItemLineDetail;
+            const quickbooksItemId = detail.ItemRef?.value || 'UNKNOWN';
+            const productName = detail.ItemRef?.name || line.Description || 'Unknown Product';
+            
+            results.push({
+              sku: quickbooksItemId,
+              productName,
+              qty: detail.Qty || 1,
+              amount: line.Amount || 0,
+              date: txnDate,
+              source: 'refundreceipt',
+              docNumber: refund.DocNumber || refund.Id,
+              quickbooksItemId,
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[QuickBooks] Error fetching refund receipts:', error);
+    }
+
+    return results;
+  }
+
+  /**
+   * Sync demand history (sales and returns) to the new demand history table
+   * Aggregates by QuickBooks Item ID + year + month with qtySold, qtyReturned, netQty, revenue
+   */
+  async syncDemandHistory(sinceYears: number = 3): Promise<{ 
+    success: boolean; 
+    message: string; 
+    recordsCreated: number;
+    recordsUpdated: number;
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, message: 'QuickBooks not connected', recordsCreated: 0, recordsUpdated: 0 };
+      }
+
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setFullYear(startDate.getFullYear() - sinceYears);
+
+      console.log(`[QuickBooks] Syncing demand history from ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+      // Fetch sales and returns in parallel
+      const [salesLines, returnsLines] = await Promise.all([
+        this.fetchSalesHistory(startDate, endDate),
+        this.fetchReturnsHistory(startDate, endDate),
+      ]);
+
+      console.log(`[QuickBooks] Fetched ${salesLines.length} sales lines and ${returnsLines.length} returns lines`);
+
+      // Aggregate by QuickBooks Item ID + year + month
+      const aggregations = new Map<string, { 
+        quickbooksItemId: string;
+        sku: string;
+        productName: string;
+        year: number; 
+        month: number; 
+        qtySold: number;
+        qtyReturned: number;
+        salesRevenue: number;
+        returnsRevenue: number;
+      }>();
+
+      // Process sales
+      for (const line of salesLines) {
+        const year = line.date.getFullYear();
+        const month = line.date.getMonth() + 1; // 1-12
+        const key = `${line.quickbooksItemId}-${year}-${month}`;
+
+        const existing = aggregations.get(key);
+        if (existing) {
+          existing.qtySold += line.qty;
+          existing.salesRevenue += line.amount;
+        } else {
+          aggregations.set(key, {
+            quickbooksItemId: line.quickbooksItemId,
+            sku: line.sku,
+            productName: line.productName,
+            year,
+            month,
+            qtySold: line.qty,
+            qtyReturned: 0,
+            salesRevenue: line.amount,
+            returnsRevenue: 0,
+          });
+        }
+      }
+
+      // Process returns
+      for (const line of returnsLines) {
+        const year = line.date.getFullYear();
+        const month = line.date.getMonth() + 1; // 1-12
+        const key = `${line.quickbooksItemId}-${year}-${month}`;
+
+        const existing = aggregations.get(key);
+        if (existing) {
+          existing.qtyReturned += line.qty;
+          existing.returnsRevenue += line.amount;
+        } else {
+          aggregations.set(key, {
+            quickbooksItemId: line.quickbooksItemId,
+            sku: line.sku,
+            productName: line.productName,
+            year,
+            month,
+            qtySold: 0,
+            qtyReturned: line.qty,
+            salesRevenue: 0,
+            returnsRevenue: line.amount,
+          });
+        }
+      }
+
+      // Upsert demand history records
+      let created = 0;
+      let updated = 0;
+
+      for (const agg of Array.from(aggregations.values())) {
+        const netQty = agg.qtySold - agg.qtyReturned;
+        const revenue = agg.salesRevenue - agg.returnsRevenue;
+
+        const result = await this.storage.upsertQuickbooksDemandHistory({
+          quickbooksItemId: agg.quickbooksItemId,
+          sku: agg.sku,
+          productName: agg.productName,
+          year: agg.year,
+          month: agg.month,
+          qtySold: agg.qtySold,
+          qtyReturned: agg.qtyReturned,
+          netQty,
+          revenue,
+          lastSyncedAt: new Date(),
+        });
+
+        if (result.isNew) {
+          created++;
+        } else {
+          updated++;
+        }
+      }
+
+      // Update last sync timestamp
+      if (this.auth) {
+        await this.storage.updateQuickbooksAuth(this.auth.id, {
+          lastSalesSyncAt: new Date(),
+          lastSalesSyncStatus: 'SUCCESS',
+        });
+      }
+
+      // Log to AI Logs
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'DEMAND_HISTORY_SYNC',
+        status: 'INFO',
+        description: `QuickBooks demand history sync completed: ${created} created, ${updated} updated`,
+        details: {
+          sinceYears,
+          salesLinesProcessed: salesLines.length,
+          returnsLinesProcessed: returnsLines.length,
+          recordsCreated: created,
+          recordsUpdated: updated,
+          dateRange: { start: startDate.toISOString(), end: endDate.toISOString() },
+        },
+      });
+
+      return {
+        success: true,
+        message: `Synced demand history: ${created} new, ${updated} updated (${salesLines.length} sales, ${returnsLines.length} returns)`,
+        recordsCreated: created,
+        recordsUpdated: updated,
+      };
+    } catch (error: any) {
+      // Update last sync status
+      if (this.auth) {
+        await this.storage.updateQuickbooksAuth(this.auth.id, {
+          lastSalesSyncStatus: 'FAILED',
+        });
+      }
+
+      // Log error
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'DEMAND_HISTORY_SYNC_ERROR',
+        status: 'ERROR',
+        description: `QuickBooks demand history sync failed: ${error.message}`,
+        details: { error: error.message },
+      });
+
+      return {
+        success: false,
+        message: error.message || 'Demand history sync failed',
+        recordsCreated: 0,
+        recordsUpdated: 0,
       };
     }
   }

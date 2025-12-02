@@ -348,6 +348,76 @@ class LogService {
       details: details || null,
     });
   }
+
+  async logGhlSync(params: {
+    action: 'SYNC' | 'CLEANUP' | 'CREATE' | 'UPDATE' | 'DELETE';
+    category: 'SALES_ORDERS' | 'RETURNS' | 'STOCK_WARNINGS' | 'PURCHASE_ORDERS' | 'ALL';
+    count: number;
+    triggeredBy: 'USER' | 'AUTOMATION';
+    userId?: string;
+    userName?: string;
+    details?: Record<string, any>;
+  }): Promise<void> {
+    const actionText = {
+      SYNC: 'synced',
+      CLEANUP: 'cleaned up',
+      CREATE: 'created',
+      UPDATE: 'updated',
+      DELETE: 'deleted',
+    }[params.action];
+
+    const categoryText = {
+      SALES_ORDERS: 'sales orders',
+      RETURNS: 'returns',
+      STOCK_WARNINGS: 'stock warnings',
+      PURCHASE_ORDERS: 'purchase orders',
+      ALL: 'opportunities',
+    }[params.category];
+
+    const triggeredByText = params.triggeredBy === 'USER' 
+      ? `by ${params.userName || 'user'}` 
+      : 'by automation';
+
+    await this.logSystemEvent({
+      type: SystemLogType.GHL_SYNC_INFO,
+      entityType: SystemLogEntityType.INTEGRATION,
+      severity: SystemLogSeverity.INFO,
+      code: `GHL_${params.action}`,
+      message: `GoHighLevel: ${actionText} ${params.count} ${categoryText} ${triggeredByText}`,
+      details: {
+        action: params.action,
+        category: params.category,
+        count: params.count,
+        triggeredBy: params.triggeredBy,
+        userId: params.userId,
+        userName: params.userName,
+        ...params.details,
+      },
+    });
+  }
+
+  async logGhlCleanup(params: {
+    deletedCount: number;
+    deletedItems: string[];
+    triggeredBy: 'USER' | 'AUTOMATION';
+    userId?: string;
+    userName?: string;
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.GHL_SYNC_INFO,
+      entityType: SystemLogEntityType.INTEGRATION,
+      severity: SystemLogSeverity.INFO,
+      code: 'GHL_CLEANUP',
+      message: `GoHighLevel: deleted ${params.deletedCount} orphaned opportunities ${params.triggeredBy === 'USER' ? `by ${params.userName || 'user'}` : 'by automation'}`,
+      details: {
+        deletedCount: params.deletedCount,
+        deletedItems: params.deletedItems,
+        triggeredBy: params.triggeredBy,
+        userId: params.userId,
+        userName: params.userName,
+      },
+    });
+  }
 }
 
 export const logService = new LogService();

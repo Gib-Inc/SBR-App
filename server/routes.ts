@@ -4792,6 +4792,10 @@ Notes: ${po.notes || 'None'}
       // ========== 5. CLEANUP ORPHANED OPPORTUNITIES ==========
       console.log('[GHL Sync] Starting cleanup of orphaned opportunities...');
       let cleanupCount = 0;
+      const deletedItems: string[] = [];
+      
+      // Get user info for logging
+      const syncUser = await storage.getUser(req.session.userId!);
       
       try {
         // Get all opportunities in the pipeline
@@ -4863,6 +4867,7 @@ Notes: ${po.notes || 'None'}
               const deleteResult = await client.deleteOpportunity(opp.id);
               if (deleteResult.success) {
                 cleanupCount++;
+                deletedItems.push(name);
                 console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
               } else {
                 console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);
@@ -4876,6 +4881,34 @@ Notes: ${po.notes || 'None'}
       }
       
       console.log(`[GHL Sync] Cleanup complete: ${cleanupCount} orphaned opportunities deleted`);
+      
+      // Log cleanup action if any items were deleted
+      if (cleanupCount > 0) {
+        await logService.logGhlCleanup({
+          deletedCount: cleanupCount,
+          deletedItems,
+          triggeredBy: 'USER',
+          userId: req.session.userId!,
+          userName: syncUser?.email,
+        });
+      }
+      
+      // Log overall sync summary
+      await logService.logGhlSync({
+        action: 'SYNC',
+        category: 'ALL',
+        count: syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced,
+        triggeredBy: 'USER',
+        userId: req.session.userId!,
+        userName: syncUser?.email,
+        details: {
+          salesOrders: syncResults.salesOrders.synced,
+          returns: syncResults.returns.synced,
+          stockWarnings: syncResults.stockWarnings.synced,
+          purchaseOrders: syncResults.purchaseOrders.synced,
+          cleanedUp: cleanupCount,
+        },
+      });
 
       // Build summary message
       const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced;

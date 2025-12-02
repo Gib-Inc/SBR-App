@@ -4387,16 +4387,37 @@ TOTAL: $${subtotal.toFixed(2)}
       // Stock warnings and other system items need a contact in V2 API
       console.log('[GHL Sync] Creating/finding system contact...');
       let systemContactId: string | undefined;
-      const systemContactResult = await client.createOrFindContact(
-        'Inventory System',
-        'inventory@system.local',
-        undefined
-      );
-      if (systemContactResult.success) {
-        systemContactId = systemContactResult.contactId;
-        console.log(`[GHL Sync] System contact ID: ${systemContactId}`);
-      } else {
-        console.error('[GHL Sync] Failed to create system contact:', systemContactResult.error);
+      try {
+        const systemContactResult = await client.createOrFindContact(
+          'Inventory System',
+          'inventory@system.local',
+          undefined
+        );
+        if (systemContactResult.success && systemContactResult.contactId) {
+          systemContactId = systemContactResult.contactId;
+          console.log(`[GHL Sync] System contact ID: ${systemContactId}`);
+        } else {
+          console.error('[GHL Sync] Failed to create system contact:', systemContactResult.error);
+          // Try once more with a different email
+          const retryResult = await client.createOrFindContact(
+            'Inventory System',
+            'inventory-system@stickerburrroller.com',
+            undefined
+          );
+          if (retryResult.success && retryResult.contactId) {
+            systemContactId = retryResult.contactId;
+            console.log(`[GHL Sync] System contact ID (retry): ${systemContactId}`);
+          } else {
+            console.error('[GHL Sync] Failed to create system contact on retry:', retryResult.error);
+          }
+        }
+      } catch (e: any) {
+        console.error('[GHL Sync] Exception creating system contact:', e.message);
+      }
+
+      // If we couldn't create a system contact, we can't sync stock warnings or POs
+      if (!systemContactId) {
+        console.warn('[GHL Sync] No system contact available - stock warnings and POs will use customer contacts');
       }
 
       // ========== 1. SYNC SALES ORDERS ==========
@@ -4443,10 +4464,11 @@ Order Date: ${order.orderDate ? new Date(order.orderDate).toLocaleDateString() :
 Total: $${orderTotal.toFixed(2)}
           `.trim();
 
-          const opportunityResult = await client.createOpportunity(
+          const orderName = `Order ${order.orderNumber || order.externalOrderId || order.id} - ${order.customerName || 'Customer'}`;
+          const opportunityResult = await client.createOrUpdateOpportunity(
             pipelineId,
             GHL_CONFIG.stages.SALES_ORDERS,
-            `Order ${order.orderNumber || order.externalOrderId || order.id} - ${order.customerName || 'Customer'}`,
+            orderName,
             orderTotal,
             notes,
             {
@@ -4455,14 +4477,17 @@ Total: $${orderTotal.toFixed(2)}
               channel: order.channel,
               status: order.status,
             },
-            contactId // Pass contactId as last parameter (required for V2)
+            contactId, // Pass contactId (required for V2)
+            order.orderNumber || order.externalOrderId || order.id // Unique identifier for search
           );
 
           if (opportunityResult.success) {
             syncResults.salesOrders.synced++;
+            console.log(`[GHL Sync] Sales order ${order.orderNumber}: ${opportunityResult.action || 'synced'}`);
           } else {
             syncResults.salesOrders.failed++;
             syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: ${opportunityResult.error}`);
+            console.error(`[GHL Sync] Sales order ${order.orderNumber} failed: ${opportunityResult.error}`);
           }
         } catch (error: any) {
           syncResults.salesOrders.failed++;
@@ -4536,8 +4561,8 @@ Notes: ${returnRequest.resolutionNotes || 'None'}
             stageId = GHL_CONFIG.stages.REFUNDED;
           }
 
-          // Create opportunity for return
-          const opportunityResult = await client.createOpportunity(
+          // Create or update opportunity for return (idempotent)
+          const opportunityResult = await client.createOrUpdateOpportunity(
             pipelineId,
             stageId,
             title,
@@ -4548,14 +4573,17 @@ Notes: ${returnRequest.resolutionNotes || 'None'}
               rmaNumber: returnRequest.rmaNumber,
               status: returnRequest.status,
             },
-            contactId // Pass contactId (required for V2)
+            contactId, // Pass contactId (required for V2)
+            rmaDisplay // Unique identifier for search
           );
 
           if (opportunityResult.success) {
             syncResults.returns.synced++;
+            console.log(`[GHL Sync] Return ${rmaDisplay}: ${opportunityResult.action || 'synced'}`);
           } else {
             syncResults.returns.failed++;
             syncResults.returns.errors.push(`Return ${rmaDisplay}: ${opportunityResult.error}`);
+            console.error(`[GHL Sync] Return ${rmaDisplay} failed: ${opportunityResult.error}`);
           }
         } catch (error: any) {
           syncResults.returns.failed++;
@@ -4610,10 +4638,11 @@ Priority: ${priority}
 Reorder Point: ${item.reorderPoint || 'Not set'}
             `.trim();
 
-            const opportunityResult = await client.createOpportunity(
+            const stockAlertName = `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`;
+            const opportunityResult = await client.createOrUpdateOpportunity(
               pipelineId,
               stageId,
-              `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`,
+              stockAlertName,
               0,
               notes,
               {
@@ -4622,14 +4651,17 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
                 daysOfCover: item.daysOfCover,
                 priority,
               },
-              systemContactId // Use system contact for stock warnings (required for V2)
+              systemContactId!, // Use system contact for stock warnings (required for V2)
+              item.sku // Unique identifier for search
             );
 
             if (opportunityResult.success) {
               syncResults.stockWarnings.synced++;
+              console.log(`[GHL Sync] Stock warning ${item.sku}: ${opportunityResult.action || 'synced'}`);
             } else {
               syncResults.stockWarnings.failed++;
               syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${opportunityResult.error}`);
+              console.error(`[GHL Sync] Stock warning ${item.sku} failed: ${opportunityResult.error}`);
             }
           } catch (error: any) {
             syncResults.stockWarnings.failed++;
@@ -4696,8 +4728,8 @@ Notes: ${po.notes || 'None'}
 
             const title = `PO ${po.poNumber} - ${supplierName}`;
 
-            // Create opportunity for PO
-            const opportunityResult = await client.createOpportunity(
+            // Create or update opportunity for PO (idempotent)
+            const opportunityResult = await client.createOrUpdateOpportunity(
               pipelineId,
               stageId,
               title,
@@ -4709,14 +4741,17 @@ Notes: ${po.notes || 'None'}
                 status: po.status,
                 supplierId: po.supplierId,
               },
-              systemContactId // Use system contact for POs (required for V2)
+              systemContactId!, // Use system contact for POs (required for V2)
+              po.poNumber // Unique identifier for search
             );
 
             if (opportunityResult.success) {
               syncResults.purchaseOrders.synced++;
+              console.log(`[GHL Sync] PO ${po.poNumber}: ${opportunityResult.action || 'synced'}`);
             } else {
               syncResults.purchaseOrders.failed++;
               syncResults.purchaseOrders.errors.push(`PO ${po.poNumber}: ${opportunityResult.error}`);
+              console.error(`[GHL Sync] PO ${po.poNumber} failed: ${opportunityResult.error}`);
             }
           } catch (error: any) {
             syncResults.purchaseOrders.failed++;

@@ -668,6 +668,99 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Delete an opportunity by ID
+   */
+  async deleteOpportunity(
+    opportunityId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/opportunities/${opportunityId}`, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Delete opportunity failed:', errorText);
+        return {
+          success: false,
+          error: `Delete failed: ${response.status}`,
+        };
+      }
+
+      console.log(`[GoHighLevelClient] Deleted opportunity: ${opportunityId}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error deleting opportunity:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to delete opportunity',
+      };
+    }
+  }
+
+  /**
+   * Get all opportunities in a pipeline (for cleanup)
+   */
+  async getAllOpportunitiesInPipeline(
+    pipelineId: string
+  ): Promise<{ success: boolean; opportunities?: any[]; error?: string }> {
+    try {
+      const allOpportunities: any[] = [];
+      let hasMore = true;
+      let startAfter: string | undefined;
+      
+      while (hasMore) {
+        const params = new URLSearchParams({
+          location_id: this.locationId,
+          pipeline_id: pipelineId,
+          limit: '100',
+        });
+        if (startAfter) {
+          params.append('startAfter', startAfter);
+        }
+
+        const response = await fetch(`${this.baseUrl}/opportunities/search?${params}`, {
+          method: 'GET',
+          headers: this.getHeaders(),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[GoHighLevelClient] Get all opportunities failed:', errorText);
+          return {
+            success: false,
+            error: `Failed to fetch opportunities: ${response.status}`,
+          };
+        }
+
+        const data = await response.json();
+        const opportunities = data.opportunities || [];
+        allOpportunities.push(...opportunities);
+        
+        // Check if there are more results
+        if (opportunities.length < 100) {
+          hasMore = false;
+        } else {
+          startAfter = opportunities[opportunities.length - 1]?.id;
+          if (!startAfter) hasMore = false;
+        }
+      }
+
+      return {
+        success: true,
+        opportunities: allOpportunities,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error getting all opportunities:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to get opportunities',
+      };
+    }
+  }
+
+  /**
    * Create or update an opportunity - idempotent sync
    * Searches for existing opportunity by name, updates if found, creates if not
    */

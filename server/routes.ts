@@ -4789,6 +4789,94 @@ Notes: ${po.notes || 'None'}
         console.log(`[GHL Sync] PO errors: ${syncResults.purchaseOrders.errors.join('; ')}`);
       }
 
+      // ========== 5. CLEANUP ORPHANED OPPORTUNITIES ==========
+      console.log('[GHL Sync] Starting cleanup of orphaned opportunities...');
+      let cleanupCount = 0;
+      
+      try {
+        // Get all opportunities in the pipeline
+        const allOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
+        
+        if (allOppsResult.success && allOppsResult.opportunities) {
+          const allOpps = allOppsResult.opportunities;
+          console.log(`[GHL Sync] Found ${allOpps.length} total opportunities in pipeline`);
+          
+          // Build sets of valid identifiers from app data
+          const validSalesOrderIds = new Set(salesOrders.map(so => so.orderNumber));
+          const validReturnIds = new Set(returnRequests.map(r => r.rmaNumber || r.id));
+          const validStockAlertNames = new Set(
+            items
+              .filter(item => {
+                const stock = item.type === "finished_product" 
+                  ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+                  : item.currentStock;
+                const daysOfCover = item.dailyUsage > 0 ? stock / item.dailyUsage : Infinity;
+                return daysOfCover <= 30 && daysOfCover !== Infinity;
+              })
+              .map(item => item.name)
+          );
+          const validPONumbers = new Set(
+            purchaseOrders
+              .filter(po => !['DRAFT', 'APPROVAL_PENDING', 'APPROVED', 'CANCELLED'].includes(po.status))
+              .map(po => po.poNumber)
+          );
+          
+          // Check each opportunity for orphan status
+          for (const opp of allOpps) {
+            const name = opp.name || '';
+            let isOrphan = false;
+            
+            // Determine category by name prefix and check if orphaned
+            if (name.startsWith('Stock Alert:')) {
+              // Extract item name from "Stock Alert: Name (X days)" format
+              const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
+              const itemName = match ? match[1].trim() : null;
+              if (!itemName || !validStockAlertNames.has(itemName)) {
+                isOrphan = true;
+                console.log(`[GHL Cleanup] Stock alert orphan: "${name}" - item not in at-risk list`);
+              }
+            } else if (name.startsWith('Return ') || name.includes('Return cddade') || name.includes('Return 0ce') || name.includes('Return b007') || name.includes('Return ee31')) {
+              // Check if return RMA or ID is in the name
+              const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(id));
+              if (!hasValidReturn) {
+                isOrphan = true;
+                console.log(`[GHL Cleanup] Return orphan: "${name}"`);
+              }
+            } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
+              // Check if PO number is in the name
+              const hasValidPO = Array.from(validPONumbers).some(poNum => name.includes(poNum));
+              if (!hasValidPO) {
+                isOrphan = true;
+                console.log(`[GHL Cleanup] PO orphan: "${name}"`);
+              }
+            } else if (name.startsWith('Order ') || name.includes('Order AMZ-') || name.includes('Order SHOP-')) {
+              // Check if order number is in the name
+              const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
+              if (!hasValidOrder) {
+                isOrphan = true;
+                console.log(`[GHL Cleanup] Sales order orphan: "${name}"`);
+              }
+            }
+            
+            // Delete orphaned opportunity
+            if (isOrphan && opp.id) {
+              const deleteResult = await client.deleteOpportunity(opp.id);
+              if (deleteResult.success) {
+                cleanupCount++;
+                console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
+              } else {
+                console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);
+              }
+            }
+          }
+        }
+      } catch (cleanupError: any) {
+        console.error('[GHL Sync] Cleanup error:', cleanupError.message);
+        // Don't fail the sync if cleanup fails
+      }
+      
+      console.log(`[GHL Sync] Cleanup complete: ${cleanupCount} orphaned opportunities deleted`);
+
       // Build summary message
       const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced;
       const totalFailed = syncResults.salesOrders.failed + syncResults.returns.failed + syncResults.stockWarnings.failed + syncResults.purchaseOrders.failed;
@@ -4798,6 +4886,7 @@ Notes: ${po.notes || 'None'}
         `${syncResults.returns.synced} returns, ` +
         `${syncResults.stockWarnings.synced} stock warnings, ` +
         `${syncResults.purchaseOrders.synced} purchase orders` +
+        (cleanupCount > 0 ? `. Cleaned up ${cleanupCount} orphaned entries` : '') +
         (totalFailed > 0 ? ` (${totalFailed} failed)` : '');
 
       // Update integration config status
@@ -4822,6 +4911,7 @@ Notes: ${po.notes || 'None'}
         success: true,
         message: summaryMessage,
         details: syncResults,
+        cleanedUp: cleanupCount,
       });
     } catch (error: any) {
       console.error('[GHL Sync] Error:', error);

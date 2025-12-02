@@ -629,6 +629,8 @@ interface AiAgentSettings {
   mediumThresholdDays: number;
   shopifyTwoWaySync: boolean;
   shopifySafetyBuffer: number;
+  amazonTwoWaySync: boolean;
+  amazonSafetyBuffer: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -675,6 +677,8 @@ function RulesTab() {
   const [criticalRescueDays, setCriticalRescueDays] = useState(7);
   const [shopifyTwoWaySync, setShopifyTwoWaySync] = useState(false);
   const [shopifySafetyBuffer, setShopifySafetyBuffer] = useState(0);
+  const [amazonTwoWaySync, setAmazonTwoWaySync] = useState(false);
+  const [amazonSafetyBuffer, setAmazonSafetyBuffer] = useState(0);
   
   // Sync form with fetched rules
   useEffect(() => {
@@ -700,6 +704,8 @@ function RulesTab() {
       setCriticalRescueDays(aiAgentSettings.criticalRescueDays || 7);
       setShopifyTwoWaySync(aiAgentSettings.shopifyTwoWaySync || false);
       setShopifySafetyBuffer(aiAgentSettings.shopifySafetyBuffer || 0);
+      setAmazonTwoWaySync(aiAgentSettings.amazonTwoWaySync || false);
+      setAmazonSafetyBuffer(aiAgentSettings.amazonSafetyBuffer || 0);
     }
   }, [aiAgentSettings]);
   
@@ -708,7 +714,7 @@ function RulesTab() {
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
       features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
-      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number };
     }) => {
       // Save rules, features, and agent settings in parallel
       await Promise.all([
@@ -751,6 +757,8 @@ function RulesTab() {
         criticalRescueDays,
         shopifyTwoWaySync,
         shopifySafetyBuffer,
+        amazonTwoWaySync,
+        amazonSafetyBuffer,
       },
     });
   };
@@ -1257,6 +1265,57 @@ function RulesTab() {
                         value={shopifySafetyBuffer}
                         onChange={(e) => setShopifySafetyBuffer(parseInt(e.target.value) || 0)}
                         data-testid="input-safety-buffer"
+                      />
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Amazon Two-Way Sync */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="amazon-two-way-sync">Amazon Two-Way Sync</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-amazon-sync-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Push inventory levels back to Amazon Seller Central when stock changes. This app becomes the FBM inventory master, syncing available quantities for mapped products.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <Switch
+                    id="amazon-two-way-sync"
+                    checked={amazonTwoWaySync}
+                    onCheckedChange={setAmazonTwoWaySync}
+                    data-testid="switch-amazon-sync"
+                  />
+                </div>
+                
+                {amazonTwoWaySync && (
+                  <div className="space-y-2 pl-2 border-l-2 border-primary/20">
+                    <div className="flex items-center gap-1.5">
+                      <Label htmlFor="amazon-safety-buffer">Safety Buffer</Label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-amazon-buffer-info" />
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p>Subtract this amount from available stock when syncing to Amazon. Prevents overselling by keeping a reserve.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="amazon-safety-buffer"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={amazonSafetyBuffer}
+                        onChange={(e) => setAmazonSafetyBuffer(parseInt(e.target.value) || 0)}
+                        data-testid="input-amazon-buffer"
                       />
                       <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
                     </div>

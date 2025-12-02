@@ -1,0 +1,340 @@
+Implement a complete, production-ready Amazon Seller Central integration for the Inventory app, parallel to Shopify. Use the existing “Amazon Seller Central” integration card and the BOM / Sales Orders pages. Do NOT create new apps or routes; extend the current codebase.
+
+CRITICAL REQUIREMENT – AMAZON 2-WAY TOGGLE
+1) In the AI Agent settings page (where “Auto-Send Critical POs” and “Shopify Two-Way Sync” exist), add:
+   - Toggle: “Amazon Two-Way Sync”
+
+2) Behavior for this toggle:
+   - When OFF  →  1-Way mode (Inbound Only):
+       - We only RECEIVE data from Amazon (orders, listing metadata).
+       - We NEVER push inventory or order updates back to Amazon.
+       - We may log “what would have been sent” for debugging, but no write API calls.
+   - When ON   →  2-Way mode:
+       - This app is the inventory master for FBM items.
+       - We push inventory quantities to Amazon for mapped SKUs.
+   - Store this setting server-side, e.g. `settings.aiRules.amazonTwoWaySync: boolean`, and ensure all outbound Amazon write operations check it before sending.
+
+========================================================
+A) CONFIGURATION UI & CREDENTIAL STORAGE
+========================================================
+Use the existing “Amazon Seller Central” card in the integrations page.
+
+1) Configure dialog
+   - When the user clicks “Configure” on the Amazon card, open a dialog that collects:
+
+     - Seller ID
+     - Primary Marketplace ID (e.g. ATVPDKIKX0DER for US)
+     - Region (e.g. NA)
+     - SP-API LWA Client ID
+     - SP-API LWA Client Secret
+     - Refresh Token
+     - (Optional for future) IAM Role ARN / AWS Keys if needed by the SP-API client library
+     - Feature toggles:
+       - [x] Import orders from Amazon (must remain enabled while integration is active).
+       - [ ] Push inventory to Amazon (this checkbox must be disabled/greyed when “Amazon Two-Way Sync” in AI rules is OFF).
+
+   - Store these values securely on the server side; never expose them to client code or logs.
+
+2) Status & actions on Amazon card
+   - Show:
+     - Connection status: Not Configured / Configured / Error.
+     - Last successful:
+       - Order sync timestamp
+       - Inventory push timestamp
+     - Mode:
+       - “Mode: 1-Way (Inbound Only)” when Amazon Two-Way Sync is OFF.
+       - “Mode: 2-Way (Inventory Push Enabled)” when toggle is ON and the “Push inventory” flag is checked.
+
+   - Buttons:
+     - Configure
+     - Test Connection
+     - Sync Now
+     - Link to SKU Mapping wizard (Amazon tab).
+
+3) Test Connection
+   - Implement “Test Connection” by calling a lightweight SP-API endpoint:
+     - Example: Sellers → getMarketplaceParticipations or Catalog → getCatalogItem for a known ASIN.
+   - On success: update status to Configured.
+   - On failure: show a clear error and write a log entry in the central Logs table.
+
+========================================================
+B) PRODUCT & SKU/UPC MAPPING – AMAZON TAB
+========================================================
+Products in this app include:
+- sku           // House SKU (internal)
+- upc           // GS1/UPC/GTIN
+- amazonSku     // Amazon SellerSKU (nullable)
+- amazonAsin    // Amazon ASIN (nullable)
+
+1) Amazon tab in SKU Mapping wizard
+   - Create/extend an “Amazon” tab similar to Shopify’s:
+
+     - Fetch Amazon listings or catalog items for the configured seller + marketplace:
+       - sellerSku
+       - asin
+       - title
+       - possibly gtin (UPC/EAN) where available
+
+     - For each Amazon listing, auto-suggest a match to an internal product:
+       - First by UPC:
+         - If Amazon listing gtin == product.upc → suggest that product.
+       - If no UPC match, match by SKU:
+         - If listing.sellerSku == product.sku (House) OR product.amazonSku → suggest.
+       - If still no match, leave it unmapped.
+
+   - In the UI, show:
+     - Left: Amazon record (sellerSku, asin, title, gtin).
+     - Right: Internal product (name, sku, upc).
+
+   - For each mapping confirmed by the user:
+     - Set product.amazonSku  = sellerSku.
+     - Set product.amazonAsin = asin.
+     - Keep sku and upc unchanged.
+     - Persist any IDs needed for inventory updating (if specific APIs require them).
+
+   - Do NOT auto-create internal products without explicit confirmation.
+
+2) Product edit form
+   - In Add/Edit Product, extend the identifiers section to include:
+     - Amazon SKU (amazonSku)
+     - ASIN (amazonAsin, read-only or advanced field)
+   - BOM Finished Products table already supports extra columns; ensure:
+     - There is an “Amazon SKU” column bound to product.amazonSku (visible or toggleable).
+     - UPC and House SKU remain primary identifiers.
+
+========================================================
+C) ORDER IMPORT FLOW (AMAZON → APP)
+========================================================
+Orders from Amazon become Sales Orders with channel = "AMAZON". This import is allowed in BOTH 1-Way and 2-Way modes.
+
+Assume we are primarily dealing with FBM (Seller-Fulfilled) orders, not FBA inventory.
+
+1) Triggers
+   - Prefer SP-API Orders API:
+     - Periodically poll `getOrders` with marketplaceId and `LastUpdatedAfter` cursor.
+     - Filter for:
+       - OrderStatus in (Unshipped, PartiallyShipped, Shipped, Pending) as needed.
+       - FulfillmentChannel = "MFN" (FBM) for stock you control directly.
+
+   - Optionally later: add an SQS/SNS subscription flow, but for now polling is enough.
+
+2) Sales Order creation/update
+   - For each Amazon order:
+
+     - Identify it by `AmazonOrderId`.
+     - Find or create a SalesOrder record:
+       - channel: "AMAZON"
+       - externalOrderId: AmazonOrderId
+       - externalOrderNumber: AmazonOrderId (there is no friendly number).
+
+     - Populate/update fields:
+       - status:
+         - OPEN when the order is unshipped.
+         - CANCELLED if order status is Canceled.
+         - FULFILLED when status is Shipped and all items are fully shipped.
+       - customerName: from shipping address.
+       - customerEmail: from order (if provided).
+       - customerPhone.
+       - shippingAddress fields.
+       - orderDate: PurchaseDate.
+       - orderTotal: OrderTotal.Amount.
+       - currency: OrderTotal.CurrencyCode.
+
+       - expectedDeliveryDate:
+         - If Amazon provides a promised delivery date or latestShipDate / latestDeliveryDate, store the best available.
+         - Else leave null.
+
+       - lineItems[] from `getOrderItems`:
+         For each item:
+           - amazonSku      = SellerSKU
+           - asin           = ASIN
+           - externalProductName = Title
+           - quantityOrdered
+           - unitPrice (ItemPrice.Amount / quantityOrdered)
+           - lineTotal      (ItemPrice.Amount)
+           - Map to internal product:
+             - Try product.amazonSku == SellerSKU.
+             - Fallback: product.amazonAsin == ASIN.
+             - As a last resort, use UPC if accessible via Catalog API.
+           - Store:
+             - productId
+             - houseSku
+           - If no mapping → mark as Unmapped.
+
+3) Internal inventory + backorder logic
+   - For each mapped line:
+
+     - Update on-hand inventory using the same logic as other channels.
+     - Recompute “Available for Sale”.
+
+     - If quantityOrdered > availableAtOrderTime:
+       - Compute:
+         - fulfillNow  = max(available, 0)
+         - backordered = quantityOrdered - fulfillNow
+       - Update SalesOrder line:
+         - fulfilledQuantity = fulfillNow
+         - backorderQuantity = backordered
+       - Call existing GHL integration:
+         - Upsert an opportunity in the Replit pipeline, “Sales Orders” stage or appropriate “Stock” stage, including:
+           - Product and SKU.
+           - Ordered quantity.
+           - Backordered quantity.
+           - Amazon order reference.
+       - Update any Production status fields (READY / ALERTED / PENDING / IN TRANSIT / FULFILLED) the same way other channels do.
+
+4) Unmapped SKUs
+   - If a line cannot be mapped:
+     - Still create the SalesOrder.
+     - Flag that line as “Unmapped SKU (Amazon)”.
+     - Add SellerSKU + ASIN to an “Unmapped Amazon SKUs” list visible on the Amazon tab of the SKU Mapping wizard.
+     - Do not adjust inventory for that line until mapped.
+
+5) GHL contact & opportunity
+   - For each new Amazon order:
+     - Upsert contact in GHL with:
+       - Name, email, phone.
+       - Tags: “Sticker Burr Roller”, “Amazon Order”.
+     - Upsert an opportunity in the Replit pipeline with:
+       - Channel = Amazon.
+       - Order total.
+       - Primary product summary.
+       - AmazonOrderId.
+
+========================================================
+D) INVENTORY SYNC (APP → AMAZON) RESPECTING AMAZON TWO-WAY TOGGLE
+========================================================
+Inventory push must obey BOTH:
+- Amazon Two-Way Sync toggle in AI rules.
+- “Push inventory to Amazon” flag in the Amazon integration config.
+
+1) Inventory master
+   - This app is the master for FBM inventory.
+   - FBA stock is managed by Amazon; do NOT attempt to overwrite FBA quantities.
+
+2) When we *would* push inventory
+   - Define events that mark a product’s inventory “dirty”:
+     - Orders imported/updated (any channel).
+     - POs received/adjusted.
+     - Returns received.
+     - Manual BOM stock adjustments.
+
+   - After each event, recompute “Available for Sale” for the House SKU.
+
+   - Then apply logic:
+     - If `settings.aiRules.amazonTwoWaySync == FALSE`:
+       - Do NOT call SP-API write endpoints.
+       - Optionally log a dry-run entry: “Would set Amazon qty for SellerSKU X to Y”.
+     - If `amazonTwoWaySync == TRUE` AND “Push inventory to Amazon” is enabled:
+       - Queue an inventory update for that product.
+
+3) Implementing inventory push (when allowed)
+   - For each product with product.amazonSku set and mapped to Amazon:
+
+     - Compute the quantity we want Amazon to expose for FBM:
+       - Usually `AvailableForSaleInThisApp` for your main warehouse that Amazon draws from.
+     - Call appropriate SP-API endpoint (e.g., Listings Items or Feeds for Inventory) to set the quantity for sellerSku in the configured marketplace.
+
+   - Ensure:
+     - We only update FBM listing quantities.
+     - We handle rate limits by batching updates and respecting SP-API quotas.
+
+4) Batching, errors, and retries
+   - Batch updates to avoid throttling.
+   - On failure:
+     - Log:
+       - productId
+       - amazonSku
+       - target quantity
+       - endpoint
+       - HTTP status & error message.
+     - Optionally mark the product as “Amazon Inventory Sync Error” so the UI can show an icon.
+   - On success:
+     - Update an “amazonLastInventorySyncAt” timestamp per product (or global).
+
+5) UI feedback
+   - On the Amazon card:
+     - Show whether inventory push is actively enabled:
+       - If amazonTwoWaySync == FALSE:
+         - “Inventory Push: Disabled (1-Way Mode)”
+       - If amazonTwoWaySync == TRUE but “Push inventory” is unchecked:
+         - “Inventory Push: Off”
+       - If both TRUE:
+         - “Inventory Push: On”
+   - On “Sync Now”, show clearly:
+     - In 1-Way mode → only importing orders & metadata, no inventory writes.
+     - In 2-Way mode → imports + inventory pushes.
+
+========================================================
+E) SYNC NOW & BACKGROUND JOBS
+========================================================
+1) “Sync Now” on Amazon card
+   - When clicked:
+
+     - Step 1: Fetch and process orders updated since the last sync cursor (Orders + OrderItems).
+     - Step 2: Optionally refresh listing metadata (sellerSku, asin, titles, gtin) to help mapping.
+     - Step 3:
+       - If amazonTwoWaySync == TRUE and pushInventory == TRUE:
+           - Push inventory changes for mapped products.
+         Else:
+           - Skip inventory writes (or log dry-run entries only).
+
+   - Summary:
+     - Orders imported/updated.
+     - Listings refreshed.
+     - Inventory updates sent vs skipped.
+     - Errors, if any.
+
+2) Background sync
+   - If scheduler exists, periodically run a lightweight job (e.g. every 15 minutes):
+     - Import newly updated orders.
+     - In 2-Way mode, push inventory deltas for changed products.
+
+========================================================
+F) LOGGING & ERROR HANDLING
+========================================================
+1) Central logs
+   - Use the same Logs system as other integrations to record:
+     - SP-API failures (read and write).
+     - Dry-run events when amazonTwoWaySync is FALSE.
+     - Unmapped SellerSKUs/ASINs discovered during order import.
+
+2) Surfacing issues
+   - On Amazon card:
+     - Show counts or badges for:
+       - Unmapped Amazon SKUs.
+       - Last sync error(s).
+   - In the SKU Mapping wizard:
+     - Provide a filtered view for Amazon to resolve unmapped SKUs.
+
+========================================================
+G) SECURITY & TESTING
+========================================================
+1) Security
+   - Keep all SP-API secrets on the server only.
+   - Never echo tokens, secrets, or refresh tokens to the client or logs.
+
+2) Test flows
+   - Provide a clean test plan:
+
+     - 1-Way Mode:
+       - Configure Amazon credentials.
+       - Turn OFF “Amazon Two-Way Sync”.
+       - Trigger “Sync Now”.
+       - Confirm:
+         - Orders appear in Sales Orders (channel = Amazon).
+         - Internal inventory and backorder logic runs.
+         - No inventory or listing changes occur in Seller Central.
+         - Logs show dry-run entries for would-be inventory pushes (optional).
+
+     - 2-Way Mode:
+       - Turn ON “Amazon Two-Way Sync” and enable “Push inventory to Amazon”.
+       - Trigger “Sync Now” after adjusting stock internally.
+       - Confirm:
+         - SP-API inventory updates are sent for mapped products.
+         - Quantities in Amazon Seller Central reflect the app’s “Available for Sale”.
+         - Errors (if any) are logged and surfaced.
+
+After implementing all of this, Amazon behaves in parallel with Shopify:
+
+- 1-Way mode: safe testing → Amazon → app only (orders + metadata).
+- 2-Way mode: the app becomes the FBM inventory master, pushing quantities back to Amazon while still importing orders and driving GHL + internal workflows.

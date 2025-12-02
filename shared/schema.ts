@@ -1741,6 +1741,10 @@ export const SystemLogType = {
   SHOPIFY_BACKORDER: "SHOPIFY_BACKORDER",
   SHOPIFY_WEBHOOK_ERROR: "SHOPIFY_WEBHOOK_ERROR",
   AMAZON_SYNC_ERROR: "AMAZON_SYNC_ERROR",
+  AMAZON_SYNC_INFO: "AMAZON_SYNC_INFO",
+  AMAZON_BACKORDER: "AMAZON_BACKORDER",
+  AMAZON_INVENTORY_PUSH: "AMAZON_INVENTORY_PUSH",
+  AMAZON_SKU_MISMATCH: "AMAZON_SKU_MISMATCH",
   EXTENSIV_SYNC_ERROR: "EXTENSIV_SYNC_ERROR",
   SHIPPO_ERROR: "SHIPPO_ERROR",
   GHL_SYNC_ERROR: "GHL_SYNC_ERROR",
@@ -1811,6 +1815,9 @@ export const aiAgentSettings = pgTable("ai_agent_settings", {
   // Shopify sync settings
   shopifyTwoWaySync: boolean("shopify_two_way_sync").notNull().default(false),
   shopifySafetyBuffer: integer("shopify_safety_buffer").notNull().default(0), // Safety buffer for availability calculation
+  // Amazon sync settings
+  amazonTwoWaySync: boolean("amazon_two_way_sync").notNull().default(false), // Master toggle for Amazon inventory push
+  amazonSafetyBuffer: integer("amazon_safety_buffer").notNull().default(0), // Safety buffer for Amazon availability
   // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),

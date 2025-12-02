@@ -3675,11 +3675,14 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config or environment variables
       const config = await storage.getIntegrationConfig(userId, 'AMAZON');
-      const sellerId = (config?.config as any)?.sellerId || process.env.AMAZON_SELLER_ID;
-      const marketplaceId = (config?.config as any)?.marketplaceId || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER'; // US default
-      const refreshToken = (config?.config as any)?.refreshToken || process.env.AMAZON_REFRESH_TOKEN;
-      const clientId = (config?.config as any)?.clientId || process.env.AMAZON_CLIENT_ID;
-      const clientSecret = (config?.config as any)?.clientSecret || process.env.AMAZON_CLIENT_SECRET;
+      const configData = config?.config as Record<string, any> || {};
+      const sellerId = configData.sellerId || process.env.AMAZON_SELLER_ID;
+      const marketplaceIds = configData.marketplaceIds || [];
+      const marketplaceId = marketplaceIds[0] || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+      const region = configData.region || 'NA';
+      const refreshToken = config?.apiKey || process.env.AMAZON_REFRESH_TOKEN;
+      const clientId = configData.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = configData.clientSecret || process.env.AMAZON_CLIENT_SECRET;
       
       if (!sellerId || !refreshToken || !clientId || !clientSecret) {
         return res.status(400).json({ 
@@ -3688,7 +3691,7 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
-      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret, region);
       const result = await client.testConnection();
 
       // Update integration config status
@@ -3717,11 +3720,14 @@ TOTAL: $${subtotal.toFixed(2)}
       
       // Get credentials from integration config or environment variables
       const config = await storage.getIntegrationConfig(userId, 'AMAZON');
-      const sellerId = (config?.config as any)?.sellerId || process.env.AMAZON_SELLER_ID;
-      const marketplaceId = (config?.config as any)?.marketplaceId || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
-      const refreshToken = (config?.config as any)?.refreshToken || process.env.AMAZON_REFRESH_TOKEN;
-      const clientId = (config?.config as any)?.clientId || process.env.AMAZON_CLIENT_ID;
-      const clientSecret = (config?.config as any)?.clientSecret || process.env.AMAZON_CLIENT_SECRET;
+      const configData = config?.config as Record<string, any> || {};
+      const sellerId = configData.sellerId || process.env.AMAZON_SELLER_ID;
+      const marketplaceIds = configData.marketplaceIds || [];
+      const marketplaceId = marketplaceIds[0] || process.env.AMAZON_MARKETPLACE_ID || 'ATVPDKIKX0DER';
+      const region = configData.region || 'NA';
+      const refreshToken = config?.apiKey || process.env.AMAZON_REFRESH_TOKEN;
+      const clientId = configData.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = configData.clientSecret || process.env.AMAZON_CLIENT_SECRET;
       
       if (!sellerId || !refreshToken || !clientId || !clientSecret) {
         const message = "Amazon SP-API credentials not configured";
@@ -3735,7 +3741,7 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(400).json({ success: false, message });
       }
 
-      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret);
+      const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret, region);
       
       // Set status to PENDING
       if (config) {
@@ -3962,6 +3968,152 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ 
         success: false,
         message: error.message || "Integration sync failed" 
+      });
+    }
+  });
+
+  // Amazon - Fetch Listings for SKU Mapping
+  app.get("/api/integrations/amazon/products", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      const configData = config?.config as Record<string, any> || {};
+      const sellerId = configData.sellerId;
+      const marketplaceIds = configData.marketplaceIds || [];
+      const marketplaceId = marketplaceIds[0];
+      const region = configData.region || 'NA';
+      const refreshToken = config?.apiKey;
+      const clientId = configData.clientId;
+      const clientSecret = configData.clientSecret;
+      
+      if (!sellerId || !marketplaceId || !refreshToken || !clientId) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Amazon SP-API credentials not configured",
+          products: [] 
+        });
+      }
+
+      const client = new AmazonClient(
+        sellerId, 
+        marketplaceId, 
+        refreshToken, 
+        clientId, 
+        clientSecret || '',
+        region
+      );
+      
+      const listings = await client.fetchListingsForMapping();
+      
+      console.log(`[Amazon] Fetched ${listings.length} listings for SKU mapping`);
+      
+      res.json({
+        success: true,
+        products: listings.map(listing => ({
+          sellerSku: listing.sellerSku,
+          asin: listing.asin,
+          title: listing.title,
+          gtin: listing.gtin,
+          fnSku: listing.fnSku,
+          fulfillmentChannel: listing.fulfillmentChannel,
+          status: listing.status,
+          quantity: listing.quantity,
+        })),
+      });
+    } catch (error: any) {
+      console.error('[Amazon] Failed to fetch listings:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to fetch Amazon listings",
+        products: [] 
+      });
+    }
+  });
+
+  // Amazon - Sync Inventory to Amazon (Two-Way)
+  app.post("/api/amazon/sync-inventory", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { itemId } = req.body;
+
+      const { amazonInventorySyncService } = await import('./services/amazon-inventory-sync-service');
+      
+      const initialized = await amazonInventorySyncService.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({
+          success: false,
+          message: 'Amazon integration not configured',
+        });
+      }
+
+      if (itemId) {
+        const item = await storage.getItem(itemId);
+        if (!item) {
+          return res.status(404).json({
+            success: false,
+            message: 'Item not found',
+          });
+        }
+
+        const result = await amazonInventorySyncService.syncItemInventory(item);
+        return res.json({
+          success: result.synced,
+          dryRun: result.dryRun,
+          message: result.message,
+        });
+      } else {
+        const result = await amazonInventorySyncService.syncAllInventory();
+        return res.json({
+          success: true,
+          ...result,
+        });
+      }
+    } catch (error: any) {
+      console.error('[Amazon] Inventory sync error:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to sync inventory to Amazon',
+      });
+    }
+  });
+
+  // Amazon - Get Sync Status
+  app.get("/api/amazon/sync-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const config = await storage.getIntegrationConfig(userId, 'AMAZON');
+      const configData = config?.config as Record<string, any> || {};
+      
+      const aiAgentSettings = await storage.getAiAgentSettingsByUserId(userId);
+      const amazonTwoWaySync = aiAgentSettings?.amazonTwoWaySync ?? false;
+      const amazonSafetyBuffer = aiAgentSettings?.amazonSafetyBuffer ?? 0;
+      const pushInventory = configData.pushInventory ?? false;
+      
+      // Get mapped item count from items
+      const allItems = await storage.getAllItems();
+      const mappedCount = allItems.filter(item => 
+        item.type === 'finished_product' && item.amazonSku
+      ).length;
+      
+      res.json({
+        configured: !!config?.apiKey,
+        amazonTwoWaySync,
+        amazonSafetyBuffer,
+        pushInventory,
+        mappedItemCount: mappedCount,
+        lastSyncAt: config?.lastSyncAt,
+        lastSyncStatus: config?.lastSyncStatus,
+        lastSyncMessage: config?.lastSyncMessage,
+        syncMode: amazonTwoWaySync 
+          ? (pushInventory ? '2-Way (Inventory Push Enabled)' : '2-Way (Push Off)')
+          : '1-Way (Inbound Only)',
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to get Amazon sync status',
       });
     }
   });
@@ -10794,7 +10946,8 @@ Generate only the email body text, no subject line.`;
       // Filter to only include valid fields that are defined
       const validFields = [
         'autoSendCriticalPos', 'criticalRescueDays', 'criticalThresholdDays',
-        'highThresholdDays', 'mediumThresholdDays', 'shopifyTwoWaySync', 'shopifySafetyBuffer'
+        'highThresholdDays', 'mediumThresholdDays', 'shopifyTwoWaySync', 'shopifySafetyBuffer',
+        'amazonTwoWaySync', 'amazonSafetyBuffer'
       ];
       const updateData: Record<string, any> = {};
       for (const field of validFields) {

@@ -68,10 +68,12 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   // Amazon fields
   const [sellerId, setSellerId] = useState("");
   const [marketplaceIds, setMarketplaceIds] = useState("");
+  const [region, setRegion] = useState("NA");
   const [refreshToken, setRefreshToken] = useState("");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [amazonSyncOrders, setAmazonSyncOrders] = useState(true);
+  const [amazonPushInventory, setAmazonPushInventory] = useState(false);
   
   // GoHighLevel fields
   const [ghlApiKey, setGhlApiKey] = useState("");
@@ -91,16 +93,19 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
     },
   });
 
-  // Fetch AI Agent settings to check if two-way sync is enabled (for Shopify)
+  // Fetch AI Agent settings to check if two-way sync is enabled (for Shopify and Amazon)
   const { data: aiAgentSettings } = useQuery<{
     shopifyTwoWaySync: boolean;
     shopifySafetyBuffer: number;
+    amazonTwoWaySync: boolean;
+    amazonSafetyBuffer: number;
   } | null>({
     queryKey: ["/api/ai-agent-settings"],
-    enabled: open && integrationType === "SHOPIFY",
+    enabled: open && (integrationType === "SHOPIFY" || integrationType === "AMAZON"),
   });
 
   const shopifyTwoWaySyncEnabled = aiAgentSettings?.shopifyTwoWaySync ?? false;
+  const amazonTwoWaySyncEnabled = aiAgentSettings?.amazonTwoWaySync ?? false;
 
   // Initialize form fields when config loads
   useEffect(() => {
@@ -118,10 +123,12 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
       } else if (integrationType === "AMAZON") {
         setSellerId(config.config?.sellerId || "");
         setMarketplaceIds(config.config?.marketplaceIds?.join(", ") || "");
+        setRegion(config.config?.region || "NA");
         setRefreshToken("");
         setClientId(config.config?.clientId || "");
         setClientSecret("");
         setAmazonSyncOrders(config.config?.syncOrders !== false);
+        setAmazonPushInventory(config.config?.pushInventory || false);
       } else if (integrationType === "GOHIGHLEVEL") {
         setGhlApiKey("");
         setGhlLocationId(config.config?.locationId || "");
@@ -199,8 +206,10 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         configData = {
           sellerId,
           marketplaceIds: marketplaceIds.split(",").map((id) => id.trim()).filter(Boolean),
+          region,
           clientId,
           syncOrders: amazonSyncOrders,
+          pushInventory: amazonPushInventory,
         };
       } else if (integrationType === "GOHIGHLEVEL") {
         configData = {
@@ -316,6 +325,49 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Amazon Mode Display */}
+          {integrationType === "AMAZON" && config && config.apiKey && !isConfigMode && (
+            <div className="space-y-3 p-4 rounded-lg bg-muted/50" data-testid="section-amazon-status">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Sync Mode</span>
+                <Badge 
+                  variant={amazonTwoWaySyncEnabled ? "default" : "secondary"}
+                  data-testid="badge-amazon-mode"
+                >
+                  {amazonTwoWaySyncEnabled 
+                    ? (config.config?.pushInventory ? "2-Way (Inventory Push Enabled)" : "2-Way (Push Off)")
+                    : "1-Way (Inbound Only)"}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Import Orders</span>
+                <span className="text-sm">{config.config?.syncOrders !== false ? "Enabled" : "Disabled"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Inventory Push</span>
+                <span className="text-sm">
+                  {!amazonTwoWaySyncEnabled 
+                    ? "Disabled (1-Way Mode)" 
+                    : config.config?.pushInventory 
+                      ? "Enabled" 
+                      : "Disabled"}
+                </span>
+              </div>
+              {config.config?.region && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Region</span>
+                  <span className="text-sm font-mono">{config.config.region}</span>
+                </div>
+              )}
+              {config.config?.sellerId && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Seller ID</span>
+                  <span className="text-sm font-mono">{config.config.sellerId}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Shopify Mode Display */}
           {integrationType === "SHOPIFY" && config && config.apiKey && !isConfigMode && (
             <div className="space-y-3 p-4 rounded-lg bg-muted/50" data-testid="section-shopify-status">
@@ -515,14 +567,58 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="marketplace-ids" data-testid="label-marketplace-ids">
-                      Marketplace IDs (comma-separated)
+                      Primary Marketplace ID
                     </Label>
                     <Input
                       id="marketplace-ids"
-                      placeholder="ATVPDKIKX0DER, A2EUQ1WTGCTBG2"
+                      placeholder="ATVPDKIKX0DER (US)"
                       value={marketplaceIds}
                       onChange={(e) => setMarketplaceIds(e.target.value)}
                       data-testid="input-marketplace-ids"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Common: ATVPDKIKX0DER (US), A2EUQ1WTGCTBG2 (CA), A1F83G8C2ARO7P (UK)
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="region" data-testid="label-region">
+                      Region
+                    </Label>
+                    <select
+                      id="region"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      value={region}
+                      onChange={(e) => setRegion(e.target.value)}
+                      data-testid="select-region"
+                    >
+                      <option value="NA">North America (NA)</option>
+                      <option value="EU">Europe (EU)</option>
+                      <option value="FE">Far East (FE)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="client-id" data-testid="label-client-id">
+                      SP-API LWA Client ID
+                    </Label>
+                    <Input
+                      id="client-id"
+                      placeholder="amzn1.application-oa2-client.xxx"
+                      value={clientId}
+                      onChange={(e) => setClientId(e.target.value)}
+                      data-testid="input-client-id"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="client-secret" data-testid="label-client-secret">
+                      SP-API LWA Client Secret
+                    </Label>
+                    <Input
+                      id="client-secret"
+                      type="password"
+                      placeholder="Enter your LWA client secret"
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      data-testid="input-client-secret"
                     />
                   </div>
                   <div className="space-y-2">
@@ -538,40 +634,38 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       data-testid="input-refresh-token"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="client-id" data-testid="label-client-id">
-                      Client ID
-                    </Label>
-                    <Input
-                      id="client-id"
-                      placeholder="Enter your Amazon client ID"
-                      value={clientId}
-                      onChange={(e) => setClientId(e.target.value)}
-                      data-testid="input-client-id"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="client-secret" data-testid="label-client-secret">
-                      Client Secret
-                    </Label>
-                    <Input
-                      id="client-secret"
-                      type="password"
-                      placeholder="Enter your Amazon client secret"
-                      value={clientSecret}
-                      onChange={(e) => setClientSecret(e.target.value)}
-                      data-testid="input-client-secret"
-                    />
-                  </div>
                   <div className="flex items-center justify-between">
                     <Label htmlFor="amazon-sync-orders" data-testid="label-amazon-sync-orders">
-                      Sync Orders
+                      Import Orders from Amazon
                     </Label>
                     <Switch
                       id="amazon-sync-orders"
                       checked={amazonSyncOrders}
                       onCheckedChange={setAmazonSyncOrders}
                       data-testid="switch-amazon-sync-orders"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label 
+                        htmlFor="amazon-push-inventory" 
+                        className={!amazonTwoWaySyncEnabled ? "text-muted-foreground" : ""}
+                        data-testid="label-amazon-push-inventory"
+                      >
+                        Push Inventory to Amazon
+                      </Label>
+                      {!amazonTwoWaySyncEnabled && (
+                        <p className="text-xs text-muted-foreground">
+                          Enable "Amazon Two-Way Sync" in AI Agent &rarr; Rules to unlock this option
+                        </p>
+                      )}
+                    </div>
+                    <Switch
+                      id="amazon-push-inventory"
+                      checked={amazonPushInventory}
+                      onCheckedChange={setAmazonPushInventory}
+                      disabled={!amazonTwoWaySyncEnabled}
+                      data-testid="switch-amazon-push-inventory"
                     />
                   </div>
                 </>

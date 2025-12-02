@@ -1,0 +1,123 @@
+Update the AI Agent → Insights page to support TWO internal tabs: “AI Recommendations” and “QuickBooks Demand History”.
+
+Goal:
+Keep the existing AI Agent layout and top-level tabs (Data Sources, Rules, LLM Config, Insights, Logs) exactly as they are. Inside the Insights tab, introduce an internal tab switcher that separates the current AI Recommendations view from a new QuickBooks Demand History view.
+
+========================================
+1) INSIGHTS LAYOUT – INTERNAL TABS
+========================================
+Inside the existing AI Agent “Insights” tab:
+
+1. Add an internal tab control at the top of the Insights content area (just under the AI Agent heading + main tab bar):
+
+   - Tab labels:
+     • “AI Recommendations”
+     • “QuickBooks Demand History”
+
+   - Default selected internal tab: “AI Recommendations”.
+
+   - Maintain selection in component state; if there is already a pattern for query params or local storage for tab persistence, follow it, otherwise simple React state is fine.
+
+2. Move the CURRENT Insights content (AI Recommendations table, filters, refresh button, etc.) into the “AI Recommendations” internal tab. Functionally nothing in that view should change besides being wrapped in that tab.
+
+   - Ensure:
+     • Existing filters (Active/All, severity/risk filter, type filter, refresh button, etc.) still work.
+     • Table columns and actions stay identical.
+
+========================================
+2) QUICKBOOKS DEMAND HISTORY TAB
+========================================
+In the new internal tab “QuickBooks Demand History”:
+
+3. Data source:
+   - Use the existing QuickBooks demand history data (e.g. table `QuickBooksDemandHistory` or equivalent).
+   - If no endpoint exists, create a backend API like:
+       GET /api/ai/insights/qb-demand-history
+       Query params:
+         - search (by SKU or product name, optional)
+         - year (optional)
+         - month (optional)
+         - page, pageSize
+       Response:
+         - items: [
+             {
+               id,
+               productId,
+               productName,
+               sku,
+               year,
+               month,
+               qtySold,
+               qtyReturned,
+               netQty,
+               revenue,
+               lastSyncedAt
+             }, ...
+           ]
+         - pagination meta.
+
+4. UI structure:
+
+   - At top of the “QuickBooks Demand History” tab, add filter controls:
+     • Search input: placeholder “Search by SKU or product…”
+     • Year dropdown: “All years” + list of years present in data.
+     • Month dropdown: “All months” + Jan–Dec.
+     • Optional: toggle “Mapped only” if you support filtering to only products with a QuickBooks mapping.
+
+   - Below filters, render a paginated table:
+
+     Columns:
+       • Product        – product name
+       • SKU            – house SKU
+       • Year           – numeric
+       • Month          – month name or MM
+       • Qty Sold       – qtySold
+       • Qty Returned   – qtyReturned
+       • Net Qty        – netQty
+       • Revenue        – formatted currency
+       • Last Synced    – lastSyncedAt (relative or datetime)
+
+     Behavior:
+       • Read-only; NO row actions in V1.
+       • Support pagination (e.g. 25 rows/page).
+       • Sorting by Year/Month and Net Qty if easy; otherwise static is fine.
+
+5. Empty states:
+
+   - If QuickBooks is not configured OR there is no demand history:
+     • Show a centered empty-state message within this tab:
+       Title: “No QuickBooks demand history”
+       Body: “Connect QuickBooks and run ‘Sync Demand Now’ from the integrations page to populate demand history.”
+       Optional button: “Open Integrations” that routes to the integrations/settings area.
+
+========================================
+3) INTEGRATION WITH EXISTING UI
+========================================
+6. Ensure the new internal tabs do NOT change anything outside of Insights:
+
+   - Data Sources, Rules, LLM Config, and Logs tabs remain unchanged.
+   - The URL and routing for AI Agent stay the same; only the component under Insights gains the two internal tabs.
+
+7. All existing AI Recommendations behavior must still work exactly as before:
+   - Existing “data as of …” timestamp display.
+   - Refresh button.
+   - Recommendation actions (e.g. send PO / dismiss) remain intact.
+   - No extra QuickBooks logic is required in the AI Recommendations tab for now.
+
+========================================
+4) TESTING
+========================================
+8. Test scenarios:
+
+   - With QuickBooks disconnected:
+     • Insights → AI Recommendations works as before.
+     • Insights → QuickBooks Demand History shows the empty state.
+
+   - With QuickBooks connected and demand synced:
+     • QuickBooks Demand History tab shows rows with correct values.
+     • Applying search/year/month filters reduces the visible rows as expected.
+     • Switching between “AI Recommendations” and “QuickBooks Demand History” is instant and preserves each tab’s filters while the user stays in Insights.
+
+The end result should be: AI Agent → Insights has an internal tab bar with two pages:
+(1) AI Recommendations (existing view)
+(2) QuickBooks Demand History (new reporting view built on the existing QB demand data).

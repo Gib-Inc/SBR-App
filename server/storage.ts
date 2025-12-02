@@ -432,6 +432,13 @@ export interface IStorage {
   // QuickBooks Sales Snapshots
   getQuickbooksSalesSnapshotsBySku(sku: string): Promise<QuickbooksSalesSnapshot[]>;
   getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]>;
+  getQuickbooksDemandHistory(params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksSalesSnapshot[]; total: number; years: number[] }>;
   upsertQuickbooksSalesSnapshot(snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }>;
 
   // QuickBooks Vendor Mappings
@@ -2781,6 +2788,16 @@ export class MemStorage implements IStorage {
     return [];
   }
 
+  async getQuickbooksDemandHistory(_params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksSalesSnapshot[]; total: number; years: number[] }> {
+    return { items: [], total: 0, years: [] };
+  }
+
   async upsertQuickbooksSalesSnapshot(_snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }> {
     throw new Error('QuickBooks not supported in MemStorage');
   }
@@ -5048,6 +5065,58 @@ export class PostgresStorage implements IStorage {
 
   async getAllQuickbooksSalesSnapshots(): Promise<QuickbooksSalesSnapshot[]> {
     return await this.db.select().from(schema.quickbooksSalesSnapshots);
+  }
+
+  async getQuickbooksDemandHistory(params: {
+    search?: string;
+    year?: number;
+    month?: number;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: QuickbooksSalesSnapshot[]; total: number; years: number[] }> {
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 25;
+    const offset = (page - 1) * pageSize;
+
+    const conditions: any[] = [];
+    
+    if (params.search) {
+      const searchPattern = `%${params.search}%`;
+      conditions.push(or(
+        ilike(schema.quickbooksSalesSnapshots.sku, searchPattern),
+        ilike(schema.quickbooksSalesSnapshots.productName, searchPattern)
+      ));
+    }
+    
+    if (params.year) {
+      conditions.push(eq(schema.quickbooksSalesSnapshots.year, params.year));
+    }
+    
+    if (params.month) {
+      conditions.push(eq(schema.quickbooksSalesSnapshots.month, params.month));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [items, countResult, yearsResult] = await Promise.all([
+      this.db.select()
+        .from(schema.quickbooksSalesSnapshots)
+        .where(whereClause)
+        .orderBy(desc(schema.quickbooksSalesSnapshots.year), desc(schema.quickbooksSalesSnapshots.month))
+        .limit(pageSize)
+        .offset(offset),
+      this.db.select({ count: sql<number>`count(*)::int` })
+        .from(schema.quickbooksSalesSnapshots)
+        .where(whereClause),
+      this.db.selectDistinct({ year: schema.quickbooksSalesSnapshots.year })
+        .from(schema.quickbooksSalesSnapshots)
+        .orderBy(desc(schema.quickbooksSalesSnapshots.year))
+    ]);
+
+    const total = countResult[0]?.count ?? 0;
+    const years = yearsResult.map(r => r.year);
+
+    return { items, total, years };
   }
 
   async upsertQuickbooksSalesSnapshot(snapshot: Omit<InsertQuickbooksSalesSnapshot, 'id'>): Promise<{ snapshot: QuickbooksSalesSnapshot; isNew: boolean }> {

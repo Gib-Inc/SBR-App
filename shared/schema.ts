@@ -76,6 +76,10 @@ export const items = pgTable("items", {
   extensivWarehouseId: text("extensiv_warehouse_id"), // Extensiv warehouse ID override for this item
   // UPC/GTIN for product identification
   upc: text("upc"), // GS1/UPC/GTIN barcode (unique when present, recommended for finished products)
+  // QuickBooks integration fields (for demand history sync)
+  quickbooksItemId: text("quickbooks_item_id"), // QB itemRef.id for mapped products
+  quickbooksItemName: text("quickbooks_item_name"), // QB item display name (for debugging)
+  quickbooksItemSku: text("quickbooks_item_sku"), // QB item SKU (for debugging)
 }, (table) => ({
   shopifySkuUniqueIdx: uniqueIndex("items_shopify_sku_unique_idx").on(table.shopifySku).where(sql`shopify_sku IS NOT NULL`),
   amazonSkuUniqueIdx: uniqueIndex("items_amazon_sku_unique_idx").on(table.amazonSku).where(sql`amazon_sku IS NOT NULL`),
@@ -889,6 +893,10 @@ export const returnRequests = pgTable("return_requests", {
   // GHL refund opportunity integration
   ghlRefundOpportunityId: text("ghl_refund_opportunity_id"), // GHL opportunity for "Issue refund" task
   ghlRefundOpportunityUrl: text("ghl_refund_opportunity_url"), // Deep link to GHL opportunity
+  // QuickBooks refund integration
+  quickbooksRefundId: text("quickbooks_refund_id"), // QB Credit Memo or Refund Receipt ID
+  quickbooksRefundType: text("quickbooks_refund_type"), // 'CREDIT_MEMO' | 'REFUND_RECEIPT' | null
+  quickbooksRefundCreatedAt: timestamp("quickbooks_refund_created_at"), // When QB refund was created
   // Lifecycle timestamps
   requestedAt: timestamp("requested_at").default(sql`now()`),
   approvedAt: timestamp("approved_at"),
@@ -1473,8 +1481,36 @@ export const insertQuickbooksAuthSchema = createInsertSchema(quickbooksAuth).omi
 export type InsertQuickbooksAuth = z.infer<typeof insertQuickbooksAuthSchema>;
 export type QuickbooksAuth = typeof quickbooksAuth.$inferSelect;
 
-// Aggregated sales snapshots from QuickBooks (for AI trend forecasting)
+// QuickBooks Demand History (aggregated sales/returns data for AI forecasting)
 // V1: Read-only historical data - we do NOT modify QuickBooks sales
+export const quickbooksDemandHistory = pgTable("quickbooks_demand_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  productId: varchar("product_id").references(() => items.id), // Link to internal product (nullable for unmapped items)
+  quickbooksItemId: text("quickbooks_item_id").notNull(), // QB itemRef.id
+  sku: text("sku").notNull(), // Our internal SKU (or QB SKU if unmapped)
+  productName: text("product_name"), // Product name for display
+  year: integer("year").notNull(),
+  month: integer("month").notNull(), // 1-12
+  qtySold: integer("qty_sold").notNull().default(0), // Positive units sold (from Invoices/SalesReceipts)
+  qtyReturned: integer("qty_returned").notNull().default(0), // Positive units returned (from CreditMemos/RefundReceipts)
+  netQty: integer("net_qty").notNull().default(0), // qtySold - qtyReturned
+  revenue: real("revenue").notNull().default(0), // Net revenue (sales minus returns)
+  lastSyncedAt: timestamp("last_synced_at").notNull().default(sql`now()`), // When this row was last updated from QB
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  productIdYearMonthIdx: uniqueIndex("qb_demand_history_product_year_month_idx").on(table.productId, table.year, table.month),
+  qbItemYearMonthIdx: uniqueIndex("qb_demand_history_qb_item_year_month_idx").on(table.quickbooksItemId, table.year, table.month),
+  yearMonthIdx: index("qb_demand_history_year_month_idx").on(table.year, table.month),
+  skuIdx: index("qb_demand_history_sku_idx").on(table.sku),
+}));
+
+export const insertQuickbooksDemandHistorySchema = createInsertSchema(quickbooksDemandHistory).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertQuickbooksDemandHistory = z.infer<typeof insertQuickbooksDemandHistorySchema>;
+export type QuickbooksDemandHistory = typeof quickbooksDemandHistory.$inferSelect;
+
+// DEPRECATED: Legacy table - use quickbooksDemandHistory instead
+// Kept for backwards compatibility during migration
 export const quickbooksSalesSnapshots = pgTable("quickbooks_sales_snapshots", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sku: text("sku").notNull(),

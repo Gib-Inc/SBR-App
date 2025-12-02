@@ -2,6 +2,7 @@ import { storage } from "./storage";
 import { refreshAdPerformanceData, refreshSalesData } from "./channel-ingestion-service";
 import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
+import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -22,9 +23,13 @@ interface ChannelSchedule {
 const channelSchedules: Map<string, ChannelSchedule> = new Map();
 let forecastContextTimer: NodeJS.Timeout | null = null;
 let aiSystemReviewTimer: NodeJS.Timeout | null = null;
+let extensivSyncTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
+
+// Extensiv sync interval: every 4 hours (aligns with 3PL inventory updates)
+const EXTENSIV_SYNC_INTERVAL_HOURS = 4;
 
 /**
  * Performs a data refresh for a specific channel
@@ -123,6 +128,50 @@ async function performForecastContextRefresh(): Promise<void> {
 }
 
 /**
+ * Performs Extensiv/Pivot inventory sync for all users with extensivTwoWaySync enabled
+ * Updates pivotQty from Extensiv on-hand quantities
+ */
+async function performExtensivSync(): Promise<void> {
+  console.log("[Scheduler] Starting Extensiv inventory sync...");
+  const startTime = Date.now();
+
+  try {
+    // Get all users and check their AI Agent Settings for extensivTwoWaySync
+    const allUsers = await storage.getAllUsers();
+    
+    for (const user of allUsers) {
+      const settings = await storage.getAIAgentSettings(user.id);
+      if (!settings?.extensivTwoWaySync) {
+        continue; // Skip users without Extensiv sync enabled
+      }
+
+      const extensivSettings = await storage.getIntegrationSettings(user.id, 'extensiv');
+      if (!extensivSettings?.apiKey || !extensivSettings?.warehouseId) {
+        console.warn(`[Scheduler] User ${user.id} has Extensiv sync enabled but missing credentials`);
+        continue;
+      }
+
+      try {
+        const syncService = new ExtensivInventorySyncService(
+          extensivSettings.apiKey,
+          extensivSettings.warehouseId,
+          user.id
+        );
+        const result = await syncService.syncInventory();
+        console.log(`[Scheduler] Extensiv sync for user ${user.id}: ${result.synced} items synced, ${result.errors} errors`);
+      } catch (error) {
+        console.error(`[Scheduler] Extensiv sync failed for user ${user.id}:`, error);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Scheduler] Extensiv inventory sync completed in ${duration}ms`);
+  } catch (error) {
+    console.error("[Scheduler] Error during Extensiv sync:", error);
+  }
+}
+
+/**
  * Runs the AI System Review to analyze logs and generate recommendations
  * This runs weekly by default to avoid excessive API costs
  */
@@ -202,6 +251,20 @@ export async function startScheduler(): Promise<void> {
       });
     }, AI_SYSTEM_REVIEW_INTERVAL_HOURS * 60 * 60 * 1000); // Weekly
 
+    // Schedule Extensiv/Pivot inventory sync (every 4 hours)
+    if (extensivSyncTimer) {
+      clearInterval(extensivSyncTimer);
+    }
+
+    // Note: Don't run immediately on startup to avoid hitting APIs on every restart
+    console.log(`[Scheduler] Extensiv sync scheduled to run every ${EXTENSIV_SYNC_INTERVAL_HOURS} hours`);
+
+    extensivSyncTimer = setInterval(() => {
+      performExtensivSync().catch(err => {
+        console.error("[Scheduler] Scheduled Extensiv sync failed:", err);
+      });
+    }, EXTENSIV_SYNC_INTERVAL_HOURS * 60 * 60 * 1000);
+
     console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
   } catch (error) {
     console.error("[Scheduler] Failed to start scheduler:", error);
@@ -230,6 +293,12 @@ export function stopScheduler(): void {
     aiSystemReviewTimer = null;
   }
 
+  // Stop Extensiv sync timer
+  if (extensivSyncTimer) {
+    clearInterval(extensivSyncTimer);
+    extensivSyncTimer = null;
+  }
+
   console.log("[Scheduler] All schedulers stopped");
 }
 
@@ -250,9 +319,10 @@ export function getSchedulerStatus(): {
   activeChannels: number;
   schedules: Array<{ channelId: string; channelName: string; intervalHours: number }>;
   aiSystemReviewScheduled: boolean;
+  extensivSyncScheduled: boolean;
 } {
   return {
-    running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null,
+    running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null || extensivSyncTimer !== null,
     activeChannels: channelSchedules.size,
     schedules: Array.from(channelSchedules.values()).map(s => ({
       channelId: s.channelId,
@@ -260,6 +330,7 @@ export function getSchedulerStatus(): {
       intervalHours: s.intervalHours,
     })),
     aiSystemReviewScheduled: aiSystemReviewTimer !== null,
+    extensivSyncScheduled: extensivSyncTimer !== null,
   };
 }
 
@@ -324,4 +395,12 @@ export async function triggerAISystemReview(options?: {
       error: error.message || 'Unknown error',
     };
   }
+}
+
+/**
+ * Manually triggers Extensiv inventory sync for all users.
+ * Exported so it can be called from API endpoints.
+ */
+export async function triggerExtensivSync(): Promise<void> {
+  return performExtensivSync();
 }

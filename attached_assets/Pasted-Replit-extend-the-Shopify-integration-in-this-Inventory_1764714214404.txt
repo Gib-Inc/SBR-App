@@ -1,0 +1,191 @@
+Replit, extend the Shopify integration in this Inventory app to support TWO Shopify locations (Hildale and Pivot) and wire them cleanly to the BOM (Products) page. Implement all of the following as a single coherent feature.
+
+CONTEXT
+
+- The app already has:
+  - BOM page with Finished Products table, including columns: Name, SKU, Forecast, Hildale Qty, Pivot Qty, Available for Sale, Backorders, etc.
+  - AI Agent → Data Sources section with a Shopify card that opens a config modal.
+  - AI Agent → Rules section with a “Shopify Two-Way Sync” toggle that currently gates write-backs to Shopify.
+  - Central “House SKU / UPC” mapping so that external systems (Shopify, Amazon, Extensiv, etc.) can be matched to the app’s products.
+- The rule for locations:
+  - Pivot = 3PL shipment location (customer orders ship from here).
+  - Hildale = internal warehouse, only adjusted by POs/receipts and transfers, not directly by customer orders.
+  - Sales should only reduce Pivot Qty. Hildale Qty changes only when stock is moved from Hildale to Pivot or received from suppliers into Hildale.
+
+GOAL
+
+- Replace the current single-location Shopify setup with a multi-location model:
+  - Allow configuring separate Shopify location IDs for:
+    - Pivot (Pyvott – Spanish Fork Utah).
+    - Hildale (Sticker Burr HQ – Hildale Utah).
+  - Sync inventory for BOTH locations from Shopify into the BOM table:
+    - Hildale Shopify location → Hildale Qty column.
+    - Pivot Shopify location → Pivot Qty column.
+  - Respect the existing “Shopify Two-Way Sync” toggle:
+    - When OFF: one-way (Shopify → app only).
+    - When ON: two-way (app can push inventory changes back to Shopify at the per-location level).
+
+1) SHOPIFY CONFIG SCHEMA
+
+- Find the Shopify data source config type (where we currently store shop domain, access token, API version, and a single inventoryLocationId).
+- Update the backend config schema and persistence model to:
+
+  - Add fields:
+    - `pivotLocationId: string | null`
+    - `hildaleLocationId: string | null`
+  - Keep the existing single `inventoryLocationId` ONLY for backward compatibility, but prefer the new fields going forward:
+    - If both `pivotLocationId` and `hildaleLocationId` are present, ignore `inventoryLocationId` for inventory sync.
+    - If only `inventoryLocationId` is present (old config), treat it as Pivot location for now and leave Hildale Qty as app-internal (no Shopify mapping).
+  - Ensure server validation:
+    - Shop domain and access token are required once Shopify is enabled.
+    - Pivot and Hildale IDs are optional but strongly recommended. If missing, log a warning (see Logs section).
+
+2) SHOPIFY CONFIG UI (AI AGENT → DATA SOURCES → SHOPIFY MODAL)
+
+- Update the Shopify configuration modal so it no longer shows a single “Inventory Location ID” field.
+- Instead, show:
+
+  - Shop Domain (unchanged).
+  - Access Token (unchanged).
+  - API Version (unchanged – keep current default).
+  - New grouped section “Inventory Locations” with two fields:
+    - “Pivot Location ID (Pyvott – 3PL)” – text input bound to `pivotLocationId`.
+    - “Hildale Location ID (Sticker Burr HQ)” – text input bound to `hildaleLocationId`.
+  - Helper text beneath that group:
+    - “Find these IDs in Shopify Admin → Settings → Locations → select a location → copy the numeric ID from the URL.”
+
+- If an old `inventoryLocationId` exists and new IDs are empty:
+  - Pre-fill `pivotLocationId` with the old value when the modal opens.
+  - Show a small, non-blocking note like: “We detected a legacy inventory location. It has been mapped to Pivot. You can add a separate Hildale location ID if needed.”
+
+- “Import Orders from Shopify” toggle remains as is.
+- “Push Inventory to Shopify” remains disabled by default and only becomes enabled when the Rules toggle “Shopify Two-Way Sync” is ON.
+
+3) INVENTORY SYNC: SHOPIFY → APP
+
+- Update the Shopify sync job and “Sync” button logic to handle multi-location:
+
+  - When sync is triggered (either manually from the Shopify card or on the existing schedule):
+
+    - If `pivotLocationId` or `hildaleLocationId` is missing:
+      - Still sync what is available:
+        - If only Pivot ID exists, sync Pivot Qty only.
+        - If only Hildale ID exists, sync Hildale Qty only.
+      - Log a warning entry in the AI Agent → Logs explaining which location ID is missing.
+
+    - For EACH finished product that has a Shopify mapping (via House SKU / UPC):
+      - Call Shopify InventoryLevel API for BOTH location IDs:
+        - Get available/on_hand quantity for Pivot location ID.
+        - Get available/on_hand quantity for Hildale location ID.
+      - Update the BOM Finished Products table:
+        - `Hildale Qty` column = quantity at Hildale location.
+        - `Pivot Qty` column = quantity at Pivot location.
+      - Keep all app-internal calculations (Forecast, Backorders, Available for Sale, etc.) intact and recompute derived fields after updating these base quantities.
+
+- Do not push any changes TO Shopify during this job, regardless of config, unless “Shopify Two-Way Sync” is ON and a change originated in the app (see section 5).
+
+4) ORDER HANDLING: SHOPIFY ORDERS → APP
+
+- When importing orders from Shopify (if “Import Orders from Shopify” is enabled):
+
+  - Continue creating or updating Sales Orders as currently implemented.
+  - For inventory impact:
+    - Treat all Shopify sales as shipping from Pivot (3PL).
+      - For each new order or fulfillment:
+        - Match line items to the correct product using the House SKU / UPC mapping.
+        - Decrement `Pivot Qty` (not Hildale Qty).
+    - Hildale Qty is never directly reduced by Shopify sales.
+  - Ensure that if multi-location info is available on the order (location assignments), we still prioritize Pivot mapping as the ship-from location, but we do not attempt to adjust Hildale Qty directly from Shopify orders.
+
+5) INVENTORY ADJUSTMENTS: APP → SHOPIFY (WHEN TWO-WAY SYNC IS ON)
+
+- Respect the existing “Shopify Two-Way Sync” toggle in AI Agent → Rules:
+  - When OFF:
+    - No write-backs to Shopify, regardless of internal inventory changes.
+  - When ON:
+    - For any inventory change in the app that should reflect at the sales channel, push targeted adjustments to Shopify using BOTH location IDs.
+
+- Implement push behavior for these events:
+
+  a) Receiving a Purchase Order into Hildale:
+     - When POs are marked as “Received” and quantities are recorded:
+       - Increase app’s `Hildale Qty` by received amounts.
+       - If `hildaleLocationId` is configured and Two-Way Sync is ON, call Shopify to increase the inventory for the Hildale location ID to match the new quantity.
+       - Do NOT update Pivot location inventory from this event.
+
+  b) Transfers from Hildale → Pivot:
+     - When the user performs a “transfer” action (if such a flow exists) or when we represent a planned transfer:
+       - Decrease `Hildale Qty` in the app.
+       - Increase `Pivot Qty` in the app.
+       - If Two-Way Sync is ON and both location IDs are present:
+         - Call Shopify to decrease inventory at Hildale location ID by transfer amount.
+         - Call Shopify to increase inventory at Pivot location ID by transfer amount.
+
+  c) Manual inventory adjustments:
+     - If the app supports manual stock corrections on BOM:
+       - When a user directly edits Hildale or Pivot quantities and saves:
+         - Apply the change in the app.
+         - If Two-Way Sync is ON, push the delta to the correct Shopify location ID (Hildale or Pivot) for the affected product.
+
+- All Shopify write calls must:
+  - Be no-ops if Two-Way Sync is OFF.
+  - Be protected by try/catch with clear error handling to avoid crashing the app.
+
+6) AI AGENT RULES: EXPLICITLY ENFORCE LOCATION BEHAVIOR
+
+- In the AI Agent → Rules subsystem (if there is logic that computes reorder recommendations based on Hildale and Pivot):
+
+  - Make sure the following core rule is encoded and documented in code comments:
+    - “Customer sales reduce Pivot Qty only.”
+    - “Hildale Qty changes only via PO receipts and transfers to Pivot.”
+  - Where relevant, ensure reorder logic uses the combined picture correctly, e.g.:
+    - Available inventory for customer shipments = Pivot Qty.
+    - Buffer or safety stock can consider Hildale Qty as backup, but customer-facing availability is tied to Pivot.
+
+- Ensure the existing “Shopify Two-Way Sync” toggle is clearly documented in the Rules UI and that it controls ALL Shopify inventory write-backs, including multi-location adjustments.
+
+7) LOGGING AND DIAGNOSTICS
+
+- In AI Agent → Logs, add clear entries for multi-location operations:
+
+  - On every Shopify sync:
+    - Log one summary entry: “Shopify sync complete. Updated Hildale and Pivot quantities for N products. Missing IDs: [list if any].”
+  - On each write-back operation (when Two-Way Sync is ON):
+    - Log whether the write succeeded or failed, including:
+      - Product SKU.
+      - Target location (Pivot or Hildale).
+      - Old quantity, new quantity.
+      - Any Shopify error codes or messages on failure.
+
+- If either location ID is invalid (e.g., Shopify returns 404 or permission errors), surface a non-blocking warning in the Shopify card and in Logs.
+
+8) UI CONSISTENCY CHECKS
+
+- On the BOM Finished Products table:
+  - Confirm that:
+    - Hildale Qty column is always populated from Hildale location (or app-internal if that location ID is missing).
+    - Pivot Qty column is always populated from Pivot location (or app-internal if that location ID is missing).
+  - No new columns are added beyond what already exists; we are just wiring multi-location behavior behind the scenes.
+
+- In the Shopify card:
+  - Ensure the “Sync” button triggers the new multi-location sync behavior.
+  - Ensure tooltips or help text mention that:
+    - Hildale Location ID ↔ Hildale Qty.
+    - Pivot Location ID ↔ Pivot Qty.
+    - Two-Way Sync must be ON to push inventory back to Shopify.
+
+9) MIGRATION & SAFETY
+
+- On first deploy of this change:
+  - If an existing config has `inventoryLocationId` but `pivotLocationId` is null:
+    - Copy `inventoryLocationId` into `pivotLocationId`.
+    - Leave `hildaleLocationId` empty until the user fills it.
+  - Do NOT auto-populate `hildaleLocationId` from anything, to avoid accidental mis-mapping.
+
+- Add unit-level or integration-level tests (wherever tests live in this repo) to verify:
+  - Sync from Shopify correctly sets Hildale and Pivot quantities.
+  - Sales reduce Pivot only.
+  - Transfers adjust both sides correctly and push to Shopify only when Two-Way Sync is ON.
+  - If Two-Way Sync is OFF, no calls to Shopify write APIs are made.
+
+Implement all of the above so that the app fully supports multi-location Shopify inventory, with Pivot and Hildale wired correctly into BOM and controlled by the existing Shopify Two-Way Sync rules.

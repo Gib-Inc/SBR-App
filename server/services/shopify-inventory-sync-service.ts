@@ -43,6 +43,8 @@ interface ShopifyCredentials {
   accessToken: string;
   apiVersion: string;
   defaultLocationId: string | null;
+  pivotLocationId: string | null;
+  hildaleLocationId: string | null;
 }
 
 export class ShopifyInventorySyncService {
@@ -62,13 +64,30 @@ export class ShopifyInventorySyncService {
       
       if (config?.isEnabled && config.apiKey) {
         const configData = config.config as Record<string, any> || {};
+        
+        // Multi-location support: prefer new pivotLocationId/hildaleLocationId, fallback to legacy locationId
+        const legacyLocationId = configData.locationId || null;
+        const pivotLocationId = configData.pivotLocationId || legacyLocationId; // Legacy falls back to Pivot
+        const hildaleLocationId = configData.hildaleLocationId || null;
+        
         this.credentials = {
           shopDomain: (configData.shopDomain || '').replace(/^https?:\/\//, '').replace(/\/$/, ''),
           accessToken: config.apiKey,
           apiVersion: configData.apiVersion || '2024-01',
-          defaultLocationId: configData.locationId || null,
+          defaultLocationId: pivotLocationId, // For backward compatibility
+          pivotLocationId,
+          hildaleLocationId,
         };
-        console.log(`[ShopifyInventorySync] Initialized with IntegrationConfig for user ${userId}`);
+        
+        // Log which location IDs are configured
+        const locationInfo = [];
+        if (pivotLocationId) locationInfo.push(`Pivot: ${pivotLocationId}`);
+        if (hildaleLocationId) locationInfo.push(`Hildale: ${hildaleLocationId}`);
+        if (legacyLocationId && !configData.pivotLocationId) {
+          console.log(`[ShopifyInventorySync] Using legacy locationId as Pivot location`);
+        }
+        
+        console.log(`[ShopifyInventorySync] Initialized with IntegrationConfig for user ${userId}. Locations: ${locationInfo.join(', ') || 'none configured'}`);
         return this.isConfigured();
       }
       
@@ -77,11 +96,17 @@ export class ShopifyInventorySyncService {
       const envToken = process.env.SHOPIFY_ACCESS_TOKEN || '';
       
       if (envDomain && envToken) {
+        const envLegacyLocationId = process.env.SHOPIFY_LOCATION_ID || null;
+        const envPivotLocationId = process.env.SHOPIFY_PIVOT_LOCATION_ID || envLegacyLocationId;
+        const envHildaleLocationId = process.env.SHOPIFY_HILDALE_LOCATION_ID || null;
+        
         this.credentials = {
           shopDomain: envDomain,
           accessToken: envToken,
           apiVersion: process.env.SHOPIFY_API_VERSION || '2024-01',
-          defaultLocationId: process.env.SHOPIFY_LOCATION_ID || null,
+          defaultLocationId: envPivotLocationId,
+          pivotLocationId: envPivotLocationId,
+          hildaleLocationId: envHildaleLocationId,
         };
         console.log(`[ShopifyInventorySync] Initialized with environment variables (fallback)`);
         return this.isConfigured();
@@ -119,12 +144,38 @@ export class ShopifyInventorySyncService {
   /**
    * Get the current credentials info (for status display)
    */
-  getCredentialsInfo(): { configured: boolean; shopDomain?: string; hasLocationId: boolean } {
+  getCredentialsInfo(): { 
+    configured: boolean; 
+    shopDomain?: string; 
+    hasLocationId: boolean;
+    hasPivotLocationId: boolean;
+    hasHildaleLocationId: boolean;
+    pivotLocationId?: string;
+    hildaleLocationId?: string;
+  } {
     return {
       configured: this.isConfigured(),
       shopDomain: this.credentials?.shopDomain,
       hasLocationId: !!this.credentials?.defaultLocationId,
+      hasPivotLocationId: !!this.credentials?.pivotLocationId,
+      hasHildaleLocationId: !!this.credentials?.hildaleLocationId,
+      pivotLocationId: this.credentials?.pivotLocationId || undefined,
+      hildaleLocationId: this.credentials?.hildaleLocationId || undefined,
     };
+  }
+
+  /**
+   * Get Pivot location ID (3PL, customer-facing inventory)
+   */
+  getPivotLocationId(): string | null {
+    return this.credentials?.pivotLocationId || null;
+  }
+
+  /**
+   * Get Hildale location ID (production warehouse, buffer stock)
+   */
+  getHildaleLocationId(): string | null {
+    return this.credentials?.hildaleLocationId || null;
   }
 
   /**
@@ -396,6 +447,507 @@ export class ShopifyInventorySyncService {
 
     const safetyBuffer = settings.shopifySafetyBuffer || 0;
     return this.syncItemInventory(item, safetyBuffer);
+  }
+
+  // ============================================================================
+  // MULTI-LOCATION METHODS
+  // ============================================================================
+
+  /**
+   * Get inventory levels for both Hildale and Pivot locations for a given inventory item
+   * Returns { hildaleQty: number | null, pivotQty: number | null }
+   */
+  async getMultiLocationInventoryLevels(inventoryItemId: string): Promise<{
+    hildaleQty: number | null;
+    pivotQty: number | null;
+    errors: string[];
+  }> {
+    const result = {
+      hildaleQty: null as number | null,
+      pivotQty: null as number | null,
+      errors: [] as string[],
+    };
+
+    if (!this.isConfigured()) {
+      result.errors.push('Shopify not configured');
+      return result;
+    }
+
+    const pivotLocationId = this.getPivotLocationId();
+    const hildaleLocationId = this.getHildaleLocationId();
+
+    // Fetch Pivot location inventory
+    if (pivotLocationId) {
+      try {
+        result.pivotQty = await this.getInventoryLevel(inventoryItemId, pivotLocationId);
+      } catch (error: any) {
+        result.errors.push(`Pivot location error: ${error.message}`);
+      }
+    } else {
+      result.errors.push('Pivot location ID not configured');
+    }
+
+    // Fetch Hildale location inventory
+    if (hildaleLocationId) {
+      try {
+        result.hildaleQty = await this.getInventoryLevel(inventoryItemId, hildaleLocationId);
+      } catch (error: any) {
+        result.errors.push(`Hildale location error: ${error.message}`);
+      }
+    }
+    // Note: Hildale location is optional - don't add an error if missing
+
+    return result;
+  }
+
+  /**
+   * Pull inventory from Shopify for a single item and update app's hildaleQty/pivotQty
+   * This is a PULL operation (Shopify → App)
+   * 
+   * @param item - The item to sync
+   * @returns Updated quantities and any errors
+   */
+  async pullItemInventoryFromShopify(item: Item): Promise<{
+    success: boolean;
+    sku: string;
+    previousHildaleQty: number;
+    previousPivotQty: number;
+    newHildaleQty: number | null;
+    newPivotQty: number | null;
+    errors: string[];
+  }> {
+    const result = {
+      success: false,
+      sku: item.sku || 'unknown',
+      previousHildaleQty: item.hildaleQty ?? 0,
+      previousPivotQty: item.pivotQty ?? 0,
+      newHildaleQty: null as number | null,
+      newPivotQty: null as number | null,
+      errors: [] as string[],
+    };
+
+    if (!item.shopifyVariantId) {
+      result.errors.push('No Shopify variant ID configured');
+      return result;
+    }
+
+    // Get or fetch inventory item ID
+    let inventoryItemId = item.shopifyInventoryItemId;
+    if (!inventoryItemId) {
+      inventoryItemId = await this.getInventoryItemId(item.shopifyVariantId);
+      if (!inventoryItemId) {
+        result.errors.push('Could not get inventory item ID from Shopify');
+        return result;
+      }
+      
+      // Cache the inventory item ID for future use
+      try {
+        await storage.updateItem(item.id, { shopifyInventoryItemId: inventoryItemId });
+      } catch (e) {
+        // Non-critical, continue
+      }
+    }
+
+    // Get inventory levels from both locations
+    const levels = await this.getMultiLocationInventoryLevels(inventoryItemId);
+    result.errors.push(...levels.errors);
+
+    // Update item with new quantities (only if we got valid data)
+    const updates: { pivotQty?: number; hildaleQty?: number } = {};
+    let hasUpdates = false;
+
+    if (levels.pivotQty !== null) {
+      result.newPivotQty = levels.pivotQty;
+      updates.pivotQty = levels.pivotQty;
+      hasUpdates = true;
+    }
+
+    if (levels.hildaleQty !== null) {
+      result.newHildaleQty = levels.hildaleQty;
+      updates.hildaleQty = levels.hildaleQty;
+      hasUpdates = true;
+    }
+
+    if (hasUpdates) {
+      try {
+        await storage.updateItem(item.id, updates as any);
+        result.success = true;
+        console.log(
+          `[ShopifyInventorySync] Pulled inventory for ${item.sku}: ` +
+          `Hildale: ${result.previousHildaleQty} → ${result.newHildaleQty ?? 'unchanged'}, ` +
+          `Pivot: ${result.previousPivotQty} → ${result.newPivotQty ?? 'unchanged'}`
+        );
+      } catch (error: any) {
+        result.errors.push(`Failed to update item: ${error.message}`);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Push inventory to a specific Shopify location
+   * This is a PUSH operation (App → Shopify)
+   * 
+   * @param item - The item to sync
+   * @param location - 'PIVOT' or 'HILDALE'
+   * @param quantity - The quantity to set
+   * @param safetyBuffer - Safety buffer to subtract (only applies to Pivot)
+   */
+  async pushInventoryToLocation(
+    item: Item,
+    location: 'PIVOT' | 'HILDALE',
+    quantity: number,
+    safetyBuffer: number = 0
+  ): Promise<{
+    success: boolean;
+    sku: string;
+    location: string;
+    previousLevel: number | null;
+    newLevel: number;
+    error?: string;
+  }> {
+    const result = {
+      success: false,
+      sku: item.sku || 'unknown',
+      location,
+      previousLevel: null as number | null,
+      newLevel: quantity,
+      error: undefined as string | undefined,
+    };
+
+    if (!item.shopifyVariantId) {
+      result.error = 'No Shopify variant ID configured';
+      return result;
+    }
+
+    const locationId = location === 'PIVOT' 
+      ? this.getPivotLocationId() 
+      : this.getHildaleLocationId();
+
+    if (!locationId) {
+      result.error = `${location} location ID not configured`;
+      return result;
+    }
+
+    // Get or fetch inventory item ID
+    let inventoryItemId = item.shopifyInventoryItemId;
+    if (!inventoryItemId) {
+      inventoryItemId = await this.getInventoryItemId(item.shopifyVariantId);
+      if (!inventoryItemId) {
+        result.error = 'Could not get inventory item ID from Shopify';
+        return result;
+      }
+      
+      try {
+        await storage.updateItem(item.id, { shopifyInventoryItemId: inventoryItemId });
+      } catch (e) {
+        // Non-critical
+      }
+    }
+
+    // Get current level for logging
+    result.previousLevel = await this.getInventoryLevel(inventoryItemId, locationId);
+
+    // Apply safety buffer only to Pivot (sellable inventory)
+    const adjustedQuantity = location === 'PIVOT' 
+      ? Math.max(0, quantity - safetyBuffer)
+      : Math.max(0, quantity);
+    result.newLevel = adjustedQuantity;
+
+    // Set the inventory level
+    const setResult = await this.setInventoryLevel(inventoryItemId, locationId, adjustedQuantity);
+    
+    if (setResult.success) {
+      result.success = true;
+      console.log(
+        `[ShopifyInventorySync] Pushed to ${location} for ${item.sku}: ` +
+        `${result.previousLevel ?? 'unknown'} → ${adjustedQuantity}` +
+        (location === 'PIVOT' && safetyBuffer > 0 ? ` (buffer: ${safetyBuffer})` : '')
+      );
+    } else {
+      result.error = setResult.error;
+      await logService.logShopifySyncError({
+        sku: item.sku || 'unknown',
+        productId: item.id,
+        variantId: item.shopifyVariantId || undefined,
+        locationId: locationId,
+        error: setResult.error || 'Unknown error',
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Pull inventory from Shopify for all items with Shopify mapping
+   * Updates hildaleQty and pivotQty for each item
+   */
+  async pullAllInventoryFromShopify(userId: string): Promise<{
+    totalItems: number;
+    updated: number;
+    skipped: number;
+    failed: number;
+    missingPivotId: boolean;
+    missingHildaleId: boolean;
+    results: Array<{
+      sku: string;
+      success: boolean;
+      hildaleQty: number | null;
+      pivotQty: number | null;
+      errors: string[];
+    }>;
+  }> {
+    const result = {
+      totalItems: 0,
+      updated: 0,
+      skipped: 0,
+      failed: 0,
+      missingPivotId: false,
+      missingHildaleId: false,
+      results: [] as Array<{
+        sku: string;
+        success: boolean;
+        hildaleQty: number | null;
+        pivotQty: number | null;
+        errors: string[];
+      }>,
+    };
+
+    // Initialize if needed
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        console.log('[ShopifyInventorySync] Not configured, skipping pull');
+        return result;
+      }
+    }
+
+    // Check location IDs
+    result.missingPivotId = !this.getPivotLocationId();
+    result.missingHildaleId = !this.getHildaleLocationId();
+
+    if (result.missingPivotId) {
+      console.log('[ShopifyInventorySync] Warning: Pivot location ID not configured');
+    }
+    if (result.missingHildaleId) {
+      console.log('[ShopifyInventorySync] Warning: Hildale location ID not configured (Hildale sync will be skipped)');
+    }
+
+    const items = await storage.getAllItems();
+    const shopifyItems = items.filter((item: Item) => item.shopifyVariantId);
+    result.totalItems = shopifyItems.length;
+
+    console.log(`[ShopifyInventorySync] Starting multi-location pull for ${shopifyItems.length} items`);
+
+    for (const item of shopifyItems) {
+      const pullResult = await this.pullItemInventoryFromShopify(item);
+      
+      result.results.push({
+        sku: pullResult.sku,
+        success: pullResult.success,
+        hildaleQty: pullResult.newHildaleQty,
+        pivotQty: pullResult.newPivotQty,
+        errors: pullResult.errors,
+      });
+
+      if (pullResult.success) {
+        result.updated++;
+      } else if (pullResult.errors.some(e => e.includes('No Shopify'))) {
+        result.skipped++;
+      } else {
+        result.failed++;
+      }
+
+      // Rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // Log summary
+    await logService.logSystemEvent({
+      type: 'SHOPIFY_SYNC_INFO',
+      entityType: 'INTEGRATION',
+      severity: 'INFO',
+      code: 'MULTI_LOCATION_PULL',
+      message: `Shopify sync complete. Updated ${result.updated} products. ` +
+        `Missing IDs: ${[result.missingPivotId ? 'Pivot' : '', result.missingHildaleId ? 'Hildale' : ''].filter(Boolean).join(', ') || 'none'}`,
+      details: {
+        totalItems: result.totalItems,
+        updated: result.updated,
+        skipped: result.skipped,
+        failed: result.failed,
+      },
+    });
+
+    console.log(
+      `[ShopifyInventorySync] Multi-location pull complete: ${result.updated} updated, ${result.skipped} skipped, ${result.failed} failed`
+    );
+
+    return result;
+  }
+
+  /**
+   * Push inventory changes after PO receipt (increases Hildale location only)
+   * Only runs if two-way sync is enabled
+   */
+  async pushPOReceiptToShopify(
+    item: Item, 
+    receivedQty: number, 
+    userId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    // Check if two-way sync is enabled
+    const settings = await storage.getAiAgentSettingsByUserId(userId);
+    if (!settings?.shopifyTwoWaySync) {
+      return { success: true }; // Silent skip when disabled
+    }
+
+    if (!this.getHildaleLocationId()) {
+      console.log(`[ShopifyInventorySync] PO receipt: Hildale location not configured, skipping Shopify push`);
+      return { success: true };
+    }
+
+    // Initialize if needed
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        return { success: false, error: 'Shopify not configured' };
+      }
+    }
+
+    // Push the new Hildale quantity (no safety buffer for Hildale)
+    const newHildaleQty = (item.hildaleQty ?? 0) + receivedQty;
+    const result = await this.pushInventoryToLocation(item, 'HILDALE', newHildaleQty, 0);
+
+    if (result.success) {
+      await logService.logSystemEvent({
+        type: 'SHOPIFY_SYNC_INFO',
+        entityType: 'PRODUCT',
+        entityId: item.id,
+        severity: 'INFO',
+        code: 'PO_RECEIPT_PUSH',
+        message: `Pushed PO receipt to Shopify Hildale: ${item.sku} +${receivedQty} (new total: ${newHildaleQty})`,
+      });
+    }
+
+    return { success: result.success, error: result.error };
+  }
+
+  /**
+   * Push inventory changes after transfer from Hildale to Pivot
+   * Decreases Hildale, increases Pivot
+   * Only runs if two-way sync is enabled
+   */
+  async pushTransferToShopify(
+    item: Item,
+    transferQty: number,
+    userId: string
+  ): Promise<{ success: boolean; errors: string[] }> {
+    const errors: string[] = [];
+
+    // Check if two-way sync is enabled
+    const settings = await storage.getAiAgentSettingsByUserId(userId);
+    if (!settings?.shopifyTwoWaySync) {
+      return { success: true, errors: [] }; // Silent skip when disabled
+    }
+
+    const safetyBuffer = settings.shopifySafetyBuffer || 0;
+
+    // Initialize if needed
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        return { success: false, errors: ['Shopify not configured'] };
+      }
+    }
+
+    let hildaleSuccess = true;
+    let pivotSuccess = true;
+
+    // Push to Hildale (decrease)
+    if (this.getHildaleLocationId()) {
+      const newHildaleQty = Math.max(0, (item.hildaleQty ?? 0) - transferQty);
+      const hildaleResult = await this.pushInventoryToLocation(item, 'HILDALE', newHildaleQty, 0);
+      if (!hildaleResult.success) {
+        hildaleSuccess = false;
+        errors.push(`Hildale: ${hildaleResult.error}`);
+      }
+    }
+
+    // Push to Pivot (increase)
+    if (this.getPivotLocationId()) {
+      const newPivotQty = (item.pivotQty ?? 0) + transferQty;
+      const pivotResult = await this.pushInventoryToLocation(item, 'PIVOT', newPivotQty, safetyBuffer);
+      if (!pivotResult.success) {
+        pivotSuccess = false;
+        errors.push(`Pivot: ${pivotResult.error}`);
+      }
+    } else {
+      errors.push('Pivot location ID not configured');
+      pivotSuccess = false;
+    }
+
+    const success = hildaleSuccess && pivotSuccess;
+
+    if (success) {
+      await logService.logSystemEvent({
+        type: 'SHOPIFY_SYNC_INFO',
+        entityType: 'PRODUCT',
+        entityId: item.id,
+        severity: 'INFO',
+        code: 'TRANSFER_PUSH',
+        message: `Pushed transfer to Shopify: ${item.sku} moved ${transferQty} from Hildale to Pivot`,
+      });
+    }
+
+    return { success, errors };
+  }
+
+  /**
+   * Push manual inventory adjustment to Shopify
+   * Routes to the correct location based on which quantity was changed
+   */
+  async pushManualAdjustmentToShopify(
+    item: Item,
+    location: 'PIVOT' | 'HILDALE',
+    newQuantity: number,
+    userId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    // Check if two-way sync is enabled
+    const settings = await storage.getAiAgentSettingsByUserId(userId);
+    if (!settings?.shopifyTwoWaySync) {
+      return { success: true }; // Silent skip when disabled
+    }
+
+    // Initialize if needed
+    if (!this.isConfigured() || this.userId !== userId) {
+      const initialized = await this.initialize(userId);
+      if (!initialized) {
+        return { success: false, error: 'Shopify not configured' };
+      }
+    }
+
+    // Check if the location is configured
+    const locationId = location === 'PIVOT' ? this.getPivotLocationId() : this.getHildaleLocationId();
+    if (!locationId) {
+      console.log(`[ShopifyInventorySync] Manual adjustment: ${location} location not configured, skipping`);
+      return { success: true };
+    }
+
+    const safetyBuffer = location === 'PIVOT' ? (settings.shopifySafetyBuffer || 0) : 0;
+    const result = await this.pushInventoryToLocation(item, location, newQuantity, safetyBuffer);
+
+    if (result.success) {
+      await logService.logSystemEvent({
+        type: 'SHOPIFY_SYNC_INFO',
+        entityType: 'PRODUCT',
+        entityId: item.id,
+        severity: 'INFO',
+        code: 'MANUAL_ADJUSTMENT_PUSH',
+        message: `Pushed manual adjustment to Shopify ${location}: ${item.sku} → ${newQuantity}`,
+      });
+    }
+
+    return { success: result.success, error: result.error };
   }
 }
 

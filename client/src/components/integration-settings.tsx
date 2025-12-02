@@ -63,7 +63,9 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
   const [shopDomain, setShopDomain] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [apiVersion, setApiVersion] = useState("2024-01");
-  const [shopifyLocationId, setShopifyLocationId] = useState("");
+  const [shopifyPivotLocationId, setShopifyPivotLocationId] = useState("");
+  const [shopifyHildaleLocationId, setShopifyHildaleLocationId] = useState("");
+  const [showLegacyLocationNote, setShowLegacyLocationNote] = useState(false);
   const [syncOrders, setSyncOrders] = useState(true);
   const [pushInventory, setPushInventory] = useState(false);
   
@@ -125,7 +127,22 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         setShopDomain(config.config?.shopDomain || "");
         setAccessToken("");
         setApiVersion(config.config?.apiVersion || "2024-01");
-        setShopifyLocationId(config.config?.locationId || "");
+        
+        // Multi-location support: prefer new fields, fallback to legacy locationId
+        const legacyLocationId = config.config?.locationId || "";
+        const pivotId = config.config?.pivotLocationId || "";
+        const hildaleId = config.config?.hildaleLocationId || "";
+        
+        // If only legacy locationId exists, pre-fill it as Pivot and show note
+        if (legacyLocationId && !pivotId) {
+          setShopifyPivotLocationId(legacyLocationId);
+          setShowLegacyLocationNote(true);
+        } else {
+          setShopifyPivotLocationId(pivotId);
+          setShowLegacyLocationNote(false);
+        }
+        setShopifyHildaleLocationId(hildaleId);
+        
         setSyncOrders(config.config?.syncOrders !== false);
         setPushInventory(config.config?.pushInventory || false);
       } else if (integrationType === "AMAZON") {
@@ -212,7 +229,8 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
         configData = {
           shopDomain,
           apiVersion,
-          locationId: shopifyLocationId,
+          pivotLocationId: shopifyPivotLocationId,
+          hildaleLocationId: shopifyHildaleLocationId,
           syncOrders,
           pushInventory,
         };
@@ -291,6 +309,7 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
     setClientSecret("");
     setGhlApiKey("");
     setPhantomApiKey("");
+    setShowLegacyLocationNote(false);
   };
 
   const handleClose = () => {
@@ -410,12 +429,21 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       : "Disabled"}
                 </span>
               </div>
-              {config.config?.locationId && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Location ID</span>
-                  <span className="text-sm font-mono">{config.config.locationId}</span>
-                </div>
-              )}
+              <div className="pt-2 border-t">
+                <span className="text-sm font-medium">Inventory Locations</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Pivot (Pyvott - 3PL)</span>
+                <span className="text-sm font-mono">
+                  {config.config?.pivotLocationId || config.config?.locationId || "Not configured"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Hildale (Sticker Burr HQ)</span>
+                <span className="text-sm font-mono">
+                  {config.config?.hildaleLocationId || "Not configured"}
+                </span>
+              </div>
             </div>
           )}
 
@@ -588,20 +616,56 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                       data-testid="input-api-version"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="shopify-location-id" data-testid="label-shopify-location-id">
-                      Inventory Location ID
-                    </Label>
-                    <Input
-                      id="shopify-location-id"
-                      placeholder="Enter your Shopify Location ID"
-                      value={shopifyLocationId}
-                      onChange={(e) => setShopifyLocationId(e.target.value)}
-                      data-testid="input-shopify-location-id"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      The Shopify location to manage inventory for. Find this in Shopify Admin → Settings → Locations.
-                    </p>
+                  {/* Inventory Locations Section */}
+                  <div className="space-y-4 pt-2 border-t">
+                    <div>
+                      <Label className="text-sm font-medium">Inventory Locations</Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Configure Shopify location IDs for multi-warehouse inventory sync.
+                        Find these in Shopify Admin → Settings → Locations → select a location → copy the numeric ID from the URL.
+                      </p>
+                    </div>
+                    
+                    {showLegacyLocationNote && (
+                      <Alert data-testid="alert-legacy-location">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertDescription>
+                          We detected a legacy inventory location. It has been mapped to Pivot. You can add a separate Hildale location ID if needed.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="shopify-pivot-location-id" data-testid="label-shopify-pivot-location-id">
+                        Pivot Location ID (Pyvott – 3PL)
+                      </Label>
+                      <Input
+                        id="shopify-pivot-location-id"
+                        placeholder="Enter Pivot location ID (e.g., 12345678901)"
+                        value={shopifyPivotLocationId}
+                        onChange={(e) => setShopifyPivotLocationId(e.target.value)}
+                        data-testid="input-shopify-pivot-location-id"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Customer orders ship from this 3PL location. Maps to Pivot Qty in BOM.
+                      </p>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <Label htmlFor="shopify-hildale-location-id" data-testid="label-shopify-hildale-location-id">
+                        Hildale Location ID (Sticker Burr HQ)
+                      </Label>
+                      <Input
+                        id="shopify-hildale-location-id"
+                        placeholder="Enter Hildale location ID (optional)"
+                        value={shopifyHildaleLocationId}
+                        onChange={(e) => setShopifyHildaleLocationId(e.target.value)}
+                        data-testid="input-shopify-hildale-location-id"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Internal production warehouse. Maps to Hildale Qty in BOM. Only changes via PO receipts and transfers.
+                      </p>
+                    </div>
                   </div>
                   <div className="flex items-center justify-between">
                     <Label htmlFor="sync-orders" data-testid="label-sync-orders">

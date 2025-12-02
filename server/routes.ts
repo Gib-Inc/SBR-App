@@ -1609,6 +1609,26 @@ TOTAL: $${subtotal.toFixed(2)}
             await storage.updateItem(req.params.id, validated);
           }
           const updatedItem = await storage.getItem(req.params.id);
+          
+          // Trigger Shopify push if two-way sync is enabled
+          try {
+            const userId = req.session.userId!;
+            const settings = await storage.getAiAgentSettingsByUserId(userId);
+            if (settings?.shopifyTwoWaySync && updatedItem?.shopifyVariantId) {
+              const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
+              const initialized = await shopifyInventorySync.initialize(userId);
+              if (initialized) {
+                // Push to appropriate location based on which field was adjusted
+                shopifyInventorySync.syncItemById(req.params.id, userId).catch((err: Error) => {
+                  console.error('[Shopify Sync] Background sync failed:', err);
+                });
+              }
+            }
+          } catch (syncErr: any) {
+            console.error('[Shopify Sync] Error triggering sync after adjustment:', syncErr);
+            // Don't fail the request - just log the error
+          }
+          
           return res.json(updatedItem);
         }
       }
@@ -11968,6 +11988,10 @@ Generate only the email body text, no subject line.`;
         configured: credentialsInfo.configured,
         shopDomain: credentialsInfo.shopDomain,
         hasLocationId: credentialsInfo.hasLocationId,
+        hasPivotLocationId: credentialsInfo.hasPivotLocationId,
+        hasHildaleLocationId: credentialsInfo.hasHildaleLocationId,
+        pivotLocationId: credentialsInfo.pivotLocationId,
+        hildaleLocationId: credentialsInfo.hildaleLocationId,
         twoWaySyncEnabled: settings?.shopifyTwoWaySync || false,
         safetyBuffer: settings?.shopifySafetyBuffer || 0,
         // Source info
@@ -11980,6 +12004,38 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error('[Shopify Sync] Error checking status:', error);
       res.status(500).json({ error: error.message || 'Failed to check sync status' });
+    }
+  });
+
+  // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
+  app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { shopifyInventorySync } = await import("./services/shopify-inventory-sync-service");
+      
+      // Initialize with user-specific credentials
+      const initialized = await shopifyInventorySync.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({ 
+          error: "Shopify not configured", 
+          message: "Please configure Shopify integration in Data Sources" 
+        });
+      }
+
+      const result = await shopifyInventorySync.pullAllInventoryFromShopify(userId);
+      
+      res.json({
+        success: true,
+        message: `Pulled inventory for ${result.updated} products from Shopify`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('[Shopify Pull] Error pulling inventory:', error);
+      res.status(500).json({ error: error.message || 'Failed to pull inventory from Shopify' });
     }
   });
 

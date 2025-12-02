@@ -413,7 +413,7 @@ export class GoHighLevelClient {
   /**
    * Create or update an opportunity in a pipeline
    * Used for draft PO creation from stock warnings
-   * V2 API format - customFields must be array of {key, value} objects
+   * V2 API format - contactId is REQUIRED, customFields must be array of {key, value} objects
    */
   async createOpportunity(
     pipelineId: string,
@@ -421,9 +421,19 @@ export class GoHighLevelClient {
     name: string,
     monetaryValue: number,
     notes: string,
-    customFields?: Record<string, any>
+    customFields?: Record<string, any>,
+    contactId?: string
   ): Promise<{ success: boolean; opportunityId?: string; opportunityUrl?: string; error?: string }> {
     try {
+      // V2 API requires contactId for opportunities
+      if (!contactId) {
+        console.error('[GoHighLevelClient] contactId is required for V2 opportunities');
+        return {
+          success: false,
+          error: 'contactId is required to create an opportunity in GHL V2',
+        };
+      }
+
       const opportunityData: any = {
         pipelineId,
         pipelineStageId: stageId,
@@ -431,11 +441,12 @@ export class GoHighLevelClient {
         monetaryValue,
         status: 'open',
         locationId: this.locationId,
+        contactId, // Required for V2 API
       };
 
       // V2 API doesn't support notes directly - put them in the name if needed
       // Or we can skip notes for now as they're not a standard V2 field
-      console.log(`[GoHighLevelClient] Creating opportunity: ${name} in pipeline ${pipelineId}, stage ${stageId}`);
+      console.log(`[GoHighLevelClient] Creating opportunity: ${name} for contact ${contactId}`);
 
       // V2 API: customFields must be an array of {key, value} objects
       // Only add if we have meaningful custom fields to pass

@@ -4382,23 +4382,51 @@ TOTAL: $${subtotal.toFixed(2)}
         stockWarnings: { synced: 0, failed: 0, errors: [] as string[] },
       };
 
+      // ========== 0. CREATE SYSTEM CONTACT FOR NON-CUSTOMER ITEMS ==========
+      // Stock warnings and other system items need a contact in V2 API
+      console.log('[GHL Sync] Creating/finding system contact...');
+      let systemContactId: string | undefined;
+      const systemContactResult = await client.createOrFindContact(
+        'Inventory System',
+        'inventory@system.local',
+        undefined
+      );
+      if (systemContactResult.success) {
+        systemContactId = systemContactResult.contactId;
+        console.log(`[GHL Sync] System contact ID: ${systemContactId}`);
+      } else {
+        console.error('[GHL Sync] Failed to create system contact:', systemContactResult.error);
+      }
+
       // ========== 1. SYNC SALES ORDERS ==========
       console.log('[GHL Sync] Starting sales orders sync...');
       const salesOrders = await storage.getAllSalesOrders();
       
       for (const order of salesOrders) {
         try {
-          // Create or find contact for the customer
+          // Create or find contact for the customer (required for V2 API)
           let contactId: string | undefined;
-          if (order.customerName) {
-            const contactResult = await client.createOrFindContact(
-              order.customerName,
-              order.customerEmail || undefined,
-              order.customerPhone || undefined
-            );
-            if (contactResult.success) {
-              contactId = contactResult.contactId;
-            }
+          const customerName = order.customerName || 'Unknown Customer';
+          
+          const contactResult = await client.createOrFindContact(
+            customerName,
+            order.customerEmail || undefined,
+            order.customerPhone || undefined
+          );
+          
+          if (contactResult.success && contactResult.contactId) {
+            contactId = contactResult.contactId;
+            console.log(`[GHL Sync] Contact for ${customerName}: ${contactId}`);
+          } else {
+            // Use system contact as fallback
+            contactId = systemContactId;
+            console.log(`[GHL Sync] Using system contact for ${customerName}`);
+          }
+
+          if (!contactId) {
+            syncResults.salesOrders.failed++;
+            syncResults.salesOrders.errors.push(`Order ${order.orderNumber}: No contact available`);
+            continue;
           }
 
           // Create opportunity for the sales order
@@ -4425,8 +4453,8 @@ Total: $${orderTotal.toFixed(2)}
               orderNumber: order.orderNumber || order.externalOrderId,
               channel: order.channel,
               status: order.status,
-              contactId,
-            }
+            },
+            contactId // Pass contactId as last parameter (required for V2)
           );
 
           if (opportunityResult.success) {
@@ -4476,14 +4504,28 @@ Notes: ${returnRequest.customerNotes || 'None'}
 
           const title = `Return ${returnRequest.returnNumber || returnRequest.id} - ${salesOrder?.customerName || 'Customer'}`;
 
-          // Try to find contact
+          // Create or find contact for the return (required for V2 API)
           let contactId: string | undefined;
-          if (salesOrder) {
-            const contact = await client.getContactByPhoneOrEmail(
-              salesOrder.customerPhone || undefined,
-              salesOrder.customerEmail || undefined
+          if (salesOrder && salesOrder.customerName) {
+            const contactResult = await client.createOrFindContact(
+              salesOrder.customerName,
+              salesOrder.customerEmail || undefined,
+              salesOrder.customerPhone || undefined
             );
-            contactId = contact?.id;
+            if (contactResult.success && contactResult.contactId) {
+              contactId = contactResult.contactId;
+            }
+          }
+          
+          // Use system contact as fallback
+          if (!contactId) {
+            contactId = systemContactId;
+          }
+
+          if (!contactId) {
+            syncResults.returns.failed++;
+            syncResults.returns.errors.push(`Return ${returnRequest.returnNumber}: No contact available`);
+            continue;
           }
 
           // Determine stage based on return status
@@ -4503,8 +4545,8 @@ Notes: ${returnRequest.customerNotes || 'None'}
               returnId: returnRequest.id,
               returnNumber: returnRequest.returnNumber,
               status: returnRequest.status,
-              contactId,
-            }
+            },
+            contactId // Pass contactId (required for V2)
           );
 
           if (opportunityResult.success) {
@@ -4522,35 +4564,41 @@ Notes: ${returnRequest.customerNotes || 'None'}
 
       // ========== 3. SYNC STOCK WARNINGS ==========
       console.log('[GHL Sync] Starting stock warnings sync...');
-      const items = await storage.getAllItems();
-      const atRiskItems = items
-        .map(item => {
-          const stock = item.type === "finished_product" 
-            ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
-            : item.currentStock;
-          const daysOfCover = item.dailyUsage > 0 ? stock / item.dailyUsage : Infinity;
-          return { ...item, daysOfCover, currentStock: stock };
-        })
-        .filter(item => item.daysOfCover <= 30 && item.daysOfCover !== Infinity)
-        .sort((a, b) => a.daysOfCover - b.daysOfCover);
+      
+      // Stock warnings require a contact - use system contact
+      if (!systemContactId) {
+        console.error('[GHL Sync] Cannot sync stock warnings: no system contact available');
+        syncResults.stockWarnings.errors.push('No system contact available for stock warnings');
+      } else {
+        const items = await storage.getAllItems();
+        const atRiskItems = items
+          .map(item => {
+            const stock = item.type === "finished_product" 
+              ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+              : item.currentStock;
+            const daysOfCover = item.dailyUsage > 0 ? stock / item.dailyUsage : Infinity;
+            return { ...item, daysOfCover, currentStock: stock };
+          })
+          .filter(item => item.daysOfCover <= 30 && item.daysOfCover !== Infinity)
+          .sort((a, b) => a.daysOfCover - b.daysOfCover);
 
-      for (const item of atRiskItems) {
-        try {
-          // Determine stage based on days of cover
-          let stageId: string;
-          let priority: string;
-          if (item.daysOfCover <= 7) {
-            stageId = GHL_CONFIG.stages.STOCK_ORDER_NOW;
-            priority = 'CRITICAL';
-          } else if (item.daysOfCover <= 14) {
-            stageId = GHL_CONFIG.stages.STOCK_14_21;
-            priority = 'HIGH';
-          } else {
-            stageId = GHL_CONFIG.stages.STOCK_21_30;
-            priority = 'MEDIUM';
-          }
+        for (const item of atRiskItems) {
+          try {
+            // Determine stage based on days of cover
+            let stageId: string;
+            let priority: string;
+            if (item.daysOfCover <= 7) {
+              stageId = GHL_CONFIG.stages.STOCK_ORDER_NOW;
+              priority = 'CRITICAL';
+            } else if (item.daysOfCover <= 14) {
+              stageId = GHL_CONFIG.stages.STOCK_14_21;
+              priority = 'HIGH';
+            } else {
+              stageId = GHL_CONFIG.stages.STOCK_21_30;
+              priority = 'MEDIUM';
+            }
 
-          const notes = `
+            const notes = `
 Stock Warning: ${item.name}
 SKU: ${item.sku}
 Current Stock: ${item.currentStock}
@@ -4558,31 +4606,33 @@ Days of Cover: ${Math.round(item.daysOfCover)} days
 Daily Usage: ${item.dailyUsage}
 Priority: ${priority}
 Reorder Point: ${item.reorderPoint || 'Not set'}
-          `.trim();
+            `.trim();
 
-          const opportunityResult = await client.createOpportunity(
-            pipelineId,
-            stageId,
-            `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`,
-            0,
-            notes,
-            {
-              itemId: item.id,
-              sku: item.sku,
-              daysOfCover: item.daysOfCover,
-              priority,
+            const opportunityResult = await client.createOpportunity(
+              pipelineId,
+              stageId,
+              `Stock Alert: ${item.name} (${Math.round(item.daysOfCover)} days)`,
+              0,
+              notes,
+              {
+                itemId: item.id,
+                sku: item.sku,
+                daysOfCover: item.daysOfCover,
+                priority,
+              },
+              systemContactId // Use system contact for stock warnings (required for V2)
+            );
+
+            if (opportunityResult.success) {
+              syncResults.stockWarnings.synced++;
+            } else {
+              syncResults.stockWarnings.failed++;
+              syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${opportunityResult.error}`);
             }
-          );
-
-          if (opportunityResult.success) {
-            syncResults.stockWarnings.synced++;
-          } else {
+          } catch (error: any) {
             syncResults.stockWarnings.failed++;
-            syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${opportunityResult.error}`);
+            syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${error.message}`);
           }
-        } catch (error: any) {
-          syncResults.stockWarnings.failed++;
-          syncResults.stockWarnings.errors.push(`Item ${item.sku}: ${error.message}`);
         }
       }
       console.log(`[GHL Sync] Stock warnings: ${syncResults.stockWarnings.synced} synced, ${syncResults.stockWarnings.failed} failed`);

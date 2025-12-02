@@ -1,0 +1,298 @@
+You are working in my Inventory app Replit project.
+
+GOAL
+I already have a two-mode Shopify sync (“Import only” vs “Replace with Shopify”) with a confirmation modal. I now want the SAME pattern implemented for these data sources:
+
+- GoHighLevel (GHL)
+- Amazon Seller Central
+- Extensiv/Pivot (3PL)
+- QuickBooks Online
+
+Do NOT change the existing Shopify implementation. Use it as the reference pattern and extend the same UX + backend model to these sources.
+
+High-level rules for ALL sources:
+- Clicking the “Sync” button on each data source card must open a confirmation modal instead of silently starting a sync.
+- The modal must offer two options:
+  1) “Import only (recommended)” → merge mode (no deletions in this app)
+  2) “Replace with [Source] (destructive)” → replace mode (clean up local rows that no longer exist in the source)
+- The backend sync function for each source must accept a `mode` parameter: `"merge"` or `"replace"`.
+- If no mode is passed, default to `"merge"` for safety.
+- All sync runs must be logged with mode, counts, and any errors.
+
+Reuse whatever architecture you created for Shopify’s sync (modal, callbacks, service functions, logging), but parameterized by `source`.
+
+========================================================
+1) GENERIC SYNC MODAL PATTERN (ALL SOURCES)
+========================================================
+
+For each card (GHL, Amazon, Extensiv/Pivot, QuickBooks):
+
+A. Trigger
+- When the user clicks that card’s **Sync** button:
+  - Do NOT start sync immediately.
+  - Open a modal similar to the Shopify one.
+
+B. Modal content (source-aware)
+- Title: “[Source] Sync Options”
+  - Example: “GoHighLevel Sync Options”, “Amazon Sync Options”, etc.
+
+- Short description: “Choose how to reconcile [Source] with this inventory app.”
+
+- Question text at the top:
+  - “Do you want to remove any data that doesn’t match [Source]?”
+
+- Radio options (or segmented control):
+
+  1) Option A (DEFAULT):
+     Label: “Import only (recommended)”
+     Description: “Import data from [Source] and update existing records without deleting anything that only exists in this app.”
+
+  2) Option B (DESTRUCTIVE):
+     Label: “Replace with [Source] (destructive)”
+     Description: “Make this app match [Source] by removing local [Source] records that no longer exist upstream.”
+     Small red warning label:
+     “This may delete test or outdated [Source] records stored only in this app.”
+
+- Buttons:
+  - Primary: “Start Sync”
+  - Secondary: “Cancel”
+
+C. Behavior
+- Default selection: “Import only (recommended)”.
+- On “Start Sync”:
+  - Close the modal.
+  - Disable the card’s Sync button and show a spinner / “Syncing…” state.
+  - Call a source-specific sync function with a `mode` argument:
+      - GHL:        `syncGHL({ mode: "merge" | "replace" })`
+      - Amazon:     `syncAmazon({ mode: "merge" | "replace" })`
+      - Extensiv:   `syncExtensiv({ mode: "merge" | "replace" })`
+      - QuickBooks: `syncQuickBooks({ mode: "merge" | "replace" })`
+- Show toasts like Shopify:
+  - On start: “[Source] sync started…”
+  - On success: show counts.
+  - On failure: “[Source] sync failed. See Logs for details.”
+
+========================================================
+2) GHL SYNC LOGIC (PIPELINE / OPPORTUNITIES)
+========================================================
+
+Use the existing GHL connection (location ID, pipeline ID, stage IDs) and whatever structure we already have.
+
+Signature idea:
+`syncGHL({ mode })` → `{ mode, dealsUpdated, dealsArchived, tasksUpdated }`
+
+A. Common behavior (merge & replace)
+- Pull data from GHL:
+  - For the configured pipeline / stages (Replit pipeline and PO / refund stages already defined).
+  - Fetch relevant fields:
+    - Opportunity ID (GHL ID)
+    - Pipeline ID, Stage ID
+    - Contact info (name, email, phone)
+    - Monetary value / amount
+    - Custom fields we already use for linking to orders / POs / refunds
+- Upsert into our internal tables:
+  - For “PO Sent / PO Paid / PO Delivered / Sales Orders / Refunded / Processing Refund”:
+    - If an opportunity with that GHL ID already exists, update it.
+    - Otherwise create a new record in our GHL-linked tables.
+- Never touch non-GHL data.
+
+B. mode = "merge" (Import only)
+- Only upsert:
+  - Don’t delete or archive any local GHL opportunities that no longer exist upstream.
+- Counts:
+  - `dealsUpdated` = created + updated.
+  - `dealsArchived` = 0.
+  - `tasksUpdated` = any internal tasks/flags we update in our app.
+
+C. mode = "replace" (Replace with GHL)
+- After importing all current GHL opportunities in scope:
+  - Find local GHL-linked opportunities (those with a GHL ID / pipeline = Replit pipeline).
+  - Any local opportunity that:
+    - Has `channel = GHL` (or whatever flag we use), AND
+    - No longer appears in the latest GHL data
+    → Archive or soft-delete it (follow existing convention).
+- Do NOT delete:
+  - Internal records that are not tied to a GHL ID.
+  - Any other channels (Shopify, Amazon, manual, etc.).
+- Counts:
+  - `dealsUpdated` = upserted deals.
+  - `dealsArchived` = GHL deals archived/removed.
+  - `tasksUpdated` = tasks or flags updated.
+
+D. Logging
+- Log each run with:
+  - source: "GHL"
+  - mode, timestamp
+  - counts above
+  - any GHL API errors.
+
+========================================================
+3) AMAZON SELLER CENTRAL SYNC LOGIC
+========================================================
+
+This is for marketplace orders and inventory that we map into our Sales Orders and BOM.
+
+Signature idea:
+`syncAmazon({ mode })` → `{ mode, ordersUpdated, ordersArchived, inventoryUpdated, inventoryMappingsCleared }`
+
+A. Common behavior (merge & replace)
+- Using our existing Amazon connection:
+  - Fetch Amazon orders:
+    - Order ID
+    - Status (open, shipped, cancelled, returned, etc.)
+    - Customer info
+    - Line items: SKU/ASIN, quantity, price
+  - Fetch inventory levels for the configured Amazon channels (FBA/FBM as we defined).
+- Upsert:
+  - Sales Orders table with channel = AMAZON.
+    - Map Amazon SKUs/ASINs → our products (using canonical SKU / UPC / mapping wizard).
+  - Update Amazon-related inventory fields:
+    - e.g., Amazon on-hand, reserved, inbound, etc., if we already track them.
+- Do NOT touch non-Amazon channels.
+
+B. mode = "merge" (Import only)
+- No deletions:
+  - Keep local Amazon orders that don’t show up in this sync.
+  - Keep any Amazon inventory mappings that don’t exist upstream.
+- Counts:
+  - `ordersUpdated`, `ordersArchived = 0`, `inventoryUpdated`, `inventoryMappingsCleared = 0`.
+
+C. mode = "replace" (Replace with Amazon)
+- Orders:
+  - After pulling all Amazon order IDs in scope:
+    - Find local Sales Orders with channel = AMAZON.
+    - If an Amazon order in our DB is not present in the Amazon response:
+      - Archive / soft-delete / mark as “Archived (no longer in Amazon)” according to existing pattern.
+- Inventory:
+  - For any Amazon-linked inventory rows that refer to SKUs no longer existing in Amazon:
+    - Clear or mark the Amazon-specific link as inactive (do NOT delete the base product).
+- Counts:
+  - `ordersUpdated`, `ordersArchived`, `inventoryUpdated`, `inventoryMappingsCleared`.
+
+D. Logging
+- Source: "Amazon"
+- mode, timestamp, counts, error messages.
+
+========================================================
+4) EXTENSIV/PIVOT (3PL) SYNC LOGIC
+========================================================
+
+Extensiv is the 3PL that feeds the “Pivot” quantities in BOM. It should NEVER directly affect Hildale quantities; those are only updated via transfers and shipments we define in the app.
+
+Signature idea:
+`syncExtensiv({ mode })` → `{ mode, inventoryUpdated, inventoryCleared }`
+
+A. Common behavior (merge & replace)
+- Fetch from Extensiv:
+  - All SKUs and on-hand quantities for the Pivot warehouse/location.
+- Mapping:
+  - Map Extensiv SKUs → our canonical products (using the mapping system we already built).
+- Upsert:
+  - Only the Pivot quantity fields in the BOM Finished Products table.
+  - Do NOT touch Hildale Qty; only update Pivot Qty.
+  - Do NOT touch Shopify / Amazon / other source fields here.
+
+B. mode = "merge" (Import only)
+- Behavior:
+  - Only update Pivot Qty for SKUs returned by Extensiv.
+  - Leave existing Pivot Qty for SKUs that Extensiv didn’t mention.
+- Counts:
+  - `inventoryUpdated` = number of Pivot Qty fields updated.
+  - `inventoryCleared = 0`.
+
+C. mode = "replace" (Replace with Extensiv)
+- Treat Extensiv as the ground truth for Pivot:
+  - After syncing all Extensiv SKUs:
+    - For any product that has a Pivot Qty in our app but is not present in Extensiv:
+      - Set Pivot Qty to 0 and/or mark the Extensiv link as inactive.
+- Still NEVER change Hildale Qty here.
+- Counts:
+  - `inventoryUpdated` = updated Pivot Qty values.
+  - `inventoryCleared` = number of Pivot Qty fields that were zeroed or unlinked.
+
+D. Logging
+- Source: "Extensiv"
+- mode, timestamp, counts, any Extensiv errors.
+
+========================================================
+5) QUICKBOOKS ONLINE SYNC LOGIC
+========================================================
+
+QuickBooks is used for financial & demand history, NOT for real-time inventory control. We DO NOT push inventory back to QuickBooks. This sync is read-only from QBO to our “Quickbooks Demand History” table under AI Agent → Insights.
+
+Signature idea:
+`syncQuickBooks({ mode })` → `{ mode, recordsUpdated, recordsCleared }`
+
+A. Common behavior (merge & replace)
+- Pull from QuickBooks:
+  - Sales invoices / sales receipts for products we track:
+    - Date, product, quantity, revenue.
+  - Credit memos / refunds that affect demand.
+- Aggregate or normalize:
+  - Create or update entries in our QuickBooks Demand History table(s):
+    - SKU / product
+    - Period (e.g., month/year)
+    - Units sold
+    - Units refunded
+    - Net demand
+    - Revenue, if relevant.
+- This table is read-only from the app’s perspective and used by AI in the “Quickbooks Demand History” tab under Insights.
+
+B. mode = "merge" (Import only)
+- Behavior:
+  - Upsert history rows based on SKUs and time buckets (e.g., year+month).
+  - If a period already exists, update totals.
+  - Do NOT delete any rows, even if they no longer appear in QuickBooks (safe option).
+- Counts:
+  - `recordsUpdated` = rows inserted or updated.
+  - `recordsCleared = 0`.
+
+C. mode = "replace" (Replace with QuickBooks) — still conservative
+- Behavior:
+  - Use QBO as the source of truth for the QuickBooks Demand History table ONLY.
+  - After importing:
+    - Identify rows in the QuickBooks Demand History table that:
+      - Are tagged as `source = "QuickBooks"` AND
+      - No longer correspond to any QuickBooks transactions in the current sync window.
+    - Remove or mark those rows as archived.
+  - Never delete or change any core product or inventory tables; only clean up the QuickBooks history table.
+- Counts:
+  - `recordsUpdated` = rows inserted or updated.
+  - `recordsCleared` = history rows removed/archived.
+
+D. Logging
+- Source: "QuickBooks"
+- mode, timestamp, counts, and any QuickBooks API errors.
+
+========================================================
+6) SHARED INFRASTRUCTURE & UI
+========================================================
+
+A. Reuse a generic sync handler
+- Create a generic function that the modals can call:
+  - `runSync({ source, mode })`
+  - Internally delegates to:
+    - GHL → `syncGHL`
+    - Amazon → `syncAmazon`
+    - Extensiv → `syncExtensiv`
+    - QuickBooks → `syncQuickBooks`
+    - (Shopify already exists; keep as-is.)
+- Use the existing toast and Logs system used for Shopify.
+
+B. Logs
+- Ensure all sources write to the same Logs area (AI Agent → Logs) with:
+  - Source name
+  - Mode
+  - Timestamp
+  - Summary counts
+  - Any error / message text.
+
+C. Final checks
+- Verify for EACH data source (GHL, Amazon, Extensiv, QuickBooks) that:
+  - Clicking **Sync** opens the correct modal.
+  - “Import only (recommended)” runs in merge mode with no deletions.
+  - “Replace with [Source] (destructive)” runs in replace mode and only cleans up that source’s own records as defined above.
+  - Other sources’ data remains untouched.
+  - Logs and toasts show correct counts and error messages.
+
+Implement all of the above now so that all major integrations have the same safe, predictable two-mode sync behavior as Shopify.

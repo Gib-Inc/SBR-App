@@ -359,6 +359,7 @@ export interface IStorage {
   getAllSalesOrders(): Promise<SalesOrder[]>;
   getSalesOrder(id: string): Promise<SalesOrder | undefined>;
   getSalesOrdersByExternalId(channel: string, externalOrderId: string): Promise<SalesOrder[]>;
+  getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]>;
   getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined>;
   createSalesOrder(order: InsertSalesOrder): Promise<SalesOrder>;
   updateSalesOrder(id: string, order: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined>;
@@ -2396,6 +2397,12 @@ export class MemStorage implements IStorage {
   async getSalesOrdersByExternalId(channel: string, externalOrderId: string): Promise<SalesOrder[]> {
     return Array.from(this.salesOrders.values()).filter(
       order => order.channel === channel && order.externalOrderId === externalOrderId
+    );
+  }
+
+  async getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]> {
+    return Array.from(this.salesOrders.values()).filter(
+      order => order.channel === channel
     );
   }
 
@@ -4800,6 +4807,11 @@ export class PostgresStorage implements IStorage {
       ))
       .orderBy(schema.salesOrders.createdAt)
       .limit(1);
+  }
+
+  async getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]> {
+    return await this.db.select().from(schema.salesOrders)
+      .where(eq(schema.salesOrders.channel, channel));
   }
 
   async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {

@@ -3485,11 +3485,12 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // Shopify - Sync Recent Orders
+  // Shopify - Sync Recent Orders (with merge/replace mode support)
   app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const { daysBack = 7 } = req.body;
+      const { daysBack = 7, mode = "merge" } = req.body;
+      const syncMode: "merge" | "replace" = mode === "replace" ? "replace" : "merge";
       
       // Get credentials from integration config or environment variables
       const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
@@ -3515,14 +3516,32 @@ TOTAL: $${subtotal.toFixed(2)}
       if (config) {
         await storage.updateIntegrationConfig(config.id, {
           lastSyncStatus: 'PENDING',
-          lastSyncMessage: 'Sync in progress...',
+          lastSyncMessage: `Sync in progress (${syncMode} mode)...`,
         });
+      }
+
+      // Log sync start
+      console.log(`[Shopify] Starting ${syncMode.toUpperCase()} sync from last ${daysBack} days...`);
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'SHOPIFY',
+          action: 'SYNC_STARTED',
+          status: 'INFO',
+          message: `Shopify ${syncMode} sync started`,
+          details: { mode: syncMode, daysBack }
+        });
+      } catch (logErr) {
+        console.warn('[Shopify] Failed to log sync start:', logErr);
       }
 
       // Fetch recent orders from Shopify
       console.log(`[Shopify] Syncing orders from last ${daysBack} days...`);
       const normalizedOrders = await client.syncRecentOrders(daysBack);
       console.log(`[Shopify] Fetched ${normalizedOrders.length} orders`);
+      
+      // Build a set of Shopify order IDs that we fetched
+      const shopifyOrderIds = new Set(normalizedOrders.map(o => o.externalOrderId));
 
       let createdCount = 0;
       let updatedCount = 0;
@@ -3732,7 +3751,134 @@ TOTAL: $${subtotal.toFixed(2)}
         }
       }
 
-      const summary = `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+      // REPLACE MODE: Archive/remove Shopify orders and clear inventory mappings that don't exist in Shopify
+      let ordersArchived = 0;
+      let inventoryMappingsCleared = 0;
+      let inventoryUpdated = 0;
+      
+      if (syncMode === "replace") {
+        console.log('[Shopify] REPLACE mode: Checking for local Shopify records to archive/remove...');
+        
+        // 1. Fetch ALL Shopify orders (use a very large window - 3 years) to get a complete picture
+        // This is critical: we cannot use the limited daysBack scope for deletion decisions
+        console.log('[Shopify] Fetching complete order list from Shopify for replace mode reconciliation...');
+        let allShopifyOrderIds = new Set<string>();
+        try {
+          const allOrders = await client.syncRecentOrders(1095); // 3 years worth of orders
+          allShopifyOrderIds = new Set(allOrders.map(o => o.externalOrderId));
+          console.log(`[Shopify] Fetched ${allShopifyOrderIds.size} total Shopify orders for reconciliation`);
+        } catch (fetchErr: any) {
+          console.error('[Shopify] Failed to fetch complete order list for replace mode:', fetchErr);
+          errors.push(`Replace mode order reconciliation skipped: ${fetchErr.message}`);
+          // Don't proceed with archiving if we couldn't get a complete picture
+        }
+        
+        // 2. Archive/soft-delete local Shopify orders that no longer exist in the complete Shopify order set
+        if (allShopifyOrderIds.size > 0) {
+          try {
+            const localShopifyOrders = await storage.getSalesOrdersByChannel('SHOPIFY');
+            for (const localOrder of localShopifyOrders) {
+              // Skip already archived orders
+              if (localOrder.status === 'ARCHIVED') continue;
+              
+              if (localOrder.externalOrderId && !allShopifyOrderIds.has(localOrder.externalOrderId)) {
+                // This local Shopify order doesn't exist in Shopify anymore - archive it
+                try {
+                  await storage.updateSalesOrder(localOrder.id, { 
+                    status: 'ARCHIVED',
+                    notes: `Archived by Shopify Replace sync on ${new Date().toISOString()} - order no longer exists in Shopify`
+                  });
+                  ordersArchived++;
+                  console.log(`[Shopify] Archived order ${localOrder.externalOrderId} (not in Shopify)`);
+                } catch (archiveErr: any) {
+                  errors.push(`Failed to archive order ${localOrder.externalOrderId}: ${archiveErr.message}`);
+                }
+              }
+            }
+            console.log(`[Shopify] Archived ${ordersArchived} orders that no longer exist in Shopify`);
+          } catch (orderErr: any) {
+            console.error('[Shopify] Error checking orders for archive:', orderErr);
+            errors.push(`Failed to check orders for archiving: ${orderErr.message}`);
+          }
+        } else {
+          console.log('[Shopify] Skipping order archival - could not fetch complete order list from Shopify');
+        }
+        
+        // 3. Clear Shopify inventory mappings for products that no longer exist in Shopify
+        try {
+          // Fetch all Shopify products/variants to know what's valid
+          console.log('[Shopify] Fetching complete product catalog from Shopify for mapping reconciliation...');
+          const shopifyProducts = await client.fetchProductsForMapping();
+          const validVariantIds = new Set<string>();
+          const validShopifySkus = new Set<string>();
+          
+          for (const product of shopifyProducts) {
+            for (const variant of product.variants) {
+              validVariantIds.add(String(variant.id));
+              if (variant.sku) {
+                validShopifySkus.add(variant.sku);
+              }
+            }
+          }
+          
+          console.log(`[Shopify] Fetched ${shopifyProducts.length} products with ${validVariantIds.size} variants for reconciliation`);
+          
+          // Safety check: only proceed if we got a reasonable catalog
+          if (validVariantIds.size === 0) {
+            console.warn('[Shopify] Skipping mapping cleanup - no products/variants returned from Shopify (catalog may be incomplete)');
+            errors.push('Mapping cleanup skipped: Shopify product catalog appears empty');
+          } else {
+            // Get all items with Shopify mappings
+            const allItems = await storage.getAllItems();
+            for (const item of allItems) {
+              let needsUpdate = false;
+              const updates: any = {};
+              
+              // Check if the shopifyVariantId is still valid
+              if (item.shopifyVariantId && !validVariantIds.has(item.shopifyVariantId)) {
+                updates.shopifyVariantId = null;
+                updates.shopifyInventoryItemId = null;
+                needsUpdate = true;
+                console.log(`[Shopify] Clearing variant mapping for ${item.sku} (variant ${item.shopifyVariantId} no longer exists)`);
+              }
+              
+              // Check if the shopifySku is still valid
+              if (item.shopifySku && !validShopifySkus.has(item.shopifySku)) {
+                updates.shopifySku = null;
+                needsUpdate = true;
+                console.log(`[Shopify] Clearing SKU mapping for ${item.sku} (Shopify SKU ${item.shopifySku} no longer exists)`);
+              }
+              
+              if (needsUpdate) {
+                await storage.updateItem(item.id, updates);
+                inventoryMappingsCleared++;
+              }
+            }
+            console.log(`[Shopify] Cleared ${inventoryMappingsCleared} Shopify mappings that no longer exist`);
+          }
+        } catch (mappingErr: any) {
+          console.error('[Shopify] Error clearing inventory mappings:', mappingErr);
+          errors.push(`Failed to clear inventory mappings: ${mappingErr.message}`);
+        }
+        
+        // Log replace mode completion
+        try {
+          const { logService } = await import('./services/log-service');
+          await logService.logIntegrationEvent({
+            source: 'SHOPIFY',
+            action: 'REPLACE_SYNC_COMPLETED',
+            status: 'SUCCESS',
+            message: `Shopify replace sync completed: ${ordersArchived} orders archived, ${inventoryMappingsCleared} mappings cleared`,
+            details: { mode: syncMode, ordersArchived, inventoryMappingsCleared }
+          });
+        } catch (logErr) {
+          console.warn('[Shopify] Failed to log replace sync completion:', logErr);
+        }
+      }
+
+      const summary = syncMode === "replace"
+        ? `Created ${createdCount}, updated ${updatedCount} orders. ${ordersArchived} archived, ${inventoryMappingsCleared} mappings cleared. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`
+        : `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -3744,10 +3890,37 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
+      // Log sync completion
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'SHOPIFY',
+          action: 'SYNC_COMPLETED',
+          status: hasErrors ? 'WARNING' : 'SUCCESS',
+          message: summary,
+          details: { 
+            mode: syncMode, 
+            createdOrders: createdCount, 
+            updatedOrders: updatedCount,
+            ordersArchived,
+            inventoryMappingsCleared,
+            inventoryUpdated,
+            unmatchedSkus: unmatchedSkus.length,
+            errors: errors.length 
+          }
+        });
+      } catch (logErr) {
+        console.warn('[Shopify] Failed to log sync completion:', logErr);
+      }
+
       res.json({
         success: !hasErrors,
+        mode: syncMode,
         createdOrders: createdCount,
         updatedOrders: updatedCount,
+        ordersArchived,
+        inventoryUpdated,
+        inventoryMappingsCleared,
         unmatchedSkus,
         errors,
         message: summary,

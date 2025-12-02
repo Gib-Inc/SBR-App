@@ -4851,8 +4851,8 @@ Notes: ${po.notes || 'None'}
                 key = `return:${returnMatch[1]}`;
               }
             } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
-              // Key by PO number
-              const poMatch = name.match(/PO[- ]?(\d+)/);
+              // Key by full PO number (e.g., "PO-2025-0003" from "PO PO-2025-0003 - Acme Corp")
+              const poMatch = name.match(/PO[- ]?(PO-\d+-\d+|\d+-\d+)/i);
               if (poMatch) {
                 key = `po:${poMatch[1]}`;
               }

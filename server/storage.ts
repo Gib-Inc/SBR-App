@@ -101,7 +101,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, gt, gte, lte, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, gt, gte, lte, desc, or, ilike, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {

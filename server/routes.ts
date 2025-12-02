@@ -4555,8 +4555,10 @@ Notes: ${returnRequest.resolutionNotes || 'None'}
           }
 
           // Determine stage based on return status
+          // OPEN, LABEL_ISSUED → REFUND_PROCESSING (still in progress)
+          // RECEIVED, REFUNDED, CLOSED → REFUNDED (completed)
           let stageId = GHL_CONFIG.stages.REFUND_PROCESSING;
-          if (returnRequest.status === 'REFUNDED' || returnRequest.status === 'CLOSED') {
+          if (returnRequest.status === 'RECEIVED' || returnRequest.status === 'REFUNDED' || returnRequest.status === 'CLOSED') {
             stageId = GHL_CONFIG.stages.REFUNDED;
           }
 

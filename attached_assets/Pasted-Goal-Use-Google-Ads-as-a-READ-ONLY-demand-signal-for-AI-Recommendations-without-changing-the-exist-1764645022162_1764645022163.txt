@@ -1,0 +1,213 @@
+Goal:
+Use Google Ads as a READ-ONLY demand signal for AI Recommendations, without changing the existing Google Ads card UI in AI Agent → Data Sources.
+
+The Google Ads card must keep its current layout/labels. When I connect Google Ads through that card, the system you build below must use those credentials and data, but the visual card itself should not be redesigned.
+
+Instead, all Google Ads influence should appear inside AI Agent → Insights → AI Recommendations as:
+- a “Google Ads” column that shows “Order”, “Don’t order”, or “–” per SKU, and
+- a slide-over details panel that explains, for that row, how Google Ads (and other data sources) contributed to the final AI decision.
+
+In addition, add the same pattern of columns for other data sources (Meta Ads, Shopify, Extensiv/Pivot, QuickBooks), even if some are just stubs for now. Finally, add a “Final Decision” column that is the LLM’s overall call.
+
+DO NOT:
+- change budgets, bids, or campaigns in Google Ads,
+- redesign the Data Sources “cards” section,
+- or remove existing AI Recommendation columns unless absolutely necessary.
+
+==================================================
+1) BACKEND – GOOGLE ADS CONNECTION REUSE
+==================================================
+Use the EXISTING Google Ads data-source card for configuration and tokens.
+
+1. Locate the existing Google Ads integration wiring in AI Agent → Data Sources:
+   - Keep the card UI exactly as-is (buttons, labels, status).
+   - Re-use its credentials and sync entry-point for the work below.
+   - If no integration logic exists yet, implement it BEHIND the current card without changing the card layout.
+
+2. OAuth & tokens:
+   - Use official Google Ads API, using the current Configure/Connect flow already on the card.
+   - Store tokens securely and re-use them for the sync job described below.
+   - If the card already exposes a “Sync” action, hook that into the new sync job instead of adding new buttons.
+
+==================================================
+2) DATA MODEL – SOURCE DECISION STRUCTURE
+==================================================
+Extend the AI Recommendation model so each row can carry per-source decisions and explanations.
+
+1. AI Recommendation detail payload:
+   - Add a JSON field on the AI recommendation entity, e.g. `sourceDecisionsJson`.
+   - Shape (TypeScript-style):
+
+   interface SourceDecision {
+     source: "GOOGLE_ADS" | "META_ADS" | "SHOPIFY" | "EXTENSIV" | "QUICKBOOKS";
+     status: "ORDER" | "DONT_ORDER" | "NEUTRAL" | "NO_DATA"; // "NO_DATA" means no signal
+     rationale: string;                                      // short human-readable reason
+     metrics: Record<string, string | number>;               // key metrics used for this source
+   }
+
+   interface RecommendationDetail {
+     finalDecision: "ORDER" | "DONT_ORDER" | "MONITOR";      // overall call
+     finalRationale: string;                                 // 1–3 sentence explanation
+     sources: SourceDecision[];
+   }
+
+   - Store this as JSON on each AI Recommendation row.
+
+2. Keep existing AI Recommendation fields (SKU, Product, Type, Risk, Days Left, Avail, Gap%, On PO, etc.) intact; they should continue to be first-class columns.
+
+==================================================
+3) GOOGLE ADS – DATA PULL & SOURCE DECISION
+==================================================
+Implement a read-only Google Ads sync and per-source decision calculation.
+
+1. Data pull (re-use “Sync” from Google Ads card):
+   - On sync, pull the last N days (configurable, default 14) of performance per product using Google Ads API:
+     • Dimensions: date, campaign/ad group/asset group, product item ID (if available).
+     • Metrics: impressions, clicks, cost, conversions, conversion value.
+   - Map product item ID → internal product (house SKU) using:
+     • existing mapping (SKU/UPC) or
+     • any existing Google-item-ID field on Product.
+   - Aggregate per product per day, and then per product over the last 14 days:
+     • avgConvPerDay
+     • avgRevenuePerDay
+     • avgSpendPerDay (optional)
+   - Store this in a dedicated performance table (if not already created) or cache layer, but keep it READ-ONLY.
+
+2. Google Ads “Order / Don’t order” logic:
+   - For each product with Google Ads data and an active AI Recommendation row:
+     - Compute:
+       • avgConvPerDay = average conversions over the last 7–14 days.
+       • projectedOrdersHorizon = avgConvPerDay * daysLeftHorizon,
+         where daysLeftHorizon comes from the recommendation’s forecast window.
+       • available = current available-for-sale units (same as used in AI Recommendations).
+     - Define a simple rule (you can adjust thresholds if more sensible):
+       • If projectedOrdersHorizon > available * 0.7 → Google Ads status = "ORDER"
+       • Else if projectedOrdersHorizon < available * 0.3 → status = "DONT_ORDER"
+       • Else → status = "NEUTRAL"
+     - If there is no mapped Google Ads data for that product → status = "NO_DATA".
+
+   - Build a SourceDecision for "GOOGLE_ADS" with:
+     • status (Order / Don’t order / Neutral / No data),
+     • rationale string, e.g.:
+       - "High ad-driven demand: ~X orders expected vs Y units available."
+       - "Ad-driven demand appears low relative to current stock."
+       - "No recent Google Ads data available for this SKU."
+     • metrics object including:
+       - avgConvPerDay
+       - projectedOrdersHorizon
+       - available
+       - daysLeftHorizon
+       - time window used (e.g., "last_14_days").
+
+3. DO NOT WRITE BACK to Google Ads:
+   - No changes to bids, budgets, or campaign settings.
+   - This source is strictly used to inform recommendations.
+
+==================================================
+4) OTHER SOURCES – STUBBED SOURCEDECISION ENTRIES
+==================================================
+We want the AI Recommendations UI to show columns for multiple data sources, even if some are not fully wired yet.
+
+1. For each recommendation row, ensure the RecommendationDetail JSON includes one SourceDecision entry per source:
+   - "GOOGLE_ADS" – computed as above.
+   - "META_ADS" – for now, set status "NO_DATA" and a rationale like "Meta Ads integration not yet configured."
+   - "SHOPIFY" – derive a simple initial status based on recent Shopify orders (if that logic already exists); otherwise "NO_DATA".
+   - "EXTENSIV" – based on pivot/warehouse signals if available; otherwise "NO_DATA".
+   - "QUICKBOOKS" – based on QuickBooks demand history if implemented; otherwise "NO_DATA".
+
+   These can be expanded later without changing the UI pattern.
+
+2. Final Decision:
+   - For now, the finalDecision should mirror your existing “Type”/“Reorder vs OK” classification, but expressed as:
+     • "ORDER" (needs reorder),
+     • "DONT_ORDER" (no reorder needed),
+     • or "MONITOR" (borderline).
+   - Add a short finalRationale combining the major signals (e.g., inventory days left + major source statuses).
+
+==================================================
+5) UI – AI RECOMMENDATIONS TABLE COLUMNS
+==================================================
+Update AI Agent → Insights → AI Recommendations table to show per-source columns and final decision.
+
+1. Add new columns (left-to-right order can be similar to):
+   - SKU | Product | Type | Risk | Days Left | Avail | Gap% | On PO |
+   - Google Ads | Meta Ads | Shopify | Extensiv | QuickBooks |
+   - Final Decision | Actions
+
+2. Cell rendering:
+   - For each of the five source columns, read the matching SourceDecision from the JSON:
+     • If status "ORDER" → pill with text "Order" and a positive/highlight style.
+     • If status "DONT_ORDER" → pill with text "Don’t order" and a neutral/dim style.
+     • If status "NEUTRAL" → pill with text "Neutral".
+     • If status "NO_DATA" → show "–" with muted style.
+   - Final Decision column:
+     • Show "Order", "Don’t order", or "Monitor" as a pill based on RecommendationDetail.finalDecision.
+
+3. Do NOT remove existing filter/search functionality on AI Recommendations.
+
+==================================================
+6) UI – ROW CLICK DETAILS PANEL
+==================================================
+Clicking a recommendation row must open a slide-over details panel explaining the decision.
+
+1. Trigger:
+   - When the user clicks anywhere on a row (or on a dedicated “Details” icon), open a right-side slide-over panel.
+
+2. Panel content:
+   - Header: SKU and Product name, and the Final Decision pill.
+   - Section: “Overall Reasoning”
+     • Show RecommendationDetail.finalRationale.
+   - Section: “Source Signals”
+     • For each SourceDecision in sources (GOOGLE_ADS, META_ADS, SHOPIFY, EXTENSIV, QUICKBOOKS):
+       - Show source name and status pill.
+       - Underneath, show key metrics (from metrics object) in a compact key/value list.
+       - Show the per-source rationale string.
+   - Section: “Core Forecast Metrics” (re-use existing forecast fields: days left, available, forecast horizon, backorders, etc.).
+
+3. Behavior:
+   - Panel should be read-only; no buttons to modify campaigns, budgets, or external systems.
+   - Close button or click-outside to dismiss.
+
+==================================================
+7) AI PIPELINE CHANGES
+==================================================
+Update the AI/LLM pipeline that generates AI Recommendations so that:
+
+1. It collects all relevant metrics for each SKU:
+   - Inventory metrics (Hildale, Pivot, backorders, days left).
+   - Google Ads projections (from the performance table).
+   - Any other available source metrics (Shopify, Extensiv, QuickBooks) if ready.
+
+2. It generates a RecommendationDetail JSON as described:
+   - The LLM can be used to:
+     • Turn numeric metrics into rationale strings for each SourceDecision.
+     • Synthesize finalDecision and finalRationale.
+   - The simple threshold logic for Google Ads “ORDER / DONT_ORDER / NEUTRAL” should still be enforced so behavior is deterministic; the LLM should explain, not override, the hard thresholds.
+
+3. Save RecommendationDetail JSON with each AI Recommendation row so the table and slide-over can render from it.
+
+==================================================
+8) TESTS / VERIFICATION
+==================================================
+Verify at least:
+
+1) When Google Ads is configured and synced:
+   - AI Recommendations table shows “Google Ads” column with “Order / Don’t order / Neutral / –” per SKU.
+   - Clicking a row opens the details panel with a Google Ads section listing metrics and rationale.
+   - Final Decision column matches the overall reorder logic.
+
+2) When Google Ads is NOT configured:
+   - Google Ads column shows “–”.
+   - Details panel shows Google Ads section with “No data available” style text.
+
+3) Other sources:
+   - Columns for Meta Ads, Shopify, Extensiv, QuickBooks appear with “–” where not implemented, without breaking existing logic.
+
+4) Safety:
+   - There is no code calling Google Ads APIs to modify entities (budgets, bids, campaigns).
+   - Existing Google Ads Data Sources card UI remains visually unchanged; its configure/sync flows simply back the new logic you implemented.
+
+End state:
+- Google Ads is hooked into the AI engine as a read-only signal.
+- AI Recommendations now show per-source “Order / Don’t order” views plus a Final Decision column.
+- Clicking any recommendation gives a clear, per-source explanation without altering any external ad settings.

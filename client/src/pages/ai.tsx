@@ -3288,7 +3288,8 @@ function LogsTab() {
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
-  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER" | null>(null);
+  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | null>(null);
+  const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
@@ -3316,10 +3317,7 @@ export default function AIAgent() {
     retry: false,
   });
 
-  const { data: phantomConfig } = useQuery<any>({
-    queryKey: ["/api/integration-configs/PHANTOMBUSTER"],
-    retry: false,
-  });
+  // PhantomBuster is disabled in V1 - no config query needed
 
   // Fetch Meta Ads and Google Ads platform configs (uses OAuth)
   const { data: metaAdsConfig, refetch: refetchMetaAds } = useQuery<any>({
@@ -3615,14 +3613,13 @@ export default function AIAgent() {
       id: "phantombuster",
       integrationType: "PHANTOMBUSTER" as const,
       name: "PhantomBuster",
-      description: "Supplier data scraping",
+      description: "External demand & supplier research (coming in V2)",
       icon: Database,
-      configured: !!(phantomConfig?.apiKey),
-      status: getConfigStatus(phantomConfig),
-      hasConfigDialog: true,
-      showRotation: true,
-      lastRotatedAt: phantomConfig?.tokenLastRotatedAt,
-      nextRotationAt: phantomConfig?.tokenNextRotationAt,
+      configured: false,
+      status: "v2_planned",
+      hasConfigDialog: false,
+      showRotation: false,
+      isV2Placeholder: true,
     },
     {
       id: "quickbooks",
@@ -3735,7 +3732,9 @@ export default function AIAgent() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <Badge
                               variant={
-                                !source.configured
+                                (source as any).isV2Placeholder
+                                  ? "secondary"
+                                  : !source.configured
                                   ? "outline"
                                   : source.status === "success" || source.status === "connected"
                                   ? "default"
@@ -3745,7 +3744,9 @@ export default function AIAgent() {
                               }
                               data-testid={`status-${source.id}`}
                             >
-                              {!source.configured
+                              {(source as any).isV2Placeholder
+                                ? "V2 Planned"
+                                : !source.configured
                                 ? "Not Configured"
                                 : source.status === "success" || source.status === "connected"
                                   ? "Connected"
@@ -3764,7 +3765,12 @@ export default function AIAgent() {
                               </span>
                             )}
                           </div>
-                          {(source as any).showRotation && (
+                          {(source as any).isV2Placeholder && (
+                            <div className="text-xs text-muted-foreground border-t pt-2 mt-1" data-testid={`v2-notice-${source.id}`}>
+                              Not available in V1
+                            </div>
+                          )}
+                          {(source as any).showRotation && !(source as any).isV2Placeholder && (
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs border-t pt-2 mt-1" data-testid={`rotation-info-${source.id}`}>
                               {(source as any).lastSyncAt && (
                                 <>
@@ -3787,59 +3793,80 @@ export default function AIAgent() {
                             </div>
                           )}
                           <div className="flex gap-2 flex-wrap">
-                            <Button
-                              size="sm"
-                              variant="default"
-                              onClick={() => {
-                                if (source.id === "quickbooks") {
-                                  if (!source.configured) {
-                                    handleQuickBooksConnect();
-                                  } else {
-                                    handleQuickBooksDisconnect();
-                                  }
-                                } else if (source.id === "meta-ads") {
-                                  if (!source.configured) {
-                                    handleMetaAdsConnect();
-                                  } else {
-                                    handleMetaAdsDisconnect();
-                                  }
-                                } else if (source.id === "google-ads") {
-                                  if (!source.configured) {
-                                    handleGoogleAdsConnect();
-                                  } else {
-                                    handleGoogleAdsDisconnect();
-                                  }
-                                } else {
-                                  setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER");
-                                }
-                              }}
-                              data-testid={`button-configure-${source.id}`}
-                            >
-                              <Settings2 className="mr-2 h-4 w-4" />
-                              Configure
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => {
-                                if (source.id === "quickbooks") {
-                                  handleQuickBooksSync();
-                                } else if (source.id === "meta-ads") {
-                                  handleMetaAdsSync();
-                                } else if (source.id === "google-ads") {
-                                  handleGoogleAdsSync();
-                                } else {
-                                  handleSync(source.id);
-                                }
-                              }}
-                              disabled={!source.configured || syncingSource === source.id}
-                              data-testid={`button-sync-${source.id}`}
-                            >
-                              <RefreshCw
-                                className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
-                              />
-                              {syncingSource === source.id ? "Syncing..." : "Sync"}
-                            </Button>
+                            {(source as any).isV2Placeholder ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => setShowPhantomV2Modal(true)}
+                                    data-testid={`button-learn-more-${source.id}`}
+                                  >
+                                    <Info className="mr-2 h-4 w-4" />
+                                    Learn more
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>PhantomBuster integration is planned for V2. Not available yet.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="default"
+                                  onClick={() => {
+                                    if (source.id === "quickbooks") {
+                                      if (!source.configured) {
+                                        handleQuickBooksConnect();
+                                      } else {
+                                        handleQuickBooksDisconnect();
+                                      }
+                                    } else if (source.id === "meta-ads") {
+                                      if (!source.configured) {
+                                        handleMetaAdsConnect();
+                                      } else {
+                                        handleMetaAdsDisconnect();
+                                      }
+                                    } else if (source.id === "google-ads") {
+                                      if (!source.configured) {
+                                        handleGoogleAdsConnect();
+                                      } else {
+                                        handleGoogleAdsDisconnect();
+                                      }
+                                    } else {
+                                      setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL");
+                                    }
+                                  }}
+                                  data-testid={`button-configure-${source.id}`}
+                                >
+                                  <Settings2 className="mr-2 h-4 w-4" />
+                                  Configure
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => {
+                                    if (source.id === "quickbooks") {
+                                      handleQuickBooksSync();
+                                    } else if (source.id === "meta-ads") {
+                                      handleMetaAdsSync();
+                                    } else if (source.id === "google-ads") {
+                                      handleGoogleAdsSync();
+                                    } else {
+                                      handleSync(source.id);
+                                    }
+                                  }}
+                                  disabled={!source.configured || syncingSource === source.id}
+                                  data-testid={`button-sync-${source.id}`}
+                                >
+                                  <RefreshCw
+                                    className={`mr-2 h-4 w-4 ${syncingSource === source.id ? "animate-spin" : ""}`}
+                                  />
+                                  {syncingSource === source.id ? "Syncing..." : "Sync"}
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3881,6 +3908,28 @@ export default function AIAgent() {
           onClose={() => setOpenIntegration(null)}
         />
       )}
+
+      {/* PhantomBuster V2 Modal */}
+      <Dialog open={showPhantomV2Modal} onOpenChange={setShowPhantomV2Modal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>PhantomBuster – Planned for V2</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              This integration will be used later to pull external demand and supplier intelligence.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              There is no live PhantomBuster integration in this version.
+            </p>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => setShowPhantomV2Modal(false)} data-testid="button-close-phantom-v2-modal">
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

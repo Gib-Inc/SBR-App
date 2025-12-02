@@ -12,7 +12,7 @@ import { ExtensivClient } from "./services/extensiv-client";
 import { ShopifyClient } from "./services/shopify-client";
 import { AmazonClient } from "./services/amazon-client";
 import { GoHighLevelClient } from "./services/gohighlevel-client";
-import { PhantomBusterClient } from "./services/phantombuster-client";
+// PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
@@ -4785,108 +4785,22 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // PhantomBuster - Test Connection
-  app.post("/api/integrations/phantombuster/test", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const userId = req.session.userId!;
-      
-      // Get credentials from integration config
-      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
-      const apiKey = config?.apiKey;
-      
-      if (!apiKey) {
-        return res.status(400).json({ 
-          success: false,
-          message: "PhantomBuster API key not configured." 
-        });
-      }
-
-      const client = new PhantomBusterClient(apiKey);
-      const result = await client.testConnection();
-
-      // Update integration config status
-      if (config) {
-        await storage.updateIntegrationConfig(config.id, {
-          lastSyncAt: new Date(),
-          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
-          lastSyncMessage: result.message,
-        });
-      }
-
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ 
-        success: false,
-        message: error.message || "Failed to test PhantomBuster connection" 
-      });
-    }
+  // PhantomBuster - Test Connection (V2 placeholder - disabled in V1)
+  app.post("/api/integrations/phantombuster/test", requireAuth, async (_req: Request, res: Response) => {
+    // PhantomBuster integration is planned for V2 - return informational message
+    res.json({ 
+      success: false,
+      message: "PhantomBuster integration is planned for V2. Not available in this version." 
+    });
   });
 
-  // PhantomBuster - Sync (placeholder)
-  app.post("/api/integrations/phantombuster/sync", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const userId = req.session.userId!;
-      
-      // Get credentials from integration config
-      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
-      const apiKey = config?.apiKey;
-      
-      if (!apiKey) {
-        const message = "PhantomBuster API key not configured";
-        if (config) {
-          await storage.updateIntegrationConfig(config.id, {
-            lastSyncAt: new Date(),
-            lastSyncStatus: 'FAILED',
-            lastSyncMessage: message,
-          });
-        }
-        return res.status(400).json({ success: false, message });
-      }
-
-      const client = new PhantomBusterClient(apiKey);
-      
-      // Set status to PENDING
-      if (config) {
-        await storage.updateIntegrationConfig(config.id, {
-          lastSyncStatus: 'PENDING',
-          lastSyncMessage: 'Sync in progress...',
-        });
-      }
-
-      // For now, just test connection as a sync placeholder
-      const result = await client.sync();
-      
-      // Update integration config status
-      if (config) {
-        await storage.updateIntegrationConfig(config.id, {
-          lastSyncAt: new Date(),
-          lastSyncStatus: result.success ? 'SUCCESS' : 'FAILED',
-          lastSyncMessage: result.message,
-        });
-      }
-
-      res.json({
-        success: result.success,
-        message: result.message,
-      });
-    } catch (error: any) {
-      const userId = req.session.userId!;
-      const config = await storage.getIntegrationConfig(userId, 'PHANTOMBUSTER');
-      
-      // Record failure in integration config
-      if (config) {
-        await storage.updateIntegrationConfig(config.id, {
-          lastSyncAt: new Date(),
-          lastSyncStatus: 'FAILED',
-          lastSyncMessage: error.message || "Sync failed",
-        });
-      }
-      
-      res.status(500).json({ 
-        success: false,
-        message: error.message || "Integration sync failed" 
-      });
-    }
+  // PhantomBuster - Sync (V2 placeholder - disabled in V1)
+  app.post("/api/integrations/phantombuster/sync", requireAuth, async (_req: Request, res: Response) => {
+    // PhantomBuster integration is planned for V2 - return informational message
+    res.json({ 
+      success: false,
+      message: "PhantomBuster integration is planned for V2. Not available in this version." 
+    });
   });
 
   // ============================================================================
@@ -8830,169 +8744,40 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // PhantomBuster Supplier Discovery Routes
-  // GET - Get available phantoms/agents
-  app.get("/api/suppliers/discovery/phantombuster/agents", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const userId = req.session.userId!;
-      const settings = await storage.getSettings(userId);
-      const apiKey = settings?.phantombusterApiKey;
-
-      if (!apiKey) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "PhantomBuster API key not configured" 
-        });
-      }
-
-      const client = new PhantomBusterClient(apiKey);
-      const result = await client.getAgents();
-      
-      res.json(result);
-    } catch (error: any) {
-      console.error("[SupplierDiscovery] Error fetching agents:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message || "Failed to fetch agents" 
-      });
-    }
+  // PhantomBuster Supplier Discovery Routes (V2 placeholder - disabled in V1)
+  // All PhantomBuster routes return V2 planned message - no real integration in V1
+  
+  // GET - Get available phantoms/agents (V2 placeholder)
+  app.get("/api/suppliers/discovery/phantombuster/agents", requireAuth, async (_req: Request, res: Response) => {
+    res.json({ 
+      success: false, 
+      agents: [],
+      message: "PhantomBuster integration is planned for V2. Not available in this version." 
+    });
   });
 
-  // POST - Launch a supplier discovery job
-  app.post("/api/suppliers/discovery/phantombuster/run", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const { agentId, keywords, location, tags, notes } = req.body;
-
-      if (!agentId || !keywords) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "agentId and keywords are required" 
-        });
-      }
-
-      const userId = req.session.userId!;
-      const settings = await storage.getSettings(userId);
-      const apiKey = settings?.phantombusterApiKey;
-
-      if (!apiKey) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "PhantomBuster API key not configured" 
-        });
-      }
-
-      const client = new PhantomBusterClient(apiKey);
-      
-      // Launch the discovery job
-      const launchResult = await client.launchDiscoveryJob(agentId, {
-        keywords,
-        location,
-        tags,
-        notes,
-      });
-
-      if (!launchResult.success || !launchResult.containerId) {
-        return res.status(400).json(launchResult);
-      }
-
-      // Return immediately with containerId for polling
-      res.json({
-        success: true,
-        containerId: launchResult.containerId,
-        message: "Discovery job started. Poll for results using the containerId.",
-      });
-    } catch (error: any) {
-      console.error("[SupplierDiscovery] Error launching discovery:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message || "Failed to launch discovery job" 
-      });
-    }
+  // POST - Launch a supplier discovery job (V2 placeholder)
+  app.post("/api/suppliers/discovery/phantombuster/run", requireAuth, async (_req: Request, res: Response) => {
+    res.json({ 
+      success: false, 
+      message: "PhantomBuster integration is planned for V2. Not available in this version." 
+    });
   });
 
-  // POST - Poll for discovery results and save leads
-  app.post("/api/suppliers/discovery/phantombuster/results", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const { agentId, containerId, keywords, location, tags, notes } = req.body;
-
-      if (!agentId || !containerId) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "agentId and containerId are required" 
-        });
-      }
-
-      const userId = req.session.userId!;
-      const settings = await storage.getSettings(userId);
-      const apiKey = settings?.phantombusterApiKey;
-
-      if (!apiKey) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "PhantomBuster API key not configured" 
-        });
-      }
-
-      const client = new PhantomBusterClient(apiKey);
-      
-      // Poll for results
-      const pollResult = await client.pollDiscoveryResults(agentId, containerId, {
-        keywords: keywords || '',
-        location,
-        tags,
-        notes,
-      });
-
-      if (!pollResult.success) {
-        return res.status(400).json(pollResult);
-      }
-
-      // Save leads to database with deduplication
-      const savedLeads = [];
-      for (const lead of pollResult.leads) {
-        try {
-          const savedLead = await storage.upsertSupplierLead({
-            name: lead.name,
-            companyName: lead.companyName,
-            websiteUrl: lead.websiteUrl,
-            contactEmail: lead.contactEmail,
-            contactPhone: lead.contactPhone,
-            location: lead.location,
-            source: lead.source,
-            status: 'NEW',
-            category: tags?.join(', '),
-            notes: notes,
-            rawData: lead.rawData,
-            phantomRunId: containerId,
-          });
-          savedLeads.push(savedLead);
-        } catch (err: any) {
-          console.warn("[SupplierDiscovery] Error saving lead:", lead.name, err.message);
-        }
-      }
-
-      res.json({
-        success: true,
-        leadsFound: pollResult.leads.length,
-        leadsSaved: savedLeads.length,
-        leads: savedLeads,
-        message: `Found ${pollResult.leads.length} leads, saved ${savedLeads.length} (deduplicated)`,
-      });
-    } catch (error: any) {
-      console.error("[SupplierDiscovery] Error polling results:", error);
-      res.status(500).json({ 
-        success: false, 
-        error: error.message || "Failed to poll discovery results" 
-      });
-    }
+  // POST - Poll for discovery results (V2 placeholder)
+  app.post("/api/suppliers/discovery/phantombuster/results", requireAuth, async (_req: Request, res: Response) => {
+    res.json({ 
+      success: false, 
+      leads: [],
+      message: "PhantomBuster integration is planned for V2. Not available in this version." 
+    });
   });
 
-  // Legacy endpoint - redirect to new pattern
-  app.post("/api/supplier-leads/import-phantombuster", requireAuth, async (req: Request, res: Response) => {
-    res.status(301).json({ 
-      error: "This endpoint has been replaced",
-      redirect: "POST /api/suppliers/discovery/phantombuster/run",
-      note: "Use the new discovery endpoints for PhantomBuster integration."
+  // Legacy endpoint - redirect to new pattern (V2 placeholder)
+  app.post("/api/supplier-leads/import-phantombuster", requireAuth, async (_req: Request, res: Response) => {
+    res.json({ 
+      success: false,
+      message: "PhantomBuster integration is planned for V2. Not available in this version."
     });
   });
 

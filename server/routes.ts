@@ -4385,12 +4385,14 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // ========== 0. CREATE SYSTEM CONTACT FOR NON-CUSTOMER ITEMS ==========
       // Stock warnings and other system items need a contact in V2 API
+      // Use a valid email domain that GHL will accept
       console.log('[GHL Sync] Creating/finding system contact...');
       let systemContactId: string | undefined;
       try {
+        // Use a real, valid email format for the system contact
         const systemContactResult = await client.createOrFindContact(
           'Inventory System',
-          'inventory@system.local',
+          'inventory@stickerburrroller.com',
           undefined
         );
         if (systemContactResult.success && systemContactResult.contactId) {
@@ -4398,18 +4400,6 @@ TOTAL: $${subtotal.toFixed(2)}
           console.log(`[GHL Sync] System contact ID: ${systemContactId}`);
         } else {
           console.error('[GHL Sync] Failed to create system contact:', systemContactResult.error);
-          // Try once more with a different email
-          const retryResult = await client.createOrFindContact(
-            'Inventory System',
-            'inventory-system@stickerburrroller.com',
-            undefined
-          );
-          if (retryResult.success && retryResult.contactId) {
-            systemContactId = retryResult.contactId;
-            console.log(`[GHL Sync] System contact ID (retry): ${systemContactId}`);
-          } else {
-            console.error('[GHL Sync] Failed to create system contact on retry:', retryResult.error);
-          }
         }
       } catch (e: any) {
         console.error('[GHL Sync] Exception creating system contact:', e.message);
@@ -4417,7 +4407,9 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // If we couldn't create a system contact, we can't sync stock warnings or POs
       if (!systemContactId) {
-        console.warn('[GHL Sync] No system contact available - stock warnings and POs will use customer contacts');
+        console.warn('[GHL Sync] No system contact available - stock warnings and POs will fail');
+        syncResults.stockWarnings.errors.push('No system contact available');
+        syncResults.purchaseOrders.errors.push('No system contact available');
       }
 
       // ========== 1. SYNC SALES ORDERS ==========

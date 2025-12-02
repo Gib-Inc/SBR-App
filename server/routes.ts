@@ -4759,11 +4759,16 @@ Notes: ${po.notes || 'None'}
             }
           } catch (error: any) {
             syncResults.purchaseOrders.failed++;
-            syncResults.purchaseOrders.errors.push(`PO ${po.poNumber}: ${error.message}`);
+            const errorMsg = error.message || String(error);
+            syncResults.purchaseOrders.errors.push(`PO ${po.poNumber}: ${errorMsg}`);
+            console.error(`[GHL Sync] PO ${po.poNumber} exception:`, errorMsg, error.stack);
           }
         }
       }
       console.log(`[GHL Sync] Purchase orders: ${syncResults.purchaseOrders.synced} synced, ${syncResults.purchaseOrders.failed} failed`);
+      if (syncResults.purchaseOrders.errors.length > 0) {
+        console.log(`[GHL Sync] PO errors: ${syncResults.purchaseOrders.errors.join('; ')}`);
+      }
 
       // Build summary message
       const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced;

@@ -2235,7 +2235,7 @@ function InsightsTab() {
                   <th className="px-3 text-left font-medium whitespace-nowrap w-px">Type</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap w-px">Risk</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap w-px">Days Left</th>
-                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Avail</th>
+                  <th className="px-3 text-right font-medium whitespace-nowrap w-px">Available for Sale</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap w-px">Gap%</th>
                   <th className="px-3 text-center font-medium whitespace-nowrap w-px">G.Ads</th>
                   <th className="px-3 text-center font-medium whitespace-nowrap w-px">Meta</th>

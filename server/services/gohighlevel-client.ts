@@ -529,6 +529,198 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Search for opportunities by name or custom field
+   * V2 API: GET /opportunities/search
+   */
+  async searchOpportunities(
+    pipelineId: string,
+    searchTerm: string
+  ): Promise<{ success: boolean; opportunities?: any[]; error?: string }> {
+    try {
+      // V2 API search endpoint with query parameter
+      const params = new URLSearchParams({
+        location_id: this.locationId,
+        pipeline_id: pipelineId,
+        q: searchTerm,
+        limit: '100',
+      });
+
+      const response = await fetch(`${this.baseUrl}/opportunities/search?${params}`, {
+        method: 'GET',
+        headers: this.getHeaders(),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Search opportunities failed:', errorText);
+        return {
+          success: false,
+          error: `Search failed: ${response.status}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        opportunities: data.opportunities || [],
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error searching opportunities:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to search opportunities',
+      };
+    }
+  }
+
+  /**
+   * Update an existing opportunity
+   * V2 API: PUT /opportunities/:id
+   */
+  async updateOpportunity(
+    opportunityId: string,
+    updates: {
+      name?: string;
+      monetaryValue?: number;
+      pipelineStageId?: string;
+      status?: string;
+      customFields?: Record<string, any>;
+    }
+  ): Promise<{ success: boolean; opportunityId?: string; error?: string }> {
+    try {
+      const updateData: any = {};
+      
+      if (updates.name) updateData.name = updates.name;
+      if (updates.monetaryValue !== undefined) updateData.monetaryValue = updates.monetaryValue;
+      if (updates.pipelineStageId) updateData.pipelineStageId = updates.pipelineStageId;
+      if (updates.status) updateData.status = updates.status;
+      
+      // V2 API: customFields must be an array of {key, field_value} objects
+      if (updates.customFields && Object.keys(updates.customFields).length > 0) {
+        const customFieldsArray = Object.entries(updates.customFields)
+          .filter(([_, value]) => value !== undefined && value !== null)
+          .map(([key, value]) => ({
+            key,
+            field_value: String(value),
+          }));
+        
+        if (customFieldsArray.length > 0) {
+          updateData.customFields = customFieldsArray;
+        }
+      }
+
+      const response = await fetch(`${this.baseUrl}/opportunities/${opportunityId}`, {
+        method: 'PUT',
+        headers: this.getHeaders(),
+        body: JSON.stringify(updateData),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Update opportunity failed:', errorText);
+        return {
+          success: false,
+          error: `Update failed: ${response.status}`,
+        };
+      }
+
+      console.log(`[GoHighLevelClient] Updated opportunity: ${opportunityId}`);
+      return {
+        success: true,
+        opportunityId,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error updating opportunity:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to update opportunity',
+      };
+    }
+  }
+
+  /**
+   * Create or update an opportunity - idempotent sync
+   * Searches for existing opportunity by name, updates if found, creates if not
+   */
+  async createOrUpdateOpportunity(
+    pipelineId: string,
+    stageId: string,
+    name: string,
+    monetaryValue: number,
+    notes: string,
+    customFields?: Record<string, any>,
+    contactId?: string,
+    uniqueIdentifier?: string // Used for searching existing opportunities
+  ): Promise<{ success: boolean; opportunityId?: string; opportunityUrl?: string; error?: string; action?: 'created' | 'updated' | 'skipped' }> {
+    try {
+      // V2 API requires contactId for opportunities
+      if (!contactId) {
+        console.error('[GoHighLevelClient] contactId is required for V2 opportunities');
+        return {
+          success: false,
+          error: 'contactId is required to create an opportunity in GHL V2',
+        };
+      }
+
+      // Search for existing opportunity by unique identifier or name
+      const searchTerm = uniqueIdentifier || name;
+      const searchResult = await this.searchOpportunities(pipelineId, searchTerm);
+      
+      if (searchResult.success && searchResult.opportunities && searchResult.opportunities.length > 0) {
+        // Find exact match by name
+        const existingOpp = searchResult.opportunities.find(
+          (opp: any) => opp.name === name || opp.name?.includes(uniqueIdentifier || '')
+        );
+        
+        if (existingOpp) {
+          // Update existing opportunity
+          console.log(`[GoHighLevelClient] Found existing opportunity: ${existingOpp.id}, updating...`);
+          const updateResult = await this.updateOpportunity(existingOpp.id, {
+            name,
+            monetaryValue,
+            pipelineStageId: stageId,
+            customFields,
+          });
+          
+          if (updateResult.success) {
+            const opportunityUrl = `https://app.gohighlevel.com/v2/location/${this.locationId}/opportunities/${existingOpp.id}`;
+            return {
+              success: true,
+              opportunityId: existingOpp.id,
+              opportunityUrl,
+              action: 'updated',
+            };
+          }
+          // If update fails, continue to try creating
+          console.warn('[GoHighLevelClient] Update failed, will try creating new:', updateResult.error);
+        }
+      }
+
+      // Create new opportunity
+      const result = await this.createOpportunity(
+        pipelineId,
+        stageId,
+        name,
+        monetaryValue,
+        notes,
+        customFields,
+        contactId
+      );
+
+      return {
+        ...result,
+        action: result.success ? 'created' : undefined,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error in createOrUpdate:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to create or update opportunity',
+      };
+    }
+  }
+
+  /**
    * Sync data (placeholder for future implementation)
    */
   async sync(): Promise<{ success: boolean; message: string }> {

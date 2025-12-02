@@ -4684,19 +4684,36 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
         
         for (const po of purchaseOrders) {
           try {
-            console.log(`[GHL Sync] Processing PO ${po.poNumber} with status ${po.status}`);
+            // Get PO lines to calculate receipt quantities for derived display status
+            const poLines = await storage.getPurchaseOrderLinesByPOId(po.id);
+            const totalQtyOrdered = poLines.reduce((sum, l) => sum + (l.qtyOrdered || 0), 0);
+            const totalQtyReceived = poLines.reduce((sum, l) => sum + (l.qtyReceived || 0), 0);
             
-            // Determine stage based on PO status
+            // Use the same display status derivation as the frontend
+            const displayStatus = derivePoDisplayStatus(
+              {
+                status: po.status,
+                lastEmailStatus: po.lastEmailStatus,
+                lastEmailSentAt: po.lastEmailSentAt,
+                acknowledgementStatus: po.acknowledgementStatus,
+              },
+              totalQtyOrdered,
+              totalQtyReceived
+            );
+            
+            console.log(`[GHL Sync] Processing PO ${po.poNumber} - DB status: ${po.status}, Display status: ${displayStatus}`);
+            
+            // Determine stage based on derived displayStatus (matches what user sees in app)
             let stageId: string;
-            if (po.status === 'RECEIVED' || po.status === 'CLOSED') {
+            if (displayStatus === 'RECEIVED' || displayStatus === 'CLOSED') {
               stageId = GHL_CONFIG.stages.PO_DELIVERED;
-            } else if (po.status === 'PARTIAL_RECEIVED') {
+            } else if (displayStatus === 'PARTIAL' || displayStatus === 'PARTIAL_RECEIVED') {
               stageId = GHL_CONFIG.stages.PO_PAID; // Treat partial as in-transit/paid
-            } else if (po.status === 'SENT' || po.status === 'ACKNOWLEDGED') {
+            } else if (displayStatus === 'SENT' || displayStatus === 'ACCEPTED') {
               stageId = GHL_CONFIG.stages.PO_SENT;
             } else {
               // DRAFT, APPROVAL_PENDING, APPROVED - skip syncing these for now
-              console.log(`[GHL Sync] Skipping PO ${po.poNumber} with status ${po.status}`);
+              console.log(`[GHL Sync] Skipping PO ${po.poNumber} with displayStatus ${displayStatus}`);
               continue;
             }
 
@@ -4709,8 +4726,7 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
               }
             }
 
-            // Get PO lines for summary
-            const poLines = await storage.getPurchaseOrderLinesByPOId(po.id);
+            // Build items list for description
             const itemsList = poLines.map(line => 
               `- ${line.itemName || line.sku}: ${line.quantity} units @ $${Number(line.unitCost || 0).toFixed(2)}`
             ).join('\n');
@@ -4719,7 +4735,8 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
             const description = `
 Purchase Order: ${po.poNumber}
 Supplier: ${supplierName}
-Status: ${po.status}
+Status: ${displayStatus}
+Receipt Progress: ${totalQtyReceived}/${totalQtyOrdered} units
 Total: $${poTotal.toFixed(2)}
 Order Date: ${po.orderDate ? new Date(po.orderDate).toLocaleDateString() : 'N/A'}
 Expected Delivery: ${po.expectedDeliveryDate ? new Date(po.expectedDeliveryDate).toLocaleDateString() : 'N/A'}

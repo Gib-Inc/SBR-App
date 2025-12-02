@@ -4703,7 +4703,7 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
             // Get supplier name for display
             let supplierName = 'Unknown Supplier';
             if (po.supplierId) {
-              const supplier = await storage.getSupplierById(po.supplierId);
+              const supplier = await storage.getSupplier(po.supplierId);
               if (supplier) {
                 supplierName = supplier.name;
               }

@@ -473,6 +473,62 @@ class LogService {
       },
     });
   }
+
+  async logInventoryAdjustment(params: {
+    itemId: string;
+    itemName: string;
+    itemSku?: string;
+    field: string;
+    oldValue: number;
+    newValue: number;
+    delta: number;
+    reason: string;
+    notes?: string;
+    userId?: string;
+    userName?: string;
+  }): Promise<void> {
+    const reasonLabels: Record<string, string> = {
+      offline_sale: 'Offline Sale',
+      updated_count: 'Updated Count',
+      product_produced: 'Product Produced',
+      other: 'Other',
+    };
+
+    const fieldLabels: Record<string, string> = {
+      hildaleQty: 'Hildale',
+      pivotQty: 'Pivot',
+      currentStock: 'Stock',
+    };
+
+    const reasonLabel = reasonLabels[params.reason] || params.reason;
+    const fieldLabel = fieldLabels[params.field] || params.field;
+    const deltaDisplay = params.delta > 0 ? `+${params.delta}` : `${params.delta}`;
+    const userDisplay = params.userName ? ` by ${params.userName}` : '';
+
+    await this.logSystemEvent({
+      type: SystemLogType.INFO,
+      entityType: SystemLogEntityType.PRODUCT,
+      entityId: params.itemId,
+      severity: SystemLogSeverity.INFO,
+      code: 'INVENTORY_ADJUSTMENT',
+      message: `Inventory: ${params.itemName} ${fieldLabel} ${params.oldValue} → ${params.newValue} (${deltaDisplay}) - ${reasonLabel}${userDisplay}`,
+      details: {
+        itemId: params.itemId,
+        itemName: params.itemName,
+        itemSku: params.itemSku,
+        field: params.field,
+        fieldLabel,
+        oldValue: params.oldValue,
+        newValue: params.newValue,
+        delta: params.delta,
+        reason: params.reason,
+        reasonLabel,
+        notes: params.notes,
+        userId: params.userId,
+        userName: params.userName,
+      },
+    });
+  }
 }
 
 export const logService = new LogService();

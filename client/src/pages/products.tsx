@@ -8,19 +8,18 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, ArrowLeftRight, History, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2 } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SiShopify, SiAmazon } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { ImportProductsDialog } from "@/components/import-products-dialog";
-import { TransferDialog } from "@/components/transfer-dialog";
-import { ProductionDialog } from "@/components/production-dialog";
-import { TransactionHistoryDialog } from "@/components/transaction-history-dialog";
 import { ScanInventoryModal } from "@/components/scan-inventory-modal";
 import { ItemCostSettingsDialog } from "@/components/item-cost-settings-dialog";
 import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
+import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -488,33 +487,6 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Extensiv Variance Column (only for finished products) - Shows difference between Extensiv snapshot and our tracking */}
-      {item.type === "finished_product" && (
-        <td className="px-3 align-middle whitespace-nowrap text-right" data-testid={`text-extensiv-variance-${item.id}`}>
-          {(() => {
-            const extensivQty = item.extensivOnHandSnapshot ?? 0;
-            const ourQty = item.availableForSaleQty ?? 0;
-            const variance = extensivQty - ourQty;
-            
-            if (extensivQty === 0 && !item.extensivLastSyncAt) {
-              return <span className="text-muted-foreground text-sm">—</span>;
-            }
-            
-            return (
-              <span className={
-                variance > 0 
-                  ? "text-green-600 dark:text-green-400 font-medium" 
-                  : variance < 0 
-                    ? "text-red-600 dark:text-red-400 font-medium" 
-                    : ""
-              } title={`Extensiv: ${extensivQty}, Ours: ${ourQty}`}>
-                {variance > 0 ? `+${variance}` : variance}
-              </span>
-            );
-          })()}
-        </td>
-      )}
-
       {/* Backorders Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
@@ -536,23 +508,6 @@ function ItemTableRow({
               </div>
             );
           })()}
-        </td>
-      )}
-
-      {/* BOM Components Column (only for finished products) */}
-      {item.type === "finished_product" && (
-        <td className="px-3 align-middle text-center whitespace-nowrap">
-          {onEditBOM && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onEditBOM(item)}
-              data-testid={`button-edit-bom-${item.id}`}
-            >
-              <Edit className="h-3 w-3 mr-1" />
-              {item.componentsCount || 0} components
-            </Button>
-          )}
         </td>
       )}
 
@@ -591,29 +546,25 @@ function ItemTableRow({
       {/* Actions Column */}
       <td className="sticky right-0 z-10 bg-card px-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
         <div className="flex gap-1 justify-end">
-          {item.type === "finished_product" && onTransfer && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onTransfer(item)}
-              data-testid={`button-transfer-${item.id}`}
-              className="h-8 w-8"
-              title="Transfer between locations"
-            >
-              <ArrowLeftRight className="h-4 w-4" />
-            </Button>
-          )}
-          {item.type === "finished_product" && onProduce && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onProduce(item)}
-              data-testid={`button-produce-${item.id}`}
-              className="h-8 w-8"
-              title="Produce items"
-            >
-              <Boxes className="h-4 w-4" />
-            </Button>
+          {item.type === "finished_product" && onEditBOM && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onEditBOM(item)}
+                    data-testid={`button-edit-bom-${item.id}`}
+                    className="h-8 w-8"
+                  >
+                    <Boxes className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{item.componentsCount || 0} components</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           {item.type === "component" && onReorder && (
             <Button
@@ -637,18 +588,6 @@ function ItemTableRow({
               title="Cost settings"
             >
               <DollarSign className="h-4 w-4" />
-            </Button>
-          )}
-          {onViewHistory && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onViewHistory(item)}
-              data-testid={`button-history-${item.id}`}
-              className="h-8 w-8"
-              title="View transaction history"
-            >
-              <History className="h-4 w-4" />
             </Button>
           )}
           <Button
@@ -1411,15 +1350,144 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   );
 }
 
+const INVENTORY_CHANGE_REASONS = [
+  { value: "offline_sale", label: "Offline Sale", icon: PackageMinus, description: "Sold outside of tracked channels" },
+  { value: "updated_count", label: "Updated Count", icon: ClipboardCheck, description: "Physical recount or inventory audit" },
+  { value: "product_produced", label: "Product Produced", icon: Boxes, description: "Manufactured or assembled new units" },
+  { value: "other", label: "Other", icon: FileEdit, description: "Other adjustment reason" },
+];
+
+function InventoryChangeReasonDialog({
+  isOpen,
+  onClose,
+  item,
+  field,
+  oldValue,
+  newValue,
+  onConfirm,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  item: any;
+  field: string;
+  oldValue: number;
+  newValue: number;
+  onConfirm: (reason: string, notes?: string) => void;
+}) {
+  const [selectedReason, setSelectedReason] = useState<string>("");
+  const [notes, setNotes] = useState("");
+
+  const delta = newValue - oldValue;
+  const deltaDisplay = delta > 0 ? `+${delta}` : `${delta}`;
+  const fieldLabel = field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Pivot" : field === "currentStock" ? "Stock" : field;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedReason) return;
+    onConfirm(selectedReason, notes || undefined);
+    setSelectedReason("");
+    setNotes("");
+  };
+
+  const handleClose = () => {
+    setSelectedReason("");
+    setNotes("");
+    onClose();
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ClipboardCheck className="h-5 w-5" />
+            Inventory Adjustment
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="rounded-md bg-muted p-3 space-y-1">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Product:</span>
+              <span className="font-medium">{item.name}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Location:</span>
+              <span className="font-medium">{fieldLabel}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Change:</span>
+              <span className={`font-bold ${delta > 0 ? 'text-green-600 dark:text-green-400' : delta < 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
+                {oldValue} → {newValue} ({deltaDisplay})
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>What caused this change?</Label>
+            <RadioGroup value={selectedReason} onValueChange={setSelectedReason} className="space-y-2">
+              {INVENTORY_CHANGE_REASONS.map((reason) => (
+                <label
+                  key={reason.value}
+                  className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
+                    selectedReason === reason.value 
+                      ? 'border-primary bg-primary/5' 
+                      : 'border-border hover-elevate'
+                  }`}
+                >
+                  <RadioGroupItem value={reason.value} className="mt-0.5" />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <reason.icon className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium text-sm">{reason.label}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{reason.description}</p>
+                  </div>
+                </label>
+              ))}
+            </RadioGroup>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="notes">Notes (optional)</Label>
+            <Textarea
+              id="notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add any additional context..."
+              className="resize-none"
+              rows={2}
+              data-testid="input-adjustment-notes"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={handleClose} data-testid="button-cancel-adjustment">
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!selectedReason} data-testid="button-confirm-adjustment">
+              Confirm Change
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function BOM() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [editingBOMItem, setEditingBOMItem] = useState<any>(null);
-  const [transferItem, setTransferItem] = useState<any>(null);
-  const [productionItem, setProductionItem] = useState<any>(null);
-  const [historyItem, setHistoryItem] = useState<any>(null);
+  const [pendingQuantityChange, setPendingQuantityChange] = useState<{
+    item: any;
+    field: string;
+    oldValue: number;
+    newValue: number;
+    onSuccess: () => void;
+    onError: () => void;
+  } | null>(null);
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
   const [scanMode, setScanMode] = useState<"RAW" | "FINISHED">("RAW");
   const [reorderItem, setReorderItem] = useState<any>(null);
@@ -1532,12 +1600,28 @@ export default function BOM() {
       return;
     }
 
+    // Intercept quantity field changes to show reason dialog
+    const isQuantityField = field === "hildaleQty" || field === "pivotQty" || field === "currentStock";
+    if (isQuantityField) {
+      const oldValue = item[field] ?? 0;
+      const newValue = typeof value === 'number' ? value : parseInt(String(value), 10);
+      
+      // Only show dialog if value actually changed
+      if (oldValue !== newValue) {
+        setPendingQuantityChange({
+          item,
+          field,
+          oldValue,
+          newValue,
+          onSuccess,
+          onError,
+        });
+        return;
+      }
+    }
+
+    // For non-quantity fields, proceed directly
     let updates: any = { [field]: value };
-
-    // Finished products: Do NOT update currentStock - use only pivotQty and hildaleQty
-    // Components: currentStock remains the source of truth
-    // No automatic recalculation needed - backend can compute totalOwned on read if needed
-
     updateMutation.mutate(
       { id, updates },
       {
@@ -1549,6 +1633,59 @@ export default function BOM() {
         }
       }
     );
+  };
+
+  const handleQuantityChangeWithReason = async (
+    item: any,
+    field: string,
+    newValue: number,
+    reason: string,
+    notes: string | undefined,
+    onSuccess: () => void,
+    onError: () => void
+  ) => {
+    const oldValue = item[field] ?? 0;
+    const delta = newValue - oldValue;
+
+    try {
+      // First update the item
+      const updates = { [field]: newValue };
+      await new Promise<void>((resolve, reject) => {
+        updateMutation.mutate(
+          { id: item.id, updates },
+          {
+            onSuccess: () => resolve(),
+            onError: () => reject(new Error("Update failed"))
+          }
+        );
+      });
+
+      // Then log the adjustment to AI Agent Logs
+      await apiRequest("POST", "/api/logs/inventory-adjustment", {
+        itemId: item.id,
+        itemName: item.name,
+        itemSku: item.sku,
+        field,
+        oldValue,
+        newValue,
+        delta,
+        reason,
+        notes,
+      });
+
+      onSuccess();
+      toast({
+        title: "Inventory Updated",
+        description: `${item.name} ${field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Pivot" : "Stock"} quantity updated to ${newValue}`,
+      });
+    } catch (error) {
+      onError();
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: "Failed to update inventory",
+      });
+    }
   };
 
   const handleDelete = (item: any) => {
@@ -1809,9 +1946,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Pivot Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Available for Sale</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Extensiv Δ</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap">Backorders</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap">BOM</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
@@ -1823,9 +1958,6 @@ export default function BOM() {
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
                     onEditBOM={setEditingBOMItem}
-                    onTransfer={setTransferItem}
-                    onProduce={setProductionItem}
-                    onViewHistory={setHistoryItem}
                     backorderSnapshots={backorderSnapshots}
                     columnVisibility={columnVisibility}
                   />
@@ -1904,7 +2036,6 @@ export default function BOM() {
                     item={item}
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
-                    onViewHistory={setHistoryItem}
                     onReorder={setReorderItem}
                     onCostSettings={setCostSettingsItem}
                     aiRecommendations={aiRecommendations}
@@ -1940,26 +2071,30 @@ export default function BOM() {
         onClose={() => setIsImportDialogOpen(false)}
       />
       
-      {/* Transaction Dialogs */}
-      {transferItem && (
-        <TransferDialog
-          isOpen={!!transferItem}
-          onClose={() => setTransferItem(null)}
-          item={transferItem}
-        />
-      )}
-      {productionItem && (
-        <ProductionDialog
-          isOpen={!!productionItem}
-          onClose={() => setProductionItem(null)}
-          item={productionItem}
-        />
-      )}
-      {historyItem && (
-        <TransactionHistoryDialog
-          isOpen={!!historyItem}
-          onClose={() => setHistoryItem(null)}
-          item={historyItem}
+      {/* Inventory Change Reason Dialog */}
+      {pendingQuantityChange && (
+        <InventoryChangeReasonDialog
+          isOpen={!!pendingQuantityChange}
+          onClose={() => {
+            pendingQuantityChange.onError();
+            setPendingQuantityChange(null);
+          }}
+          item={pendingQuantityChange.item}
+          field={pendingQuantityChange.field}
+          oldValue={pendingQuantityChange.oldValue}
+          newValue={pendingQuantityChange.newValue}
+          onConfirm={(reason: string, notes?: string) => {
+            handleQuantityChangeWithReason(
+              pendingQuantityChange.item,
+              pendingQuantityChange.field,
+              pendingQuantityChange.newValue,
+              reason,
+              notes,
+              pendingQuantityChange.onSuccess,
+              pendingQuantityChange.onError
+            );
+            setPendingQuantityChange(null);
+          }}
         />
       )}
       {reorderItem && (

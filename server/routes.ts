@@ -11744,6 +11744,39 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Log inventory adjustment (for AI Agent Logs)
+  app.post("/api/logs/inventory-adjustment", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      
+      const { itemId, itemName, itemSku, field, oldValue, newValue, delta, reason, notes } = req.body;
+      
+      if (!itemId || !field || reason === undefined) {
+        return res.status(400).json({ error: 'Missing required fields: itemId, field, reason' });
+      }
+      
+      await logService.logInventoryAdjustment({
+        itemId,
+        itemName,
+        itemSku,
+        field,
+        oldValue: oldValue ?? 0,
+        newValue: newValue ?? 0,
+        delta: delta ?? 0,
+        reason,
+        notes,
+        userId,
+        userName: user?.email,
+      });
+      
+      res.json({ success: true, message: 'Inventory adjustment logged' });
+    } catch (error: any) {
+      console.error('[Logs] Error logging inventory adjustment:', error);
+      res.status(500).json({ error: error.message || 'Failed to log inventory adjustment' });
+    }
+  });
+
   // ============================================================================
   // AI AGENT SETTINGS
   // ============================================================================

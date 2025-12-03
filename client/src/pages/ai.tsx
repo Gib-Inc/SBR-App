@@ -18,11 +18,12 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
 import { CreatePOSheet } from "@/components/create-po-sheet";
+import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
 
 const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
 
@@ -3660,6 +3661,7 @@ export default function AIAgent() {
   const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
   const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
   const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
+  const [showSkuMappingWizard, setShowSkuMappingWizard] = useState(false);
   
   // GHL Sync Modal state
   const [showGhlSyncModal, setShowGhlSyncModal] = useState(false);
@@ -4652,24 +4654,43 @@ export default function AIAgent() {
               </div>
             </RadioGroup>
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-between gap-2">
             <Button 
               variant="outline" 
-              onClick={() => setShowShopifySyncModal(false)}
-              data-testid="button-cancel-shopify-sync"
+              onClick={() => {
+                setShowShopifySyncModal(false);
+                setShowSkuMappingWizard(true);
+              }}
+              data-testid="button-map-skus-shopify"
             >
-              Cancel
+              <Link2 className="mr-2 h-4 w-4" />
+              Map SKUs First
             </Button>
-            <Button 
-              onClick={handleShopifySync}
-              data-testid="button-start-shopify-sync"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Start Sync
-            </Button>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                onClick={() => setShowShopifySyncModal(false)}
+                data-testid="button-cancel-shopify-sync"
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleShopifySync}
+                data-testid="button-start-shopify-sync"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Start Sync
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* SKU Mapping Wizard */}
+      <SkuMappingWizard 
+        isOpen={showSkuMappingWizard} 
+        onClose={() => setShowSkuMappingWizard(false)} 
+      />
 
       {/* GoHighLevel Sync Options Modal */}
       <Dialog open={showGhlSyncModal} onOpenChange={setShowGhlSyncModal}>

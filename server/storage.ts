@@ -2517,12 +2517,17 @@ export class MemStorage implements IStorage {
   async createSalesOrder(insertOrder: InsertSalesOrder): Promise<SalesOrder> {
     const id = randomUUID();
     const now = new Date();
+    
+    // Auto-set isHistorical when status is terminal
+    const status = insertOrder.status ?? 'DRAFT';
+    const isTerminal = isSalesOrderStatusTerminal(status);
+    
     const order: SalesOrder = {
       id,
       ...insertOrder,
       externalOrderId: insertOrder.externalOrderId ?? null,
       externalCustomerId: insertOrder.externalCustomerId ?? null,
-      status: insertOrder.status ?? 'DRAFT',
+      status,
       orderDate: insertOrder.orderDate ?? now,
       customerEmail: insertOrder.customerEmail ?? null,
       customerPhone: insertOrder.customerPhone ?? null,
@@ -2532,6 +2537,8 @@ export class MemStorage implements IStorage {
       currency: insertOrder.currency ?? 'USD',
       notes: insertOrder.notes ?? null,
       rawPayload: insertOrder.rawPayload ?? null,
+      isHistorical: isTerminal ? true : (insertOrder.isHistorical ?? false),
+      archivedAt: isTerminal ? now : (insertOrder.archivedAt ?? null),
       createdAt: now,
       updatedAt: now,
     };
@@ -5037,7 +5044,17 @@ export class PostgresStorage implements IStorage {
   }
 
   async createSalesOrder(insertOrder: InsertSalesOrder): Promise<SalesOrder> {
-    const results = await this.db.insert(schema.salesOrders).values(insertOrder).returning();
+    // Auto-set isHistorical when status is terminal
+    const status = insertOrder.status ?? 'DRAFT';
+    const isTerminal = isSalesOrderStatusTerminal(status);
+    
+    const orderToInsert = {
+      ...insertOrder,
+      isHistorical: isTerminal ? true : (insertOrder.isHistorical ?? false),
+      archivedAt: isTerminal ? new Date() : (insertOrder.archivedAt ?? null),
+    };
+    
+    const results = await this.db.insert(schema.salesOrders).values(orderToInsert).returning();
     return results[0];
   }
 

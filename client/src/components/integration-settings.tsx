@@ -31,6 +31,7 @@ interface IntegrationSettingsProps {
   integrationType: IntegrationType;
   open: boolean;
   onClose: () => void;
+  onOpenSkuWizard?: () => void;
 }
 
 const INTEGRATION_LABELS = {
@@ -49,7 +50,7 @@ const INTEGRATION_DESCRIPTIONS = {
   PHANTOMBUSTER: "Enrich supplier and product data through automated scraping",
 };
 
-export function IntegrationSettings({ integrationType, open, onClose }: IntegrationSettingsProps) {
+export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuWizard }: IntegrationSettingsProps) {
   const { toast } = useToast();
   const [isConfigMode, setIsConfigMode] = useState(false);
 
@@ -921,7 +922,14 @@ export function IntegrationSettings({ integrationType, open, onClose }: Integrat
                 Test Connection
               </Button>
               <Button
-                onClick={() => syncMutation.mutate()}
+                onClick={() => {
+                  if (integrationType === "SHOPIFY" && onOpenSkuWizard) {
+                    onClose();
+                    onOpenSkuWizard();
+                  } else {
+                    syncMutation.mutate();
+                  }
+                }}
                 disabled={!isFormValid() || syncMutation.isPending}
                 data-testid="button-sync-now"
               >

@@ -3931,10 +3931,9 @@ export default function AIAgent() {
       });
       return;
     }
-    // Shopify - show sync options modal
+    // Shopify - open SKU wizard directly
     if (source === "shopify") {
-      setShopifySyncMode("merge");
-      setShowShopifySyncModal(true);
+      setShowSkuMappingWizard(true);
       return;
     }
     // GoHighLevel - show sync options modal
@@ -4577,6 +4576,7 @@ export default function AIAgent() {
           integrationType={openIntegration}
           open={!!openIntegration}
           onClose={() => setOpenIntegration(null)}
+          onOpenSkuWizard={() => setShowSkuMappingWizard(true)}
         />
       )}
 

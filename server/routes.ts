@@ -4769,7 +4769,16 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // ========== 1. SYNC SALES ORDERS ==========
       console.log('[GHL Sync] Starting sales orders sync...');
-      const salesOrders = await storage.getAllSalesOrders();
+      const allSalesOrders = await storage.getAllSalesOrders();
+      // In Align mode, only sync Live items (isHistorical = false)
+      // In Update mode, sync all items
+      const salesOrders = syncMode === "align" 
+        ? allSalesOrders.filter(so => !so.isHistorical)
+        : allSalesOrders;
+      const historicalSalesOrderIds = new Set(
+        allSalesOrders.filter(so => so.isHistorical).map(so => so.orderNumber || so.externalOrderId || so.id)
+      );
+      console.log(`[GHL Sync] Sales orders: ${salesOrders.length} to sync (${historicalSalesOrderIds.size} historical will be cleaned up in align mode)`);
       
       for (const order of salesOrders) {
         try {
@@ -4845,7 +4854,16 @@ Total: $${orderTotal.toFixed(2)}
 
       // ========== 2. SYNC RETURNS ==========
       console.log('[GHL Sync] Starting returns sync...');
-      const returns = await storage.getAllReturnRequests();
+      const allReturns = await storage.getAllReturnRequests();
+      // In Align mode, only sync Live items (isHistorical = false)
+      // In Update mode, sync all items
+      const returns = syncMode === "align"
+        ? allReturns.filter(r => !r.isHistorical)
+        : allReturns;
+      const historicalReturnIds = new Set(
+        allReturns.filter(r => r.isHistorical).map(r => r.rmaNumber || r.id)
+      );
+      console.log(`[GHL Sync] Returns: ${returns.length} to sync (${historicalReturnIds.size} historical will be cleaned up in align mode)`);
       
       for (const returnRequest of returns) {
         try {
@@ -5037,7 +5055,16 @@ Reorder Point: ${item.reorderPoint || 'Not set'}
         console.error('[GHL Sync] Cannot sync purchase orders: no system contact available');
         syncResults.purchaseOrders.errors.push('No system contact available for purchase orders');
       } else {
-        const purchaseOrders = await storage.getAllPurchaseOrders();
+        const allPurchaseOrders = await storage.getAllPurchaseOrders();
+        // In Align mode, only sync Live items (isHistorical = false)
+        // In Update mode, sync all items
+        const purchaseOrders = syncMode === "align"
+          ? allPurchaseOrders.filter(po => !po.isHistorical)
+          : allPurchaseOrders;
+        const historicalPONumbers = new Set(
+          allPurchaseOrders.filter(po => po.isHistorical).map(po => po.poNumber)
+        );
+        console.log(`[GHL Sync] Purchase orders: ${purchaseOrders.length} to sync (${historicalPONumbers.size} historical will be cleaned up in align mode)`);
         
         for (const po of purchaseOrders) {
           try {
@@ -5144,12 +5171,13 @@ Notes: ${po.notes || 'None'}
         console.log(`[GHL Sync] PO errors: ${syncResults.purchaseOrders.errors.join('; ')}`);
       }
 
-      // ========== 5. CLEANUP: DEDUPLICATION + ORPHAN REMOVAL ==========
+      // ========== 5. CLEANUP: DEDUPLICATION + ORPHAN/HISTORICAL REMOVAL ==========
       // In "update" mode: only deduplication, no orphan removal
-      // In "align" mode: deduplication + orphan removal
-      console.log(`[GHL Sync] Starting cleanup (deduplication${syncMode === "align" ? " + orphan removal" : " only"})...`);
+      // In "align" mode: deduplication + orphan removal + historical items removal
+      console.log(`[GHL Sync] Starting cleanup (deduplication${syncMode === "align" ? " + orphan/historical removal" : " only"})...`);
       let cleanupCount = 0;
       let orphanCount = 0;
+      let historicalCount = 0;
       const deletedItems: string[] = [];
       
       // Get user info for logging
@@ -5167,7 +5195,8 @@ Notes: ${po.notes || 'None'}
           const allOpps = allOppsResult.opportunities;
           console.log(`[GHL Sync] Found ${allOpps.length} total opportunities in pipeline`);
           
-          // Build sets of valid identifiers from app data
+          // Build sets of valid identifiers from LIVE app data only (non-historical)
+          // These are items that SHOULD exist in GHL after align
           const validSalesOrderIds = new Set(salesOrders.map(so => so.orderNumber));
           const validReturnIds = new Set(returns.map(r => r.rmaNumber || r.id));
           const validStockAlertNames = new Set(
@@ -5181,11 +5210,14 @@ Notes: ${po.notes || 'None'}
               })
               .map(item => item.name)
           );
+          // Only include Live POs (not historical) - purchaseOrders is already filtered in align mode
           const validPONumbers = new Set(
-            allPOsForCleanup
+            purchaseOrders
               .filter(po => !['DRAFT', 'APPROVAL_PENDING', 'APPROVED', 'CANCELLED'].includes(po.status))
               .map(po => po.poNumber)
           );
+          
+          console.log(`[GHL Cleanup] Valid counts - Sales: ${validSalesOrderIds.size}, Returns: ${validReturnIds.size}, Stock: ${validStockAlertNames.size}, POs: ${validPONumbers.size}`);
           
           // ===== STEP A: DEDUPLICATION =====
           // Group opportunities by their entity key to find duplicates
@@ -5258,9 +5290,11 @@ Notes: ${po.notes || 'None'}
             }
           }
           
-          // ===== STEP B: ORPHAN REMOVAL (only in "align" mode) =====
+          // ===== STEP B: ORPHAN + HISTORICAL REMOVAL (only in "align" mode) =====
           if (syncMode === "align") {
-            console.log('[GHL Cleanup] Align mode: proceeding with orphan removal...');
+            console.log('[GHL Cleanup] Align mode: proceeding with orphan + historical removal...');
+            console.log(`[GHL Cleanup] Historical counts - Sales: ${historicalSalesOrderIds.size}, Returns: ${historicalReturnIds.size}, POs: ${historicalPONumbers.size}`);
+            
             // Re-fetch opportunities after deduplication for orphan check
             const refreshedOppsResult = await client.getAllOpportunitiesInPipeline(pipelineId);
             const refreshedOpps = refreshedOppsResult.success && refreshedOppsResult.opportunities 
@@ -5269,55 +5303,78 @@ Notes: ${po.notes || 'None'}
             
             for (const opp of refreshedOpps) {
               const name = opp.name || '';
-              let isOrphan = false;
+              let shouldDelete = false;
+              let isHistorical = false;
+              let deleteReason = '';
               
-              // Determine category by name prefix and check if orphaned
+              // Determine category by name prefix and check if orphaned or historical
               if (name.startsWith('Stock Alert:')) {
                 // Extract item name from "Stock Alert: Name (X days)" format
                 const match = name.match(/Stock Alert:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*\(\d+\s*days?\)/i);
                 const itemName = match ? match[1].trim() : null;
                 if (!itemName || !validStockAlertNames.has(itemName)) {
-                  isOrphan = true;
-                  console.log(`[GHL Cleanup] Stock alert orphan: "${name}" - item not in at-risk list`);
+                  shouldDelete = true;
+                  deleteReason = 'item not in at-risk list';
                 }
               } else if (name.startsWith('Return ') || name.includes('Return ')) {
                 // Check if return RMA or ID is in the name
                 const hasValidReturn = Array.from(validReturnIds).some(id => name.includes(String(id)));
-                if (!hasValidReturn) {
-                  isOrphan = true;
-                  console.log(`[GHL Cleanup] Return orphan: "${name}"`);
+                const hasHistoricalReturn = Array.from(historicalReturnIds).some(id => name.includes(String(id)));
+                if (hasHistoricalReturn) {
+                  shouldDelete = true;
+                  isHistorical = true;
+                  deleteReason = 'historical/archived return';
+                } else if (!hasValidReturn) {
+                  shouldDelete = true;
+                  deleteReason = 'orphaned (no matching app record)';
                 }
               } else if (name.startsWith('PO ') || name.startsWith('PO-')) {
                 // Check if PO number is in the name
                 const hasValidPO = Array.from(validPONumbers).some(poNum => name.includes(poNum));
-                if (!hasValidPO) {
-                  isOrphan = true;
-                  console.log(`[GHL Cleanup] PO orphan: "${name}"`);
+                const hasHistoricalPO = Array.from(historicalPONumbers).some(poNum => name.includes(poNum));
+                if (hasHistoricalPO) {
+                  shouldDelete = true;
+                  isHistorical = true;
+                  deleteReason = 'historical/archived PO';
+                } else if (!hasValidPO) {
+                  shouldDelete = true;
+                  deleteReason = 'orphaned (no matching app record)';
                 }
               } else if (name.startsWith('Order ') || name.includes('Order ')) {
                 // Check if order number is in the name
                 const hasValidOrder = Array.from(validSalesOrderIds).some(orderId => orderId && name.includes(orderId));
-                if (!hasValidOrder) {
-                  isOrphan = true;
-                  console.log(`[GHL Cleanup] Sales order orphan: "${name}"`);
+                const hasHistoricalOrder = Array.from(historicalSalesOrderIds).some(orderId => orderId && name.includes(String(orderId)));
+                if (hasHistoricalOrder) {
+                  shouldDelete = true;
+                  isHistorical = true;
+                  deleteReason = 'historical/archived sales order';
+                } else if (!hasValidOrder) {
+                  shouldDelete = true;
+                  deleteReason = 'orphaned (no matching app record)';
                 }
               }
               
-              // Delete orphaned opportunity
-              if (isOrphan && opp.id) {
+              // Delete opportunity if it should be removed
+              if (shouldDelete && opp.id) {
                 const deleteResult = await client.deleteOpportunity(opp.id);
                 if (deleteResult.success) {
-                  orphanCount++;
                   cleanupCount++;
-                  deletedItems.push(`[ORPHAN] ${name}`);
-                  console.log(`[GHL Cleanup] Deleted orphan: "${name}" (${opp.id})`);
+                  if (isHistorical) {
+                    historicalCount++;
+                    deletedItems.push(`[HISTORICAL] ${name}`);
+                    console.log(`[GHL Cleanup] Deleted historical: "${name}" - ${deleteReason}`);
+                  } else {
+                    orphanCount++;
+                    deletedItems.push(`[ORPHAN] ${name}`);
+                    console.log(`[GHL Cleanup] Deleted orphan: "${name}" - ${deleteReason}`);
+                  }
                 } else {
-                  console.error(`[GHL Cleanup] Failed to delete orphan "${name}": ${deleteResult.error}`);
+                  console.error(`[GHL Cleanup] Failed to delete "${name}": ${deleteResult.error}`);
                 }
               }
             }
           } else {
-            console.log('[GHL Cleanup] Update mode: skipping orphan removal');
+            console.log('[GHL Cleanup] Update mode: skipping orphan/historical removal');
           }
         }
       } catch (cleanupError: any) {
@@ -5325,7 +5382,7 @@ Notes: ${po.notes || 'None'}
         // Don't fail the sync if cleanup fails
       }
       
-      console.log(`[GHL Sync] Cleanup complete: ${cleanupCount} orphaned opportunities deleted`);
+      console.log(`[GHL Sync] Cleanup complete: ${cleanupCount} opportunities deleted (${orphanCount} orphans, ${historicalCount} historical)`);
       
       // Log cleanup action if any items were deleted
       if (cleanupCount > 0) {
@@ -5352,8 +5409,9 @@ Notes: ${po.notes || 'None'}
           returns: syncResults.returns.synced,
           stockWarnings: syncResults.stockWarnings.synced,
           purchaseOrders: syncResults.purchaseOrders.synced,
-          duplicatesRemoved: cleanupCount - orphanCount,
+          duplicatesRemoved: cleanupCount - orphanCount - historicalCount,
           orphansArchived: orphanCount,
+          historicalDeleted: historicalCount,
         },
       });
 
@@ -5361,12 +5419,23 @@ Notes: ${po.notes || 'None'}
       const totalSynced = syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced;
       const totalFailed = syncResults.salesOrders.failed + syncResults.returns.failed + syncResults.stockWarnings.failed + syncResults.purchaseOrders.failed;
       
-      const summaryMessage = `Synced ${totalSynced} items to GoHighLevel: ` +
+      // Build cleanup summary based on what was actually removed
+      let cleanupSummary = '';
+      if (cleanupCount > 0) {
+        const parts = [];
+        if (historicalCount > 0) parts.push(`${historicalCount} historical`);
+        if (orphanCount > 0) parts.push(`${orphanCount} orphaned`);
+        const dupCount = cleanupCount - orphanCount - historicalCount;
+        if (dupCount > 0) parts.push(`${dupCount} duplicates`);
+        cleanupSummary = `. Cleaned up ${cleanupCount} entries (${parts.join(', ')})`;
+      }
+      
+      const summaryMessage = `Synced ${totalSynced} Live items to GoHighLevel: ` +
         `${syncResults.salesOrders.synced} sales orders, ` +
         `${syncResults.returns.synced} returns, ` +
         `${syncResults.stockWarnings.synced} stock warnings, ` +
         `${syncResults.purchaseOrders.synced} purchase orders` +
-        (cleanupCount > 0 ? `. Cleaned up ${cleanupCount} orphaned entries` : '') +
+        cleanupSummary +
         (totalFailed > 0 ? ` (${totalFailed} failed)` : '');
 
       // Update integration config status
@@ -5395,6 +5464,7 @@ Notes: ${po.notes || 'None'}
         opportunitiesCreated: syncResults.salesOrders.synced + syncResults.returns.synced + syncResults.stockWarnings.synced + syncResults.purchaseOrders.synced,
         opportunitiesUpdated: 0, // Currently not tracked separately
         opportunitiesArchived: orphanCount,
+        historicalDeleted: historicalCount,
         statusesPulled: 0, // Future enhancement: track pulled status changes
         cleanedUp: cleanupCount,
       });

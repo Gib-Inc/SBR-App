@@ -4726,10 +4726,10 @@ export default function AIAgent() {
                     Update only (recommended)
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Push new/changed POs, Refunds, and Stock Warnings to GHL. Pull back any status changes made in GHL.
+                    Push ALL POs, Refunds, Sales Orders, and Stock Warnings to GHL (Live + History).
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Orphaned GHL opportunities (no matching app record) are logged but not deleted.
+                    Orphaned or historical GHL opportunities are logged but not deleted.
                   </p>
                 </div>
               </div>
@@ -4741,14 +4741,14 @@ export default function AIAgent() {
                 <RadioGroupItem value="align" id="ghl-align" data-testid="radio-ghl-align" />
                 <div className="flex-1 space-y-1">
                   <Label htmlFor="ghl-align" className="text-sm font-medium cursor-pointer">
-                    Align GHL and clean up orphans
+                    Align GHL with Live data only
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Same as above, plus: archive/close GHL opportunities that have no matching app record.
+                    Only sync LIVE items to GHL. Delete opportunities for items in the History tab.
                   </p>
                   <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
                     <AlertTriangle className="h-3 w-3" />
-                    This closes stale GHL opportunities only. App data is never deleted.
+                    Deletes GHL opportunities for archived/historical items. App data is never deleted.
                   </p>
                 </div>
               </div>

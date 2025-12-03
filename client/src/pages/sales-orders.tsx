@@ -735,6 +735,9 @@ export default function SalesOrders() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-end gap-4 flex-wrap">
             <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-orders">
+                {filteredOrders.length} {filteredOrders.length === 1 ? 'order' : 'orders'}
+              </Badge>
               <Select value={channelFilter} onValueChange={setChannelFilter}>
                 <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
                   <SelectValue placeholder="Filter by channel" />

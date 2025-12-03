@@ -42,6 +42,14 @@ Preferred communication style: Simple, everyday language.
     *   `TRANSFER` event type moves stock from Hildale → Pivot (makes it sellable)
     *   Robust `InventoryMovement` system tracking all changes via `InventoryTransaction`
 *   **Forecasting & Planning**: Constraint-based planning for stockout prediction and production capacity, LLM-powered multi-period forecasting for reorder recommendations.
+*   **AI Batch Recommendation System**: Centralized batch processing for all LLM-powered inventory recommendations:
+    *   Scheduled batch runs at 10:00 AM and 3:00 PM Mountain time (America/Denver)
+    *   Critical trigger detection with 15-minute debounce for SKUs crossing into critical state
+    *   Order timing decision: `ORDER_TODAY` (daysUntilStockout - leadTime <= 3 days) vs `SAFE_UNTIL_TOMORROW`
+    *   Batch logs tracked in `ai_batch_logs` table with status, metrics, and LLM response times
+    *   Deterministic fallback when LLM is unavailable
+    *   Mutex to prevent overlapping batch runs
+    *   Manual batch trigger via `/api/ai-batch/run` endpoint
 *   **Order Management**: Multi-channel order synchronization (Shopify, Amazon) with duplicate prevention and SKU mapping.
 *   **Purchase Order (PO) System**:
     *   LLM-powered PO creation wizard with GoHighLevel integration.

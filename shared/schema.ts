@@ -803,12 +803,46 @@ export const aiRecommendations = pgTable("ai_recommendations", {
   llmResponseTimeMs: integer("llm_response_time_ms"), // LLM response time for metrics
   outcomeStatus: text("outcome_status"), // Tracking outcome of recommendation
   outcomeDetails: jsonb("outcome_details"), // Details about outcome
+  // Order timing decision from batch AI runs
+  orderTiming: text("order_timing"), // 'ORDER_TODAY' | 'SAFE_UNTIL_TOMORROW' - LLM decides if order is urgent
+  batchLogId: varchar("batch_log_id"), // Reference to the batch run that created/updated this
 }, (table) => ({
   itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
   createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),
   statusIdx: index("ai_recommendations_status_idx").on(table.status),
   skuIdx: index("ai_recommendations_sku_idx").on(table.sku),
 }));
+
+// AI Batch Logs - Track scheduled and triggered batch runs
+export const aiBatchLogs = pgTable("ai_batch_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  startedAt: timestamp("started_at").notNull().default(sql`now()`),
+  finishedAt: timestamp("finished_at"),
+  status: text("status").notNull().default("RUNNING"), // 'RUNNING', 'SUCCESS', 'FAILED', 'PARTIAL'
+  reason: text("reason").notNull(), // 'SCHEDULED_10AM', 'SCHEDULED_3PM', 'CRITICAL_TRIGGER', 'MANUAL'
+  affectedSkus: jsonb("affected_skus"), // Array of SKU strings that were evaluated
+  totalSkus: integer("total_skus").default(0),
+  processedSkus: integer("processed_skus").default(0),
+  criticalItemsFound: integer("critical_items_found").default(0),
+  orderTodayCount: integer("order_today_count").default(0),
+  safeUntilTomorrowCount: integer("safe_until_tomorrow_count").default(0),
+  llmProvider: text("llm_provider"), // 'chatgpt', 'claude', 'grok', 'custom'
+  llmModel: text("llm_model"), // e.g. 'gpt-4o', 'claude-3-5-sonnet'
+  llmResponseTimeMs: integer("llm_response_time_ms"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  startedAtIdx: index("ai_batch_logs_started_at_idx").on(table.startedAt),
+  reasonIdx: index("ai_batch_logs_reason_idx").on(table.reason),
+  statusIdx: index("ai_batch_logs_status_idx").on(table.status),
+}));
+
+export const insertAIBatchLogSchema = createInsertSchema(aiBatchLogs).omit({ 
+  id: true, 
+  createdAt: true 
+});
+export type InsertAIBatchLog = z.infer<typeof insertAIBatchLogSchema>;
+export type AIBatchLog = typeof aiBatchLogs.$inferSelect;
 
 export const insertAIRecommendationSchema = createInsertSchema(aiRecommendations).omit({ 
   id: true, 

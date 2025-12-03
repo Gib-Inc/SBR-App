@@ -1,0 +1,153 @@
+You are working in the Sticker Burr Roller Inventory app.
+
+Goal
+I want the AI Agent / LLM to stop running on every small event and instead:
+- Keep ALL data sources syncing in real time on every sale / refund / PO / transfer (no change to that behavior).
+- Run the LLM in scheduled “batch” jobs at 10:00 and 15:00 (America/Denver time).
+- Run the LLM immediately again only when a SKU crosses into a “critical” state.
+- For each SKU the AI evaluates, it must explicitly decide: “Do we need to order today, or can we safely wait until tomorrow (next business day)?”
+
+Do NOT rewrite or duplicate any existing data sync logic you have already built for Shopify, Amazon, Extensiv/Pivot, GHL, QuickBooks, etc. Only add the scheduling and critical-trigger behavior and extend the AI recommendation logic.
+
+1) Preserve existing real-time sync behavior (no changes)
+- Keep all existing event-driven / webhook / sync behavior for:
+  - Shopify orders, refunds, inventory changes.
+  - Amazon orders, refunds.
+  - Extensiv/Pivot inventory sync.
+  - GHL opportunities for POs, refunds, stock warnings.
+  - QuickBooks financial sync.
+- These handlers should continue to:
+  - Insert/update Sales Orders, Returns, Purchase Orders.
+  - Update BOM inventory (Hildale Qty, Pivot Qty, Available for Sale, Backorders, etc.).
+  - Update any “Δ” columns and metrics you already calculate.
+- IMPORTANT: none of these sync handlers should call the LLM any more. They should only write/update database rows and derived numeric metrics.
+
+2) Centralize the AI recommendation pipeline
+- Find the existing logic that generates AI recommendations shown in:
+  - AI Agent → Insights → “AI Recommendations” table.
+- Extract that logic into a single reusable function/service, for example:
+
+  runInventoryRecommendationsBatch(params: {
+    reason: "SCHEDULED_10AM" | "SCHEDULED_3PM" | "CRITICAL_TRIGGER",
+    affectedSkus?: string[];
+  })
+
+- This function should:
+  - Read the current state for each relevant SKU (canonical House SKU):
+    - Current Hildale Qty and Pivot Qty.
+    - Sales and demand data from Shopify, Amazon, etc.
+    - Any QuickBooks-derived demand history / seasonality metrics.
+    - Open POs, lead time, min/max thresholds, risk days, etc.
+  - Build the prompt for the LLM.
+  - Call the LLM once per batch (or batched per group of SKUs if that’s how it’s already done).
+  - Write/refresh the AI Recommendations table the app already uses.
+
+3) New “Order today vs tomorrow” decision field
+- Extend the AI recommendation output model to add a field like:
+
+  order_timing: "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW"
+
+- When you call the LLM, update the system prompt/instructions so that for each SKU it must answer both:
+  - “Should we place a PO based on today’s data?” (yes/no)
+  - “If a PO is needed, do we NEED to place it today, or can we safely wait until tomorrow (next business day) without going below our thresholds?”
+- The LLM decision should consider at least:
+  - Current Days Left vs High-risk and Medium-risk thresholds from AI Agent → Rules.
+  - Supplier lead time and minimum order quantities.
+  - Open POs already in flight.
+  - Seasonality / expected demand from QuickBooks history (if available).
+- Persist this new field into the AI Recommendations table and expose it in the UI as a new column, e.g.:
+  - Column name: “Timing”
+  - Badge values:
+    - “Order Today” (for ORDER_TODAY)
+    - “Can Wait” (for SAFE_UNTIL_TOMORROW)
+
+4) Scheduled batch runs at 10:00 and 15:00
+- Implement a server-side scheduler / cron mechanism in this app that will call:
+
+  runInventoryRecommendationsBatch({ reason: "SCHEDULED_10AM" })
+  runInventoryRecommendationsBatch({ reason: "SCHEDULED_3PM" })
+
+- Use the app’s existing timezone (America/Denver / Mountain time).
+- At each run:
+  - Re-read all inventory, orders, QuickBooks summaries, etc.
+  - Regenerate AI recommendations for all active SKUs.
+  - Update the AI Recommendations table in place (do not create duplicate rows; just update or upsert).
+  - Log each batch in a simple “ai_batches” or equivalent log table with:
+    - id
+    - run_time
+    - reason
+    - number_of_skus_evaluated
+    - number_of_critical_items
+- The UI should continue to show the latest recommendations from the last batch. If you display a “Data as of …” timestamp, update that timestamp based on the most recent batch run.
+
+5) Critical trigger auto-runs
+- Define a reusable “risk classification” helper that can determine when a SKU crosses into a critical state:
+
+  isCritical(skuState) = true when:
+    - Days Left <= High-risk threshold configured in AI Agent → Rules, OR
+    - Any other business rules you already use for “High Risk / Critical”.
+
+- In the existing inventory update paths (e.g., after a sale, after an inventory sync, after a PO receipt), after the data row is updated:
+  - Compute new risk level for the affected SKU(s).
+  - If a SKU just moved from non-critical to critical:
+    - Schedule a CRITICAL_TRIGGER batch run instead of running per-event logic.
+
+- To avoid hammering the LLM:
+  - Implement a small debounce window, for example:
+    - If a CRITICAL_TRIGGER batch has run within the last X minutes (e.g., 10–15 minutes), skip scheduling another immediately.
+  - When running a CRITICAL_TRIGGER batch, pass only the affected SKU IDs into:
+
+    runInventoryRecommendationsBatch({
+      reason: "CRITICAL_TRIGGER",
+      affectedSkus: [ ... ]
+    })
+
+  - The function should then:
+    - Only recompute recommendations for those SKUs.
+    - Update the AI Recommendations rows for them (including the new “Timing” field).
+
+6) AI prompt / model contract
+- Update the LLM prompt for runInventoryRecommendationsBatch so that for each SKU it receives a structured JSON input with:
+  - sku_id, product_name
+  - hildale_qty, pivot_qty, combined_available
+  - days_left
+  - high_risk_threshold_days, medium_risk_threshold_days
+  - lead_time_days, min_order_qty
+  - open_po_qty and expected_arrival_date(s)
+  - recent demand and seasonality metrics (from QuickBooks and live sales)
+  - any channel feedback (Shopify / Amazon / ads signals, if already wired)
+
+- Ask the LLM to return a JSON list with at least:
+  - sku_id
+  - risk_level (LOW / MEDIUM / HIGH / CRITICAL)
+  - action_type (e.g., “NO_ACTION”, “REORDER”)
+  - recommended_order_qty (if REORDER)
+  - order_timing: "ORDER_TODAY" or "SAFE_UNTIL_TOMORROW"
+  - rationale: short text explaining why and referencing key numbers.
+
+- The app maps these outputs back into the AI Recommendations table and UI:
+  - Existing columns: SKU, Product, Type, Risk, Days Left, Gap%, On PO, etc.
+  - New column: “Timing” (Order Today / Can Wait).
+  - Existing “Final Decision” column should reflect the action_type and timing.
+
+7) UI & UX details
+- Do not add new pages.
+- Keep AI Agent → Insights layout, but:
+  - Ensure the “AI Recommendations” table shows:
+    - The new “Timing” column.
+    - A tooltip on “Timing” explaining: “Whether the AI believes we must order today, or can safely wait until next business day, based on current stock, lead time, and demand.”
+- If you already show a “refreshed at …” timestamp on AI Recommendations:
+  - Update this timestamp whenever a batch finishes, using the latest batch log entry.
+
+8) Safety & performance
+- Confirm that:
+  - Webhook/event handlers for Shopify, Amazon, Extensiv, GHL, QuickBooks still run fast and do NOT call the LLM.
+  - All LLM calls go exclusively through runInventoryRecommendationsBatch.
+  - The scheduler is idempotent: if two runs overlap, handle this safely (e.g., by queuing or skipping).
+- Add basic tests (or at least sanity checks) to verify:
+  - Real-time data mappings still work after code changes.
+  - Scheduled 10:00 and 15:00 runs generate updated recommendations.
+  - A SKU crossing into critical risk does trigger a CRITICAL_TRIGGER batch (with debounce).
+  - The LLM output is correctly parsed and the “Timing” column is stored and shown correctly.
+
+Only make the changes described above. Do not remove existing features or pages, and do not change the semantics of the current risk thresholds or data sync flows.

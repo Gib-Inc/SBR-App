@@ -7369,6 +7369,86 @@ Notes: ${po.notes || 'None'}
   });
 
   // ============================================================================
+  // AI BATCH LOGS
+  // ============================================================================
+
+  app.get("/api/ai-batch-logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { limit, reason } = req.query;
+      
+      let logs;
+      if (reason && typeof reason === "string") {
+        logs = await storage.getAIBatchLogsByReason(reason);
+      } else {
+        logs = await storage.getAllAIBatchLogs(limit ? parseInt(limit as string) : 50);
+      }
+      
+      res.json(logs);
+    } catch (error: any) {
+      console.error("[AIBatchLog] Error fetching batch logs:", error);
+      res.status(500).json({ error: "Failed to fetch batch logs" });
+    }
+  });
+
+  app.get("/api/ai-batch-logs/latest", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const log = await storage.getLatestAIBatchLog();
+      
+      if (!log) {
+        return res.status(404).json({ error: "No batch logs found" });
+      }
+      
+      res.json(log);
+    } catch (error: any) {
+      console.error("[AIBatchLog] Error fetching latest batch log:", error);
+      res.status(500).json({ error: "Failed to fetch latest batch log" });
+    }
+  });
+
+  app.get("/api/ai-batch-logs/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const log = await storage.getAIBatchLog(id);
+      
+      if (!log) {
+        return res.status(404).json({ error: "Batch log not found" });
+      }
+      
+      res.json(log);
+    } catch (error: any) {
+      console.error("[AIBatchLog] Error fetching batch log:", error);
+      res.status(500).json({ error: "Failed to fetch batch log" });
+    }
+  });
+
+  app.get("/api/ai-batch-scheduler/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getSchedulerStatus } = await import("./services/ai-batch-scheduler");
+      const status = getSchedulerStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error("[AIBatchScheduler] Error fetching scheduler status:", error);
+      res.status(500).json({ error: "Failed to fetch scheduler status" });
+    }
+  });
+
+  app.post("/api/ai-batch/run", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { triggerManualBatch } = await import("./services/ai-batch-scheduler");
+      const result = await triggerManualBatch();
+      
+      if (result.success) {
+        res.json({ success: true, message: result.message });
+      } else {
+        res.status(400).json({ success: false, error: result.message });
+      }
+    } catch (error: any) {
+      console.error("[AIBatch] Error running manual batch:", error);
+      res.status(500).json({ error: error.message || "Failed to run batch" });
+    }
+  });
+
+  // ============================================================================
   // PURCHASE ORDERS
   // ============================================================================
 
@@ -12626,5 +12706,14 @@ Generate only the email body text, no subject line.`;
   });
 
   const httpServer = createServer(app);
+  
+  // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time
+  import("./services/ai-batch-scheduler").then(({ initializeScheduler }) => {
+    initializeScheduler();
+    console.log("[Server] AI Batch Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize AI Batch Scheduler:", error);
+  });
+  
   return httpServer;
 }

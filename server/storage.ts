@@ -101,6 +101,8 @@ import {
   type InsertShippoLabelLog,
   type AiAgentSettings,
   type InsertAiAgentSettings,
+  type AIBatchLog,
+  type InsertAIBatchLog,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -237,6 +239,14 @@ export interface IStorage {
   clearStaleRecommendations(itemId: string): Promise<void>; // Clear old NEW recommendations for an item
   createAIRecommendation(recommendation: InsertAIRecommendation): Promise<AIRecommendation>;
   updateAIRecommendation(id: string, recommendation: Partial<InsertAIRecommendation>): Promise<AIRecommendation | undefined>;
+
+  // AI Batch Logs
+  getAllAIBatchLogs(limit?: number): Promise<AIBatchLog[]>;
+  getAIBatchLog(id: string): Promise<AIBatchLog | undefined>;
+  getLatestAIBatchLog(): Promise<AIBatchLog | undefined>;
+  getAIBatchLogsByReason(reason: string): Promise<AIBatchLog[]>;
+  createAIBatchLog(log: InsertAIBatchLog): Promise<AIBatchLog>;
+  updateAIBatchLog(id: string, log: Partial<InsertAIBatchLog>): Promise<AIBatchLog | undefined>;
 
   // Purchase Orders
   getAllPurchaseOrders(): Promise<PurchaseOrder[]>;
@@ -544,6 +554,7 @@ export class MemStorage implements IStorage {
   private importJobs: Map<string, ImportJob>;
   private inventoryTransactions: Map<string, InventoryTransaction>;
   private aiRecommendations: Map<string, AIRecommendation>;
+  private aiBatchLogs: Map<string, AIBatchLog>;
   private purchaseOrders: Map<string, PurchaseOrder>;
   private purchaseOrderLines: Map<string, PurchaseOrderLine>;
   private supplierLeads: Map<string, SupplierLead>;
@@ -579,6 +590,7 @@ export class MemStorage implements IStorage {
     this.importJobs = new Map();
     this.inventoryTransactions = new Map();
     this.aiRecommendations = new Map();
+    this.aiBatchLogs = new Map();
     this.purchaseOrders = new Map();
     this.purchaseOrderLines = new Map();
     this.supplierLeads = new Map();
@@ -1746,6 +1758,62 @@ export class MemStorage implements IStorage {
     if (!existing) return undefined;
     const updated = { ...existing, ...update, updatedAt: new Date() };
     this.aiRecommendations.set(id, updated);
+    return updated;
+  }
+
+  // AI Batch Logs
+  async getAllAIBatchLogs(limit: number = 50): Promise<AIBatchLog[]> {
+    return Array.from(this.aiBatchLogs.values())
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+      .slice(0, limit);
+  }
+
+  async getAIBatchLog(id: string): Promise<AIBatchLog | undefined> {
+    return this.aiBatchLogs.get(id);
+  }
+
+  async getLatestAIBatchLog(): Promise<AIBatchLog | undefined> {
+    const logs = Array.from(this.aiBatchLogs.values())
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+    return logs[0];
+  }
+
+  async getAIBatchLogsByReason(reason: string): Promise<AIBatchLog[]> {
+    return Array.from(this.aiBatchLogs.values())
+      .filter(log => log.reason === reason)
+      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  }
+
+  async createAIBatchLog(insertLog: InsertAIBatchLog): Promise<AIBatchLog> {
+    const id = randomUUID();
+    const now = new Date();
+    const log: AIBatchLog = {
+      id,
+      startedAt: insertLog.startedAt ?? now,
+      finishedAt: insertLog.finishedAt ?? null,
+      status: insertLog.status ?? 'RUNNING',
+      reason: insertLog.reason,
+      affectedSkus: insertLog.affectedSkus ?? null,
+      totalSkus: insertLog.totalSkus ?? 0,
+      processedSkus: insertLog.processedSkus ?? 0,
+      criticalItemsFound: insertLog.criticalItemsFound ?? 0,
+      orderTodayCount: insertLog.orderTodayCount ?? 0,
+      safeUntilTomorrowCount: insertLog.safeUntilTomorrowCount ?? 0,
+      llmProvider: insertLog.llmProvider ?? null,
+      llmModel: insertLog.llmModel ?? null,
+      llmResponseTimeMs: insertLog.llmResponseTimeMs ?? null,
+      errorMessage: insertLog.errorMessage ?? null,
+      createdAt: now,
+    };
+    this.aiBatchLogs.set(id, log);
+    return log;
+  }
+
+  async updateAIBatchLog(id: string, update: Partial<InsertAIBatchLog>): Promise<AIBatchLog | undefined> {
+    const existing = this.aiBatchLogs.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...update };
+    this.aiBatchLogs.set(id, updated);
     return updated;
   }
 
@@ -4156,6 +4224,65 @@ export class PostgresStorage implements IStorage {
       .update(schema.aiRecommendations)
       .set({ ...update, updatedAt: new Date() })
       .where(eq(schema.aiRecommendations.id, id))
+      .returning();
+    return results[0];
+  }
+
+  // AI Batch Logs
+  async getAllAIBatchLogs(limit: number = 50): Promise<AIBatchLog[]> {
+    const results = await this.db
+      .select()
+      .from(schema.aiBatchLogs)
+      .orderBy(desc(schema.aiBatchLogs.startedAt))
+      .limit(limit);
+    return results;
+  }
+
+  async getAIBatchLog(id: string): Promise<AIBatchLog | undefined> {
+    const results = await this.db
+      .select()
+      .from(schema.aiBatchLogs)
+      .where(eq(schema.aiBatchLogs.id, id))
+      .limit(1);
+    return results[0];
+  }
+
+  async getLatestAIBatchLog(): Promise<AIBatchLog | undefined> {
+    const results = await this.db
+      .select()
+      .from(schema.aiBatchLogs)
+      .orderBy(desc(schema.aiBatchLogs.startedAt))
+      .limit(1);
+    return results[0];
+  }
+
+  async getAIBatchLogsByReason(reason: string): Promise<AIBatchLog[]> {
+    const results = await this.db
+      .select()
+      .from(schema.aiBatchLogs)
+      .where(eq(schema.aiBatchLogs.reason, reason))
+      .orderBy(desc(schema.aiBatchLogs.startedAt));
+    return results;
+  }
+
+  async createAIBatchLog(log: InsertAIBatchLog): Promise<AIBatchLog> {
+    const results = await this.db.insert(schema.aiBatchLogs).values({
+      ...log,
+      status: log.status ?? 'RUNNING',
+      totalSkus: log.totalSkus ?? 0,
+      processedSkus: log.processedSkus ?? 0,
+      criticalItemsFound: log.criticalItemsFound ?? 0,
+      orderTodayCount: log.orderTodayCount ?? 0,
+      safeUntilTomorrowCount: log.safeUntilTomorrowCount ?? 0,
+    }).returning();
+    return results[0];
+  }
+
+  async updateAIBatchLog(id: string, update: Partial<InsertAIBatchLog>): Promise<AIBatchLog | undefined> {
+    const results = await this.db
+      .update(schema.aiBatchLogs)
+      .set(update)
+      .where(eq(schema.aiBatchLogs.id, id))
       .returning();
     return results[0];
   }

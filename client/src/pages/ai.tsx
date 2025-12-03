@@ -180,6 +180,8 @@ interface PersistedRecommendation {
   adMultiplier: number | null;
   baseVelocity: number | null;
   adjustedVelocity: number | null;
+  orderTiming: "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW" | null;
+  batchLogId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2236,6 +2238,7 @@ function InsightsTab() {
                   <th className="px-3 text-left font-medium whitespace-nowrap">Product</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap w-px">Type</th>
                   <th className="px-3 text-left font-medium whitespace-nowrap w-px">Risk</th>
+                  <th className="px-3 text-center font-medium whitespace-nowrap w-px">Timing</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap w-px">Days Left</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap w-px">Available for Sale</th>
                   <th className="px-3 text-right font-medium whitespace-nowrap w-px">Gap%</th>
@@ -2253,7 +2256,7 @@ function InsightsTab() {
               <tbody>
                 {filteredRecommendations.length === 0 ? (
                   <tr>
-                    <td colSpan={16} className="text-center text-muted-foreground py-8">
+                    <td colSpan={17} className="text-center text-muted-foreground py-8">
                       {recsData?.recommendations.length === 0 
                         ? "No actionable recommendations. Click Refresh to generate new recommendations."
                         : "No items match the selected filters."
@@ -2286,6 +2289,19 @@ function InsightsTab() {
                         >
                           {rec.riskLevel}
                         </Badge>
+                      </td>
+                      <td className="px-3 align-middle text-center whitespace-nowrap">
+                        {rec.orderTiming ? (
+                          <Badge 
+                            variant={rec.orderTiming === "ORDER_TODAY" ? "destructive" : "secondary"}
+                            className="text-xs"
+                            data-testid={`badge-timing-${rec.id}`}
+                          >
+                            {rec.orderTiming === "ORDER_TODAY" ? "Order Today" : "Safe Till Tomorrow"}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">-</span>
+                        )}
                       </td>
                       <td className="px-3 align-middle text-right whitespace-nowrap">
                         {rec.daysUntilStockout ?? "-"}

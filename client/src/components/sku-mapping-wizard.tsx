@@ -630,16 +630,16 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                 return (
                   <Card key={item.id} className={`${isLinked ? "border-green-500/50" : suggestedMatch ? "border-primary/50" : ""} overflow-hidden`}>
                     <CardContent className="p-3">
-                      <div className="flex items-start gap-3 overflow-hidden">
-                        <div className="flex-1 min-w-0 overflow-hidden">
+                      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 items-center">
+                        <div className="min-w-0 overflow-hidden">
                           <div className="font-medium truncate">{item.name}</div>
-                          <div className="text-sm text-muted-foreground font-mono flex items-center gap-2">
-                            <span>{item.sku}</span>
-                            {item.upc && <Badge variant="secondary" className="text-xs">UPC: {item.upc}</Badge>}
+                          <div className="text-sm text-muted-foreground font-mono flex items-center gap-2 overflow-hidden">
+                            <span className="flex-shrink-0">{item.sku}</span>
+                            {item.upc && <Badge variant="secondary" className="text-xs flex-shrink-0">UPC: {item.upc}</Badge>}
                           </div>
                         </div>
                         
-                        <div className="flex flex-col gap-2 w-[280px] flex-shrink-0">
+                        <div className="min-w-0">
                           {isLinked ? (
                             <div className="flex items-center gap-2">
                               <div className="flex-1 min-w-0 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800 overflow-hidden">
@@ -649,7 +649,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                                 </div>
                               </div>
                               <Button
-                                size="sm"
+                                size="icon"
                                 variant="ghost"
                                 onClick={() => unlinkFromShopifyMutation.mutate(item.id)}
                                 disabled={unlinkFromShopifyMutation.isPending}
@@ -663,12 +663,11 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                               <div className="flex-1 min-w-0 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 overflow-hidden">
                                 <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300 min-w-0">
                                   <Sparkles className="h-4 w-4 flex-shrink-0" />
-                                  <span className="font-medium truncate flex-1 min-w-0">{suggestedMatch.variant.fullName}</span>
-                                  <Badge variant="secondary" className="text-xs flex-shrink-0">{suggestedMatch.matchType}</Badge>
+                                  <span className="font-medium truncate">{suggestedMatch.variant.fullName}</span>
                                 </div>
                               </div>
                               <Button
-                                size="sm"
+                                size="icon"
                                 onClick={() => handleLinkToShopify(item, suggestedMatch.variant)}
                                 disabled={linkToShopifyMutation.isPending}
                                 data-testid={`button-accept-match-${item.id}`}
@@ -831,22 +830,22 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                   : null;
 
                 return (
-                  <Card key={item.id}>
+                  <Card key={item.id} className={`${isLinked ? "border-green-500/50" : suggestedMatch ? "border-primary/50" : ""} overflow-hidden`}>
                     <CardContent className="p-3">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 min-w-0">
+                      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 items-center">
+                        <div className="min-w-0 overflow-hidden">
                           <div className="font-medium truncate">{item.name}</div>
                           <div className="text-sm text-muted-foreground font-mono">{item.sku}</div>
                           {item.upc && (
                             <div className="text-xs text-muted-foreground">UPC: {item.upc}</div>
                           )}
                         </div>
-                        <div className="flex-1 min-w-0">
+                        <div className="min-w-0">
                           {isLinked ? (
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800">
-                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300">
-                                  <Link2 className="h-4 w-4" />
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 min-w-0">
+                                  <Link2 className="h-4 w-4 flex-shrink-0" />
                                   <span className="font-medium truncate">
                                     {linkedProduct?.name || item.extensivSku}
                                   </span>
@@ -858,7 +857,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                                 )}
                               </div>
                               <Button
-                                size="sm"
+                                size="icon"
                                 variant="ghost"
                                 onClick={() => unlinkFromExtensivMutation.mutate(item.id)}
                                 disabled={unlinkFromExtensivMutation.isPending}
@@ -869,18 +868,17 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                             </div>
                           ) : suggestedMatch ? (
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
-                                <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300">
-                                  <Sparkles className="h-4 w-4" />
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300 min-w-0">
+                                  <Sparkles className="h-4 w-4 flex-shrink-0" />
                                   <span className="font-medium truncate">{suggestedMatch.product.name}</span>
-                                  <Badge variant="secondary" className="text-xs ml-auto">{suggestedMatch.matchType}</Badge>
                                 </div>
                                 <div className="text-xs text-blue-600 dark:text-blue-400">
                                   SKU: {suggestedMatch.product.sku} | Qty: {suggestedMatch.product.quantity}
                                 </div>
                               </div>
                               <Button
-                                size="sm"
+                                size="icon"
                                 onClick={() => linkToExtensivMutation.mutate({
                                   itemId: item.id,
                                   extensivSku: suggestedMatch.product.sku,
@@ -986,29 +984,29 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
               </div>
             ) : (
               filteredProducts.map((item) => (
-                <Card key={item.id} className={hasChanges(item.id) ? "border-primary" : ""}>
+                <Card key={item.id} className={`${hasChanges(item.id) ? "border-primary" : ""} overflow-hidden`}>
                   <CardContent className="p-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 min-w-0">
+                    <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 items-center">
+                      <div className="min-w-0 overflow-hidden">
                         <div className="font-medium truncate">{item.name}</div>
                         <div className="text-sm text-muted-foreground font-mono">{item.sku}</div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         {getCurrentValue(item, channel) ? (
-                          <Link2 className="h-4 w-4 text-green-500" />
+                          <Link2 className="h-4 w-4 text-green-500 flex-shrink-0" />
                         ) : (
-                          <Unlink className="h-4 w-4 text-muted-foreground" />
+                          <Unlink className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                         )}
                         <Input
                           value={getCurrentValue(item, channel)}
                           onChange={(e) => handleSkuChange(item.id, channel, e.target.value)}
                           placeholder={placeholder}
-                          className="w-48 font-mono text-sm"
+                          className="flex-1 min-w-0 font-mono text-sm"
                           data-testid={`input-${channel}-${item.id}`}
                         />
                         {hasChanges(item.id) && (
                           <Button
-                            size="sm"
+                            size="icon"
                             variant="ghost"
                             onClick={() => saveChanges(item.id)}
                             disabled={updateMutation.isPending}
@@ -1033,7 +1031,7 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-4xl overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             SKU Mapping Wizard

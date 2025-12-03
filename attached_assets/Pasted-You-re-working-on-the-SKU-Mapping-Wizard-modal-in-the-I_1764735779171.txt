@@ -1,0 +1,82 @@
+You’re working on the SKU Mapping Wizard modal in the Inventory app. Fix the layout so the mapping fields don’t grow to the full width of the product name and are always bound inside the modal.
+
+Here’s exactly what I want you to do:
+
+1) Scope & components
+- Only touch the SKU Mapping Wizard UI:
+  - The modal that opens from “SKU Mapping” on the BOM page.
+  - All provider tabs inside it: Shopify, Amazon, Extensiv, QuickBooks.
+- Do NOT change any mapping logic, API calls, or data models. This is a pure layout/UX fix.
+
+2) Mapping row layout
+- Each mapping row currently has:
+  - Left side: the external product row (e.g. “Push 1.0 – Classic Model…”).
+  - Right side: a select/dropdown like “Select Shopify variant…” (or equivalent for each source).
+- Right now the select width seems to follow the width of the left product name, causing the whole row to grow too wide.
+
+Change this to a fixed, responsive 2-column layout:
+
+- Wrap each row in a container that uses either:
+  - A CSS grid with 2 columns, or
+  - A flex layout with two children.
+- Target layout:
+  - Left column (external product info): about 60–70% of the row width.
+  - Right column (mapping select): about 30–40% of the row width.
+- Make sure:
+  - The row’s max width is 100% of the modal’s inner width.
+  - No child in the row can force horizontal overflow.
+
+Concrete layout rules (Tailwind / CSS style is fine):
+- Row container:
+  - `display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0.75rem; max-width: 100%;`
+  OR
+  - `display: flex; align-items: center; gap: 0.75rem; max-width: 100%;`
+- Left column (product name area):
+  - Allow it to shrink and truncate long titles:
+    - e.g. `flex: 2 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;`
+- Right column (select / mapping field):
+  - Constrain width & prevent it from expanding with the name:
+    - e.g. `flex: 1 0 0; min-width: 160px; max-width: 280px; width: 100%;`
+  - The select element itself should be `width: 100%` inside this bounded column.
+
+3) Modal width & bounding
+- Ensure the wizard modal itself has:
+  - A max width suitable for desktop but not full-screen (e.g. around 900–1024px).
+  - `max-width: 100vw;` so it never exceeds the viewport.
+- Enforce `overflow-x: hidden` on the modal content container so no horizontal scrollbar appears due to overly wide fields.
+- If vertical content is tall, only vertical scrolling should occur inside the modal body.
+
+4) Consistency across tabs
+- Apply the same row layout rules to all tabs:
+  - Shopify tab mapping rows.
+  - Amazon tab mapping rows.
+  - Extensiv tab mapping rows.
+  - QuickBooks tab mapping rows.
+- Even if some tabs have slightly different actions or labels, the column widths and truncation behavior should match so the wizard feels consistent.
+
+5) Interaction behavior
+- Don’t change how mapping works:
+  - Clicking the select should still show variants/options exactly as before.
+  - Clicking the “link”/“push” button should behave exactly the same.
+- Just ensure:
+  - Long product names are truncated with ellipsis instead of pushing the select off-screen.
+  - The select stays visually aligned in its right column and never overlaps or escapes the modal.
+
+6) Visual polish
+- Keep the existing colors, icons, and badges (e.g. “1 Linked / 2 Unmapped / 23 Variants”).
+- Make sure the search bar at the top still spans the usable width of the modal, but is bounded by the same max-width rules as the rows beneath it.
+- Verify that when the browser window is resized narrower:
+  - Rows compress but remain legible.
+  - Nothing overflows horizontally.
+
+7) Testing
+- Test with:
+  - Very long product names.
+  - Many variants in the select.
+  - Enough rows to require vertical scrolling.
+- Confirm:
+  - No horizontal scrollbar.
+  - All rows stay within the modal width.
+  - The mapping fields no longer grow to the size of the name field; they stay within their own, smaller column.
+
+Implement these layout changes so the SKU Mapping Wizard is clean, bounded to the modal, and usable even with very long product names.

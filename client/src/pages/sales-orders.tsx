@@ -735,46 +735,6 @@ export default function SalesOrders() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-end gap-4 flex-wrap">
             <div className="flex items-center gap-2">
-              {activeTab === "live" && (
-                <>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileImport}
-                    accept=".csv"
-                    className="hidden"
-                    data-testid="input-import-csv"
-                  />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => fileInputRef.current?.click()}
-                        data-testid="button-import-csv"
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Import
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Import sales orders from CSV</TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={exportToCSV}
-                        data-testid="button-export-csv"
-                      >
-                        <Upload className="h-4 w-4 mr-2" />
-                        Export
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Export orders to CSV</TooltipContent>
-                  </Tooltip>
-                </>
-              )}
               <Select value={channelFilter} onValueChange={setChannelFilter}>
                 <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
                   <SelectValue placeholder="Filter by channel" />

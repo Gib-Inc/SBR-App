@@ -3662,6 +3662,7 @@ export default function AIAgent() {
   const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
   const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
   const [showSkuMappingWizard, setShowSkuMappingWizard] = useState(false);
+  const [skuWizardSource, setSkuWizardSource] = useState<"shopify" | "amazon" | "extensiv" | "quickbooks" | null>(null);
   
   // GHL Sync Modal state
   const [showGhlSyncModal, setShowGhlSyncModal] = useState(false);
@@ -3933,6 +3934,7 @@ export default function AIAgent() {
     }
     // Shopify - open SKU wizard directly
     if (source === "shopify") {
+      setSkuWizardSource("shopify");
       setShowSkuMappingWizard(true);
       return;
     }
@@ -4576,7 +4578,10 @@ export default function AIAgent() {
           integrationType={openIntegration}
           open={!!openIntegration}
           onClose={() => setOpenIntegration(null)}
-          onOpenSkuWizard={() => setShowSkuMappingWizard(true)}
+          onOpenSkuWizard={(source?: "shopify" | "amazon" | "extensiv" | "quickbooks") => {
+            setSkuWizardSource(source || null);
+            setShowSkuMappingWizard(true);
+          }}
         />
       )}
 
@@ -4659,6 +4664,7 @@ export default function AIAgent() {
               variant="outline" 
               onClick={() => {
                 setShowShopifySyncModal(false);
+                setSkuWizardSource("shopify");
                 setShowSkuMappingWizard(true);
               }}
               data-testid="button-map-skus-shopify"
@@ -4689,7 +4695,11 @@ export default function AIAgent() {
       {/* SKU Mapping Wizard */}
       <SkuMappingWizard 
         isOpen={showSkuMappingWizard} 
-        onClose={() => setShowSkuMappingWizard(false)} 
+        onClose={() => {
+          setShowSkuMappingWizard(false);
+          setSkuWizardSource(null);
+        }}
+        source={skuWizardSource}
       />
 
       {/* GoHighLevel Sync Options Modal */}

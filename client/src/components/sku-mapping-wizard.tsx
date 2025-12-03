@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -69,16 +69,27 @@ interface ExtensivProductsResponse {
   message?: string;
 }
 
+type SourceType = "shopify" | "amazon" | "extensiv" | "quickbooks" | null;
+
 interface SkuMappingWizardProps {
   isOpen: boolean;
   onClose: () => void;
+  source?: SourceType;
 }
 
-export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
+export function SkuMappingWizard({ isOpen, onClose, source = null }: SkuMappingWizardProps) {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState("shopify");
+  const [activeTab, setActiveTab] = useState(source || "shopify");
   const [searchQuery, setSearchQuery] = useState("");
   const [pendingChanges, setPendingChanges] = useState<Record<string, Partial<Item>>>({});
+
+  useEffect(() => {
+    if (isOpen && source) {
+      setActiveTab(source);
+    } else if (isOpen && !source) {
+      setActiveTab("shopify");
+    }
+  }, [isOpen, source]);
 
   const { data: items = [], isLoading } = useQuery<Item[]>({
     queryKey: ["/api/items"],
@@ -1066,27 +1077,29 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
             </div>
           </div>
 
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-4">
-              <TabsTrigger value="shopify" className="gap-2" data-testid="tab-shopify-sku">
-                <SiShopify className="h-4 w-4" />
-                Shopify
-              </TabsTrigger>
-              <TabsTrigger value="amazon" className="gap-2" data-testid="tab-amazon-sku">
-                <SiAmazon className="h-4 w-4" />
-                Amazon
-              </TabsTrigger>
-              <TabsTrigger value="extensiv" className="gap-2" data-testid="tab-extensiv-sku">
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                </svg>
-                Extensiv
-              </TabsTrigger>
-              <TabsTrigger value="quickbooks" className="gap-2" data-testid="tab-quickbooks-sku">
-                <SiQuickbooks className="h-4 w-4" />
-                QuickBooks
-              </TabsTrigger>
-            </TabsList>
+          <Tabs value={activeTab} onValueChange={source ? undefined : (value) => setActiveTab(value as "shopify" | "amazon" | "extensiv" | "quickbooks")}>
+            {!source && (
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="shopify" className="gap-2" data-testid="tab-shopify-sku">
+                  <SiShopify className="h-4 w-4" />
+                  Shopify
+                </TabsTrigger>
+                <TabsTrigger value="amazon" className="gap-2" data-testid="tab-amazon-sku">
+                  <SiAmazon className="h-4 w-4" />
+                  Amazon
+                </TabsTrigger>
+                <TabsTrigger value="extensiv" className="gap-2" data-testid="tab-extensiv-sku">
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                  </svg>
+                  Extensiv
+                </TabsTrigger>
+                <TabsTrigger value="quickbooks" className="gap-2" data-testid="tab-quickbooks-sku">
+                  <SiQuickbooks className="h-4 w-4" />
+                  QuickBooks
+                </TabsTrigger>
+              </TabsList>
+            )}
 
             <TabsContent value="shopify" className="mt-4">
               {renderShopifyTab()}

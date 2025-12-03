@@ -31,7 +31,7 @@ interface IntegrationSettingsProps {
   integrationType: IntegrationType;
   open: boolean;
   onClose: () => void;
-  onOpenSkuWizard?: () => void;
+  onOpenSkuWizard?: (source?: "shopify" | "amazon" | "extensiv" | "quickbooks") => void;
 }
 
 const INTEGRATION_LABELS = {
@@ -923,9 +923,14 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               </Button>
               <Button
                 onClick={() => {
-                  if (integrationType === "SHOPIFY" && onOpenSkuWizard) {
+                  if ((integrationType === "SHOPIFY" || integrationType === "AMAZON" || integrationType === "EXTENSIV") && onOpenSkuWizard) {
                     onClose();
-                    onOpenSkuWizard();
+                    const sourceMap: Record<string, "shopify" | "amazon" | "extensiv"> = {
+                      SHOPIFY: "shopify",
+                      AMAZON: "amazon",
+                      EXTENSIV: "extensiv",
+                    };
+                    onOpenSkuWizard(sourceMap[integrationType]);
                   } else {
                     syncMutation.mutate();
                   }

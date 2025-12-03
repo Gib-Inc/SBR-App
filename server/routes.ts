@@ -55,6 +55,8 @@ import {
   type SalesOrderLine,
   type ReturnItem,
   type ReturnRequest,
+  type PurchaseOrder,
+  type SalesOrder,
 } from "@shared/schema";
 import { createReturnLabelService } from "./return-label-service";
 import { returnsService } from "./services/returns-service";
@@ -7302,7 +7304,30 @@ Notes: ${po.notes || 'None'}
 
   app.get("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     try {
-      const purchaseOrders = await storage.getAllPurchaseOrders();
+      // Support filtering by live/historical via query params
+      const { view, startDate, endDate, status, supplierId } = req.query as {
+        view?: 'live' | 'historical' | 'all';
+        startDate?: string;
+        endDate?: string;
+        status?: string;
+        supplierId?: string;
+      };
+      
+      let purchaseOrders: PurchaseOrder[];
+      
+      if (view === 'historical') {
+        const options: any = {};
+        if (startDate) options.startDate = new Date(startDate);
+        if (endDate) options.endDate = new Date(endDate);
+        if (status) options.status = status;
+        if (supplierId) options.supplierId = supplierId;
+        purchaseOrders = await storage.getHistoricalPurchaseOrders(options);
+      } else if (view === 'live') {
+        purchaseOrders = await storage.getLivePurchaseOrders();
+      } else {
+        // Default to all for backwards compatibility
+        purchaseOrders = await storage.getAllPurchaseOrders();
+      }
       
       // Enrich with line items and derived display status
       const enrichedPOs = await Promise.all(
@@ -10545,7 +10570,31 @@ Generate only the email body text, no subject line.`;
   // GET /api/returns
   app.get("/api/returns", requireAuth, async (req: Request, res: Response) => {
     try {
-      const returnRequests = await storage.getAllReturnRequests();
+      // Support filtering by live/historical via query params
+      const { view, startDate, endDate, status, channel } = req.query as {
+        view?: 'live' | 'historical' | 'all';
+        startDate?: string;
+        endDate?: string;
+        status?: string;
+        channel?: string;
+      };
+      
+      let returnRequests: ReturnRequest[];
+      
+      if (view === 'historical') {
+        const options: any = {};
+        if (startDate) options.startDate = new Date(startDate);
+        if (endDate) options.endDate = new Date(endDate);
+        if (status) options.status = status;
+        if (channel) options.channel = channel;
+        returnRequests = await storage.getHistoricalReturnRequests(options);
+      } else if (view === 'live') {
+        returnRequests = await storage.getLiveReturnRequests();
+      } else {
+        // Default to all for backwards compatibility
+        returnRequests = await storage.getAllReturnRequests();
+      }
+      
       res.json(returnRequests);
     } catch (error: any) {
       console.error("[Returns] Error fetching returns:", error);
@@ -11011,7 +11060,30 @@ Generate only the email body text, no subject line.`;
   // GET /api/sales-orders
   app.get("/api/sales-orders", requireAuth, async (req: Request, res: Response) => {
     try {
-      const orders = await storage.getAllSalesOrders();
+      // Support filtering by live/historical via query params
+      const { view, startDate, endDate, status, channel } = req.query as {
+        view?: 'live' | 'historical' | 'all';
+        startDate?: string;
+        endDate?: string;
+        status?: string;
+        channel?: string;
+      };
+      
+      let orders: SalesOrder[];
+      
+      if (view === 'historical') {
+        const options: any = {};
+        if (startDate) options.startDate = new Date(startDate);
+        if (endDate) options.endDate = new Date(endDate);
+        if (status) options.status = status;
+        if (channel) options.channel = channel;
+        orders = await storage.getHistoricalSalesOrders(options);
+      } else if (view === 'live') {
+        orders = await storage.getLiveSalesOrders();
+      } else {
+        // Default to all for backwards compatibility
+        orders = await storage.getAllSalesOrders();
+      }
       
       // Enhance with line counts, total units, and totalBackorderQty
       const ordersWithSummary = await Promise.all(
@@ -12418,6 +12490,68 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error('[Shopify Pull] Error pulling inventory:', error);
       res.status(500).json({ error: error.message || 'Failed to pull inventory from Shopify' });
+    }
+  });
+
+  // ============================================================================
+  // MIGRATION ENDPOINT: Set isHistorical for existing records based on terminal status
+  // ============================================================================
+  app.post("/api/admin/migrate-historical-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { isPOStatusTerminal, isSalesOrderStatusTerminal, isReturnStatusTerminal } = await import("@shared/schema");
+      
+      let poCount = 0;
+      let soCount = 0;
+      let returnCount = 0;
+      
+      // Migrate Purchase Orders
+      const allPOs = await storage.getAllPurchaseOrders();
+      for (const po of allPOs) {
+        if (!po.isHistorical && isPOStatusTerminal(po.status)) {
+          await storage.updatePurchaseOrder(po.id, { 
+            isHistorical: true, 
+            archivedAt: po.receivedAt || po.closedAt || po.cancelledAt || new Date()
+          });
+          poCount++;
+        }
+      }
+      
+      // Migrate Sales Orders
+      const allSOs = await storage.getAllSalesOrders();
+      for (const so of allSOs) {
+        if (!so.isHistorical && isSalesOrderStatusTerminal(so.status)) {
+          await storage.updateSalesOrder(so.id, { 
+            isHistorical: true, 
+            archivedAt: so.fulfilledAt || so.cancelledAt || new Date()
+          });
+          soCount++;
+        }
+      }
+      
+      // Migrate Return Requests
+      const allReturns = await storage.getAllReturnRequests();
+      for (const ret of allReturns) {
+        if (!ret.isHistorical && isReturnStatusTerminal(ret.status)) {
+          await storage.updateReturnRequest(ret.id, { 
+            isHistorical: true, 
+            archivedAt: ret.closedAt || ret.refundedAt || new Date()
+          });
+          returnCount++;
+        }
+      }
+      
+      res.json({
+        success: true,
+        message: "Migration completed",
+        migratedCounts: {
+          purchaseOrders: poCount,
+          salesOrders: soCount,
+          returnRequests: returnCount,
+        }
+      });
+    } catch (error: any) {
+      console.error("[Migration] Error migrating historical status:", error);
+      res.status(500).json({ error: error.message || "Failed to migrate historical status" });
     }
   });
 

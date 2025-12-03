@@ -101,6 +101,9 @@ import {
   type InsertShippoLabelLog,
   type AiAgentSettings,
   type InsertAiAgentSettings,
+  isPOStatusTerminal,
+  isSalesOrderStatusTerminal,
+  isReturnStatusTerminal,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -1812,7 +1815,18 @@ export class MemStorage implements IStorage {
   async updatePurchaseOrder(id: string, updates: Partial<InsertPurchaseOrder>): Promise<PurchaseOrder | undefined> {
     const po = this.purchaseOrders.get(id);
     if (!po) return undefined;
-    const updated = { ...po, ...updates };
+    
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isPOStatusTerminal(updates.status) && !po.isHistorical) {
+      finalUpdates = {
+        ...finalUpdates,
+        isHistorical: true,
+        archivedAt: new Date(),
+      };
+    }
+    
+    const updated = { ...po, ...finalUpdates };
     this.purchaseOrders.set(id, updated);
     return updated;
   }
@@ -2065,7 +2079,18 @@ export class MemStorage implements IStorage {
   async updateReturnRequest(id: string, updates: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined> {
     const request = this.returnRequests.get(id);
     if (!request) return undefined;
-    const updated = { ...request, ...updates, updatedAt: new Date() };
+    
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isReturnStatusTerminal(updates.status) && !request.isHistorical) {
+      finalUpdates = {
+        ...finalUpdates,
+        isHistorical: true,
+        archivedAt: new Date(),
+      };
+    }
+    
+    const updated = { ...request, ...finalUpdates, updatedAt: new Date() };
     this.returnRequests.set(id, updated);
     return updated;
   }
@@ -2517,7 +2542,18 @@ export class MemStorage implements IStorage {
   async updateSalesOrder(id: string, updates: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined> {
     const order = this.salesOrders.get(id);
     if (!order) return undefined;
-    const updated = { ...order, ...updates, updatedAt: new Date() };
+    
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isSalesOrderStatusTerminal(updates.status) && !order.isHistorical) {
+      finalUpdates = {
+        ...finalUpdates,
+        isHistorical: true,
+        archivedAt: new Date(),
+      };
+    }
+    
+    const updated = { ...order, ...finalUpdates, updatedAt: new Date() };
     this.salesOrders.set(id, updated);
     return updated;
   }
@@ -4161,7 +4197,21 @@ export class PostgresStorage implements IStorage {
   }
 
   async updatePurchaseOrder(id: string, updates: Partial<InsertPurchaseOrder>): Promise<PurchaseOrder | undefined> {
-    const results = await this.db.update(schema.purchaseOrders).set(updates).where(eq(schema.purchaseOrders.id, id)).returning();
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isPOStatusTerminal(updates.status)) {
+      // Check if already historical to avoid unnecessary updates
+      const existing = await this.getPurchaseOrder(id);
+      if (existing && !existing.isHistorical) {
+        finalUpdates = {
+          ...finalUpdates,
+          isHistorical: true,
+          archivedAt: new Date(),
+        };
+      }
+    }
+    
+    const results = await this.db.update(schema.purchaseOrders).set(finalUpdates).where(eq(schema.purchaseOrders.id, id)).returning();
     return results[0];
   }
 
@@ -4436,8 +4486,22 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateReturnRequest(id: string, updates: Partial<InsertReturnRequest>): Promise<ReturnRequest | undefined> {
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isReturnStatusTerminal(updates.status)) {
+      // Check if already historical to avoid unnecessary updates
+      const existing = await this.getReturnRequest(id);
+      if (existing && !existing.isHistorical) {
+        finalUpdates = {
+          ...finalUpdates,
+          isHistorical: true,
+          archivedAt: new Date(),
+        };
+      }
+    }
+    
     const results = await this.db.update(schema.returnRequests)
-      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .set({ ...finalUpdates, updatedAt: drizzleSql`now()` })
       .where(eq(schema.returnRequests.id, id))
       .returning();
     return results[0];
@@ -4978,8 +5042,22 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateSalesOrder(id: string, updates: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined> {
+    // Auto-set isHistorical when status transitions to terminal
+    let finalUpdates = { ...updates };
+    if (updates.status && isSalesOrderStatusTerminal(updates.status)) {
+      // Check if already historical to avoid unnecessary updates
+      const existing = await this.getSalesOrder(id);
+      if (existing && !existing.isHistorical) {
+        finalUpdates = {
+          ...finalUpdates,
+          isHistorical: true,
+          archivedAt: new Date(),
+        };
+      }
+    }
+    
     const results = await this.db.update(schema.salesOrders)
-      .set({ ...updates, updatedAt: drizzleSql`now()` })
+      .set({ ...finalUpdates, updatedAt: drizzleSql`now()` })
       .where(eq(schema.salesOrders.id, id))
       .returning();
     return results[0];

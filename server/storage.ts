@@ -237,6 +237,8 @@ export interface IStorage {
 
   // Purchase Orders
   getAllPurchaseOrders(): Promise<PurchaseOrder[]>;
+  getLivePurchaseOrders(): Promise<PurchaseOrder[]>;
+  getHistoricalPurchaseOrders(options?: { startDate?: Date; endDate?: Date; status?: string; supplierId?: string }): Promise<PurchaseOrder[]>;
   getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined>;
   getPurchaseOrdersBySupplierId(supplierId: string): Promise<PurchaseOrder[]>;
   createPurchaseOrder(po: InsertPurchaseOrder): Promise<PurchaseOrder>;
@@ -284,6 +286,8 @@ export interface IStorage {
 
   // Return Requests
   getAllReturnRequests(): Promise<ReturnRequest[]>;
+  getLiveReturnRequests(): Promise<ReturnRequest[]>;
+  getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]>;
   getReturnRequest(id: string): Promise<ReturnRequest | undefined>;
   getReturnRequestsBySalesOrderId(salesOrderId: string): Promise<ReturnRequest[]>;
   createReturnRequest(request: InsertReturnRequest): Promise<ReturnRequest>;
@@ -357,6 +361,8 @@ export interface IStorage {
 
   // Sales Orders
   getAllSalesOrders(): Promise<SalesOrder[]>;
+  getLiveSalesOrders(): Promise<SalesOrder[]>;
+  getHistoricalSalesOrders(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<SalesOrder[]>;
   getSalesOrder(id: string): Promise<SalesOrder | undefined>;
   getSalesOrdersByExternalId(channel: string, externalOrderId: string): Promise<SalesOrder[]>;
   getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]>;
@@ -1745,6 +1751,28 @@ export class MemStorage implements IStorage {
     return Array.from(this.purchaseOrders.values());
   }
 
+  async getLivePurchaseOrders(): Promise<PurchaseOrder[]> {
+    return Array.from(this.purchaseOrders.values())
+      .filter(po => !po.isHistorical);
+  }
+
+  async getHistoricalPurchaseOrders(options?: { startDate?: Date; endDate?: Date; status?: string; supplierId?: string }): Promise<PurchaseOrder[]> {
+    let pos = Array.from(this.purchaseOrders.values()).filter(po => po.isHistorical);
+    if (options?.startDate) {
+      pos = pos.filter(po => po.archivedAt && new Date(po.archivedAt) >= options.startDate!);
+    }
+    if (options?.endDate) {
+      pos = pos.filter(po => po.archivedAt && new Date(po.archivedAt) <= options.endDate!);
+    }
+    if (options?.status) {
+      pos = pos.filter(po => po.status === options.status);
+    }
+    if (options?.supplierId) {
+      pos = pos.filter(po => po.supplierId === options.supplierId);
+    }
+    return pos;
+  }
+
   async getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined> {
     return this.purchaseOrders.get(id);
   }
@@ -1980,6 +2008,28 @@ export class MemStorage implements IStorage {
   // Return Requests
   async getAllReturnRequests(): Promise<ReturnRequest[]> {
     return Array.from(this.returnRequests.values());
+  }
+
+  async getLiveReturnRequests(): Promise<ReturnRequest[]> {
+    return Array.from(this.returnRequests.values())
+      .filter(r => !r.isHistorical);
+  }
+
+  async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
+    let returns = Array.from(this.returnRequests.values()).filter(r => r.isHistorical);
+    if (options?.startDate) {
+      returns = returns.filter(r => r.archivedAt && new Date(r.archivedAt) >= options.startDate!);
+    }
+    if (options?.endDate) {
+      returns = returns.filter(r => r.archivedAt && new Date(r.archivedAt) <= options.endDate!);
+    }
+    if (options?.status) {
+      returns = returns.filter(r => r.status === options.status);
+    }
+    if (options?.channel) {
+      returns = returns.filter(r => r.salesChannel === options.channel);
+    }
+    return returns;
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
@@ -2389,6 +2439,28 @@ export class MemStorage implements IStorage {
   // Sales Orders
   async getAllSalesOrders(): Promise<SalesOrder[]> {
     return Array.from(this.salesOrders.values());
+  }
+
+  async getLiveSalesOrders(): Promise<SalesOrder[]> {
+    return Array.from(this.salesOrders.values())
+      .filter(order => !order.isHistorical);
+  }
+
+  async getHistoricalSalesOrders(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<SalesOrder[]> {
+    let orders = Array.from(this.salesOrders.values()).filter(o => o.isHistorical);
+    if (options?.startDate) {
+      orders = orders.filter(o => o.archivedAt && new Date(o.archivedAt) >= options.startDate!);
+    }
+    if (options?.endDate) {
+      orders = orders.filter(o => o.archivedAt && new Date(o.archivedAt) <= options.endDate!);
+    }
+    if (options?.status) {
+      orders = orders.filter(o => o.status === options.status);
+    }
+    if (options?.channel) {
+      orders = orders.filter(o => o.channel === options.channel);
+    }
+    return orders;
   }
 
   async getSalesOrder(id: string): Promise<SalesOrder | undefined> {
@@ -4050,6 +4122,30 @@ export class PostgresStorage implements IStorage {
     return await this.db.select().from(schema.purchaseOrders);
   }
 
+  async getLivePurchaseOrders(): Promise<PurchaseOrder[]> {
+    return await this.db.select().from(schema.purchaseOrders)
+      .where(eq(schema.purchaseOrders.isHistorical, false));
+  }
+
+  async getHistoricalPurchaseOrders(options?: { startDate?: Date; endDate?: Date; status?: string; supplierId?: string }): Promise<PurchaseOrder[]> {
+    const conditions = [eq(schema.purchaseOrders.isHistorical, true)];
+    if (options?.startDate) {
+      conditions.push(gte(schema.purchaseOrders.archivedAt, options.startDate));
+    }
+    if (options?.endDate) {
+      conditions.push(lte(schema.purchaseOrders.archivedAt, options.endDate));
+    }
+    if (options?.status) {
+      conditions.push(eq(schema.purchaseOrders.status, options.status));
+    }
+    if (options?.supplierId) {
+      conditions.push(eq(schema.purchaseOrders.supplierId, options.supplierId));
+    }
+    return await this.db.select().from(schema.purchaseOrders)
+      .where(and(...conditions))
+      .orderBy(desc(schema.purchaseOrders.archivedAt));
+  }
+
   async getPurchaseOrder(id: string): Promise<PurchaseOrder | undefined> {
     const results = await this.db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, id));
     return results[0];
@@ -4303,6 +4399,30 @@ export class PostgresStorage implements IStorage {
   // Return Requests
   async getAllReturnRequests(): Promise<ReturnRequest[]> {
     return await this.db.select().from(schema.returnRequests);
+  }
+
+  async getLiveReturnRequests(): Promise<ReturnRequest[]> {
+    return await this.db.select().from(schema.returnRequests)
+      .where(eq(schema.returnRequests.isHistorical, false));
+  }
+
+  async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
+    const conditions = [eq(schema.returnRequests.isHistorical, true)];
+    if (options?.startDate) {
+      conditions.push(gte(schema.returnRequests.archivedAt, options.startDate));
+    }
+    if (options?.endDate) {
+      conditions.push(lte(schema.returnRequests.archivedAt, options.endDate));
+    }
+    if (options?.status) {
+      conditions.push(eq(schema.returnRequests.status, options.status));
+    }
+    if (options?.channel) {
+      conditions.push(eq(schema.returnRequests.salesChannel, options.channel));
+    }
+    return await this.db.select().from(schema.returnRequests)
+      .where(and(...conditions))
+      .orderBy(desc(schema.returnRequests.archivedAt));
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
@@ -4798,6 +4918,30 @@ export class PostgresStorage implements IStorage {
   // Sales Orders
   async getAllSalesOrders(): Promise<SalesOrder[]> {
     return await this.db.select().from(schema.salesOrders);
+  }
+
+  async getLiveSalesOrders(): Promise<SalesOrder[]> {
+    return await this.db.select().from(schema.salesOrders)
+      .where(eq(schema.salesOrders.isHistorical, false));
+  }
+
+  async getHistoricalSalesOrders(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<SalesOrder[]> {
+    const conditions = [eq(schema.salesOrders.isHistorical, true)];
+    if (options?.startDate) {
+      conditions.push(gte(schema.salesOrders.archivedAt, options.startDate));
+    }
+    if (options?.endDate) {
+      conditions.push(lte(schema.salesOrders.archivedAt, options.endDate));
+    }
+    if (options?.status) {
+      conditions.push(eq(schema.salesOrders.status, options.status));
+    }
+    if (options?.channel) {
+      conditions.push(eq(schema.salesOrders.channel, options.channel));
+    }
+    return await this.db.select().from(schema.salesOrders)
+      .where(and(...conditions))
+      .orderBy(desc(schema.salesOrders.archivedAt));
   }
 
   async getSalesOrder(id: string): Promise<SalesOrder | undefined> {

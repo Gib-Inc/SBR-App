@@ -736,6 +736,9 @@ export default function PurchaseOrders() {
                   <SelectItem value="CANCELLED">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
+              <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-pos">
+                {sortedPOs.length} {sortedPOs.length === 1 ? 'PO' : 'POs'}
+              </Badge>
             </div>
             <Button
               variant="outline"

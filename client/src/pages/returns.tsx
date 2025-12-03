@@ -380,7 +380,13 @@ export default function Returns() {
               )}
             </div>
           ) : (
-            <div className="overflow-auto max-h-[calc(100vh-320px)] rounded-md">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-end px-4 pt-4">
+                <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-returns">
+                  {returns.length} {returns.length === 1 ? 'return' : 'returns'}
+                </Badge>
+              </div>
+              <div className="overflow-auto max-h-[calc(100vh-360px)] rounded-md">
               <table className="w-full table-auto">
                 <thead className="bg-muted sticky top-0 z-10">
                   <tr className="border-b">
@@ -521,9 +527,10 @@ export default function Returns() {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
-        )}
+              </table>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

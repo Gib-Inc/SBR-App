@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { Link } from "wouter";
 import { CreatePODialog } from "@/components/create-po-dialog";
 import { EditPODialog } from "@/components/edit-po-dialog";
@@ -28,6 +28,12 @@ import {
   MailCheck,
   Package,
   Pencil,
+  Calendar,
+  History,
+  Zap,
+  Archive,
+  Download,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +70,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { PurchaseOrder, Supplier } from "@shared/schema";
@@ -270,9 +279,27 @@ export default function PurchaseOrders() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingPO, setEditingPO] = useState<PurchaseOrderWithSupplier | null>(null);
+  
+  const [activeTab, setActiveTab] = useState<"live" | "history">("live");
+  const [historyStartDate, setHistoryStartDate] = useState<Date | undefined>(subDays(new Date(), 30));
+  const [historyEndDate, setHistoryEndDate] = useState<Date | undefined>(new Date());
+
+  const viewParam = activeTab === "live" ? "live" : "historical";
+  const queryParams = new URLSearchParams({ view: viewParam });
+  if (activeTab === "history" && historyStartDate) {
+    queryParams.set("startDate", historyStartDate.toISOString());
+  }
+  if (activeTab === "history" && historyEndDate) {
+    queryParams.set("endDate", historyEndDate.toISOString());
+  }
 
   const { data: purchaseOrders, isLoading } = useQuery<PurchaseOrderWithSupplier[]>({
-    queryKey: ["/api/purchase-orders"],
+    queryKey: ["/api/purchase-orders", viewParam, historyStartDate?.toISOString(), historyEndDate?.toISOString()],
+    queryFn: async () => {
+      const res = await fetch(`/api/purchase-orders?${queryParams.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch purchase orders");
+      return res.json();
+    },
   });
 
   const { data: suppliers } = useQuery<Supplier[]>({
@@ -551,58 +578,133 @@ export default function PurchaseOrders() {
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Purchase Orders</h1>
           <p className="text-sm text-muted-foreground">Manage supplier orders and receipts</p>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-po">
-          <Plus className="h-4 w-4 mr-2" />
-          Create PO
-        </Button>
+        <div className="flex items-center gap-2">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "live" | "history")} className="w-auto">
+            <TabsList>
+              <TabsTrigger value="live" data-testid="tab-live">
+                <Zap className="h-4 w-4 mr-2" />
+                Live
+              </TabsTrigger>
+              <TabsTrigger value="history" data-testid="tab-history">
+                <Archive className="h-4 w-4 mr-2" />
+                History
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {activeTab === "live" && (
+            <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-po">
+              <Plus className="h-4 w-4 mr-2" />
+              Create PO
+            </Button>
+          )}
+        </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("all")} data-testid="card-total-orders">
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Total Orders</p>
-                <p className="text-2xl font-bold">{enrichedPOs.length}</p>
+      {activeTab === "live" && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("all")} data-testid="card-total-orders">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Total Orders</p>
+                  <p className="text-2xl font-bold">{enrichedPOs.length}</p>
+                </div>
+                <ClipboardList className="h-8 w-8 text-muted-foreground" />
               </div>
-              <ClipboardList className="h-8 w-8 text-muted-foreground" />
+            </CardContent>
+          </Card>
+          <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("DRAFT")} data-testid="card-draft-orders">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Drafts</p>
+                  <p className="text-2xl font-bold">{statusCounts.DRAFT || 0}</p>
+                </div>
+                <FileText className="h-8 w-8 text-gray-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("SENT")} data-testid="card-pending-orders">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Pending Receipt</p>
+                  <p className="text-2xl font-bold">{(statusCounts.SENT || 0) + (statusCounts.PARTIAL_RECEIVED || 0)}</p>
+                </div>
+                <Truck className="h-8 w-8 text-indigo-500" />
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("RECEIVED")} data-testid="card-received-orders">
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Received</p>
+                  <p className="text-2xl font-bold">{statusCounts.RECEIVED || 0}</p>
+                </div>
+                <PackageCheck className="h-8 w-8 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === "history" && (
+        <Card>
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">Date Range:</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="w-36" data-testid="button-start-date">
+                        <Calendar className="h-4 w-4 mr-2" />
+                        {historyStartDate ? format(historyStartDate, "MM/dd/yyyy") : "Start Date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyStartDate}
+                        onSelect={setHistoryStartDate}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="w-36" data-testid="button-end-date">
+                        <Calendar className="h-4 w-4 mr-2" />
+                        {historyEndDate ? format(historyEndDate, "MM/dd/yyyy") : "End Date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyEndDate}
+                        onSelect={setHistoryEndDate}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <Badge variant="secondary">
+                  <History className="h-3 w-3 mr-1" />
+                  {sortedPOs.length} archived records
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" data-testid="button-export-po">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
-        <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("DRAFT")} data-testid="card-draft-orders">
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Drafts</p>
-                <p className="text-2xl font-bold">{statusCounts.DRAFT || 0}</p>
-              </div>
-              <FileText className="h-8 w-8 text-gray-500" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("SENT")} data-testid="card-pending-orders">
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Pending Receipt</p>
-                <p className="text-2xl font-bold">{(statusCounts.SENT || 0) + (statusCounts.PARTIAL_RECEIVED || 0)}</p>
-              </div>
-              <Truck className="h-8 w-8 text-indigo-500" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("RECEIVED")} data-testid="card-received-orders">
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Received</p>
-                <p className="text-2xl font-bold">{statusCounts.RECEIVED || 0}</p>
-              </div>
-              <PackageCheck className="h-8 w-8 text-green-500" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">

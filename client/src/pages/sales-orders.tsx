@@ -42,6 +42,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { 
   Plus, 
   Loader2, 
@@ -54,7 +57,11 @@ import {
   ExternalLink,
   Download,
   Upload,
-  Share2
+  Share2,
+  Calendar,
+  History,
+  Zap,
+  Archive,
 } from "lucide-react";
 
 function GhlConversationIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -96,7 +103,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { Link } from "wouter";
 import type { SalesOrder, SalesOrderLine, Item } from "@shared/schema";
 
@@ -207,9 +214,27 @@ export default function SalesOrders() {
   const [showCreateReturnDialog, setShowCreateReturnDialog] = useState(false);
   const [returnCreationResult, setReturnCreationResult] = useState<ReturnCreationResult | null>(null);
   const [channelFilter, setChannelFilter] = useState<string>("ALL");
+  
+  const [activeTab, setActiveTab] = useState<"live" | "history">("live");
+  const [historyStartDate, setHistoryStartDate] = useState<Date | undefined>(subDays(new Date(), 30));
+  const [historyEndDate, setHistoryEndDate] = useState<Date | undefined>(new Date());
+
+  const viewParam = activeTab === "live" ? "live" : "historical";
+  const queryParams = new URLSearchParams({ view: viewParam });
+  if (activeTab === "history" && historyStartDate) {
+    queryParams.set("startDate", historyStartDate.toISOString());
+  }
+  if (activeTab === "history" && historyEndDate) {
+    queryParams.set("endDate", historyEndDate.toISOString());
+  }
 
   const { data: orders = [], isLoading } = useQuery<EnrichedSalesOrder[]>({
-    queryKey: ["/api/sales-orders"],
+    queryKey: ["/api/sales-orders", viewParam, historyStartDate?.toISOString(), historyEndDate?.toISOString()],
+    queryFn: async () => {
+      const res = await fetch(`/api/sales-orders?${queryParams.toString()}`);
+      if (!res.ok) throw new Error("Failed to fetch sales orders");
+      return res.json();
+    },
   });
 
   const { data: items = [] } = useQuery<Item[]>({
@@ -562,78 +587,194 @@ export default function SalesOrders() {
             Manage customer orders and backorders
           </p>
         </div>
-        <Button 
-          onClick={() => {
-            form.reset();
-            setShowNewOrderDialog(true);
-          }}
-          data-testid="button-new-order"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          New Order
-        </Button>
-      </div>
-
-      {orders.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <Package className="h-16 w-16 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">No sales orders yet</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Create your first sales order to get started
-            </p>
+        <div className="flex items-center gap-2">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "live" | "history")} className="w-auto">
+            <TabsList>
+              <TabsTrigger value="live" data-testid="tab-live">
+                <Zap className="h-4 w-4 mr-2" />
+                Live
+              </TabsTrigger>
+              <TabsTrigger value="history" data-testid="tab-history">
+                <Archive className="h-4 w-4 mr-2" />
+                History
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {activeTab === "live" && (
             <Button 
               onClick={() => {
                 form.reset();
                 setShowNewOrderDialog(true);
               }}
-              data-testid="button-create-first-order"
+              data-testid="button-new-order"
             >
               <Plus className="h-4 w-4 mr-2" />
-              Create First Order
+              New Order
             </Button>
+          )}
+        </div>
+      </div>
+
+      {activeTab === "history" && (
+        <Card>
+          <CardContent className="py-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">Date Range:</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="w-36" data-testid="button-start-date">
+                        <Calendar className="h-4 w-4 mr-2" />
+                        {historyStartDate ? format(historyStartDate, "MM/dd/yyyy") : "Start Date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyStartDate}
+                        onSelect={setHistoryStartDate}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <span className="text-sm text-muted-foreground">to</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" size="sm" className="w-36" data-testid="button-end-date">
+                        <Calendar className="h-4 w-4 mr-2" />
+                        {historyEndDate ? format(historyEndDate, "MM/dd/yyyy") : "End Date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <CalendarComponent
+                        mode="single"
+                        selected={historyEndDate}
+                        onSelect={setHistoryEndDate}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <Badge variant="secondary">
+                  <History className="h-3 w-3 mr-1" />
+                  {filteredOrders.length} archived records
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileImport}
+                  accept=".csv"
+                  className="hidden"
+                  data-testid="input-import-csv-history"
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      data-testid="button-import-csv-history"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Import
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Import sales orders from CSV</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={exportToCSV}
+                      data-testid="button-export-csv-history"
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Export orders to CSV</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {orders.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <Package className="h-16 w-16 text-muted-foreground mb-4" />
+            <h3 className="text-lg font-medium mb-2">
+              {activeTab === "live" ? "No sales orders yet" : "No archived orders found"}
+            </h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {activeTab === "live" 
+                ? "Create your first sales order to get started" 
+                : "Try adjusting the date range or check back later"
+              }
+            </p>
+            {activeTab === "live" && (
+              <Button 
+                onClick={() => {
+                  form.reset();
+                  setShowNewOrderDialog(true);
+                }}
+                data-testid="button-create-first-order"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Create First Order
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-end gap-4 flex-wrap">
             <div className="flex items-center gap-2">
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileImport}
-                accept=".csv"
-                className="hidden"
-                data-testid="input-import-csv"
-              />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={() => fileInputRef.current?.click()}
-                    data-testid="button-import-csv"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    Import
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Import sales orders from CSV</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button 
-                    variant="outline" 
-                    size="sm"
-                    onClick={exportToCSV}
-                    data-testid="button-export-csv"
-                  >
-                    <Upload className="h-4 w-4 mr-2" />
-                    Export
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Export orders to CSV</TooltipContent>
-              </Tooltip>
+              {activeTab === "live" && (
+                <>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileImport}
+                    accept=".csv"
+                    className="hidden"
+                    data-testid="input-import-csv"
+                  />
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => fileInputRef.current?.click()}
+                        data-testid="button-import-csv"
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Import
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Import sales orders from CSV</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={exportToCSV}
+                        data-testid="button-export-csv"
+                      >
+                        <Upload className="h-4 w-4 mr-2" />
+                        Export
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Export orders to CSV</TooltipContent>
+                  </Tooltip>
+                </>
+              )}
               <Select value={channelFilter} onValueChange={setChannelFilter}>
                 <SelectTrigger className="w-[180px]" data-testid="select-channel-filter">
                   <SelectValue placeholder="Filter by channel" />

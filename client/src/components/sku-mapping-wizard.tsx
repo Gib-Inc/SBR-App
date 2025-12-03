@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles, BookOpen } from "lucide-react";
+import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles, BookOpen, ArrowRightLeft } from "lucide-react";
 import { SiShopify, SiAmazon, SiQuickbooks } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -594,6 +594,20 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                 Apply All ({suggestedCount})
               </Button>
             )}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={syncNamesFromShopify}
+              disabled={isSyncingNames || finishedProducts.filter(item => item.shopifyVariantId).length === 0}
+              data-testid="button-sync-names-shopify"
+            >
+              {isSyncingNames ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="h-4 w-4 mr-1" />
+              )}
+              Sync Names
+            </Button>
             <Button variant="outline" size="sm" onClick={() => refetchShopify()} data-testid="button-refresh-shopify">
               <RefreshCw className="h-4 w-4 mr-1" />
               Refresh

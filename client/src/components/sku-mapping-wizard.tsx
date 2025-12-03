@@ -628,10 +628,10 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                 const linkedVariant = isLinked ? allShopifyVariants.find(v => v.variantId === item.shopifyVariantId) : null;
 
                 return (
-                  <Card key={item.id} className={isLinked ? "border-green-500/50" : suggestedMatch ? "border-primary/50" : ""}>
+                  <Card key={item.id} className={`${isLinked ? "border-green-500/50" : suggestedMatch ? "border-primary/50" : ""} overflow-hidden`}>
                     <CardContent className="p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
+                      <div className="flex items-start gap-3 overflow-hidden">
+                        <div className="flex-1 min-w-0 overflow-hidden">
                           <div className="font-medium truncate">{item.name}</div>
                           <div className="text-sm text-muted-foreground font-mono flex items-center gap-2">
                             <span>{item.sku}</span>
@@ -639,12 +639,12 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                           </div>
                         </div>
                         
-                        <div className="flex flex-col gap-2 min-w-[280px]">
+                        <div className="flex flex-col gap-2 w-[280px] flex-shrink-0">
                           {isLinked ? (
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800">
-                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300">
-                                  <Link2 className="h-4 w-4" />
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 min-w-0">
+                                  <Link2 className="h-4 w-4 flex-shrink-0" />
                                   <span className="font-medium truncate">{linkedVariant?.fullName || item.shopifySku}</span>
                                 </div>
                               </div>
@@ -660,11 +660,11 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
                             </div>
                           ) : suggestedMatch ? (
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
-                                <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300">
-                                  <Sparkles className="h-4 w-4" />
-                                  <span className="font-medium truncate">{suggestedMatch.variant.fullName}</span>
-                                  <Badge variant="secondary" className="text-xs ml-auto">{suggestedMatch.matchType}</Badge>
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-blue-700 dark:text-blue-300 min-w-0">
+                                  <Sparkles className="h-4 w-4 flex-shrink-0" />
+                                  <span className="font-medium truncate flex-1 min-w-0">{suggestedMatch.variant.fullName}</span>
+                                  <Badge variant="secondary" className="text-xs flex-shrink-0">{suggestedMatch.matchType}</Badge>
                                 </div>
                               </div>
                               <Button

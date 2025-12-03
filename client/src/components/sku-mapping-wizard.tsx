@@ -272,6 +272,52 @@ export function SkuMappingWizard({ isOpen, onClose }: SkuMappingWizardProps) {
     },
   });
 
+  // Sync names from Shopify to internal items
+  const [isSyncingNames, setIsSyncingNames] = useState(false);
+  
+  const syncNamesFromShopify = async () => {
+    const linkedItems = finishedProducts.filter(item => item.shopifyVariantId);
+    if (linkedItems.length === 0) {
+      toast({
+        title: "No Linked Products",
+        description: "Link products to Shopify first to sync names",
+      });
+      return;
+    }
+    
+    setIsSyncingNames(true);
+    let updatedCount = 0;
+    
+    try {
+      for (const item of linkedItems) {
+        const linkedVariant = allShopifyVariants.find(v => v.variantId === item.shopifyVariantId);
+        if (linkedVariant && linkedVariant.fullName && linkedVariant.fullName !== item.name) {
+          await apiRequest("PATCH", `/api/items/${item.id}`, {
+            name: linkedVariant.fullName,
+          });
+          updatedCount++;
+        }
+      }
+      
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      
+      toast({
+        title: "Names Synced",
+        description: updatedCount > 0 
+          ? `Updated ${updatedCount} product name${updatedCount > 1 ? 's' : ''} from Shopify`
+          : "All product names already match Shopify",
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Sync Failed",
+        description: "Failed to sync some product names. Please try again.",
+      });
+    } finally {
+      setIsSyncingNames(false);
+    }
+  };
+
   const handleLinkToShopify = (item: Item, variant: typeof allShopifyVariants[0]) => {
     linkToShopifyMutation.mutate({
       itemId: item.id,

@@ -275,10 +275,15 @@ export const purchaseOrders = pgTable("purchase_orders", {
   
   // External Integrations (Reserved for future)
   externalAccountingId: text("external_accounting_id"), // e.g., QuickBooks PO ID
+  
+  // Live vs History tracking
+  isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
+  archivedAt: timestamp("archived_at"), // When record moved to History
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),
   createdAtIdx: index("purchase_orders_created_at_idx").on(table.createdAt),
+  isHistoricalIdx: index("purchase_orders_is_historical_idx").on(table.isHistorical),
 }));
 
 // PO Status enum for type safety
@@ -899,6 +904,41 @@ export const ReturnResolution = {
 } as const;
 export type ReturnResolution = typeof ReturnResolution[keyof typeof ReturnResolution];
 
+// ============================================================================
+// TERMINAL STATUS CONFIGURATION (Live vs History System)
+// ============================================================================
+// Records with terminal statuses are moved to History (isHistorical = true)
+// Records with non-terminal statuses remain in Live (isHistorical = false)
+
+export const TERMINAL_STATUSES = {
+  // Purchase Orders: RECEIVED, CLOSED, CANCELLED are terminal
+  purchaseOrder: ['RECEIVED', 'CLOSED', 'CANCELLED'] as const,
+  
+  // Sales Orders: FULFILLED, CANCELLED are terminal
+  salesOrder: ['FULFILLED', 'CANCELLED'] as const,
+  
+  // Returns: REFUNDED, REPLACEMENT_SENT, CLOSED, REJECTED, CANCELLED, COMPLETED are terminal
+  returnRequest: ['REFUNDED', 'REPLACEMENT_SENT', 'CLOSED', 'REJECTED', 'CANCELLED', 'COMPLETED'] as const,
+} as const;
+
+// Type-safe helpers
+export type TerminalPOStatus = typeof TERMINAL_STATUSES.purchaseOrder[number];
+export type TerminalSalesOrderStatus = typeof TERMINAL_STATUSES.salesOrder[number];
+export type TerminalReturnStatus = typeof TERMINAL_STATUSES.returnRequest[number];
+
+// Helper functions to check if a status is terminal
+export function isPOStatusTerminal(status: string): boolean {
+  return TERMINAL_STATUSES.purchaseOrder.includes(status as TerminalPOStatus);
+}
+
+export function isSalesOrderStatusTerminal(status: string): boolean {
+  return TERMINAL_STATUSES.salesOrder.includes(status as TerminalSalesOrderStatus);
+}
+
+export function isReturnStatusTerminal(status: string): boolean {
+  return TERMINAL_STATUSES.returnRequest.includes(status as TerminalReturnStatus);
+}
+
 export const returnRequests = pgTable("return_requests", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   rmaNumber: text("rma_number").unique(), // Unique RMA number e.g. RMA-2025-000123
@@ -951,6 +991,11 @@ export const returnRequests = pgTable("return_requests", {
   // Legacy fields (kept for backwards compatibility)
   receiptPrintedAt: timestamp("receipt_printed_at"), // First successful print timestamp
   receiptPrintCount: integer("receipt_print_count").notNull().default(0), // Total number of prints
+  
+  // Live vs History tracking
+  isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
+  archivedAt: timestamp("archived_at"), // When record moved to History
+  
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -960,6 +1005,7 @@ export const returnRequests = pgTable("return_requests", {
   createdAtIdx: index("return_requests_created_at_idx").on(table.createdAt),
   rmaNumberIdx: index("return_requests_rma_number_idx").on(table.rmaNumber),
   ghlRefundOpportunityIdIdx: index("return_requests_ghl_refund_opportunity_id_idx").on(table.ghlRefundOpportunityId),
+  isHistoricalIdx: index("return_requests_is_historical_idx").on(table.isHistorical),
 }));
 
 export const insertReturnRequestSchema = createInsertSchema(returnRequests).omit({ 
@@ -1376,6 +1422,11 @@ export const salesOrders = pgTable("sales_orders", {
   returnStatus: text("return_status").notNull().default('NONE'), // See SalesOrderReturnStatus
   totalReturnQty: integer("total_return_qty").notNull().default(0), // Sum of all return item quantities
   totalRefundAmount: real("total_refund_amount").notNull().default(0), // Sum of refunded amounts
+  
+  // Live vs History tracking
+  isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
+  archivedAt: timestamp("archived_at"), // When record moved to History
+  
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -1385,6 +1436,7 @@ export const salesOrders = pgTable("sales_orders", {
   externalOrderIdIdx: index("sales_orders_external_order_id_idx").on(table.externalOrderId),
   productionStatusIdx: index("sales_orders_production_status_idx").on(table.productionStatus),
   returnStatusIdx: index("sales_orders_return_status_idx").on(table.returnStatus),
+  isHistoricalIdx: index("sales_orders_is_historical_idx").on(table.isHistorical),
   // V1: Unique constraint for idempotent order imports - prevents duplicate Shopify/Amazon orders
   channelExternalOrderUniqueIdx: uniqueIndex("sales_orders_channel_external_order_unique_idx")
     .on(table.channel, table.externalOrderId)

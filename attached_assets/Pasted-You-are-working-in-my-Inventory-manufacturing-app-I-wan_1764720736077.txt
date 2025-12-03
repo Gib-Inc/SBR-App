@@ -1,0 +1,215 @@
+You are working in my “Inventory” manufacturing app. I want you to add a simple “Live vs History” system on THREE pages only:
+
+- Purchase Orders
+- Sales Orders
+- Returns
+
+DO NOT change BOM for this feature.
+
+The goal:
+- The existing tables on these pages become the “Live” view (current work only).
+- A new “History” tab on each page will show closed / finished records for auditing by month/year.
+- Import/Export controls for these entities should live in the History tab, not on the Live tab.
+
+----------------------------------------------------------------------
+1) GENERAL TAB STRUCTURE (PER PAGE)
+----------------------------------------------------------------------
+
+For each of the following pages:
+
+- Purchase Orders
+- Sales Orders
+- Returns
+
+Do this:
+
+1. Add a simple two-tab switch at the top of the main content area (just under the page title), using the app’s existing tab / segmented-control style:
+
+   - Tab 1 label: “Live”
+   - Tab 2 label: “History”
+
+2. Make “Live” the default tab when navigating to the page.
+
+3. Do NOT create new routes. Keep everything in the existing page files and render different table views based on the selected tab.
+
+4. Keep styling / spacing consistent with the rest of the app (same card style, headers, filters, etc.).
+
+----------------------------------------------------------------------
+2) DATA MODEL: HOW LIVE VS HISTORY IS DETERMINED
+----------------------------------------------------------------------
+
+Do NOT create new tables in the database. Instead, extend the existing entities with archive metadata.
+
+For each entity type, add the following fields in the schema (or equivalent layer):
+
+- PurchaseOrder:
+  - `isHistorical: boolean` (default false)
+  - `archivedAt: Date | null`
+
+- SalesOrder:
+  - `isHistorical: boolean` (default false)
+  - `archivedAt: Date | null`
+
+- Return:
+  - `isHistorical: boolean` (default false)
+  - `archivedAt: Date | null`
+
+LIVE vs HISTORY logic must be:
+
+- Live tab shows records with `isHistorical == false`
+- History tab shows records with `isHistorical == true`
+
+Define which statuses are “terminal” (closed) for each entity and centralize this in a small config (do not scatter magic strings):
+
+- Purchase Orders (example; use our existing enum names):
+  - Terminal (History): RECEIVED, CLOSED, CANCELLED, COMPLETED, FULLY_RECEIVED (whatever matches our current status list).
+  - Non-terminal (Live): DRAFT, SENT, ACCEPTED, PARTIAL, IN_DISPUTE, PENDING_RECEIPT, etc.
+
+- Sales Orders:
+  - Terminal (History): FULFILLED, REFUNDED, CANCELLED, RETURNED, CLOSED.
+  - Non-terminal (Live): OPEN, PARTIALLY_FULFILLED, BACKORDERED, IN_PRODUCTION, etc.
+
+- Returns:
+  - Terminal (History): COMPLETED, REFUNDED, REJECTED, CLOSED.
+  - Non-terminal (Live): REQUESTED, LABEL_SENT, IN_TRANSIT, RECEIVED_PENDING_INSPECTION, etc.
+
+Behavior when a record moves into a terminal status:
+
+- When a PurchaseOrder, SalesOrder, or Return transitions from a non-terminal status into a terminal status:
+  - Set `isHistorical = true`
+  - Set `archivedAt = current timestamp`
+- If, for any reason, a record is moved back to a non-terminal status (e.g., re-opened), set:
+  - `isHistorical = false`
+  - `archivedAt = null`
+
+----------------------------------------------------------------------
+3) PAGE-BY-PAGE BEHAVIOR
+----------------------------------------------------------------------
+
+A. PURCHASE ORDERS PAGE
+
+LIVE TAB:
+- Continue using the current “Purchase Orders” table and filters, but only show records where `isHistorical == false`.
+- Keep columns as they are now (PO Number, Supplier, Status, Email, Items, Order Date, Expected, Total, Actions, etc.).
+- DO NOT show Import/Export buttons on the Live tab.
+- The “Create PO” button stays on the Live tab (this is where work starts).
+- If a PO is edited so that its status becomes a terminal status, remove it from the Live table (because `isHistorical` will be set true) and it should appear in History.
+
+HISTORY TAB:
+- Render a second table styled exactly like our main tables:
+  - Columns: PO Number, Supplier, Status, Items, Order Date, Expected, Total, Channel (if applicable), and `archivedAt` (or display as “Closed On”).
+- This table ONLY shows POs where `isHistorical == true`.
+- Add filter controls at the top of this tab:
+  - Date range filter, defaulting to “This Year”.
+  - Quick presets: This Month / Last Month / This Year / Last Year / All Time.
+  - Status filter (only terminal statuses).
+  - Supplier filter.
+- Move the IMPORT and EXPORT buttons to the History tab:
+  - Import: CSV import for historical PO data.
+  - Export: CSV export for the currently filtered view.
+- The PO detail drawer/modal should show if the PO is historical and its `archivedAt` date.
+
+B. SALES ORDERS PAGE
+
+LIVE TAB:
+- Use the existing “Sales Orders” table, but only show `isHistorical == false`.
+- This table represents open/active work: current orders that still matter operationally.
+- Keep current columns (Order ID, Channel, Customer, Status, Production, Order Date, etc.).
+- Remove Import/Export from this tab (they move to History).
+- Any status transition into a terminal SalesOrder status should:
+  - Update `isHistorical = true`, set `archivedAt`.
+  - Cause the row to disappear from Live and appear in History.
+
+HISTORY TAB:
+- New table, same visual style as Live, but scoped to `isHistorical == true`.
+- Columns:
+  - Order ID
+  - Channel (Shopify / Amazon / etc.)
+  - Customer
+  - Final Status
+  - Order Date
+  - Fulfilled/Closed Date (use `archivedAt` or fulfillment date)
+  - Total Value (if we track it)
+- Filters:
+  - Date range (same presets: This Month, Last Month, This Year, Last Year, All Time).
+  - Channel filter (Shopify vs Amazon vs Other).
+  - Status filter (Fulfilled vs Cancelled vs Refunded).
+- Import/Export:
+  - Add Import/Export buttons on this History tab only, same styling as other pages.
+  - Export should export currently filtered historical sales.
+- This History tab will act as an audit trail where I can compare channel data (e.g., Shopify vs Amazon vs app records).
+
+C. RETURNS PAGE
+
+LIVE TAB:
+- Use the existing Returns table for active work only (`isHistorical == false`).
+- This is where the team sees returns that still require action (label to send, in transit, inspection, refund pending, etc.).
+- Remove Import/Export from this tab if they exist now.
+
+HISTORY TAB:
+- New table, same styling, bound to `isHistorical == true`.
+- Columns:
+  - Return ID
+  - Order ID
+  - SKU/Product
+  - Customer
+  - Channel (Shopify / Amazon / Other)
+  - Return Reason
+  - Final Status (Completed / Refunded / Rejected, etc.)
+  - Opened Date
+  - Closed Date (use `archivedAt` or completion timestamp)
+- Filters:
+  - Date range presets (This Month / Last Month / This Year / Last Year / All Time).
+  - Channel filter.
+  - Final status filter.
+- Import/Export:
+  - Add Import and Export for historical returns here (no Import/Export on the Live tab).
+
+----------------------------------------------------------------------
+4) IMPORT / EXPORT MIGRATION
+----------------------------------------------------------------------
+
+For these pages only:
+
+- Purchase Orders
+- Sales Orders
+- Returns
+
+Do the following:
+
+1. Move any existing IMPORT and EXPORT buttons from the main header area to the corresponding History tab header area (per page).
+2. Ensure that:
+   - Import actions always write records into the correct table/entity AND set their `isHistorical` flag based on their status:
+     - If imported status is terminal, set `isHistorical = true` and `archivedAt` appropriately.
+     - If imported status is non-terminal, set `isHistorical = false`.
+   - Export actions export based on the current filters applied in the History tab (so I can export, for example, “all fulfilled Shopify orders this year”).
+
+3. BOM page:
+   - Leave BOM’s Import/Export exactly as they are now.
+   - DO NOT add a history tab on BOM.
+
+----------------------------------------------------------------------
+5) SYNC & STATUS TRANSITIONS
+----------------------------------------------------------------------
+
+Update any existing sync workflows (Shopify, Amazon, Extensiv, QuickBooks, GHL, etc.) and internal status update flows so they respect this Live vs History split:
+
+- When external data is pulled in and a record’s status changes:
+  - If the new status is terminal per the config:
+    - Set `isHistorical = true`, set `archivedAt = now`, and remove it from Live views.
+  - If the new status is non-terminal:
+    - Ensure `isHistorical = false` and `archivedAt = null`, so it remains in Live.
+
+- Make sure the Sales Orders, Purchase Orders, and Returns “Live” tabs ONLY show records where `isHistorical == false`, regardless of source.
+
+----------------------------------------------------------------------
+6) INITIAL MIGRATION FOR EXISTING DATA
+----------------------------------------------------------------------
+
+On first deployment of this feature:
+
+1. For PurchaseOrders:
+   - Scan all existing POs.
+   - For any PO whose status is in the terminal PO status list, set:
+     - `isHistorical = true`
+     - `archivedAt =

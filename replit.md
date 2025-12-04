@@ -79,6 +79,11 @@ Preferred communication style: Simple, everyday language.
         *   Logs to AI Agent Logs via SHOPIFY_RECONCILIATION log type
         *   Manual trigger available via `/api/shopify/reconciliation/trigger`
         *   Status check via `/api/shopify/reconciliation/status`
+    *   **Automatic GHL Sync**: Sales orders from Shopify are automatically synced to GoHighLevel as opportunities:
+        *   Triggered immediately after order creation (both webhook and reconciliation paths)
+        *   Uses idempotent upsert with `sales-order-{id}` external key
+        *   Non-blocking: GHL sync errors don't prevent order creation
+        *   Tracks `ghlSynced` count in reconciliation logs
 *   **Product Identification**: Supports UPC/GTIN for finished products, enhancing marketplace identification and cross-channel matching.
 *   **SKU Mapping Wizard**: Centralized interface for mapping internal SKUs to external platform SKUs (e.g., Shopify, Extensiv) with auto-matching capabilities.
 *   **Label Printing**: Customizable label printing with support for various dimensions, layouts, and saved format presets.

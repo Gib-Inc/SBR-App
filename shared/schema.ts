@@ -2138,3 +2138,75 @@ export const insertDashboardWidgetSchema = createInsertSchema(dashboardWidgets).
 });
 export type InsertDashboardWidget = z.infer<typeof insertDashboardWidgetSchema>;
 export type DashboardWidget = typeof dashboardWidgets.$inferSelect;
+
+// ============================================================================
+// NOTIFICATIONS (User notification system)
+// ============================================================================
+
+export const NotificationType = {
+  STOCK_WARNING_CRITICAL: "STOCK_WARNING_CRITICAL",
+  STOCK_WARNING_HIGH: "STOCK_WARNING_HIGH",
+  STOCK_WARNING_MEDIUM: "STOCK_WARNING_MEDIUM",
+  AUTO_PO_CREATED: "AUTO_PO_CREATED",
+  PO_NEEDS_APPROVAL: "PO_NEEDS_APPROVAL",
+  SUPPLIER_ACKNOWLEDGED_PO: "SUPPLIER_ACKNOWLEDGED_PO",
+  CREDENTIAL_EXPIRING: "CREDENTIAL_EXPIRING",
+  AI_RECOMMENDATION: "AI_RECOMMENDATION",
+  SYNC_FAILED: "SYNC_FAILED",
+  RETURN_RECEIVED: "RETURN_RECEIVED",
+  ORDER_SYNC_ISSUE: "ORDER_SYNC_ISSUE",
+} as const;
+export type NotificationType = typeof NotificationType[keyof typeof NotificationType];
+
+export const notifications = pgTable("notifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: text("type").notNull(), // NotificationType
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  severity: text("severity").notNull().default("INFO"), // CRITICAL, HIGH, MEDIUM, LOW, INFO
+  actionUrl: text("action_url"), // URL to navigate when clicked
+  actionLabel: text("action_label"), // Button text for action
+  relatedEntityType: text("related_entity_type"), // ITEM, PO, ORDER, RETURN, etc.
+  relatedEntityId: text("related_entity_id"), // ID of related entity
+  isPinned: boolean("is_pinned").notNull().default(false), // Pinned notifications stay at top
+  isRead: boolean("is_read").notNull().default(false),
+  readAt: timestamp("read_at"),
+  expiresAt: timestamp("expires_at"), // Optional expiration
+  metadata: jsonb("metadata"), // Additional data for the notification
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: index("notifications_user_id_idx").on(table.userId),
+  typeIdx: index("notifications_type_idx").on(table.type),
+  isReadIdx: index("notifications_is_read_idx").on(table.isRead),
+  createdAtIdx: index("notifications_created_at_idx").on(table.createdAt),
+}));
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ 
+  id: true, 
+  createdAt: true,
+});
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+export type Notification = typeof notifications.$inferSelect;
+
+// ============================================================================
+// USER TABLE PREFERENCES (Column visibility for data tables)
+// ============================================================================
+
+export const userTablePreferences = pgTable("user_table_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tableId: text("table_id").notNull(), // Unique identifier for the table (e.g., 'ai-recommendations', 'bom-components')
+  visibleColumns: text("visible_columns").array(), // Array of column IDs that are visible
+  columnOrder: text("column_order").array(), // Array of column IDs in display order
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userTableIdx: uniqueIndex("user_table_preferences_user_table_idx").on(table.userId, table.tableId),
+}));
+
+export const insertUserTablePreferencesSchema = createInsertSchema(userTablePreferences).omit({ 
+  id: true, 
+  updatedAt: true,
+});
+export type InsertUserTablePreferences = z.infer<typeof insertUserTablePreferencesSchema>;
+export type UserTablePreferences = typeof userTablePreferences.$inferSelect;

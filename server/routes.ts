@@ -13453,6 +13453,144 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // NOTIFICATIONS API
+  // ============================================================================
+
+  // Get all notifications for current user
+  app.get("/api/notifications", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const unreadOnly = req.query.unreadOnly === "true";
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      
+      const notifications = await storage.getNotificationsByUserId(userId, { unreadOnly, limit });
+      const unreadCount = await storage.getUnreadNotificationCount(userId);
+      
+      res.json({ notifications, unreadCount });
+    } catch (error: any) {
+      console.error("[Notifications] Error fetching notifications:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch notifications" });
+    }
+  });
+
+  // Get unread count only (for badge)
+  app.get("/api/notifications/count", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const count = await storage.getUnreadNotificationCount(userId);
+      res.json({ count });
+    } catch (error: any) {
+      console.error("[Notifications] Error fetching count:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch notification count" });
+    }
+  });
+
+  // Mark notification as read
+  app.patch("/api/notifications/:id/read", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const notification = await storage.getNotification(req.params.id);
+      if (!notification) {
+        return res.status(404).json({ error: "Notification not found" });
+      }
+      if (notification.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.markNotificationAsRead(req.params.id);
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[Notifications] Error marking as read:", error);
+      res.status(500).json({ error: error.message || "Failed to mark notification as read" });
+    }
+  });
+
+  // Mark all notifications as read
+  app.post("/api/notifications/mark-all-read", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      await storage.markAllNotificationsAsRead(userId);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Notifications] Error marking all as read:", error);
+      res.status(500).json({ error: error.message || "Failed to mark all notifications as read" });
+    }
+  });
+
+  // Delete a notification
+  app.delete("/api/notifications/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const notification = await storage.getNotification(req.params.id);
+      if (!notification) {
+        return res.status(404).json({ error: "Notification not found" });
+      }
+      if (notification.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deleteNotification(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Notifications] Error deleting notification:", error);
+      res.status(500).json({ error: error.message || "Failed to delete notification" });
+    }
+  });
+
+  // ============================================================================
+  // USER TABLE PREFERENCES API
+  // ============================================================================
+
+  // Get table preferences
+  app.get("/api/table-preferences/:tableId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const prefs = await storage.getTablePreferences(userId, req.params.tableId);
+      res.json(prefs || { visibleColumns: null, columnOrder: null });
+    } catch (error: any) {
+      console.error("[TablePreferences] Error fetching preferences:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch table preferences" });
+    }
+  });
+
+  // Save table preferences
+  app.post("/api/table-preferences/:tableId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const { visibleColumns, columnOrder } = req.body;
+      const prefs = await storage.upsertTablePreferences({
+        userId,
+        tableId: req.params.tableId,
+        visibleColumns,
+        columnOrder,
+      });
+      res.json(prefs);
+    } catch (error: any) {
+      console.error("[TablePreferences] Error saving preferences:", error);
+      res.status(500).json({ error: error.message || "Failed to save table preferences" });
+    }
+  });
+
   const httpServer = createServer(app);
   
   // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time

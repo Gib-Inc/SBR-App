@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut } from "lucide-react";
+import { NotificationsBell } from "@/components/notifications-bell";
 import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
@@ -99,6 +100,7 @@ function AuthenticatedApp() {
                   <SidebarTrigger data-testid="button-sidebar-toggle" />
                   <div className="flex items-center gap-2">
                     <ThemeToggle />
+                    <NotificationsBell />
                     <UserMenu />
                   </div>
                 </header>

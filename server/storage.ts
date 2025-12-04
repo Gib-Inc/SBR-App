@@ -107,6 +107,10 @@ import {
   type InsertCustomDashboard,
   type DashboardWidget,
   type InsertDashboardWidget,
+  type Notification,
+  type InsertNotification,
+  type UserTablePreferences,
+  type InsertUserTablePreferences,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -555,6 +559,20 @@ export interface IStorage {
   updateDashboardWidget(id: string, widget: Partial<InsertDashboardWidget>): Promise<DashboardWidget | undefined>;
   deleteDashboardWidget(id: string): Promise<boolean>;
   bulkUpdateWidgetPositions(updates: Array<{ id: string; position: any }>): Promise<void>;
+
+  // Notifications
+  getNotificationsByUserId(userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]>;
+  getNotification(id: string): Promise<Notification | undefined>;
+  createNotification(notification: InsertNotification): Promise<Notification>;
+  markNotificationAsRead(id: string): Promise<Notification | undefined>;
+  markAllNotificationsAsRead(userId: string): Promise<void>;
+  deleteNotification(id: string): Promise<boolean>;
+  deleteExpiredNotifications(): Promise<number>;
+  getUnreadNotificationCount(userId: string): Promise<number>;
+
+  // User Table Preferences
+  getTablePreferences(userId: string, tableId: string): Promise<UserTablePreferences | undefined>;
+  upsertTablePreferences(prefs: InsertUserTablePreferences): Promise<UserTablePreferences>;
 }
 
 export class MemStorage implements IStorage {
@@ -3578,6 +3596,48 @@ export class MemStorage implements IStorage {
       }
     }
   }
+
+  // Notifications (stub implementations for MemStorage)
+  async getNotificationsByUserId(userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]> {
+    return [];
+  }
+
+  async getNotification(id: string): Promise<Notification | undefined> {
+    return undefined;
+  }
+
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    return { ...notification, id: randomUUID(), createdAt: new Date() } as Notification;
+  }
+
+  async markNotificationAsRead(id: string): Promise<Notification | undefined> {
+    return undefined;
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<void> {
+    return;
+  }
+
+  async deleteNotification(id: string): Promise<boolean> {
+    return false;
+  }
+
+  async deleteExpiredNotifications(): Promise<number> {
+    return 0;
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    return 0;
+  }
+
+  // User Table Preferences (stub implementations for MemStorage)
+  async getTablePreferences(userId: string, tableId: string): Promise<UserTablePreferences | undefined> {
+    return undefined;
+  }
+
+  async upsertTablePreferences(prefs: InsertUserTablePreferences): Promise<UserTablePreferences> {
+    return { ...prefs, id: randomUUID(), updatedAt: new Date() } as UserTablePreferences;
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -6483,6 +6543,125 @@ export class PostgresStorage implements IStorage {
       await this.db.update(schema.dashboardWidgets)
         .set({ position: update.position, updatedAt: new Date() })
         .where(eq(schema.dashboardWidgets.id, update.id));
+    }
+  }
+
+  // Notifications
+  async getNotificationsByUserId(userId: string, options?: { unreadOnly?: boolean; limit?: number }): Promise<Notification[]> {
+    let query = this.db.select().from(schema.notifications)
+      .where(eq(schema.notifications.userId, userId))
+      .orderBy(desc(schema.notifications.isPinned), desc(schema.notifications.createdAt));
+    
+    if (options?.unreadOnly) {
+      query = this.db.select().from(schema.notifications)
+        .where(and(
+          eq(schema.notifications.userId, userId),
+          eq(schema.notifications.isRead, false)
+        ))
+        .orderBy(desc(schema.notifications.isPinned), desc(schema.notifications.createdAt));
+    }
+    
+    if (options?.limit) {
+      return await query.limit(options.limit);
+    }
+    
+    return await query;
+  }
+
+  async getNotification(id: string): Promise<Notification | undefined> {
+    const results = await this.db.select().from(schema.notifications)
+      .where(eq(schema.notifications.id, id));
+    return results[0];
+  }
+
+  async createNotification(notification: InsertNotification): Promise<Notification> {
+    const id = randomUUID();
+    const result = await this.db.insert(schema.notifications).values({
+      ...notification,
+      id,
+      createdAt: new Date(),
+    }).returning();
+    return result[0];
+  }
+
+  async markNotificationAsRead(id: string): Promise<Notification | undefined> {
+    const now = new Date();
+    const result = await this.db.update(schema.notifications)
+      .set({ isRead: true, readAt: now })
+      .where(eq(schema.notifications.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async markAllNotificationsAsRead(userId: string): Promise<void> {
+    const now = new Date();
+    await this.db.update(schema.notifications)
+      .set({ isRead: true, readAt: now })
+      .where(and(
+        eq(schema.notifications.userId, userId),
+        eq(schema.notifications.isRead, false)
+      ));
+  }
+
+  async deleteNotification(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.notifications)
+      .where(eq(schema.notifications.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  async deleteExpiredNotifications(): Promise<number> {
+    const now = new Date();
+    const results = await this.db.delete(schema.notifications)
+      .where(and(
+        isNotNull(schema.notifications.expiresAt),
+        lt(schema.notifications.expiresAt, now)
+      ))
+      .returning();
+    return results.length;
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    const result = await this.db.select({ count: count() })
+      .from(schema.notifications)
+      .where(and(
+        eq(schema.notifications.userId, userId),
+        eq(schema.notifications.isRead, false)
+      ));
+    return result[0]?.count ?? 0;
+  }
+
+  // User Table Preferences
+  async getTablePreferences(userId: string, tableId: string): Promise<UserTablePreferences | undefined> {
+    const results = await this.db.select().from(schema.userTablePreferences)
+      .where(and(
+        eq(schema.userTablePreferences.userId, userId),
+        eq(schema.userTablePreferences.tableId, tableId)
+      ));
+    return results[0];
+  }
+
+  async upsertTablePreferences(prefs: InsertUserTablePreferences): Promise<UserTablePreferences> {
+    const existing = await this.getTablePreferences(prefs.userId, prefs.tableId);
+    
+    if (existing) {
+      const result = await this.db.update(schema.userTablePreferences)
+        .set({ 
+          visibleColumns: prefs.visibleColumns, 
+          columnOrder: prefs.columnOrder,
+          updatedAt: new Date() 
+        })
+        .where(eq(schema.userTablePreferences.id, existing.id))
+        .returning();
+      return result[0];
+    } else {
+      const id = randomUUID();
+      const result = await this.db.insert(schema.userTablePreferences).values({
+        ...prefs,
+        id,
+        updatedAt: new Date(),
+      }).returning();
+      return result[0];
     }
   }
 }

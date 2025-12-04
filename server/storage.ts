@@ -110,7 +110,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, gt, gte, lte, desc, or, ilike, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -194,6 +194,7 @@ export interface IStorage {
   createIntegrationConfig(config: InsertIntegrationConfig): Promise<IntegrationConfig>;
   updateIntegrationConfig(id: string, config: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
   deleteIntegrationConfig(id: string): Promise<boolean>;
+  getConfigsNeedingRotationReminder(windowDays: number): Promise<IntegrationConfig[]>; // Get configs within X days of rotation
 
   // Barcodes
   getAllBarcodes(): Promise<Barcode[]>;
@@ -1469,6 +1470,27 @@ export class MemStorage implements IStorage {
 
   async deleteIntegrationConfig(id: string): Promise<boolean> {
     return this.integrationConfigs.delete(id);
+  }
+
+  async getConfigsNeedingRotationReminder(windowDays: number): Promise<IntegrationConfig[]> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+    
+    return Array.from(this.integrationConfigs.values()).filter(config => {
+      // Must have API key and rotation date set
+      if (!config.apiKey || !config.tokenNextRotationAt) return false;
+      // Must be within the window (rotation date <= now + windowDays)
+      const rotationDate = new Date(config.tokenNextRotationAt);
+      if (rotationDate > windowEnd) return false;
+      // Skip if reminder already sent for this rotation window
+      if (config.rotationReminderSentAt) {
+        const reminderSent = new Date(config.rotationReminderSentAt);
+        // If reminder was sent within last 7 days, skip
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (reminderSent > sevenDaysAgo) return false;
+      }
+      return true;
+    });
   }
 
   // Barcodes
@@ -3953,6 +3975,33 @@ export class PostgresStorage implements IStorage {
   async deleteIntegrationConfig(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.integrationConfigs).where(eq(schema.integrationConfigs.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getConfigsNeedingRotationReminder(windowDays: number): Promise<IntegrationConfig[]> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    // Query configs where:
+    // 1. Has API key
+    // 2. Has rotation date set
+    // 3. Rotation date is within the window
+    // 4. Either no reminder sent, or reminder sent more than 7 days ago
+    const results = await this.db.select()
+      .from(schema.integrationConfigs)
+      .where(
+        and(
+          isNotNull(schema.integrationConfigs.apiKey),
+          isNotNull(schema.integrationConfigs.tokenNextRotationAt),
+          lte(schema.integrationConfigs.tokenNextRotationAt, windowEnd),
+          or(
+            isNull(schema.integrationConfigs.rotationReminderSentAt),
+            lt(schema.integrationConfigs.rotationReminderSentAt, sevenDaysAgo)
+          )
+        )
+      );
+    
+    return results;
   }
 
   // Barcodes

@@ -413,19 +413,72 @@ export class ShopifyClient {
   }
 
   /**
-   * Fetch recent orders from Shopify
+   * Fetch recent orders from Shopify with pagination support
    * @param daysBack - Number of days to look back (default: 7)
+   * @param maxOrders - Maximum number of orders to fetch (default: 250)
    */
-  async syncRecentOrders(daysBack: number = 7): Promise<ShopifyNormalizedOrder[]> {
+  async syncRecentOrders(daysBack: number = 7, maxOrders: number = 250): Promise<ShopifyNormalizedOrder[]> {
     try {
       const createdAtMin = new Date();
       createdAtMin.setDate(createdAtMin.getDate() - daysBack);
       const createdAtMinISO = createdAtMin.toISOString();
 
-      const url = `${this.getBaseUrl()}/orders.json?status=any&created_at_min=${createdAtMinISO}&limit=250`;
+      const allOrders: ShopifyOrder[] = [];
+      let pageCount = 0;
+      const pageSize = Math.min(250, maxOrders); // Shopify max is 250 per page
       
-      console.log(`[Shopify] Fetching orders since ${createdAtMinISO}...`);
+      // First page URL
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/orders.json?status=any&created_at_min=${createdAtMinISO}&limit=${pageSize}`;
       
+      console.log(`[Shopify] Fetching orders since ${createdAtMinISO} (max: ${maxOrders})...`);
+      
+      while (nextPageUrl && allOrders.length < maxOrders) {
+        const response = await fetch(nextPageUrl, {
+          headers: this.getHeaders(),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        const orders: ShopifyOrder[] = data.orders || [];
+        
+        pageCount++;
+        
+        // Add orders up to maxOrders limit
+        for (const order of orders) {
+          if (allOrders.length >= maxOrders) break;
+          allOrders.push(order);
+        }
+
+        console.log(`[Shopify] Page ${pageCount}: fetched ${orders.length} orders (total: ${allOrders.length}/${maxOrders})`);
+
+        // Check for next page
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+        
+        // Stop if we hit the limit or no more pages
+        if (allOrders.length >= maxOrders || orders.length < pageSize) {
+          break;
+        }
+      }
+
+      console.log(`[Shopify] Fetched ${allOrders.length} orders across ${pageCount} page(s)`);
+
+      return allOrders.map(order => this.normalizeOrder(order));
+    } catch (error: any) {
+      throw new Error(`Failed to fetch Shopify orders: ${error.message}`);
+    }
+  }
+
+  /**
+   * List all registered webhooks for this shop
+   */
+  async listWebhooks(): Promise<Array<{ id: number; topic: string; address: string; format: string; created_at: string }>> {
+    try {
+      const url = `${this.getBaseUrl()}/webhooks.json`;
       const response = await fetch(url, {
         headers: this.getHeaders(),
       });
@@ -436,13 +489,65 @@ export class ShopifyClient {
       }
 
       const data = await response.json();
-      const orders: ShopifyOrder[] = data.orders || [];
-
-      console.log(`[Shopify] Fetched ${orders.length} orders`);
-
-      return orders.map(order => this.normalizeOrder(order));
+      return data.webhooks || [];
     } catch (error: any) {
-      throw new Error(`Failed to fetch Shopify orders: ${error.message}`);
+      throw new Error(`Failed to list Shopify webhooks: ${error.message}`);
+    }
+  }
+
+  /**
+   * Register a new webhook for the shop
+   * @param topic - The webhook topic (e.g., 'orders/create', 'orders/updated')
+   * @param address - The webhook callback URL
+   */
+  async registerWebhook(topic: string, address: string): Promise<{ id: number; topic: string; address: string }> {
+    try {
+      const url = `${this.getBaseUrl()}/webhooks.json`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          webhook: {
+            topic,
+            address,
+            format: 'json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data.webhook;
+    } catch (error: any) {
+      throw new Error(`Failed to register Shopify webhook: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete a webhook by ID
+   * @param webhookId - The webhook ID to delete
+   */
+  async deleteWebhook(webhookId: number): Promise<void> {
+    try {
+      const url = `${this.getBaseUrl()}/webhooks/${webhookId}.json`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+    } catch (error: any) {
+      throw new Error(`Failed to delete Shopify webhook: ${error.message}`);
     }
   }
 }

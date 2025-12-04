@@ -3593,6 +3593,10 @@ TOTAL: $${subtotal.toFixed(2)}
 
       const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
       
+      // Get ordersToFetch setting from AI Agent settings
+      const aiAgentSettings = await storage.getAiAgentSettingsByUserId(userId);
+      const ordersToFetch = aiAgentSettings?.ordersToFetch || 250;
+      
       // Set status to PENDING
       if (config) {
         await storage.updateIntegrationConfig(config.id, {
@@ -3602,7 +3606,7 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       // Log sync start
-      console.log(`[Shopify] Starting ${syncMode.toUpperCase()} sync from last ${daysBack} days...`);
+      console.log(`[Shopify] Starting ${syncMode.toUpperCase()} sync from last ${daysBack} days (max ${ordersToFetch} orders)...`);
       try {
         const { logService } = await import('./services/log-service');
         await logService.logIntegrationEvent({
@@ -3610,15 +3614,15 @@ TOTAL: $${subtotal.toFixed(2)}
           action: 'SYNC_STARTED',
           status: 'INFO',
           message: `Shopify ${syncMode} sync started`,
-          details: { mode: syncMode, daysBack }
+          details: { mode: syncMode, daysBack, ordersToFetch }
         });
       } catch (logErr) {
         console.warn('[Shopify] Failed to log sync start:', logErr);
       }
 
       // Fetch recent orders from Shopify
-      console.log(`[Shopify] Syncing orders from last ${daysBack} days...`);
-      const normalizedOrders = await client.syncRecentOrders(daysBack);
+      console.log(`[Shopify] Syncing orders from last ${daysBack} days (max ${ordersToFetch})...`);
+      const normalizedOrders = await client.syncRecentOrders(daysBack, ordersToFetch);
       console.log(`[Shopify] Fetched ${normalizedOrders.length} orders`);
       
       // Build a set of Shopify order IDs that we fetched
@@ -4104,6 +4108,10 @@ TOTAL: $${subtotal.toFixed(2)}
 
       const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret, region);
       
+      // Get ordersToFetch setting from AI Agent settings
+      const aiAgentSettings = await storage.getAiAgentSettingsByUserId(userId);
+      const ordersToFetch = aiAgentSettings?.ordersToFetch || 250;
+      
       // Set status to PENDING
       if (config) {
         await storage.updateIntegrationConfig(config.id, {
@@ -4113,8 +4121,8 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       // Fetch recent orders from Amazon
-      console.log(`[Amazon] Syncing orders from last ${daysBack} days...`);
-      const normalizedOrders = await client.syncRecentOrders(daysBack);
+      console.log(`[Amazon] Syncing orders from last ${daysBack} days (max ${ordersToFetch})...`);
+      const normalizedOrders = await client.syncRecentOrders(daysBack, ordersToFetch);
       console.log(`[Amazon] Fetched ${normalizedOrders.length} orders`);
 
       let createdCount = 0;

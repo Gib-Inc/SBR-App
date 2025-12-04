@@ -289,9 +289,11 @@ export class AmazonClient {
   }
 
   /**
-   * Fetch recent orders from Amazon SP-API
+   * Fetch recent orders from Amazon SP-API with pagination support
+   * @param daysBack - Number of days to look back (default: 7)
+   * @param maxOrders - Maximum number of orders to fetch (default: 250)
    */
-  async syncRecentOrders(daysBack: number = 7): Promise<AmazonNormalizedOrder[]> {
+  async syncRecentOrders(daysBack: number = 7, maxOrders: number = 250): Promise<AmazonNormalizedOrder[]> {
     try {
       const accessToken = await this.getAccessToken();
       const baseUrl = this.getBaseUrl();
@@ -300,30 +302,58 @@ export class AmazonClient {
       createdAfter.setDate(createdAfter.getDate() - daysBack);
       const createdAfterISO = createdAfter.toISOString();
 
-      const url = `${baseUrl}/orders/v0/orders?MarketplaceIds=${this.marketplaceId}&CreatedAfter=${createdAfterISO}`;
+      const allOrders: AmazonOrder[] = [];
+      let nextToken: string | null = null;
+      let pageCount = 0;
 
-      console.log(`[Amazon] Fetching orders since ${createdAfterISO}...`);
+      console.log(`[Amazon] Fetching orders since ${createdAfterISO} (max: ${maxOrders})...`);
 
-      const response = await fetch(url, {
-        headers: {
-          'x-amz-access-token': accessToken,
-          'Content-Type': 'application/json',
-        },
-      });
+      do {
+        // Build URL with optional NextToken for pagination
+        let url = `${baseUrl}/orders/v0/orders?MarketplaceIds=${this.marketplaceId}&CreatedAfter=${createdAfterISO}`;
+        if (nextToken) {
+          url = `${baseUrl}/orders/v0/orders?NextToken=${encodeURIComponent(nextToken)}`;
+        }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Amazon SP-API error: ${response.status} ${response.statusText} - ${errorText}`);
-      }
+        const response = await fetch(url, {
+          headers: {
+            'x-amz-access-token': accessToken,
+            'Content-Type': 'application/json',
+          },
+        });
 
-      const data = await response.json();
-      const orders: AmazonOrder[] = data.payload?.Orders || [];
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Amazon SP-API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
 
-      console.log(`[Amazon] Fetched ${orders.length} orders`);
+        const data = await response.json();
+        const orders: AmazonOrder[] = data.payload?.Orders || [];
+        
+        pageCount++;
+        
+        // Add orders up to maxOrders limit
+        for (const order of orders) {
+          if (allOrders.length >= maxOrders) break;
+          allOrders.push(order);
+        }
+
+        console.log(`[Amazon] Page ${pageCount}: fetched ${orders.length} orders (total: ${allOrders.length}/${maxOrders})`);
+
+        // Get next token for pagination
+        nextToken = data.payload?.NextToken || null;
+        
+        // Stop if we hit the limit
+        if (allOrders.length >= maxOrders) {
+          break;
+        }
+      } while (nextToken);
+
+      console.log(`[Amazon] Fetched ${allOrders.length} orders across ${pageCount} page(s)`);
 
       const normalizedOrders: AmazonNormalizedOrder[] = [];
 
-      for (const order of orders) {
+      for (const order of allOrders) {
         try {
           const itemsUrl = `${baseUrl}/orders/v0/orders/${order.AmazonOrderId}/orderItems`;
           const itemsResponse = await fetch(itemsUrl, {

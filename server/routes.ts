@@ -69,6 +69,171 @@ const SALT_ROUNDS = 10;
 // Create a single instance of the decision engine
 const decisionEngine = new InventoryDecisionEngine(storage);
 
+// Helper function to process widget data based on config and widget type
+function processWidgetData(rawData: any[], config: any, widgetType: string): any {
+  if (!rawData || rawData.length === 0) {
+    return widgetType === "KPI_CARD" ? { value: 0, label: config?.metric || "Count" } : [];
+  }
+
+  // Apply filters if present
+  let filteredData = rawData;
+  if (config?.filters) {
+    for (const filter of config.filters) {
+      if (filter.field && filter.value !== undefined) {
+        filteredData = filteredData.filter((item: any) => {
+          const fieldValue = item[filter.field];
+          if (filter.operator === "equals") return fieldValue === filter.value;
+          if (filter.operator === "contains") return String(fieldValue).includes(filter.value);
+          if (filter.operator === "gt") return Number(fieldValue) > Number(filter.value);
+          if (filter.operator === "lt") return Number(fieldValue) < Number(filter.value);
+          return true;
+        });
+      }
+    }
+  }
+
+  // Process based on widget type
+  switch (widgetType) {
+    case "KPI_CARD": {
+      const metric = config?.metric || "count";
+      const field = config?.field;
+      let value = 0;
+      
+      if (metric === "count") {
+        value = filteredData.length;
+      } else if (metric === "sum" && field) {
+        value = filteredData.reduce((acc: number, item: any) => acc + (Number(item[field]) || 0), 0);
+      } else if (metric === "avg" && field) {
+        const sum = filteredData.reduce((acc: number, item: any) => acc + (Number(item[field]) || 0), 0);
+        value = filteredData.length > 0 ? sum / filteredData.length : 0;
+      } else if (metric === "min" && field) {
+        value = Math.min(...filteredData.map((item: any) => Number(item[field]) || 0));
+      } else if (metric === "max" && field) {
+        value = Math.max(...filteredData.map((item: any) => Number(item[field]) || 0));
+      }
+      
+      return {
+        value: Math.round(value * 100) / 100,
+        label: config?.label || metric,
+        trend: config?.showTrend ? calculateTrend(filteredData, field) : undefined,
+      };
+    }
+    
+    case "BAR_CHART":
+    case "LINE_CHART":
+    case "AREA_CHART": {
+      const groupBy = config?.groupBy || "status";
+      const valueField = config?.valueField;
+      const aggregation = config?.aggregation || "count";
+      
+      const grouped = filteredData.reduce((acc: Record<string, number>, item: any) => {
+        const key = String(item[groupBy] || "Unknown");
+        if (aggregation === "count") {
+          acc[key] = (acc[key] || 0) + 1;
+        } else if (aggregation === "sum" && valueField) {
+          acc[key] = (acc[key] || 0) + (Number(item[valueField]) || 0);
+        }
+        return acc;
+      }, {});
+      
+      return Object.entries(grouped).map(([name, value]) => ({ name, value }));
+    }
+    
+    case "PIE_CHART": {
+      const groupBy = config?.groupBy || "status";
+      const grouped = filteredData.reduce((acc: Record<string, number>, item: any) => {
+        const key = String(item[groupBy] || "Unknown");
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      
+      const total = Object.values(grouped).reduce((a, b) => a + b, 0);
+      return Object.entries(grouped).map(([name, value]) => ({
+        name,
+        value,
+        percentage: Math.round((value / total) * 100),
+      }));
+    }
+    
+    case "TABLE": {
+      const columns = config?.columns || Object.keys(filteredData[0] || {}).slice(0, 5);
+      const limit = config?.limit || 10;
+      return filteredData.slice(0, limit).map((item: any) => {
+        const row: Record<string, any> = {};
+        for (const col of columns) {
+          row[col] = item[col];
+        }
+        return row;
+      });
+    }
+    
+    case "LIST": {
+      const labelField = config?.labelField || "name";
+      const valueField = config?.valueField;
+      const limit = config?.limit || 5;
+      return filteredData.slice(0, limit).map((item: any) => ({
+        label: item[labelField] || "Unknown",
+        value: valueField ? item[valueField] : undefined,
+        id: item.id,
+      }));
+    }
+    
+    case "PROGRESS": {
+      const currentField = config?.currentField;
+      const targetField = config?.targetField;
+      const target = config?.target;
+      
+      if (currentField) {
+        const current = filteredData.reduce((acc: number, item: any) => acc + (Number(item[currentField]) || 0), 0);
+        const targetValue = targetField 
+          ? filteredData.reduce((acc: number, item: any) => acc + (Number(item[targetField]) || 0), 0)
+          : (target || 100);
+        return {
+          current,
+          target: targetValue,
+          percentage: Math.min(100, Math.round((current / targetValue) * 100)),
+        };
+      }
+      return { current: 0, target: 100, percentage: 0 };
+    }
+    
+    default:
+      return filteredData;
+  }
+}
+
+function calculateTrend(data: any[], field?: string): { direction: string; value: number } {
+  if (!data || data.length < 2) return { direction: "stable", value: 0 };
+  
+  const sorted = [...data].sort((a, b) => {
+    const dateA = a.createdAt || a.orderDate || a.date;
+    const dateB = b.createdAt || b.orderDate || b.date;
+    return new Date(dateA).getTime() - new Date(dateB).getTime();
+  });
+  
+  const midpoint = Math.floor(sorted.length / 2);
+  const firstHalf = sorted.slice(0, midpoint);
+  const secondHalf = sorted.slice(midpoint);
+  
+  const getValue = (items: any[]) => {
+    if (field) {
+      return items.reduce((acc, item) => acc + (Number(item[field]) || 0), 0);
+    }
+    return items.length;
+  };
+  
+  const firstValue = getValue(firstHalf);
+  const secondValue = getValue(secondHalf);
+  
+  if (firstValue === 0) return { direction: secondValue > 0 ? "up" : "stable", value: 0 };
+  
+  const change = ((secondValue - firstValue) / firstValue) * 100;
+  return {
+    direction: change > 5 ? "up" : change < -5 ? "down" : "stable",
+    value: Math.abs(Math.round(change)),
+  };
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // AUTHENTICATION
@@ -12993,6 +13158,298 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Migration] Error migrating historical status:", error);
       res.status(500).json({ error: error.message || "Failed to migrate historical status" });
+    }
+  });
+
+  // ============================================================================
+  // CUSTOM DASHBOARDS & WIDGETS API
+  // ============================================================================
+
+  // Get all dashboards for the current user
+  app.get("/api/dashboards", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboards = await storage.getCustomDashboardsByUserId(userId);
+      res.json(dashboards);
+    } catch (error: any) {
+      console.error("[Dashboards] Error fetching dashboards:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch dashboards" });
+    }
+  });
+
+  // Get a single dashboard with its widgets
+  app.get("/api/dashboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboard = await storage.getCustomDashboard(req.params.id);
+      if (!dashboard) {
+        return res.status(404).json({ error: "Dashboard not found" });
+      }
+      if (dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const widgets = await storage.getWidgetsByDashboardId(dashboard.id);
+      res.json({ ...dashboard, widgets });
+    } catch (error: any) {
+      console.error("[Dashboards] Error fetching dashboard:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch dashboard" });
+    }
+  });
+
+  // Create a new dashboard
+  app.post("/api/dashboards", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const { name, description, layout } = req.body;
+      if (!name) {
+        return res.status(400).json({ error: "Dashboard name is required" });
+      }
+      const dashboard = await storage.createCustomDashboard({
+        userId,
+        name,
+        description,
+        layout,
+        isDefault: false,
+      });
+      res.status(201).json(dashboard);
+    } catch (error: any) {
+      console.error("[Dashboards] Error creating dashboard:", error);
+      res.status(500).json({ error: error.message || "Failed to create dashboard" });
+    }
+  });
+
+  // Update a dashboard
+  app.patch("/api/dashboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboard = await storage.getCustomDashboard(req.params.id);
+      if (!dashboard) {
+        return res.status(404).json({ error: "Dashboard not found" });
+      }
+      if (dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { name, description, layout, isDefault } = req.body;
+      const updated = await storage.updateCustomDashboard(req.params.id, {
+        name,
+        description,
+        layout,
+        isDefault,
+      });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[Dashboards] Error updating dashboard:", error);
+      res.status(500).json({ error: error.message || "Failed to update dashboard" });
+    }
+  });
+
+  // Delete a dashboard
+  app.delete("/api/dashboards/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboard = await storage.getCustomDashboard(req.params.id);
+      if (!dashboard) {
+        return res.status(404).json({ error: "Dashboard not found" });
+      }
+      if (dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deleteCustomDashboard(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Dashboards] Error deleting dashboard:", error);
+      res.status(500).json({ error: error.message || "Failed to delete dashboard" });
+    }
+  });
+
+  // Add a widget to a dashboard
+  app.post("/api/dashboards/:id/widgets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboard = await storage.getCustomDashboard(req.params.id);
+      if (!dashboard) {
+        return res.status(404).json({ error: "Dashboard not found" });
+      }
+      if (dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { type, title, dataSource, config, position } = req.body;
+      if (!type || !title || !dataSource || !config || !position) {
+        return res.status(400).json({ error: "Missing required widget fields" });
+      }
+      const widget = await storage.createDashboardWidget({
+        dashboardId: req.params.id,
+        type,
+        title,
+        dataSource,
+        config,
+        position,
+      });
+      res.status(201).json(widget);
+    } catch (error: any) {
+      console.error("[Dashboards] Error creating widget:", error);
+      res.status(500).json({ error: error.message || "Failed to create widget" });
+    }
+  });
+
+  // Update a widget
+  app.patch("/api/widgets/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const widget = await storage.getDashboardWidget(req.params.id);
+      if (!widget) {
+        return res.status(404).json({ error: "Widget not found" });
+      }
+      const dashboard = await storage.getCustomDashboard(widget.dashboardId);
+      if (!dashboard || dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { type, title, dataSource, config, position } = req.body;
+      const updated = await storage.updateDashboardWidget(req.params.id, {
+        type,
+        title,
+        dataSource,
+        config,
+        position,
+      });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[Dashboards] Error updating widget:", error);
+      res.status(500).json({ error: error.message || "Failed to update widget" });
+    }
+  });
+
+  // Delete a widget
+  app.delete("/api/widgets/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const widget = await storage.getDashboardWidget(req.params.id);
+      if (!widget) {
+        return res.status(404).json({ error: "Widget not found" });
+      }
+      const dashboard = await storage.getCustomDashboard(widget.dashboardId);
+      if (!dashboard || dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      await storage.deleteDashboardWidget(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Dashboards] Error deleting widget:", error);
+      res.status(500).json({ error: error.message || "Failed to delete widget" });
+    }
+  });
+
+  // Bulk update widget positions (for drag-and-drop)
+  app.post("/api/dashboards/:id/widgets/positions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const dashboard = await storage.getCustomDashboard(req.params.id);
+      if (!dashboard) {
+        return res.status(404).json({ error: "Dashboard not found" });
+      }
+      if (dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { updates } = req.body;
+      if (!Array.isArray(updates)) {
+        return res.status(400).json({ error: "Updates must be an array" });
+      }
+      await storage.bulkUpdateWidgetPositions(updates);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Dashboards] Error updating widget positions:", error);
+      res.status(500).json({ error: error.message || "Failed to update widget positions" });
+    }
+  });
+
+  // Get widget data based on data source
+  app.get("/api/widgets/:id/data", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      const widget = await storage.getDashboardWidget(req.params.id);
+      if (!widget) {
+        return res.status(404).json({ error: "Widget not found" });
+      }
+      const dashboard = await storage.getCustomDashboard(widget.dashboardId);
+      if (!dashboard || dashboard.userId !== userId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      
+      // Fetch data based on data source
+      let data: any = null;
+      const config = widget.config as any;
+      
+      switch (widget.dataSource) {
+        case "ITEMS":
+          const items = await storage.getAllItems();
+          data = processWidgetData(items, config, widget.type);
+          break;
+        case "SALES_ORDERS":
+          const salesOrders = await storage.getAllSalesOrders();
+          data = processWidgetData(salesOrders, config, widget.type);
+          break;
+        case "PURCHASE_ORDERS":
+          const purchaseOrders = await storage.getAllPurchaseOrders();
+          data = processWidgetData(purchaseOrders, config, widget.type);
+          break;
+        case "RETURNS":
+          const returns = await storage.getAllReturnRequests();
+          data = processWidgetData(returns, config, widget.type);
+          break;
+        case "SUPPLIERS":
+          const suppliers = await storage.getAllSuppliers();
+          data = processWidgetData(suppliers, config, widget.type);
+          break;
+        case "INVENTORY_TRANSACTIONS":
+          const transactions = await storage.getAllInventoryTransactions();
+          data = processWidgetData(transactions.slice(-100), config, widget.type);
+          break;
+        case "AI_RECOMMENDATIONS":
+          const recommendations = await storage.getActiveAIRecommendations();
+          data = processWidgetData(recommendations, config, widget.type);
+          break;
+        case "SYSTEM_LOGS":
+          const logs = await storage.getAllSystemLogs();
+          data = processWidgetData(logs.slice(0, 100), config, widget.type);
+          break;
+        default:
+          data = [];
+      }
+      
+      res.json({ data });
+    } catch (error: any) {
+      console.error("[Dashboards] Error fetching widget data:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch widget data" });
     }
   });
 

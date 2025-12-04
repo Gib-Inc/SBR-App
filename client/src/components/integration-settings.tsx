@@ -663,6 +663,92 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       data-testid="input-api-version"
                     />
                   </div>
+                  
+                  {/* Real-time Webhooks Section - Prominent placement after API Version */}
+                  {config?.apiKey && (
+                    <div className="space-y-3 pt-3 border-t">
+                      {/* Alert for webhooks not configured */}
+                      {orderWebhooks.length === 0 && !webhooksLoading && (
+                        <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950" data-testid="alert-webhooks-needed">
+                          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                          <AlertDescription className="text-amber-800 dark:text-amber-200">
+                            <strong>Connect Shopify Webhooks</strong> to receive instant order notifications. 
+                            Without webhooks, orders will only sync when you manually trigger a sync.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <Label className="flex items-center gap-1.5">
+                            <Webhook className="h-4 w-4" />
+                            Real-time Order Webhooks
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Receive instant order notifications instead of polling
+                          </p>
+                        </div>
+                        {orderWebhooks.length > 0 ? (
+                          <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50 dark:text-green-400 dark:border-green-800 dark:bg-green-950" data-testid="badge-webhooks-active">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            {orderWebhooks.length} Active
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-muted-foreground" data-testid="badge-webhooks-inactive">
+                            Not Configured
+                          </Badge>
+                        )}
+                      </div>
+                      
+                      {webhooksLoading ? (
+                        <div className="flex items-center justify-center py-2">
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : orderWebhooks.length > 0 ? (
+                        <div className="space-y-2">
+                          <div className="text-xs text-muted-foreground space-y-1">
+                            {orderWebhooks.map(webhook => (
+                              <div key={webhook.id} className="flex items-center justify-between py-1 px-2 rounded bg-muted/50">
+                                <span className="font-mono">{webhook.topic}</span>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={() => deleteWebhookMutation.mutate(webhook.id)}
+                                  disabled={deleteWebhookMutation.isPending}
+                                  data-testid={`button-delete-webhook-${webhook.id}`}
+                                >
+                                  <Trash2 className="h-3 w-3 text-destructive" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => registerWebhooksMutation.mutate()}
+                          disabled={registerWebhooksMutation.isPending}
+                          className="w-full"
+                          data-testid="button-register-webhooks"
+                        >
+                          {registerWebhooksMutation.isPending ? (
+                            <>
+                              <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                              Registering...
+                            </>
+                          ) : (
+                            <>
+                              <Webhook className="h-3 w-3 mr-1.5" />
+                              Register Order Webhooks
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  
                   {/* Inventory Locations Section */}
                   <div className="space-y-4 pt-2 border-t">
                     <div>
@@ -748,80 +834,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       data-testid="switch-push-inventory"
                     />
                   </div>
-                  
-                  {/* Real-time Webhooks Section */}
-                  {config?.apiKey && (
-                    <div className="space-y-3 pt-3 border-t">
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label className="flex items-center gap-1.5">
-                            <Webhook className="h-4 w-4" />
-                            Real-time Order Webhooks
-                          </Label>
-                          <p className="text-xs text-muted-foreground">
-                            Receive instant order notifications instead of polling
-                          </p>
-                        </div>
-                        {orderWebhooks.length > 0 ? (
-                          <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50" data-testid="badge-webhooks-active">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                            {orderWebhooks.length} Active
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-muted-foreground" data-testid="badge-webhooks-inactive">
-                            Not Configured
-                          </Badge>
-                        )}
-                      </div>
-                      
-                      {webhooksLoading ? (
-                        <div className="flex items-center justify-center py-2">
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : orderWebhooks.length > 0 ? (
-                        <div className="space-y-2">
-                          <div className="text-xs text-muted-foreground space-y-1">
-                            {orderWebhooks.map(webhook => (
-                              <div key={webhook.id} className="flex items-center justify-between py-1 px-2 rounded bg-muted/50">
-                                <span className="font-mono">{webhook.topic}</span>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => deleteWebhookMutation.mutate(webhook.id)}
-                                  disabled={deleteWebhookMutation.isPending}
-                                  data-testid={`button-delete-webhook-${webhook.id}`}
-                                >
-                                  <Trash2 className="h-3 w-3 text-destructive" />
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => registerWebhooksMutation.mutate()}
-                          disabled={registerWebhooksMutation.isPending}
-                          className="w-full"
-                          data-testid="button-register-webhooks"
-                        >
-                          {registerWebhooksMutation.isPending ? (
-                            <>
-                              <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                              Registering...
-                            </>
-                          ) : (
-                            <>
-                              <Webhook className="h-3 w-3 mr-1.5" />
-                              Register Order Webhooks
-                            </>
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                  )}
                 </>
               )}
 

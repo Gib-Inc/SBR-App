@@ -2834,7 +2834,7 @@ TOTAL: $${subtotal.toFixed(2)}
       const provider = req.params.provider.toUpperCase();
       console.log(`[IntegrationConfig] GET request - userId: ${userId}, provider: ${provider}`);
       
-      const config = await storage.getIntegrationConfig(userId, provider);
+      let config = await storage.getIntegrationConfig(userId, provider);
       console.log(`[IntegrationConfig] Query result:`, config ? `found id=${config.id}` : 'not found');
       
       if (!config) {
@@ -2842,6 +2842,20 @@ TOTAL: $${subtotal.toFixed(2)}
         const allConfigs = await storage.getAllIntegrationConfigs(userId);
         console.log(`[IntegrationConfig] All configs for user:`, allConfigs.map(c => c.provider));
         return res.status(404).json({ error: "Integration config not found" });
+      }
+      
+      // Auto-populate missing rotation dates for existing configs with API keys
+      if (config.apiKey && !config.tokenLastRotatedAt) {
+        const now = new Date();
+        const nextRotation = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+        const updated = await storage.updateIntegrationConfig(config.id, {
+          tokenLastRotatedAt: now,
+          tokenNextRotationAt: nextRotation,
+        });
+        if (updated) {
+          config = updated;
+          console.log(`[IntegrationConfig] Auto-populated rotation dates for ${provider}`);
+        }
       }
       
       // Sanitize config before sending to client
@@ -2867,12 +2881,28 @@ TOTAL: $${subtotal.toFixed(2)}
       // Check if config already exists - if so, update it instead of creating
       const existing = await storage.getIntegrationConfig(userId, normalizedProvider);
       if (existing) {
-        // Update the existing config
-        const updated = await storage.updateIntegrationConfig(existing.id, {
+        // Build update object
+        const updateData: any = {
           accountName: accountName || existing.accountName,
           apiKey: apiKey || existing.apiKey,
           config: config || existing.config,
-        });
+        };
+        
+        // For GHL and other API key integrations: set rotation dates if not already set or if API key is changing
+        if ((normalizedProvider === 'GOHIGHLEVEL' || normalizedProvider === 'EXTENSIV' || 
+             normalizedProvider === 'AMAZON' || normalizedProvider === 'SHOPIFY') && apiKey) {
+          const now = new Date();
+          // If tokenLastRotatedAt is not set, or API key is being changed, update it
+          if (!existing.tokenLastRotatedAt || (apiKey && apiKey !== existing.apiKey)) {
+            updateData.tokenLastRotatedAt = now;
+            // Set next rotation to 90 days from now (standard security practice)
+            const nextRotation = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+            updateData.tokenNextRotationAt = nextRotation;
+          }
+        }
+        
+        // Update the existing config
+        const updated = await storage.updateIntegrationConfig(existing.id, updateData);
 
         // Log the update
         try {
@@ -2891,6 +2921,10 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.json(sanitizeIntegrationConfig(updated!));
       }
 
+      // Calculate rotation dates for new configs
+      const now = new Date();
+      const nextRotation = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+      
       const newConfig = await storage.createIntegrationConfig({
         userId,
         provider: normalizedProvider,
@@ -2898,6 +2932,8 @@ TOTAL: $${subtotal.toFixed(2)}
         apiKey: apiKey || null,
         isEnabled: true,
         config: config || null,
+        tokenLastRotatedAt: apiKey ? now : null,
+        tokenNextRotationAt: apiKey ? nextRotation : null,
       });
 
       // Log integration config creation

@@ -50,6 +50,12 @@ import {
   Loader2,
   GripVertical,
   Eye,
+  Package,
+  AlertTriangle,
+  ShoppingCart,
+  ClipboardList,
+  PackageOpen,
+  RefreshCw,
 } from "lucide-react";
 import {
   DndContext,
@@ -114,6 +120,166 @@ const DATA_SOURCES = [
   { id: "AI_RECOMMENDATIONS", label: "AI Recommendations" },
   { id: "SYSTEM_LOGS", label: "System Logs" },
 ];
+
+type SystemStats = {
+  totalItems: number;
+  lowStockItems: number;
+  criticalStockItems: number;
+  activePOs: number;
+  activeSOs: number;
+  pendingReturns: number;
+  totalInventoryValue: number;
+};
+
+function SystemOverview() {
+  const { data: items = [], isLoading: itemsLoading } = useQuery<any[]>({
+    queryKey: ["/api/items"],
+  });
+
+  const { data: purchaseOrders = [], isLoading: posLoading } = useQuery<any[]>({
+    queryKey: ["/api/purchase-orders"],
+  });
+
+  const { data: salesOrders = [], isLoading: sosLoading } = useQuery<any[]>({
+    queryKey: ["/api/sales-orders"],
+  });
+
+  const { data: returns = [], isLoading: returnsLoading } = useQuery<any[]>({
+    queryKey: ["/api/returns"],
+  });
+
+  const isLoading = itemsLoading || posLoading || sosLoading || returnsLoading;
+
+  const stats = useMemo(() => {
+    if (isLoading) return null;
+    
+    const totalItems = items.length;
+    const lowStockItems = items.filter((item: any) => {
+      const availableQty = (item.hildaleQty || 0) + (item.pivotQty || 0);
+      const safetyStock = item.safetyStock || 0;
+      return availableQty > 0 && availableQty <= safetyStock;
+    }).length;
+    const criticalStockItems = items.filter((item: any) => {
+      const availableQty = (item.hildaleQty || 0) + (item.pivotQty || 0);
+      return availableQty <= 0;
+    }).length;
+    
+    const activePOs = purchaseOrders.filter((po: any) => 
+      !["RECEIVED", "CLOSED", "CANCELLED"].includes(po.status)
+    ).length;
+    
+    const activeSOs = salesOrders.filter((so: any) => 
+      !["FULFILLED", "CANCELLED"].includes(so.status)
+    ).length;
+    
+    const pendingReturns = returns.filter((ret: any) => 
+      !["REFUNDED", "REPLACEMENT_SENT", "CLOSED", "REJECTED", "CANCELLED", "COMPLETED", "RECEIVED", "RECEIVED_AT_WAREHOUSE"].includes(ret.status)
+    ).length;
+    
+    const totalInventoryValue = items.reduce((sum: number, item: any) => {
+      const qty = (item.hildaleQty || 0) + (item.pivotQty || 0);
+      const cost = item.purchaseCost || 0;
+      return sum + (qty * cost);
+    }, 0);
+    
+    return {
+      totalItems,
+      lowStockItems,
+      criticalStockItems,
+      activePOs,
+      activeSOs,
+      pendingReturns,
+      totalInventoryValue,
+    };
+  }, [items, purchaseOrders, salesOrders, returns, isLoading]);
+
+  if (isLoading) {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
+        {Array.from({ length: 7 }).map((_, i) => (
+          <Card key={i}>
+            <CardContent className="p-4">
+              <div className="animate-pulse space-y-2">
+                <div className="h-4 w-16 bg-muted rounded" />
+                <div className="h-8 w-12 bg-muted rounded" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  if (!stats) return null;
+
+  const overviewCards = [
+    {
+      label: "Total Items",
+      value: stats.totalItems,
+      icon: Package,
+      color: "text-primary",
+    },
+    {
+      label: "Low Stock",
+      value: stats.lowStockItems,
+      icon: AlertTriangle,
+      color: stats.lowStockItems > 0 ? "text-yellow-500" : "text-muted-foreground",
+    },
+    {
+      label: "Critical Stock",
+      value: stats.criticalStockItems,
+      icon: AlertTriangle,
+      color: stats.criticalStockItems > 0 ? "text-red-500" : "text-muted-foreground",
+    },
+    {
+      label: "Active POs",
+      value: stats.activePOs,
+      icon: ClipboardList,
+      color: "text-blue-500",
+    },
+    {
+      label: "Active SOs",
+      value: stats.activeSOs,
+      icon: ShoppingCart,
+      color: "text-green-500",
+    },
+    {
+      label: "Pending Returns",
+      value: stats.pendingReturns,
+      icon: PackageOpen,
+      color: stats.pendingReturns > 0 ? "text-orange-500" : "text-muted-foreground",
+    },
+    {
+      label: "Inventory Value",
+      value: `$${stats.totalInventoryValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`,
+      icon: TrendingUp,
+      color: "text-primary",
+    },
+  ];
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">System Overview</h2>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+        {overviewCards.map((card) => (
+          <Card key={card.label} data-testid={`card-overview-${card.label.toLowerCase().replace(/\s+/g, '-')}`}>
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <card.icon className={`h-4 w-4 ${card.color}`} />
+                <span className="text-xs text-muted-foreground">{card.label}</span>
+              </div>
+              <div className="text-2xl font-bold" data-testid={`text-overview-${card.label.toLowerCase().replace(/\s+/g, '-')}`}>
+                {card.value}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function SortableWidget({
   widget,
@@ -641,9 +807,9 @@ export default function Reports() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Custom Reports</h1>
+          <h1 className="text-2xl font-bold">Reports</h1>
           <p className="text-muted-foreground">
-            Create custom dashboards to visualize your inventory data
+            System overview and custom dashboards
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -670,6 +836,14 @@ export default function Reports() {
             Create Dashboard
           </Button>
         </div>
+      </div>
+
+      <SystemOverview />
+
+      <Separator />
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Custom Dashboards</h2>
       </div>
 
       {isLoading ? (

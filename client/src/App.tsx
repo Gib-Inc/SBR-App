@@ -28,6 +28,7 @@ import PurchaseOrders from "@/pages/purchase-orders";
 import Returns from "@/pages/returns";
 import Login from "@/pages/login";
 import POAcknowledge from "@/pages/po-acknowledge";
+import Reports from "@/pages/reports";
 import NotFound from "@/pages/not-found";
 
 function UserMenu() {
@@ -111,6 +112,7 @@ function AuthenticatedApp() {
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
+                    <Route path="/reports" component={Reports} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />
                   </Switch>

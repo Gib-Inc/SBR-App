@@ -171,10 +171,6 @@ export class GHLOpportunitiesService {
       }));
     }
 
-    if (params.notes) {
-      body.notes = params.notes;
-    }
-
     console.log(`[GHL Opps] Creating opportunity: ${params.name}`);
 
     const response = await fetch(`${GHL_CONFIG.baseUrl}/opportunities/`, {
@@ -279,6 +275,41 @@ export class GHLOpportunitiesService {
       return GHL_CONFIG.stages.STOCK_21_30;
     }
     return null;
+  }
+
+  /**
+   * Add a note to an opportunity via the GHL Notes API
+   */
+  async addNoteToOpportunity(contactId: string, opportunityId: string, noteBody: string): Promise<boolean> {
+    if (!this.apiKey) {
+      console.error("[GHL Opps] Cannot add note: not configured");
+      return false;
+    }
+
+    try {
+      console.log(`[GHL Opps] Adding note to opportunity ${opportunityId}`);
+      
+      const response = await fetch(`${GHL_CONFIG.baseUrl}/contacts/${contactId}/notes`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          body: noteBody,
+          // Associate note with the opportunity
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GHL Opps] Failed to add note: ${response.status} - ${errorText}`);
+        return false;
+      }
+
+      console.log(`[GHL Opps] Added note to opportunity ${opportunityId}`);
+      return true;
+    } catch (error: any) {
+      console.error("[GHL Opps] Error adding note:", error.message);
+      return false;
+    }
   }
 }
 

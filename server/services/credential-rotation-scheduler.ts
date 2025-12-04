@@ -142,17 +142,6 @@ async function processConfig(
       return { success: false, action: 'error', error: 'Could not get system contact' };
     }
     
-    // Build notes with credential rotation details
-    const notesLines = [
-      `Credential Rotation Reminder`,
-      ``,
-      `Provider: ${config.provider}`,
-      config.accountName ? `Account: ${config.accountName}` : null,
-      `Rotation Due: ${formatRotationDate(rotationDate)}`,
-      ``,
-      `Action Required: Rotate API credentials before the due date to maintain integration connectivity.`,
-    ].filter(Boolean).join('\n');
-    
     const result = await withRetry(
       async () => {
         return await ghlService.upsertOpportunity({
@@ -162,13 +151,27 @@ async function processConfig(
           status: "open",
           contactId: systemContactId,
           existingOpportunityId: config.rotationReminderOpportunityId,
-          notes: notesLines,
         });
       },
       MAX_RETRIES,
       RETRY_DELAY_MS,
       `Create opportunity for ${configContext}`
     );
+    
+    // If opportunity was created successfully, add a note with details
+    if (result.success && result.created && result.opportunityId) {
+      const noteBody = [
+        `Credential Rotation Reminder`,
+        ``,
+        `Provider: ${config.provider}`,
+        config.accountName ? `Account: ${config.accountName}` : null,
+        `Rotation Due: ${formatRotationDate(rotationDate)}`,
+        ``,
+        `Action Required: Rotate API credentials before the due date to maintain integration connectivity.`,
+      ].filter(Boolean).join('\n');
+      
+      await ghlService.addNoteToOpportunity(systemContactId, result.opportunityId, noteBody);
+    }
     
     if (!result.success) {
       console.error(`[Rotation Scheduler] Failed to create opportunity for ${configContext}:`, result.error);

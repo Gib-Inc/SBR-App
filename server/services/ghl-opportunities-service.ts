@@ -14,8 +14,8 @@ interface GHLOpportunityParams {
   existingOpportunityId?: string | null;
 }
 
-const SYSTEM_CONTACT_EMAIL = "system-notifications@inventory.internal";
-const SYSTEM_CONTACT_NAME = "System Notifications";
+const SYSTEM_CONTACT_EMAIL = "replit-admin@inventory.internal";
+const SYSTEM_CONTACT_NAME = "Replit Admin";
 
 interface GHLOpportunityResult {
   success: boolean;
@@ -99,11 +99,10 @@ export class GHLOpportunitiesService {
         headers: this.getHeaders(),
         body: JSON.stringify({
           locationId: GHL_CONFIG.locationId,
-          firstName: "System",
-          lastName: "Notifications",
+          firstName: "Replit",
+          lastName: "Admin",
           name: SYSTEM_CONTACT_NAME,
           email: SYSTEM_CONTACT_EMAIL,
-          tags: ["system", "internal", "do-not-contact"],
         }),
       });
 

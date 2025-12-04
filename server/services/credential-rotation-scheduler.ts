@@ -142,6 +142,17 @@ async function processConfig(
       return { success: false, action: 'error', error: 'Could not get system contact' };
     }
     
+    // Build notes with credential rotation details
+    const notesLines = [
+      `Credential Rotation Reminder`,
+      ``,
+      `Provider: ${config.provider}`,
+      config.accountName ? `Account: ${config.accountName}` : null,
+      `Rotation Due: ${formatRotationDate(rotationDate)}`,
+      ``,
+      `Action Required: Rotate API credentials before the due date to maintain integration connectivity.`,
+    ].filter(Boolean).join('\n');
+    
     const result = await withRetry(
       async () => {
         return await ghlService.upsertOpportunity({
@@ -151,12 +162,7 @@ async function processConfig(
           status: "open",
           contactId: systemContactId,
           existingOpportunityId: config.rotationReminderOpportunityId,
-          customFields: {
-            provider: config.provider,
-            accountName: config.accountName,
-            rotationDueDate: formatRotationDate(rotationDate),
-            configId: config.id,
-          },
+          notes: notesLines,
         });
       },
       MAX_RETRIES,

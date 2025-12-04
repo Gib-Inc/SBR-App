@@ -11,6 +11,7 @@ interface GHLOpportunityParams {
   contact?: { name?: string; email?: string; phone?: string };
   contactId?: string;
   customFields?: Record<string, any>;
+  notes?: string;
   existingOpportunityId?: string | null;
 }
 
@@ -168,6 +169,10 @@ export class GHLOpportunitiesService {
         key,
         field_value: value,
       }));
+    }
+
+    if (params.notes) {
+      body.notes = params.notes;
     }
 
     console.log(`[GHL Opps] Creating opportunity: ${params.name}`);

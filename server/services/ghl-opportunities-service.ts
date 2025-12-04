@@ -9,9 +9,13 @@ interface GHLOpportunityParams {
   status: "open" | "won" | "lost";
   amount?: number;
   contact?: { name?: string; email?: string; phone?: string };
+  contactId?: string;
   customFields?: Record<string, any>;
   existingOpportunityId?: string | null;
 }
+
+const SYSTEM_CONTACT_EMAIL = "system-notifications@inventory.internal";
+const SYSTEM_CONTACT_NAME = "System Notifications";
 
 interface GHLOpportunityResult {
   success: boolean;
@@ -24,6 +28,7 @@ interface GHLOpportunityResult {
 
 export class GHLOpportunitiesService {
   private apiKey: string | null = null;
+  private systemContactId: string | null = null;
 
   private getHeaders(): Record<string, string> {
     if (!this.apiKey) {
@@ -54,6 +59,68 @@ export class GHLOpportunitiesService {
 
   isConfigured(): boolean {
     return !!this.apiKey;
+  }
+
+  /**
+   * Find or create a system contact for internal notifications (like credential rotation reminders).
+   * Returns the contactId for use in opportunity creation.
+   */
+  async getOrCreateSystemContact(): Promise<string | null> {
+    if (this.systemContactId) {
+      return this.systemContactId;
+    }
+
+    if (!this.apiKey) {
+      console.error("[GHL Opps] Cannot get system contact: not configured");
+      return null;
+    }
+
+    try {
+      // First, search for an existing system contact by email
+      const searchUrl = `${GHL_CONFIG.baseUrl}/contacts/search/duplicate?locationId=${GHL_CONFIG.locationId}&email=${encodeURIComponent(SYSTEM_CONTACT_EMAIL)}`;
+      const searchResponse = await fetch(searchUrl, {
+        method: "GET",
+        headers: this.getHeaders(),
+      });
+
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json();
+        if (searchData.contact?.id) {
+          console.log(`[GHL Opps] Found existing system contact: ${searchData.contact.id}`);
+          this.systemContactId = searchData.contact.id;
+          return this.systemContactId;
+        }
+      }
+
+      // No existing contact found, create one
+      console.log("[GHL Opps] Creating system contact for internal notifications");
+      const createResponse = await fetch(`${GHL_CONFIG.baseUrl}/contacts/`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          locationId: GHL_CONFIG.locationId,
+          firstName: "System",
+          lastName: "Notifications",
+          name: SYSTEM_CONTACT_NAME,
+          email: SYSTEM_CONTACT_EMAIL,
+          tags: ["system", "internal", "do-not-contact"],
+        }),
+      });
+
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        console.error(`[GHL Opps] Failed to create system contact: ${createResponse.status} - ${errorText}`);
+        return null;
+      }
+
+      const createData = await createResponse.json();
+      this.systemContactId = createData.contact?.id || createData.id;
+      console.log(`[GHL Opps] Created system contact: ${this.systemContactId}`);
+      return this.systemContactId;
+    } catch (error: any) {
+      console.error("[GHL Opps] Error getting/creating system contact:", error.message);
+      return null;
+    }
   }
 
   async upsertOpportunity(params: GHLOpportunityParams): Promise<GHLOpportunityResult> {
@@ -88,7 +155,10 @@ export class GHLOpportunitiesService {
       body.monetaryValue = params.amount;
     }
 
-    if (params.contact) {
+    // Use contactId if provided directly, otherwise fall back to contact details
+    if (params.contactId) {
+      body.contactId = params.contactId;
+    } else if (params.contact) {
       if (params.contact.name) body.contactName = params.contact.name;
       if (params.contact.email) body.contactEmail = params.contact.email;
       if (params.contact.phone) body.contactPhone = params.contact.phone;

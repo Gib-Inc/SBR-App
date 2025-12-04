@@ -135,6 +135,13 @@ async function processConfig(
     
     console.log(`[Rotation Scheduler] Processing ${configContext}: rotation due ${formatRotationDate(rotationDate)}`);
     
+    // Get or create a system contact for internal notifications
+    const systemContactId = await ghlService.getOrCreateSystemContact();
+    if (!systemContactId) {
+      console.error(`[Rotation Scheduler] Could not get system contact for ${configContext}`);
+      return { success: false, action: 'error', error: 'Could not get system contact' };
+    }
+    
     const result = await withRetry(
       async () => {
         return await ghlService.upsertOpportunity({
@@ -142,6 +149,7 @@ async function processConfig(
           name: opportunityName,
           pipelineStageId: GHL_NEEDS_ATTENTION_STAGE_ID,
           status: "open",
+          contactId: systemContactId,
           existingOpportunityId: config.rotationReminderOpportunityId,
           customFields: {
             provider: config.provider,

@@ -7492,6 +7492,34 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Manual trigger for credential rotation check
+  app.post("/api/rotation-check/run", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { triggerManualRotationCheck } = await import("./services/credential-rotation-scheduler");
+      const result = await triggerManualRotationCheck();
+      
+      if (result.success) {
+        res.json({ success: true, message: result.message, details: result.details });
+      } else {
+        res.status(400).json({ success: false, error: result.message, details: result.details });
+      }
+    } catch (error: any) {
+      console.error("[RotationCheck] Error running manual check:", error);
+      res.status(500).json({ error: error.message || "Failed to run rotation check" });
+    }
+  });
+
+  // Get rotation scheduler status
+  app.get("/api/rotation-check/status", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getRotationSchedulerStatus } = await import("./services/credential-rotation-scheduler");
+      const status = getRotationSchedulerStatus();
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get rotation scheduler status" });
+    }
+  });
+
   // ============================================================================
   // PURCHASE ORDERS
   // ============================================================================
@@ -12903,6 +12931,14 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] AI Batch Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize AI Batch Scheduler:", error);
+  });
+  
+  // Initialize Credential Rotation Scheduler for daily checks at 6:00 AM Mountain time
+  import("./services/credential-rotation-scheduler").then(({ initializeRotationScheduler }) => {
+    initializeRotationScheduler();
+    console.log("[Server] Credential Rotation Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Credential Rotation Scheduler:", error);
   });
   
   return httpServer;

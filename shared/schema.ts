@@ -2043,6 +2043,8 @@ export const aiAgentSettings = pgTable("ai_agent_settings", {
   // QuickBooks demand history settings
   quickbooksIncludeHistory: boolean("quickbooks_include_history").notNull().default(false), // Include QB demand history in AI forecasting
   quickbooksHistoryMonths: integer("quickbooks_history_months").notNull().default(12), // Months of history to include for AI analysis
+  // Order sync settings (applies to all order-pulling sources: Shopify, Amazon, etc.)
+  ordersToFetch: integer("orders_to_fetch").notNull().default(250), // Number of orders to fetch during sync (min 10, max 1000)
   // Timestamps
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),

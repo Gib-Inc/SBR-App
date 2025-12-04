@@ -2063,3 +2063,78 @@ export const insertAiAgentSettingsSchema = createInsertSchema(aiAgentSettings).o
 });
 export type InsertAiAgentSettings = z.infer<typeof insertAiAgentSettingsSchema>;
 export type AiAgentSettings = typeof aiAgentSettings.$inferSelect;
+
+// ============================================================================
+// CUSTOM DASHBOARDS (User-created report dashboards)
+// ============================================================================
+
+export const WidgetType = {
+  KPI_CARD: "KPI_CARD",
+  BAR_CHART: "BAR_CHART",
+  LINE_CHART: "LINE_CHART",
+  PIE_CHART: "PIE_CHART",
+  TABLE: "TABLE",
+  LIST: "LIST",
+  PROGRESS: "PROGRESS",
+  AREA_CHART: "AREA_CHART",
+} as const;
+export type WidgetType = typeof WidgetType[keyof typeof WidgetType];
+
+export const DataSource = {
+  ITEMS: "ITEMS",
+  SALES_ORDERS: "SALES_ORDERS",
+  PURCHASE_ORDERS: "PURCHASE_ORDERS",
+  RETURNS: "RETURNS",
+  SUPPLIERS: "SUPPLIERS",
+  INVENTORY_TRANSACTIONS: "INVENTORY_TRANSACTIONS",
+  AI_RECOMMENDATIONS: "AI_RECOMMENDATIONS",
+  SYSTEM_LOGS: "SYSTEM_LOGS",
+} as const;
+export type DataSource = typeof DataSource[keyof typeof DataSource];
+
+export const customDashboards = pgTable("custom_dashboards", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text("name").notNull(),
+  description: text("description"),
+  isDefault: boolean("is_default").notNull().default(false),
+  layout: jsonb("layout"), // Grid layout configuration
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: index("custom_dashboards_user_id_idx").on(table.userId),
+}));
+
+export const insertCustomDashboardSchema = createInsertSchema(customDashboards).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true,
+});
+export type InsertCustomDashboard = z.infer<typeof insertCustomDashboardSchema>;
+export type CustomDashboard = typeof customDashboards.$inferSelect;
+
+// ============================================================================
+// DASHBOARD WIDGETS (Individual report widgets within dashboards)
+// ============================================================================
+
+export const dashboardWidgets = pgTable("dashboard_widgets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  dashboardId: varchar("dashboard_id").notNull().references(() => customDashboards.id, { onDelete: 'cascade' }),
+  type: text("type").notNull(), // WidgetType
+  title: text("title").notNull(),
+  dataSource: text("data_source").notNull(), // DataSource
+  config: jsonb("config").notNull(), // Widget-specific configuration (filters, aggregations, etc.)
+  position: jsonb("position").notNull(), // { x, y, w, h } grid position
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  dashboardIdIdx: index("dashboard_widgets_dashboard_id_idx").on(table.dashboardId),
+}));
+
+export const insertDashboardWidgetSchema = createInsertSchema(dashboardWidgets).omit({ 
+  id: true, 
+  createdAt: true, 
+  updatedAt: true,
+});
+export type InsertDashboardWidget = z.infer<typeof insertDashboardWidgetSchema>;
+export type DashboardWidget = typeof dashboardWidgets.$inferSelect;

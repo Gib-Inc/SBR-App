@@ -103,6 +103,10 @@ import {
   type InsertAiAgentSettings,
   type AIBatchLog,
   type InsertAIBatchLog,
+  type CustomDashboard,
+  type InsertCustomDashboard,
+  type DashboardWidget,
+  type InsertDashboardWidget,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -536,6 +540,21 @@ export interface IStorage {
   getAiAgentSettingsByUserId(userId: string): Promise<AiAgentSettings | undefined>;
   createAiAgentSettings(settings: InsertAiAgentSettings): Promise<AiAgentSettings>;
   updateAiAgentSettings(userId: string, settings: Partial<InsertAiAgentSettings>): Promise<AiAgentSettings | undefined>;
+
+  // Custom Dashboards
+  getCustomDashboardsByUserId(userId: string): Promise<CustomDashboard[]>;
+  getCustomDashboard(id: string): Promise<CustomDashboard | undefined>;
+  createCustomDashboard(dashboard: InsertCustomDashboard): Promise<CustomDashboard>;
+  updateCustomDashboard(id: string, dashboard: Partial<InsertCustomDashboard>): Promise<CustomDashboard | undefined>;
+  deleteCustomDashboard(id: string): Promise<boolean>;
+
+  // Dashboard Widgets
+  getWidgetsByDashboardId(dashboardId: string): Promise<DashboardWidget[]>;
+  getDashboardWidget(id: string): Promise<DashboardWidget | undefined>;
+  createDashboardWidget(widget: InsertDashboardWidget): Promise<DashboardWidget>;
+  updateDashboardWidget(id: string, widget: Partial<InsertDashboardWidget>): Promise<DashboardWidget | undefined>;
+  deleteDashboardWidget(id: string): Promise<boolean>;
+  bulkUpdateWidgetPositions(updates: Array<{ id: string; position: any }>): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -3471,6 +3490,94 @@ export class MemStorage implements IStorage {
     this.aiAgentSettings.set(existing.id, updated);
     return updated;
   }
+
+  // Custom Dashboards
+  private customDashboards: Map<string, CustomDashboard> = new Map();
+  private dashboardWidgets: Map<string, DashboardWidget> = new Map();
+
+  async getCustomDashboardsByUserId(userId: string): Promise<CustomDashboard[]> {
+    return Array.from(this.customDashboards.values()).filter(d => d.userId === userId);
+  }
+
+  async getCustomDashboard(id: string): Promise<CustomDashboard | undefined> {
+    return this.customDashboards.get(id);
+  }
+
+  async createCustomDashboard(dashboard: InsertCustomDashboard): Promise<CustomDashboard> {
+    const id = randomUUID();
+    const now = new Date();
+    const newDashboard: CustomDashboard = {
+      ...dashboard,
+      id,
+      isDefault: dashboard.isDefault ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.customDashboards.set(id, newDashboard);
+    return newDashboard;
+  }
+
+  async updateCustomDashboard(id: string, dashboard: Partial<InsertCustomDashboard>): Promise<CustomDashboard | undefined> {
+    const existing = this.customDashboards.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...dashboard, updatedAt: new Date() };
+    this.customDashboards.set(id, updated);
+    return updated;
+  }
+
+  async deleteCustomDashboard(id: string): Promise<boolean> {
+    const deleted = this.customDashboards.delete(id);
+    if (deleted) {
+      for (const [widgetId, widget] of this.dashboardWidgets.entries()) {
+        if (widget.dashboardId === id) {
+          this.dashboardWidgets.delete(widgetId);
+        }
+      }
+    }
+    return deleted;
+  }
+
+  async getWidgetsByDashboardId(dashboardId: string): Promise<DashboardWidget[]> {
+    return Array.from(this.dashboardWidgets.values()).filter(w => w.dashboardId === dashboardId);
+  }
+
+  async getDashboardWidget(id: string): Promise<DashboardWidget | undefined> {
+    return this.dashboardWidgets.get(id);
+  }
+
+  async createDashboardWidget(widget: InsertDashboardWidget): Promise<DashboardWidget> {
+    const id = randomUUID();
+    const now = new Date();
+    const newWidget: DashboardWidget = {
+      ...widget,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.dashboardWidgets.set(id, newWidget);
+    return newWidget;
+  }
+
+  async updateDashboardWidget(id: string, widget: Partial<InsertDashboardWidget>): Promise<DashboardWidget | undefined> {
+    const existing = this.dashboardWidgets.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...widget, updatedAt: new Date() };
+    this.dashboardWidgets.set(id, updated);
+    return updated;
+  }
+
+  async deleteDashboardWidget(id: string): Promise<boolean> {
+    return this.dashboardWidgets.delete(id);
+  }
+
+  async bulkUpdateWidgetPositions(updates: Array<{ id: string; position: any }>): Promise<void> {
+    for (const update of updates) {
+      const existing = this.dashboardWidgets.get(update.id);
+      if (existing) {
+        this.dashboardWidgets.set(update.id, { ...existing, position: update.position, updatedAt: new Date() });
+      }
+    }
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -6288,6 +6395,95 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.aiAgentSettings.userId, userId))
       .returning();
     return result[0];
+  }
+
+  // Custom Dashboards
+  async getCustomDashboardsByUserId(userId: string): Promise<CustomDashboard[]> {
+    return await this.db.select().from(schema.customDashboards)
+      .where(eq(schema.customDashboards.userId, userId))
+      .orderBy(desc(schema.customDashboards.createdAt));
+  }
+
+  async getCustomDashboard(id: string): Promise<CustomDashboard | undefined> {
+    const results = await this.db.select().from(schema.customDashboards)
+      .where(eq(schema.customDashboards.id, id));
+    return results[0];
+  }
+
+  async createCustomDashboard(dashboard: InsertCustomDashboard): Promise<CustomDashboard> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.customDashboards).values({
+      ...dashboard,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateCustomDashboard(id: string, dashboard: Partial<InsertCustomDashboard>): Promise<CustomDashboard | undefined> {
+    const now = new Date();
+    const result = await this.db.update(schema.customDashboards)
+      .set({ ...dashboard, updatedAt: now })
+      .where(eq(schema.customDashboards.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteCustomDashboard(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.customDashboards)
+      .where(eq(schema.customDashboards.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  // Dashboard Widgets
+  async getWidgetsByDashboardId(dashboardId: string): Promise<DashboardWidget[]> {
+    return await this.db.select().from(schema.dashboardWidgets)
+      .where(eq(schema.dashboardWidgets.dashboardId, dashboardId));
+  }
+
+  async getDashboardWidget(id: string): Promise<DashboardWidget | undefined> {
+    const results = await this.db.select().from(schema.dashboardWidgets)
+      .where(eq(schema.dashboardWidgets.id, id));
+    return results[0];
+  }
+
+  async createDashboardWidget(widget: InsertDashboardWidget): Promise<DashboardWidget> {
+    const id = randomUUID();
+    const now = new Date();
+    const result = await this.db.insert(schema.dashboardWidgets).values({
+      ...widget,
+      id,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    return result[0];
+  }
+
+  async updateDashboardWidget(id: string, widget: Partial<InsertDashboardWidget>): Promise<DashboardWidget | undefined> {
+    const now = new Date();
+    const result = await this.db.update(schema.dashboardWidgets)
+      .set({ ...widget, updatedAt: now })
+      .where(eq(schema.dashboardWidgets.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteDashboardWidget(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.dashboardWidgets)
+      .where(eq(schema.dashboardWidgets.id, id))
+      .returning();
+    return results.length > 0;
+  }
+
+  async bulkUpdateWidgetPositions(updates: Array<{ id: string; position: any }>): Promise<void> {
+    for (const update of updates) {
+      await this.db.update(schema.dashboardWidgets)
+        .set({ position: update.position, updatedAt: new Date() })
+        .where(eq(schema.dashboardWidgets.id, update.id));
+    }
   }
 }
 

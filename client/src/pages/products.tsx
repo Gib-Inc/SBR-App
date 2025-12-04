@@ -844,6 +844,269 @@ function BOMDialog({
   );
 }
 
+function QuickOrderDialog({ 
+  isOpen, 
+  onClose, 
+  stockItems 
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  stockItems: any[];
+}) {
+  const { toast } = useToast();
+  const [selectedSupplierId, setSelectedSupplierId] = useState("");
+  const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
+  const [isCreating, setIsCreating] = useState(false);
+
+  const { data: suppliers = [] } = useQuery<any[]>({
+    queryKey: ['/api/suppliers'],
+    enabled: isOpen,
+  });
+
+  const itemsForSupplier = selectedSupplierId 
+    ? stockItems.filter(item => item.primarySupplier?.supplierId === selectedSupplierId)
+    : [];
+
+  const handleQtyChange = (itemId: string, qty: number) => {
+    const newSelected = new Map(selectedItems);
+    if (qty > 0) {
+      newSelected.set(itemId, qty);
+    } else {
+      newSelected.delete(itemId);
+    }
+    setSelectedItems(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    const newSelected = new Map<string, number>();
+    itemsForSupplier.forEach(item => {
+      const suggestedQty = Math.max(item.primarySupplier?.minimumOrderQuantity || 10, 10);
+      newSelected.set(item.id, suggestedQty);
+    });
+    setSelectedItems(newSelected);
+  };
+
+  const handleClearAll = () => {
+    setSelectedItems(new Map());
+  };
+
+  const createPOMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedSupplierId || selectedItems.size === 0) {
+        throw new Error("Select items to order");
+      }
+
+      const lines = Array.from(selectedItems.entries()).map(([itemId, qty]) => {
+        const item = stockItems.find(i => i.id === itemId);
+        return {
+          itemId,
+          qtyOrdered: qty,
+          unitCost: item?.defaultPurchaseCost || item?.primarySupplier?.unitCost || 0,
+        };
+      });
+
+      const res = await apiRequest("POST", "/api/purchase-orders", {
+        supplierId: selectedSupplierId,
+        status: "DRAFT",
+        lines,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
+      toast({ 
+        title: "Purchase Order Created", 
+        description: `PO created with ${selectedItems.size} line items` 
+      });
+      handleClose();
+    },
+    onError: (error: Error) => {
+      toast({ 
+        title: "Failed to create PO", 
+        description: error.message, 
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const handleClose = () => {
+    setSelectedSupplierId("");
+    setSelectedItems(new Map());
+    setIsCreating(false);
+    onClose();
+  };
+
+  const totalItems = selectedItems.size;
+  const totalQty = Array.from(selectedItems.values()).reduce((sum, qty) => sum + qty, 0);
+  const totalCost = Array.from(selectedItems.entries()).reduce((sum, [itemId, qty]) => {
+    const item = stockItems.find(i => i.id === itemId);
+    const unitCost = item?.defaultPurchaseCost || item?.primarySupplier?.unitCost || 0;
+    return sum + (qty * unitCost);
+  }, 0);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShoppingCart className="h-5 w-5" />
+            Quick Order from Supplier
+          </DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Select a supplier and add items to create a new purchase order
+          </p>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div>
+            <Label>Select Supplier</Label>
+            <Select value={selectedSupplierId} onValueChange={(value) => {
+              setSelectedSupplierId(value);
+              setSelectedItems(new Map());
+            }}>
+              <SelectTrigger data-testid="select-quick-order-supplier">
+                <SelectValue placeholder="Choose a supplier..." />
+              </SelectTrigger>
+              <SelectContent>
+                {suppliers.map((supplier: any) => (
+                  <SelectItem key={supplier.id} value={supplier.id}>
+                    {supplier.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {selectedSupplierId && (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">
+                  {itemsForSupplier.length} items available from this supplier
+                </span>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleSelectAll}
+                    data-testid="button-select-all-items"
+                  >
+                    Select All
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={handleClearAll}
+                    data-testid="button-clear-all-items"
+                  >
+                    Clear All
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border rounded-md max-h-[300px] overflow-y-auto">
+                <table className="w-full">
+                  <thead className="bg-muted sticky top-0">
+                    <tr className="border-b">
+                      <th className="p-2 text-left text-xs font-medium">Item</th>
+                      <th className="p-2 text-right text-xs font-medium">Stock</th>
+                      <th className="p-2 text-right text-xs font-medium">MOQ</th>
+                      <th className="p-2 text-right text-xs font-medium">Unit Cost</th>
+                      <th className="p-2 text-center text-xs font-medium w-32">Order Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemsForSupplier.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-4 text-center text-muted-foreground">
+                          No items linked to this supplier
+                        </td>
+                      </tr>
+                    ) : (
+                      itemsForSupplier.map(item => {
+                        const qty = selectedItems.get(item.id) || 0;
+                        const unitCost = item.defaultPurchaseCost || item.primarySupplier?.unitCost || 0;
+                        return (
+                          <tr key={item.id} className={`border-b last:border-b-0 ${qty > 0 ? 'bg-primary/5' : ''}`}>
+                            <td className="p-2">
+                              <div>
+                                <span className="font-medium text-sm">{item.name}</span>
+                                <span className="text-xs text-muted-foreground block">{item.sku}</span>
+                              </div>
+                            </td>
+                            <td className="p-2 text-right text-sm">{item.currentStock ?? 0}</td>
+                            <td className="p-2 text-right text-sm">{item.primarySupplier?.minimumOrderQuantity || '-'}</td>
+                            <td className="p-2 text-right text-sm">
+                              {unitCost > 0 ? `$${unitCost.toFixed(2)}` : '-'}
+                            </td>
+                            <td className="p-2">
+                              <Input
+                                type="number"
+                                min={0}
+                                value={qty || ''}
+                                onChange={(e) => handleQtyChange(item.id, parseInt(e.target.value) || 0)}
+                                className="w-24 text-center"
+                                placeholder="0"
+                                data-testid={`input-order-qty-${item.id}`}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {totalItems > 0 && (
+                <Card className="bg-muted/50">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">Order Summary</p>
+                        <p className="text-xs text-muted-foreground">
+                          {totalItems} items • {totalQty} total units
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-bold">
+                          ${totalCost.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Estimated Total</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
+
+          <div className="flex justify-end gap-2 pt-4 border-t">
+            <Button variant="outline" onClick={handleClose} data-testid="button-cancel-quick-order">
+              Cancel
+            </Button>
+            <Button 
+              onClick={() => createPOMutation.mutate()} 
+              disabled={selectedItems.size === 0 || createPOMutation.isPending}
+              data-testid="button-create-quick-order"
+            >
+              {createPOMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>Create Purchase Order</>
+              )}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
   const { toast } = useToast();
   const [orderQty, setOrderQty] = useState("");
@@ -1497,6 +1760,9 @@ export default function BOM() {
   const [isVerifyingSkus, setIsVerifyingSkus] = useState(false);
   const [verificationResults, setVerificationResults] = useState<any>(null);
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
+  const [showQuickOrderDialog, setShowQuickOrderDialog] = useState(false);
+  const [selectedSupplierForOrder, setSelectedSupplierForOrder] = useState<string>("");
+  const [quickOrderItems, setQuickOrderItems] = useState<Array<{itemId: string; sku: string; name: string; qty: number}>>([]);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -1975,7 +2241,16 @@ export default function BOM() {
             <h2 className="text-lg font-semibold">Stock Inventory</h2>
             <p className="text-sm text-muted-foreground">Components and raw materials</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowQuickOrderDialog(true)}
+              data-testid="button-quick-order-supplier"
+            >
+              <ShoppingCart className="mr-2 h-4 w-4" />
+              Quick Order
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -2125,6 +2400,17 @@ export default function BOM() {
       <SkuMappingWizard
         isOpen={isSkuMappingWizardOpen}
         onClose={() => setIsSkuMappingWizardOpen(false)}
+      />
+
+      {/* Quick Order from Supplier Dialog */}
+      <QuickOrderDialog
+        isOpen={showQuickOrderDialog}
+        onClose={() => {
+          setShowQuickOrderDialog(false);
+          setSelectedSupplierForOrder("");
+          setQuickOrderItems([]);
+        }}
+        stockItems={stockInventory}
       />
 
       {/* Verify Channel SKUs Results Modal */}

@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut } from "lucide-react";
 import { NotificationsBell } from "@/components/notifications-bell";
-import Dashboard from "@/pages/dashboard";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
@@ -106,7 +105,7 @@ function AuthenticatedApp() {
                 </header>
                 <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
                   <Switch>
-                    <Route path="/" component={Dashboard} />
+                    <Route path="/" component={Reports} />
                     <Route path="/products" component={Products} />
                     <Route path="/barcodes" component={Barcodes} />
                     <Route path="/suppliers" component={Suppliers} />
@@ -114,7 +113,6 @@ function AuthenticatedApp() {
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
-                    <Route path="/reports" component={Reports} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />
                   </Switch>

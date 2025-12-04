@@ -73,6 +73,12 @@ Preferred communication style: Simple, everyday language.
     *   **Extensiv Two-Way Integration**: Pulls inventory, pushes orders, and informs fulfillment routing decisions based on inventory thresholds (Hildale vs. Pivot Extensiv).
     *   **GoHighLevel**: Simplified configuration for CRM and messaging.
     *   **Webhooks**: Shopify webhooks for real-time order processing; SendGrid webhooks for email status.
+    *   **Shopify Reconciliation**: Periodic sync runs Tuesday & Thursday at 9:00 AM MT to catch missed webhook orders:
+        *   Syncs last 7 days of orders (max 500 per run)
+        *   Prevents concurrent runs with mutex
+        *   Logs to AI Agent Logs via SHOPIFY_RECONCILIATION log type
+        *   Manual trigger available via `/api/shopify/reconciliation/trigger`
+        *   Status check via `/api/shopify/reconciliation/status`
 *   **Product Identification**: Supports UPC/GTIN for finished products, enhancing marketplace identification and cross-channel matching.
 *   **SKU Mapping Wizard**: Centralized interface for mapping internal SKUs to external platform SKUs (e.g., Shopify, Extensiv) with auto-matching capabilities.
 *   **Label Printing**: Customizable label printing with support for various dimensions, layouts, and saved format presets.

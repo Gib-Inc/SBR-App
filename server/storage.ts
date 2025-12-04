@@ -195,6 +195,7 @@ export interface IStorage {
   updateIntegrationConfig(id: string, config: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
   deleteIntegrationConfig(id: string): Promise<boolean>;
   getConfigsNeedingRotationReminder(windowDays: number): Promise<IntegrationConfig[]>; // Get configs within X days of rotation
+  getEnabledIntegrationConfigsByProvider(provider: string): Promise<IntegrationConfig[]>; // Get all enabled configs for a provider across all users
 
   // Barcodes
   getAllBarcodes(): Promise<Barcode[]>;
@@ -1491,6 +1492,12 @@ export class MemStorage implements IStorage {
       }
       return true;
     });
+  }
+
+  async getEnabledIntegrationConfigsByProvider(provider: string): Promise<IntegrationConfig[]> {
+    return Array.from(this.integrationConfigs.values()).filter(config => 
+      config.provider === provider && config.isEnabled && config.apiKey
+    );
   }
 
   // Barcodes
@@ -4001,6 +4008,19 @@ export class PostgresStorage implements IStorage {
         )
       );
     
+    return results;
+  }
+
+  async getEnabledIntegrationConfigsByProvider(provider: string): Promise<IntegrationConfig[]> {
+    const results = await this.db.select()
+      .from(schema.integrationConfigs)
+      .where(
+        and(
+          eq(schema.integrationConfigs.provider, provider),
+          eq(schema.integrationConfigs.isEnabled, true),
+          isNotNull(schema.integrationConfigs.apiKey)
+        )
+      );
     return results;
   }
 

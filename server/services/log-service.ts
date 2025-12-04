@@ -272,6 +272,25 @@ class LogService {
     });
   }
 
+  async logShopifyReconciliation(params: {
+    reason: string;
+    ordersProcessed: number;
+    ordersCreated: number;
+    ordersUpdated: number;
+    errors: number;
+    durationMs: number;
+    success: boolean;
+  }): Promise<void> {
+    await this.logSystemEvent({
+      type: SystemLogType.SHOPIFY_RECONCILIATION,
+      entityType: SystemLogEntityType.INTEGRATION,
+      severity: params.success ? SystemLogSeverity.INFO : (params.errors > 0 ? SystemLogSeverity.WARNING : SystemLogSeverity.INFO),
+      code: params.success ? "RECONCILIATION_SUCCESS" : "RECONCILIATION_PARTIAL",
+      message: `Shopify ${params.reason} reconciliation: ${params.ordersCreated} created, ${params.ordersUpdated} updated, ${params.errors} errors`,
+      details: params,
+    });
+  }
+
   async logGhlSyncError(params: {
     entityType: string;
     entityId: string;

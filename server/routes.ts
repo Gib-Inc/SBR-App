@@ -12875,6 +12875,33 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Shopify Reconciliation Scheduler status and manual trigger
+  app.get("/api/shopify/reconciliation/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getReconciliationSchedulerStatus } = await import("./services/shopify-reconciliation-scheduler");
+      const status = getReconciliationSchedulerStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error('[Shopify Reconciliation] Error getting status:', error);
+      res.status(500).json({ error: error.message || 'Failed to get reconciliation status' });
+    }
+  });
+
+  app.post("/api/shopify/reconciliation/trigger", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { triggerManualReconciliation } = await import("./services/shopify-reconciliation-scheduler");
+      const result = await triggerManualReconciliation();
+      res.json({
+        success: result.success,
+        message: `Reconciliation completed: ${result.ordersCreated} created, ${result.ordersUpdated} updated`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('[Shopify Reconciliation] Error triggering reconciliation:', error);
+      res.status(500).json({ error: error.message || 'Failed to trigger reconciliation' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -12985,6 +13012,14 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Credential Rotation Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Credential Rotation Scheduler:", error);
+  });
+  
+  // Initialize Shopify Reconciliation Scheduler for Tuesday & Thursday at 9:00 AM Mountain time
+  import("./services/shopify-reconciliation-scheduler").then(({ initializeShopifyReconciliationScheduler }) => {
+    initializeShopifyReconciliationScheduler();
+    console.log("[Server] Shopify Reconciliation Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Shopify Reconciliation Scheduler:", error);
   });
   
   return httpServer;

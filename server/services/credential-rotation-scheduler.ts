@@ -267,7 +267,10 @@ export async function runRotationCheck(): Promise<{
       }
     }
     
-    result.success = result.errors === 0;
+    // Explicitly set success to false if any errors occurred
+    if (result.errors > 0) {
+      result.success = false;
+    }
     
   } catch (error: any) {
     console.error(`[Rotation Scheduler] Fatal error during rotation check:`, error.message);
@@ -275,7 +278,8 @@ export async function runRotationCheck(): Promise<{
     result.errors++;
   }
   
-  console.log(`[Rotation Scheduler] Rotation check complete: ${result.configsChecked} checked, ${result.remindersCreated} created, ${result.remindersUpdated} updated, ${result.errors} errors`);
+  const statusText = result.success ? 'completed successfully' : `completed with ${result.errors} errors`;
+  console.log(`[Rotation Scheduler] Rotation check ${statusText}: ${result.configsChecked} checked, ${result.remindersCreated} created, ${result.remindersUpdated} updated`);
   
   return result;
 }

@@ -12,7 +12,8 @@
 import { storage } from "../storage";
 import { ShopifyClient } from "./shopify-client";
 import { logService } from "./log-service";
-import { SystemLogType, SystemLogSeverity, SystemLogEntityType } from "@shared/schema";
+import { triggerSalesOrderSync } from "./ghl-sync-triggers";
+import { SystemLogType, SystemLogSeverity, SystemLogEntityType, type User } from "@shared/schema";
 
 const TIMEZONE = "America/Denver";
 const RECONCILIATION_DAYS_BACK = 7;
@@ -28,6 +29,7 @@ interface ReconciliationResult {
   ordersCreated: number;
   ordersUpdated: number;
   ordersSkipped: number;
+  ghlSynced: number;
   errors: string[];
   duration: number;
   scheduledDay?: string;
@@ -136,6 +138,7 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
     ordersCreated: 0,
     ordersUpdated: 0,
     ordersSkipped: 0,
+    ghlSynced: 0,
     errors: [],
     duration: 0,
     scheduledDay: reason,
@@ -232,6 +235,19 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
               }
               
               result.ordersCreated++;
+              
+              // Automatically sync to GHL (same as webhook behavior)
+              try {
+                const adminUsers = await storage.getAllUsers();
+                const adminUser = adminUsers.find((u: User) => u.role === 'admin') || adminUsers[0];
+                if (adminUser) {
+                  await triggerSalesOrderSync(adminUser.id, salesOrder.id, false);
+                  result.ghlSynced++;
+                  console.log(`[Shopify Reconciliation] Synced order ${orderData.externalOrderId} to GHL`);
+                }
+              } catch (ghlError: any) {
+                console.warn(`[Shopify Reconciliation] GHL sync skipped for ${orderData.externalOrderId}:`, ghlError.message);
+              }
             }
           } catch (orderError: any) {
             result.errors.push(`Order ${orderData.externalOrderId}: ${orderError.message}`);
@@ -254,20 +270,21 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
       entityType: SystemLogEntityType.INTEGRATION,
       severity: result.success ? SystemLogSeverity.INFO : SystemLogSeverity.WARNING,
       code: result.success ? "RECONCILIATION_SUCCESS" : "RECONCILIATION_PARTIAL",
-      message: `Shopify ${reason} reconciliation completed: ${result.ordersCreated} new, ${result.ordersUpdated} updated, ${result.errors.length} errors`,
+      message: `Shopify ${reason} reconciliation completed: ${result.ordersCreated} new, ${result.ordersUpdated} updated, ${result.ghlSynced} synced to GHL, ${result.errors.length} errors`,
       details: {
         reason,
         ordersProcessed: result.ordersProcessed,
         ordersCreated: result.ordersCreated,
         ordersUpdated: result.ordersUpdated,
         ordersSkipped: result.ordersSkipped,
+        ghlSynced: result.ghlSynced,
         errorCount: result.errors.length,
         errors: result.errors.slice(0, 10),
         durationMs: result.duration,
       },
     });
     
-    console.log(`[Shopify Reconciliation] Completed: ${result.ordersCreated} created, ${result.ordersUpdated} updated, ${result.errors.length} errors (${result.duration}ms)`);
+    console.log(`[Shopify Reconciliation] Completed: ${result.ordersCreated} created, ${result.ordersUpdated} updated, ${result.ghlSynced} GHL synced, ${result.errors.length} errors (${result.duration}ms)`);
     
   } catch (error: any) {
     console.error("[Shopify Reconciliation] Fatal error:", error);

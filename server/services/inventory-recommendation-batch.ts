@@ -163,6 +163,15 @@ export class InventoryRecommendationBatch {
       let criticalItemsFound = 0;
       let orderTodayCount = 0;
       let safeUntilTomorrowCount = 0;
+      let autoDraftPOsCreated = 0;
+
+      // Check AI Agent Settings for auto-draft PO creation
+      const aiAgentSettings = await this.storage.getAiAgentSettingsByUserId(defaultUserId);
+      const shouldAutoDraftPOs = aiAgentSettings?.autoSendCriticalPos ?? false;
+
+      // Get supplier items for PO creation
+      const supplierItems = await this.storage.getAllSupplierItems();
+      const suppliers = await this.storage.getAllSuppliers();
 
       for (const rec of recommendations) {
         if (rec.riskLevel === "NEED_ORDER" || rec.riskLevel === "HIGH") {
@@ -191,6 +200,53 @@ export class InventoryRecommendationBatch {
           batchLogId: batchLog.id,
           status: "NEW",
         });
+
+        // Auto-create draft PO for critical items with ORDER_TODAY timing
+        if (shouldAutoDraftPOs && 
+            rec.orderTiming === "ORDER_TODAY" && 
+            (rec.riskLevel === "NEED_ORDER" || rec.riskLevel === "HIGH") &&
+            rec.recommendedAction === "ORDER" &&
+            rec.recommendedQty > 0) {
+          
+          try {
+            const draftPO = await this.createAutoDraftPO(
+              rec.itemId,
+              rec.sku,
+              rec.recommendedQty,
+              rec.reasoning,
+              supplierItems,
+              suppliers
+            );
+            
+            if (draftPO) {
+              autoDraftPOsCreated++;
+              console.log(`[AI Batch] Auto-created draft PO ${draftPO.poNumber} for ${rec.sku}`);
+              
+              // Create notification for auto-draft PO
+              await this.storage.createNotification({
+                userId: defaultUserId,
+                type: "AUTO_PO_CREATED",
+                title: `Auto-Draft PO: ${rec.sku}`,
+                message: `AI created draft PO ${draftPO.poNumber} for ${rec.recommendedQty} units. Review and send to complete.`,
+                severity: "HIGH",
+                actionUrl: `/products?tab=purchase-orders&po=${draftPO.id}`,
+                actionLabel: "Review PO",
+                relatedEntityType: "PurchaseOrder",
+                relatedEntityId: draftPO.id,
+                isPinned: false,
+                isRead: false,
+                metadata: { 
+                  sku: rec.sku, 
+                  quantity: rec.recommendedQty,
+                  poNumber: draftPO.poNumber,
+                  daysUntilStockout: rec.daysUntilStockout
+                },
+              });
+            }
+          } catch (error: any) {
+            console.error(`[AI Batch] Failed to auto-create draft PO for ${rec.sku}:`, error);
+          }
+        }
       }
 
       const llmResponseTimeMs = Date.now() - startTime;
@@ -260,7 +316,7 @@ export class InventoryRecommendationBatch {
     for (const line of poLines) {
       const po = purchaseOrders.find(p => p.id === line.purchaseOrderId);
       if (po && !po.isHistorical && po.status !== "CANCELLED" && po.status !== "CLOSED") {
-        const pending = (line.quantity ?? 0) - (line.receivedQty ?? 0);
+        const pending = (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0);
         if (pending > 0 && line.itemId) {
           inboundMap.set(line.itemId, (inboundMap.get(line.itemId) || 0) + pending);
         }
@@ -547,6 +603,83 @@ Respond with a JSON array of recommendations in this exact format:
   }
 
   /**
+   * Create an auto-draft PO for a critical item
+   */
+  private async createAutoDraftPO(
+    itemId: string,
+    sku: string,
+    quantity: number,
+    reasoning: string,
+    supplierItems: any[],
+    suppliers: any[]
+  ): Promise<any | null> {
+    // Find designated supplier for this item
+    const designatedSupplierItem = supplierItems.find(
+      si => si.itemId === itemId && si.isDesignatedSupplier
+    );
+    
+    if (!designatedSupplierItem) {
+      console.log(`[AI Batch] No designated supplier for ${sku}, skipping auto-draft PO`);
+      return null;
+    }
+    
+    const supplier = suppliers.find(s => s.id === designatedSupplierItem.supplierId);
+    if (!supplier) {
+      console.log(`[AI Batch] Supplier not found for ${sku}, skipping auto-draft PO`);
+      return null;
+    }
+    
+    // Get item details
+    const items = await this.storage.getAllItems();
+    const item = items.find(i => i.id === itemId);
+    if (!item) {
+      console.log(`[AI Batch] Item not found for ${sku}, skipping auto-draft PO`);
+      return null;
+    }
+    
+    // Generate PO number
+    const existingPOs = await this.storage.getAllPurchaseOrders();
+    const poCount = existingPOs.length + 1;
+    const poNumber = `AI-PO-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${String(poCount).padStart(4, '0')}`;
+    
+    // Calculate cost (use supplier item cost or fallback to 0)
+    const unitCost = designatedSupplierItem.cost ?? 0;
+    const lineTotal = quantity * unitCost;
+    
+    // Create the PO
+    const po = await this.storage.createPurchaseOrder({
+      poNumber,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      supplierEmail: supplier.email,
+      status: "DRAFT",
+      orderDate: new Date(),
+      expectedDate: new Date(Date.now() + (designatedSupplierItem.leadTimeDays || 14) * 24 * 60 * 60 * 1000),
+      subtotal: lineTotal,
+      shippingCost: 0,
+      otherFees: 0,
+      total: lineTotal,
+      notes: `Auto-generated by AI Batch System.\n\nReason: ${reasoning}`,
+      isHistorical: false,
+      isAutoDraft: true,
+    });
+    
+    // Create the PO line
+    await this.storage.createPurchaseOrderLine({
+      purchaseOrderId: po.id,
+      itemId: item.id,
+      sku: sku,
+      itemName: item.name,
+      qtyOrdered: quantity,
+      qtyReceived: 0,
+      unitCost: unitCost,
+      lineTotal: lineTotal,
+    });
+    
+    return po;
+  }
+
+  /**
    * Check if a SKU has crossed into critical state and should trigger a batch run
    */
   isCritical(daysUntilStockout: number, leadTimeDays: number, riskThresholdHighDays: number = 0): boolean {
@@ -582,7 +715,8 @@ Respond with a JSON array of recommendations in this exact format:
    */
   cleanupDebounceMap(): void {
     const now = Date.now();
-    for (const [sku, timestamp] of criticalTriggerDebounce.entries()) {
+    const entries = Array.from(criticalTriggerDebounce.entries());
+    for (const [sku, timestamp] of entries) {
       if (now - timestamp > DEBOUNCE_WINDOW_MS * 2) {
         criticalTriggerDebounce.delete(sku);
       }

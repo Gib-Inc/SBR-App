@@ -279,6 +279,9 @@ export const purchaseOrders = pgTable("purchase_orders", {
   // Live vs History tracking
   isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
   archivedAt: timestamp("archived_at"), // When record moved to History
+  
+  // AI Auto-Draft flag
+  isAutoDraft: boolean("is_auto_draft").notNull().default(false), // true = created by AI system
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),

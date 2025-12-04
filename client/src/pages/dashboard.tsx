@@ -633,11 +633,9 @@ export default function Dashboard() {
                                 ? 'bg-muted-foreground'
                                 : !isIntegrationConfigured(integration)
                                 ? 'bg-muted-foreground'
-                                : integration.status === 'success' || integration.status === 'connected'
-                                ? 'bg-status-online'
                                 : integration.status === 'failed' || integration.status === 'error'
                                 ? 'bg-status-busy'
-                                : 'bg-status-away'
+                                : 'bg-status-online'
                             }`}
                             data-testid={`status-${integration.id}`}
                           />
@@ -648,11 +646,9 @@ export default function Dashboard() {
                               ? 'Error loading config'
                               : !isIntegrationConfigured(integration)
                               ? 'Not configured' 
-                              : integration.status === 'success' || integration.status === 'connected'
-                              ? 'Connected' 
                               : integration.status === 'failed' || integration.status === 'error'
                               ? 'Failed'
-                              : 'Pending Test'}
+                              : 'Connected'}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">Last sync: {integration.lastSync || 'Never'}</p>

@@ -4283,9 +4283,9 @@ export default function AIAgent() {
 
   const getConfigStatus = (config: any) => {
     if (!config || !config.apiKey) return "not_configured";
-    if (config.lastSyncStatus === "SUCCESS") return "connected";
     if (config.lastSyncStatus === "FAILED") return "failed";
-    return "pending";
+    // Treat SUCCESS or never-synced-yet as connected (credentials are configured)
+    return "connected";
   };
 
   const dataSources = [

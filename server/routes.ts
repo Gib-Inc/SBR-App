@@ -12619,6 +12619,152 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ============================================================================
+  // SHOPIFY WEBHOOKS MANAGEMENT
+  // ============================================================================
+
+  // List all registered Shopify webhooks
+  app.get("/api/shopify/webhooks", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "Shopify credentials not configured" });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      const webhooks = await client.listWebhooks();
+
+      res.json({ webhooks });
+    } catch (error: any) {
+      console.error('[Shopify Webhooks] Error listing webhooks:', error);
+      res.status(500).json({ error: error.message || 'Failed to list webhooks' });
+    }
+  });
+
+  // Register a new Shopify webhook
+  app.post("/api/shopify/webhooks", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { topic, address } = req.body;
+      if (!topic || !address) {
+        return res.status(400).json({ error: "Missing required fields: topic, address" });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "Shopify credentials not configured" });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      const webhook = await client.registerWebhook(topic, address);
+
+      console.log(`[Shopify Webhooks] Registered webhook for topic ${topic}: ${webhook.id}`);
+      res.json({ success: true, webhook });
+    } catch (error: any) {
+      console.error('[Shopify Webhooks] Error registering webhook:', error);
+      res.status(500).json({ error: error.message || 'Failed to register webhook' });
+    }
+  });
+
+  // Delete a Shopify webhook
+  app.delete("/api/shopify/webhooks/:webhookId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { webhookId } = req.params;
+      if (!webhookId) {
+        return res.status(400).json({ error: "Missing webhook ID" });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "Shopify credentials not configured" });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      await client.deleteWebhook(parseInt(webhookId, 10));
+
+      console.log(`[Shopify Webhooks] Deleted webhook ${webhookId}`);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[Shopify Webhooks] Error deleting webhook:', error);
+      res.status(500).json({ error: error.message || 'Failed to delete webhook' });
+    }
+  });
+
+  // Register all order-related webhooks at once
+  app.post("/api/shopify/webhooks/register-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { callbackUrl } = req.body;
+      if (!callbackUrl) {
+        return res.status(400).json({ error: "Missing callback URL" });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "Shopify credentials not configured" });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      
+      const orderTopics = ['orders/create', 'orders/updated', 'orders/cancelled', 'orders/fulfilled'];
+      const results: { topic: string; success: boolean; webhookId?: number; error?: string }[] = [];
+
+      for (const topic of orderTopics) {
+        try {
+          const webhook = await client.registerWebhook(topic, callbackUrl);
+          results.push({ topic, success: true, webhookId: webhook.id });
+        } catch (err: any) {
+          // If webhook already exists, it's not an error
+          if (err.message?.includes('422') || err.message?.includes('already exists')) {
+            results.push({ topic, success: true, error: 'Already registered' });
+          } else {
+            results.push({ topic, success: false, error: err.message });
+          }
+        }
+      }
+
+      console.log(`[Shopify Webhooks] Registered order webhooks:`, results);
+      res.json({ success: true, results });
+    } catch (error: any) {
+      console.error('[Shopify Webhooks] Error registering order webhooks:', error);
+      res.status(500).json({ error: error.message || 'Failed to register order webhooks' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {

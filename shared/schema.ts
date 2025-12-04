@@ -624,6 +624,9 @@ export const integrationConfigs = pgTable("integration_configs", {
   // Token Rotation Tracking (V1 UI-driven rotation reminders)
   tokenLastRotatedAt: timestamp("token_last_rotated_at"), // When user last rotated credentials
   tokenNextRotationAt: timestamp("token_next_rotation_at"), // When next rotation is due
+  // Rotation Reminder Automation (GHL opportunity tracking)
+  rotationReminderOpportunityId: text("rotation_reminder_opportunity_id"), // GHL opportunity ID for deduplication
+  rotationReminderSentAt: timestamp("rotation_reminder_sent_at"), // When the 7-day reminder was created
 }, (table) => ({
   userProviderIdx: index("integration_configs_user_provider_idx").on(table.userId, table.provider),
 }));

@@ -766,6 +766,7 @@ function RulesTab() {
   const [hildaleHighDaysThreshold, setHildaleHighDaysThreshold] = useState(20);
   const [quickbooksIncludeHistory, setQuickbooksIncludeHistory] = useState(false);
   const [quickbooksHistoryMonths, setQuickbooksHistoryMonths] = useState(12);
+  const [ordersToFetch, setOrdersToFetch] = useState(250);
   
   // Sync form with fetched rules
   useEffect(() => {
@@ -798,6 +799,7 @@ function RulesTab() {
       setHildaleHighDaysThreshold(aiAgentSettings.hildaleHighDaysThreshold || 20);
       setQuickbooksIncludeHistory(aiAgentSettings.quickbooksIncludeHistory || false);
       setQuickbooksHistoryMonths(aiAgentSettings.quickbooksHistoryMonths || 12);
+      setOrdersToFetch(aiAgentSettings.ordersToFetch || 250);
     }
   }, [aiAgentSettings]);
   
@@ -806,7 +808,7 @@ function RulesTab() {
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
       features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
-      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number; ordersToFetch: number };
     }) => {
       // Save rules, features, and agent settings in parallel
       await Promise.all([
@@ -856,6 +858,7 @@ function RulesTab() {
         hildaleHighDaysThreshold,
         quickbooksIncludeHistory,
         quickbooksHistoryMonths,
+        ordersToFetch,
       },
     });
   };
@@ -1265,6 +1268,38 @@ function RulesTab() {
             <CardDescription className="mb-4">
               Configure automatic actions the AI Agent can take without human approval.
             </CardDescription>
+            
+            {/* Orders to Fetch - Universal Setting */}
+            <div className="p-4 border rounded-lg space-y-4 mb-6">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="orders-to-fetch">Orders to Fetch</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-orders-fetch-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Maximum number of orders to fetch when syncing from Shopify, Amazon, and other order sources. Higher values ensure you don't miss orders but take longer to sync.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <span className="text-sm text-muted-foreground">{ordersToFetch} orders</span>
+                </div>
+                <Slider
+                  id="orders-to-fetch"
+                  min={10}
+                  max={1000}
+                  step={10}
+                  value={[ordersToFetch]}
+                  onValueChange={([val]) => setOrdersToFetch(val)}
+                  data-testid="slider-orders-fetch"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Applies to: Shopify, Amazon, and all other order sources
+                </p>
+              </div>
+            </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Auto-Send Critical POs */}

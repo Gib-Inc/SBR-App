@@ -3420,6 +3420,9 @@ export class MemStorage implements IStorage {
       extensivTwoWaySync: settings.extensivTwoWaySync ?? false,
       pivotLowDaysThreshold: settings.pivotLowDaysThreshold ?? 5,
       hildaleHighDaysThreshold: settings.hildaleHighDaysThreshold ?? 20,
+      quickbooksIncludeHistory: settings.quickbooksIncludeHistory ?? false,
+      quickbooksHistoryMonths: settings.quickbooksHistoryMonths ?? 12,
+      ordersToFetch: settings.ordersToFetch ?? 250,
       createdAt: now,
       updatedAt: now,
     };

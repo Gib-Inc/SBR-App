@@ -55,13 +55,13 @@ function KPICard({ data }: { data: { value: number; label: string; trend?: { dir
       : "text-muted-foreground";
 
   return (
-    <div className="flex flex-col items-center justify-center py-4">
-      <div className="text-4xl font-bold">
+    <div className="flex flex-col items-center justify-center py-4" data-testid="widget-kpi-card">
+      <div className="text-4xl font-bold" data-testid="text-kpi-value">
         {typeof data.value === "number" ? data.value.toLocaleString() : data.value}
       </div>
-      <div className="text-sm text-muted-foreground mt-1">{data.label}</div>
+      <div className="text-sm text-muted-foreground mt-1" data-testid="text-kpi-label">{data.label}</div>
       {data.trend && (
-        <div className={`flex items-center gap-1 mt-2 ${trendColor}`}>
+        <div className={`flex items-center gap-1 mt-2 ${trendColor}`} data-testid="text-kpi-trend">
           <TrendIcon className="h-4 w-4" />
           <span className="text-sm">{data.trend.value}%</span>
         </div>
@@ -197,7 +197,7 @@ function TableWidget({ data }: { data: Record<string, any>[] }) {
   const columns = Object.keys(data[0] || {});
 
   return (
-    <div className="overflow-x-auto max-h-[200px] overflow-y-auto">
+    <div className="overflow-x-auto max-h-[200px] overflow-y-auto" data-testid="widget-table">
       <table className="w-full text-sm">
         <thead className="sticky top-0 bg-background">
           <tr>
@@ -210,7 +210,7 @@ function TableWidget({ data }: { data: Record<string, any>[] }) {
         </thead>
         <tbody>
           {data.map((row, i) => (
-            <tr key={i} className="border-b last:border-0">
+            <tr key={i} className="border-b last:border-0" data-testid={`row-table-${i}`}>
               {columns.map((col) => (
                 <td key={col} className="p-2 text-muted-foreground">
                   {formatCellValue(row[col])}
@@ -230,12 +230,12 @@ function ListWidget({ data }: { data: { label: string; value?: any; id?: string 
   }
 
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-2" data-testid="widget-list">
       {data.map((item, i) => (
-        <li key={item.id || i} className="flex items-center justify-between p-2 rounded-md bg-muted/50">
-          <span className="text-sm">{item.label}</span>
+        <li key={item.id || i} className="flex items-center justify-between p-2 rounded-md bg-muted/50" data-testid={`list-item-${item.id || i}`}>
+          <span className="text-sm" data-testid={`text-list-label-${item.id || i}`}>{item.label}</span>
           {item.value !== undefined && (
-            <Badge variant="secondary">{formatCellValue(item.value)}</Badge>
+            <Badge variant="secondary" data-testid={`badge-list-value-${item.id || i}`}>{formatCellValue(item.value)}</Badge>
           )}
         </li>
       ))}
@@ -245,13 +245,13 @@ function ListWidget({ data }: { data: { label: string; value?: any; id?: string 
 
 function ProgressWidget({ data }: { data: { current: number; target: number; percentage: number } }) {
   return (
-    <div className="flex flex-col items-center justify-center py-4 space-y-4">
+    <div className="flex flex-col items-center justify-center py-4 space-y-4" data-testid="widget-progress">
       <div className="text-center">
-        <div className="text-3xl font-bold">{data.current.toLocaleString()}</div>
-        <div className="text-sm text-muted-foreground">of {data.target.toLocaleString()}</div>
+        <div className="text-3xl font-bold" data-testid="text-progress-current">{data.current.toLocaleString()}</div>
+        <div className="text-sm text-muted-foreground" data-testid="text-progress-target">of {data.target.toLocaleString()}</div>
       </div>
-      <Progress value={data.percentage} className="w-full" />
-      <div className="text-sm font-medium">{data.percentage}% Complete</div>
+      <Progress value={data.percentage} className="w-full" data-testid="progress-bar" />
+      <div className="text-sm font-medium" data-testid="text-progress-percentage">{data.percentage}% Complete</div>
     </div>
   );
 }

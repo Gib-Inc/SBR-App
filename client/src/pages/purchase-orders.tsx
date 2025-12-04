@@ -34,6 +34,8 @@ import {
   Archive,
   Download,
   Upload,
+  Bot,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -776,15 +778,26 @@ export default function PurchaseOrders() {
                     </td>
                   </tr>
                 ) : (
-                  sortedPOs.map((po) => (
+                  sortedPOs.map((po) => {
+                    const isAutoDraft = (po as any).isAutoDraft === true;
+                    return (
                     <tr 
                       key={po.id} 
-                      className="border-b last:border-b-0 cursor-pointer hover-elevate h-12"
+                      className={`border-b last:border-b-0 cursor-pointer hover-elevate h-12 ${
+                        isAutoDraft 
+                          ? "bg-amber-50 dark:bg-amber-950/30 border-l-4 border-l-amber-400" 
+                          : ""
+                      }`}
                       onClick={() => handleViewDetails(po)}
                       data-testid={`row-po-${po.id}`}
                     >
                       <td className="p-3 align-middle whitespace-nowrap font-medium">
-                        {po.poNumber}
+                        <div className="flex items-center gap-2">
+                          {isAutoDraft && (
+                            <Bot className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                          )}
+                          {po.poNumber}
+                        </div>
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">
                         <span className="font-medium">{po.supplier?.name || po.supplierName || "-"}</span>
@@ -812,8 +825,25 @@ export default function PurchaseOrders() {
                       <td className="p-3 align-middle whitespace-nowrap text-right font-medium">
                         {formatCurrency(po.total)}
                       </td>
-                      <td className="sticky right-0 z-10 bg-background p-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
-                        <div className="flex justify-end">
+                      <td className={`sticky right-0 z-10 p-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)] ${isAutoDraft ? "bg-amber-50 dark:bg-amber-950/30" : "bg-background"}`}>
+                        <div className="flex justify-end gap-2">
+                          {/* Show Verify & Send button for AI-generated draft POs */}
+                          {isAutoDraft && ((po as any).displayStatus === "DRAFT" || po.status === "DRAFT") && (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="bg-amber-600 hover:bg-amber-700 text-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingPO(po);
+                                setIsEditOpen(true);
+                              }}
+                              data-testid={`button-verify-send-${po.id}`}
+                            >
+                              <AlertCircle className="h-3.5 w-3.5 mr-1" />
+                              Verify & Send
+                            </Button>
+                          )}
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                               <Button variant="ghost" size="icon" data-testid={`button-po-actions-${po.id}`}>
@@ -891,7 +921,7 @@ export default function PurchaseOrders() {
                         </div>
                       </td>
                     </tr>
-                  ))
+                  );})
                 )}
               </tbody>
             </table>

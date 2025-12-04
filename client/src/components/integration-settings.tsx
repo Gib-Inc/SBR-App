@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -155,6 +156,29 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     },
     onError: (error: any) => {
       toast({ title: "Failed to Remove Webhook", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const [testingWebhookId, setTestingWebhookId] = useState<number | null>(null);
+  const testWebhookMutation = useMutation({
+    mutationFn: async (webhookId: number) => {
+      setTestingWebhookId(webhookId);
+      return apiRequest("GET", `/api/shopify/webhooks/${webhookId}/test`);
+    },
+    onSuccess: (data: any) => {
+      toast({ 
+        title: "Webhook Verified", 
+        description: data.message || "Webhook is active and registered with Shopify"
+      });
+      setTestingWebhookId(null);
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Webhook Test Failed", 
+        description: error.message || "Could not verify webhook with Shopify", 
+        variant: "destructive" 
+      });
+      setTestingWebhookId(null);
     },
   });
 
@@ -678,11 +702,19 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                         </Alert>
                       )}
                       
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <div className="space-y-0.5">
                           <Label className="flex items-center gap-1.5">
                             <Webhook className="h-4 w-4" />
                             Real-time Order Webhooks
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p>These webhooks are hidden in your Shopify UI because they were created through the API. Manual webhooks appear in Settings → Notifications → Webhooks, but API webhooks do not.</p>
+                              </TooltipContent>
+                            </Tooltip>
                           </Label>
                           <p className="text-xs text-muted-foreground">
                             Receive instant order notifications instead of polling
@@ -706,23 +738,59 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                         </div>
                       ) : orderWebhooks.length > 0 ? (
                         <div className="space-y-2">
-                          <div className="text-xs text-muted-foreground space-y-1">
-                            {orderWebhooks.map(webhook => (
-                              <div key={webhook.id} className="flex items-center justify-between py-1 px-2 rounded bg-muted/50">
-                                <span className="font-mono">{webhook.topic}</span>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6"
-                                  onClick={() => deleteWebhookMutation.mutate(webhook.id)}
-                                  disabled={deleteWebhookMutation.isPending}
-                                  data-testid={`button-delete-webhook-${webhook.id}`}
-                                >
-                                  <Trash2 className="h-3 w-3 text-destructive" />
-                                </Button>
+                          {orderWebhooks.map(webhook => (
+                            <div key={webhook.id} className="p-2 rounded bg-muted/50 space-y-1.5" data-testid={`webhook-row-${webhook.id}`}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono text-sm font-medium">{webhook.topic}</span>
+                                <div className="flex items-center gap-1">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={() => testWebhookMutation.mutate(webhook.id)}
+                                        disabled={testWebhookMutation.isPending && testingWebhookId === webhook.id}
+                                        data-testid={`button-test-webhook-${webhook.id}`}
+                                      >
+                                        {testWebhookMutation.isPending && testingWebhookId === webhook.id ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Play className="h-3 w-3 text-green-600" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Test Connection</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={() => deleteWebhookMutation.mutate(webhook.id)}
+                                        disabled={deleteWebhookMutation.isPending}
+                                        data-testid={`button-delete-webhook-${webhook.id}`}
+                                      >
+                                        <Trash2 className="h-3 w-3 text-destructive" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Remove Webhook</TooltipContent>
+                                  </Tooltip>
+                                </div>
                               </div>
-                            ))}
-                          </div>
+                              <div className="text-xs text-muted-foreground space-y-0.5">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-muted-foreground/70">ID:</span>
+                                  <span className="font-mono">{webhook.id}</span>
+                                </div>
+                                <div className="flex items-start gap-1">
+                                  <span className="text-muted-foreground/70 shrink-0">Callback:</span>
+                                  <span className="font-mono break-all">{webhook.address}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       ) : (
                         <Button

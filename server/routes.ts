@@ -12829,6 +12829,52 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Test a specific webhook by fetching it from Shopify API
+  app.get("/api/shopify/webhooks/:webhookId/test", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { webhookId } = req.params;
+      if (!webhookId) {
+        return res.status(400).json({ error: "Missing webhook ID" });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+
+      if (!shopDomain || !accessToken) {
+        return res.status(400).json({ error: "Shopify credentials not configured" });
+      }
+
+      const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+      
+      // Fetch the specific webhook to verify it exists
+      const webhook = await client.getWebhook(parseInt(webhookId, 10));
+      
+      if (webhook) {
+        console.log(`[Shopify Webhooks] Test successful for webhook ${webhookId}: ${webhook.topic}`);
+        res.json({ 
+          success: true, 
+          webhook,
+          message: `Webhook ${webhook.topic} is active and registered with Shopify`
+        });
+      } else {
+        res.status(404).json({ 
+          success: false, 
+          error: "Webhook not found in Shopify" 
+        });
+      }
+    } catch (error: any) {
+      console.error('[Shopify Webhooks] Error testing webhook:', error);
+      res.status(500).json({ error: error.message || 'Failed to test webhook' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -550,4 +550,31 @@ export class ShopifyClient {
       throw new Error(`Failed to delete Shopify webhook: ${error.message}`);
     }
   }
+
+  /**
+   * Get a specific webhook by ID to verify it exists
+   * @param webhookId - The webhook ID to fetch
+   */
+  async getWebhook(webhookId: number): Promise<{ id: number; topic: string; address: string; format: string; created_at: string } | null> {
+    try {
+      const url = `${this.getBaseUrl()}/webhooks/${webhookId}.json`;
+      const response = await fetch(url, {
+        headers: this.getHeaders(),
+      });
+
+      if (response.status === 404) {
+        return null;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data.webhook || null;
+    } catch (error: any) {
+      throw new Error(`Failed to get Shopify webhook: ${error.message}`);
+    }
+  }
 }

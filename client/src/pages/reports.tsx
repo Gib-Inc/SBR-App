@@ -588,12 +588,12 @@ function AddWidgetDialog({
   );
 }
 
-function DashboardView({
+function DashboardSection({
   dashboard,
-  onBack,
+  onDelete,
 }: {
   dashboard: Dashboard;
-  onBack: () => void;
+  onDelete: () => void;
 }) {
   const { toast } = useToast();
   const [addWidgetOpen, setAddWidgetOpen] = useState(false);
@@ -676,43 +676,68 @@ function DashboardView({
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4" data-testid={`dashboard-section-${dashboard.id}`}>
       <div className="flex items-center justify-between">
         <div>
-          <Button variant="ghost" onClick={onBack} className="mb-2" data-testid="button-back-dashboards">
-            &larr; Back to Dashboards
-          </Button>
-          <h2 className="text-2xl font-bold">{dashboard.name}</h2>
+          <h3 className="text-lg font-semibold">{dashboard.name}</h3>
           {dashboard.description && (
-            <p className="text-muted-foreground">{dashboard.description}</p>
+            <p className="text-sm text-muted-foreground">{dashboard.description}</p>
           )}
         </div>
-        <Button onClick={() => setAddWidgetOpen(true)} data-testid="button-add-widget">
-          <Plus className="mr-2 h-4 w-4" />
-          Add Widget
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setAddWidgetOpen(true)} 
+            data-testid={`button-add-widget-${dashboard.id}`}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Add Widget
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                data-testid={`button-dashboard-menu-${dashboard.id}`}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={onDelete}
+                className="text-destructive"
+                data-testid={`button-delete-dashboard-${dashboard.id}`}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Dashboard
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
-      {widgets.length === 0 ? (
+      {isLoading ? (
+        <div className="flex items-center justify-center h-32">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : widgets.length === 0 ? (
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <LayoutGrid className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">No widgets yet</h3>
-            <p className="text-muted-foreground text-center mb-4">
-              Add widgets to visualize your inventory data
+          <CardContent className="flex flex-col items-center justify-center py-8">
+            <LayoutGrid className="h-8 w-8 text-muted-foreground mb-2" />
+            <p className="text-sm text-muted-foreground text-center mb-3">
+              No widgets yet. Add widgets to visualize your data.
             </p>
-            <Button onClick={() => setAddWidgetOpen(true)} data-testid="button-add-first-widget">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => setAddWidgetOpen(true)} 
+              data-testid={`button-add-first-widget-${dashboard.id}`}
+            >
               <Plus className="mr-2 h-4 w-4" />
-              Add Your First Widget
+              Add Widget
             </Button>
           </CardContent>
         </Card>
@@ -750,8 +775,6 @@ function DashboardView({
 export default function Reports() {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [selectedDashboard, setSelectedDashboard] = useState<Dashboard | null>(null);
 
   const { data: dashboards = [], isLoading } = useQuery<Dashboard[]>({
     queryKey: ["/api/dashboards"],
@@ -792,17 +815,6 @@ export default function Reports() {
     },
   });
 
-  if (selectedDashboard) {
-    return (
-      <div className="p-6">
-        <DashboardView
-          dashboard={selectedDashboard}
-          onBack={() => setSelectedDashboard(null)}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -812,30 +824,10 @@ export default function Reports() {
             System overview and custom dashboards
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center border rounded-md">
-            <Button
-              variant={viewMode === "grid" ? "secondary" : "ghost"}
-              size="icon"
-              onClick={() => setViewMode("grid")}
-              data-testid="button-view-grid"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "list" ? "secondary" : "ghost"}
-              size="icon"
-              onClick={() => setViewMode("list")}
-              data-testid="button-view-list"
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
-          <Button onClick={() => setCreateOpen(true)} data-testid="button-create-dashboard">
-            <Plus className="mr-2 h-4 w-4" />
-            Create Dashboard
-          </Button>
-        </div>
+        <Button onClick={() => setCreateOpen(true)} data-testid="button-create-dashboard">
+          <Plus className="mr-2 h-4 w-4" />
+          Create Dashboard
+        </Button>
       </div>
 
       <SystemOverview />
@@ -864,103 +856,14 @@ export default function Reports() {
             </Button>
           </CardContent>
         </Card>
-      ) : viewMode === "grid" ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {dashboards.map((dashboard) => (
-            <Card
-              key={dashboard.id}
-              className="hover-elevate cursor-pointer group"
-              data-testid={`dashboard-card-${dashboard.id}`}
-            >
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{dashboard.name}</CardTitle>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={(e) => e.stopPropagation()}
-                        data-testid={`button-dashboard-menu-${dashboard.id}`}
-                      >
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedDashboard(dashboard);
-                        }}
-                        data-testid={`button-view-dashboard-${dashboard.id}`}
-                      >
-                        <Eye className="mr-2 h-4 w-4" />
-                        View
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteDashboardMutation.mutate(dashboard.id);
-                        }}
-                        className="text-destructive"
-                        data-testid={`button-delete-dashboard-${dashboard.id}`}
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-                {dashboard.description && (
-                  <CardDescription className="line-clamp-2">
-                    {dashboard.description}
-                  </CardDescription>
-                )}
-              </CardHeader>
-              <CardContent onClick={() => setSelectedDashboard(dashboard)}>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <LayoutGrid className="h-4 w-4" />
-                  <span>Click to view dashboard</span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-8">
           {dashboards.map((dashboard) => (
-            <Card
+            <DashboardSection
               key={dashboard.id}
-              className="hover-elevate cursor-pointer"
-              onClick={() => setSelectedDashboard(dashboard)}
-              data-testid={`dashboard-list-item-${dashboard.id}`}
-            >
-              <CardContent className="flex items-center justify-between py-4">
-                <div>
-                  <div className="font-medium">{dashboard.name}</div>
-                  {dashboard.description && (
-                    <div className="text-sm text-muted-foreground">
-                      {dashboard.description}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteDashboardMutation.mutate(dashboard.id);
-                    }}
-                    data-testid={`button-delete-dashboard-list-${dashboard.id}`}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+              dashboard={dashboard}
+              onDelete={() => deleteDashboardMutation.mutate(dashboard.id)}
+            />
           ))}
         </div>
       )}

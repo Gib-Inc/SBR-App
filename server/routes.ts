@@ -9386,18 +9386,25 @@ Notes: ${po.notes || 'None'}
           return res.status(401).json({ error: "Missing webhook signature" });
         }
         
-        // Verify signature using crypto
+        // Verify signature using crypto with the raw body (captured before JSON parsing)
         const crypto = await import('crypto');
-        const rawBody = JSON.stringify(req.body);
+        const rawBody = (req as any).rawBody;
+        if (!rawBody) {
+          console.error("[Shopify Webhook] Raw body not available for HMAC verification");
+          return res.status(500).json({ error: "Server configuration error" });
+        }
+        
         const calculatedHmac = crypto
           .createHmac('sha256', shopifyWebhookSecret)
-          .update(rawBody, 'utf8')
+          .update(rawBody)
           .digest('base64');
         
         if (calculatedHmac !== hmacHeader) {
           console.error("[Shopify Webhook] Invalid HMAC signature");
           return res.status(401).json({ error: "Invalid webhook signature" });
         }
+        
+        console.log("[Shopify Webhook] HMAC signature verified successfully");
       } else {
         console.warn("[Shopify Webhook] SHOPIFY_WEBHOOK_SECRET not configured - skipping signature verification");
       }

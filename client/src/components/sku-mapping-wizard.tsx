@@ -96,7 +96,10 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     queryKey: ["/api/items"],
   });
 
-  const finishedProducts = (items as Item[]).filter((item) => item.type === "finished_product");
+  // Show all items (finished products + components) for SKU mapping
+  const allMappableItems = items as Item[];
+  // Keep finishedProducts for backward compatibility with other tabs
+  const finishedProducts = allMappableItems.filter((item) => item.type === "finished_product");
 
   const updateMutation = useMutation({
     mutationFn: async (updates: { id: string; data: Partial<Item> }) => {
@@ -163,7 +166,8 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     });
   };
 
-  const filteredProducts = finishedProducts.filter(
+  // For Shopify tab, use all items; for other tabs, use finishedProducts
+  const filteredProducts = allMappableItems.filter(
     (item) =>
       item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.sku.toLowerCase().includes(searchQuery.toLowerCase())
@@ -288,7 +292,7 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
   const [isSyncingNames, setIsSyncingNames] = useState(false);
   
   const syncNamesFromShopify = async () => {
-    const linkedItems = finishedProducts.filter(item => item.shopifyVariantId);
+    const linkedItems = allMappableItems.filter(item => item.shopifyVariantId);
     if (linkedItems.length === 0) {
       toast({
         title: "No Linked Products",
@@ -608,8 +612,9 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
 
   // Render enhanced Shopify tab
   const renderShopifyTab = () => {
-    const mappedCount = finishedProducts.filter(p => p.shopifyVariantId).length;
-    const unmappedCount = finishedProducts.length - mappedCount;
+    // Use all items for Shopify mapping stats (not just finished products)
+    const mappedCount = allMappableItems.filter(p => p.shopifyVariantId).length;
+    const unmappedCount = allMappableItems.length - mappedCount;
 
     if (isLoadingShopify) {
       return (
@@ -695,7 +700,7 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
               variant="outline" 
               size="sm" 
               onClick={syncNamesFromShopify}
-              disabled={isSyncingNames || finishedProducts.filter(item => item.shopifyVariantId).length === 0}
+              disabled={isSyncingNames || allMappableItems.filter(item => item.shopifyVariantId).length === 0}
               data-testid="button-sync-names-shopify"
             >
               {isSyncingNames ? (

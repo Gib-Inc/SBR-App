@@ -375,6 +375,17 @@ class AuditLoggerService {
     recordsCreated?: number;
     recordsUpdated?: number;
     recordsSkipped?: number;
+    syncedRecords?: Array<{
+      id: string;
+      orderNumber?: string;
+      customerName?: string;
+      status?: string;
+      totalAmount?: number;
+      currency?: string;
+      itemCount?: number;
+      syncAction?: 'created' | 'updated' | 'skipped';
+      syncReason?: string;
+    }>;
   }): Promise<AuditLog> {
     return this.logEvent({
       source: params.source,
@@ -389,6 +400,7 @@ class AuditLoggerService {
         recordsCreated: params.recordsCreated,
         recordsUpdated: params.recordsUpdated,
         recordsSkipped: params.recordsSkipped,
+        syncedRecords: params.syncedRecords,
       },
     });
   }

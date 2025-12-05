@@ -40,6 +40,28 @@ export const SHOPIFY_WEBHOOK_TOPICS = [
 
 export type ShopifyWebhookTopic = typeof SHOPIFY_WEBHOOK_TOPICS[number];
 
+export const WEBHOOK_TOPICS = {
+  CARTS_CREATE: "carts/create" as ShopifyWebhookTopic,
+  CARTS_UPDATE: "carts/update" as ShopifyWebhookTopic,
+  ORDERS_CREATE: "orders/create" as ShopifyWebhookTopic,
+  ORDERS_UPDATED: "orders/updated" as ShopifyWebhookTopic,
+  ORDERS_CANCELLED: "orders/cancelled" as ShopifyWebhookTopic,
+  ORDERS_DELETE: "orders/delete" as ShopifyWebhookTopic,
+  ORDERS_EDITED: "orders/edited" as ShopifyWebhookTopic,
+  ORDERS_FULFILLED: "orders/fulfilled" as ShopifyWebhookTopic,
+  ORDERS_PAID: "orders/paid" as ShopifyWebhookTopic,
+  ORDERS_PARTIALLY_FULFILLED: "orders/partially_fulfilled" as ShopifyWebhookTopic,
+  REFUNDS_CREATE: "refunds/create" as ShopifyWebhookTopic,
+  PRODUCTS_CREATE: "products/create" as ShopifyWebhookTopic,
+  PRODUCTS_UPDATE: "products/update" as ShopifyWebhookTopic,
+  PRODUCTS_DELETE: "products/delete" as ShopifyWebhookTopic,
+  INVENTORY_LEVELS_UPDATE: "inventory_levels/update" as ShopifyWebhookTopic,
+  INVENTORY_LEVELS_CONNECT: "inventory_levels/connect" as ShopifyWebhookTopic,
+  INVENTORY_LEVELS_DISCONNECT: "inventory_levels/disconnect" as ShopifyWebhookTopic,
+  FULFILLMENTS_CREATE: "fulfillments/create" as ShopifyWebhookTopic,
+  FULFILLMENTS_UPDATE: "fulfillments/update" as ShopifyWebhookTopic,
+} as const;
+
 export interface ShopifyWebhookPayload {
   id?: string | number;
   admin_graphql_api_id?: string;

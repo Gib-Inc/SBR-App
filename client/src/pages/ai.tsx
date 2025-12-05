@@ -5479,6 +5479,11 @@ export default function AIAgent() {
           setSkuWizardSource(null);
         }}
         source={skuWizardSource}
+        onCompleteSync={skuWizardSource === "shopify" ? () => {
+          setShowSkuMappingWizard(false);
+          setSkuWizardSource(null);
+          handleShopifySync();
+        } : undefined}
       />
 
       {/* GoHighLevel Sync Options Modal */}

@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles, BookOpen, ArrowRightLeft } from "lucide-react";
+import { Search, Save, AlertTriangle, CheckCircle, XCircle, Link2, Unlink, RefreshCw, Loader2, Sparkles, BookOpen, ArrowRightLeft, Download, Play, Package } from "lucide-react";
 import { SiShopify, SiAmazon, SiQuickbooks } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -75,9 +75,10 @@ interface SkuMappingWizardProps {
   isOpen: boolean;
   onClose: () => void;
   source?: SourceType;
+  onCompleteSync?: () => void;
 }
 
-export function SkuMappingWizard({ isOpen, onClose, source = null }: SkuMappingWizardProps) {
+export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSync }: SkuMappingWizardProps) {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState(source || "shopify");
   const [searchQuery, setSearchQuery] = useState("");
@@ -392,6 +393,80 @@ export function SkuMappingWizard({ isOpen, onClose, source = null }: SkuMappingW
       (v.barcode?.toLowerCase().includes(query))
     );
   }, [allShopifyVariants, shopifySearchQuery]);
+
+  // Compute unmapped Shopify variants (products in Shopify not linked to any item)
+  const unmappedShopifyVariants = useMemo(() => {
+    const linkedVariantIds = new Set(
+      finishedProducts
+        .filter(item => item.shopifyVariantId)
+        .map(item => item.shopifyVariantId)
+    );
+    return allShopifyVariants.filter(v => !linkedVariantIds.has(v.variantId));
+  }, [allShopifyVariants, finishedProducts]);
+
+  // State for import modal
+  const [showImportPrompt, setShowImportPrompt] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+
+  // Import Shopify products as items
+  const importShopifyProductsMutation = useMutation({
+    mutationFn: async (variants: typeof allShopifyVariants) => {
+      const results = { imported: 0, skipped: 0, errors: 0 };
+      setImportProgress({ current: 0, total: variants.length });
+      
+      for (let i = 0; i < variants.length; i++) {
+        const variant = variants[i];
+        try {
+          const hasUpc = !!variant.barcode;
+          await apiRequest("POST", "/api/items", {
+            name: variant.fullName,
+            sku: variant.sku || `SHOP-${variant.variantId}`,
+            type: hasUpc ? "finished_product" : "component",
+            upc: variant.barcode || null,
+            shopifyProductId: variant.productId,
+            shopifyVariantId: variant.variantId,
+            shopifyInventoryItemId: variant.inventoryItemId,
+            shopifySku: variant.sku,
+          });
+          results.imported++;
+        } catch (error: any) {
+          if (error.message?.includes("already exists") || error.message?.includes("duplicate")) {
+            results.skipped++;
+          } else {
+            results.errors++;
+          }
+        }
+        setImportProgress({ current: i + 1, total: variants.length });
+      }
+      
+      return results;
+    },
+    onSuccess: (results) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      refetchShopify();
+      setShowImportPrompt(false);
+      toast({
+        title: "Import Complete",
+        description: `Imported ${results.imported} product${results.imported !== 1 ? 's' : ''}${results.skipped > 0 ? `, ${results.skipped} skipped` : ''}${results.errors > 0 ? `, ${results.errors} errors` : ''}`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Failed",
+        description: error.message || "Failed to import products",
+      });
+    },
+  });
+
+  // Handle complete sync
+  const handleCompleteSync = () => {
+    if (onCompleteSync) {
+      onCompleteSync();
+    }
+    onClose();
+  };
 
   // === EXTENSIV TAB LOGIC ===
   const [extensivSearchQuery, setExtensivSearchQuery] = useState("");
@@ -1119,10 +1194,113 @@ export function SkuMappingWizard({ isOpen, onClose, source = null }: SkuMappingW
           </Tabs>
         </div>
 
-        <div className="flex justify-end gap-2 pt-4 border-t">
+        {/* Import Prompt for unmapped Shopify products */}
+        {activeTab === "shopify" && unmappedShopifyVariants.length > 0 && !showImportPrompt && (
+          <div className="flex items-center justify-between p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg mt-4">
+            <div className="flex items-center gap-2">
+              <Package className="h-5 w-5 text-blue-500" />
+              <div>
+                <p className="text-sm font-medium">
+                  {unmappedShopifyVariants.length} Shopify product{unmappedShopifyVariants.length !== 1 ? 's' : ''} not in your system
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Products with UPC will be added as finished products, others as components
+                </p>
+              </div>
+            </div>
+            <Button 
+              size="sm" 
+              onClick={() => setShowImportPrompt(true)}
+              data-testid="button-show-import-prompt"
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Import Products
+            </Button>
+          </div>
+        )}
+
+        {/* Import Confirmation */}
+        {showImportPrompt && (
+          <div className="p-4 bg-muted rounded-lg mt-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-yellow-500 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Import {unmappedShopifyVariants.length} products from Shopify?</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  This will create new items in your inventory:
+                </p>
+                <ul className="text-sm text-muted-foreground mt-2 space-y-1">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                    Products with UPC/barcode → <strong>Finished Products</strong> (BOM page)
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-blue-500" />
+                    Products without UPC → <strong>Components</strong> (Item Inventory)
+                  </li>
+                </ul>
+                {importShopifyProductsMutation.isPending && (
+                  <div className="mt-3">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Importing {importProgress.current} of {importProgress.total}...
+                    </div>
+                    <div className="w-full bg-muted-foreground/20 rounded-full h-2 mt-2">
+                      <div 
+                        className="bg-primary h-2 rounded-full transition-all"
+                        style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setShowImportPrompt(false)}
+                disabled={importShopifyProductsMutation.isPending}
+                data-testid="button-cancel-import"
+              >
+                Cancel
+              </Button>
+              <Button 
+                size="sm"
+                onClick={() => importShopifyProductsMutation.mutate(unmappedShopifyVariants)}
+                disabled={importShopifyProductsMutation.isPending}
+                data-testid="button-confirm-import"
+              >
+                {importShopifyProductsMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Download className="mr-2 h-4 w-4" />
+                    Yes, Import All
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <div className="flex justify-between gap-2 pt-4 border-t">
           <Button variant="outline" onClick={onClose} data-testid="button-close-sku-wizard">
             {totalPendingChanges > 0 ? "Close (Discard Changes)" : "Close"}
           </Button>
+          
+          {source === "shopify" && onCompleteSync && (
+            <Button 
+              onClick={handleCompleteSync}
+              data-testid="button-complete-sync"
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Complete Sync
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

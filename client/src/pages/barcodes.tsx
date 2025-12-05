@@ -1428,11 +1428,31 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
 
 function BarcodeForm({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
+  const [mode, setMode] = useState<"create" | "assign">("assign");
+  const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [productKind, setProductKind] = useState<"FINISHED" | "RAW">("RAW");
   const [name, setName] = useState("");
   const [sku, setSku] = useState("");
   const [barcodeValue, setBarcodeValue] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+
+  const { data: allItems = [] } = useQuery<any[]>({
+    queryKey: ["/api/items"],
+  });
+
+  const productsWithoutBarcodes = allItems.filter(
+    (item: any) => !item.barcodeValue && !item.barcode
+  );
+
+  const handleProductSelect = (productId: string) => {
+    setSelectedProductId(productId);
+    const product = allItems.find((p: any) => p.id === productId);
+    if (product) {
+      setName(product.name);
+      setSku(product.sku);
+      setProductKind(product.type === "finished_product" ? "FINISHED" : "RAW");
+    }
+  };
 
   const autoGenerateMutation = useMutation({
     mutationFn: async () => {
@@ -1456,6 +1476,38 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
     onError: (error: any) => {
       toast({
         title: "Generation Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const assignBarcodeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PATCH", `/api/items/${selectedProductId}`, {
+        barcodeValue,
+        barcodeFormat: "CODE128",
+        barcodeUsage: productKind === "FINISHED" ? "EXTERNAL_GS1" : "INTERNAL_STOCK",
+        barcodeSource: "MANUAL",
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to assign barcode");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/barcodes"] });
+      toast({
+        title: "Barcode Assigned",
+        description: `Barcode assigned to ${name}`,
+      });
+      onClose();
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
         description: error.message,
         variant: "destructive",
       });
@@ -1523,102 +1575,192 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !sku) {
-      toast({
-        title: "Validation Error",
-        description: "Name and SKU are required",
-        variant: "destructive",
-      });
-      return;
+    
+    if (mode === "assign") {
+      if (!selectedProductId) {
+        toast({
+          title: "Validation Error",
+          description: "Please select a product to assign a barcode to",
+          variant: "destructive",
+        });
+        return;
+      }
+      if (!barcodeValue) {
+        toast({
+          title: "Validation Error",
+          description: "Please generate or enter a barcode value",
+          variant: "destructive",
+        });
+        return;
+      }
+      assignBarcodeMutation.mutate();
+    } else {
+      if (!name || !sku) {
+        toast({
+          title: "Validation Error",
+          description: "Name and SKU are required",
+          variant: "destructive",
+        });
+        return;
+      }
+      createItemMutation.mutate();
     }
-    createItemMutation.mutate();
   };
+
+  const isPending = mode === "assign" 
+    ? assignBarcodeMutation.isPending 
+    : createItemMutation.isPending;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="product-kind">Product Type</Label>
-        <Select value={productKind} onValueChange={(v: any) => setProductKind(v)}>
-          <SelectTrigger id="product-kind" data-testid="select-product-kind">
+        <Label>Mode</Label>
+        <Select value={mode} onValueChange={(v: "create" | "assign") => {
+          setMode(v);
+          setSelectedProductId("");
+          setName("");
+          setSku("");
+          setBarcodeValue("");
+        }}>
+          <SelectTrigger data-testid="select-barcode-mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="FINISHED">Finished Product (GS1/GTIN-12)</SelectItem>
-            <SelectItem value="RAW">Raw Inventory (Internal Code)</SelectItem>
+            <SelectItem value="assign">Assign to Existing Product</SelectItem>
+            <SelectItem value="create">Create New Product</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          {productKind === "FINISHED" 
-            ? "External GS1 barcode for finished products" 
-            : "Internal stock code for raw materials"}
+          {mode === "assign" 
+            ? "Select an existing product that doesn't have a barcode yet" 
+            : "Create a brand new product with a barcode"}
         </p>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="name">Name *</Label>
-        <Input
-          id="name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., Sticker Bur Roller"
-          data-testid="input-item-name"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="sku">SKU *</Label>
-        <div className="flex gap-2">
-          <Input
-            id="sku"
-            value={sku}
-            onChange={(e) => setSku(e.target.value)}
-            placeholder="e.g., SBR-001"
-            className="font-mono"
-            data-testid="input-item-sku"
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleAutoGenerateSku}
-            data-testid="button-auto-generate-sku"
-          >
-            Auto-Generate
-          </Button>
+      {mode === "assign" && (
+        <div className="space-y-2">
+          <Label htmlFor="select-product">Select Product (without barcode)</Label>
+          <Select value={selectedProductId} onValueChange={handleProductSelect}>
+            <SelectTrigger id="select-product" data-testid="select-existing-product">
+              <SelectValue placeholder="Choose a product..." />
+            </SelectTrigger>
+            <SelectContent>
+              {productsWithoutBarcodes.length === 0 ? (
+                <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                  All products already have barcodes
+                </div>
+              ) : (
+                productsWithoutBarcodes.map((product: any) => (
+                  <SelectItem key={product.id} value={product.id}>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">
+                        {product.type === "finished_product" ? "FIN" : "RAW"}
+                      </Badge>
+                      <span>{product.name}</span>
+                      <span className="text-muted-foreground font-mono text-xs">({product.sku})</span>
+                    </div>
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+          {productsWithoutBarcodes.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {productsWithoutBarcodes.length} product{productsWithoutBarcodes.length !== 1 ? 's' : ''} without barcodes
+            </p>
+          )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          {productKind === "FINISHED" 
-            ? "Format: FIN-XXX-123456" 
-            : "Format: RAW-XXX-123456"}
-        </p>
-      </div>
+      )}
 
-      <div className="space-y-2">
-        <Label htmlFor="barcode-value">Barcode Value</Label>
-        <div className="flex gap-2">
-          <Input
-            id="barcode-value"
-            value={barcodeValue}
-            onChange={(e) => setBarcodeValue(e.target.value)}
-            placeholder={productKind === "FINISHED" ? "Leave blank or auto-generate GS1" : "Leave blank or auto-generate RAW code"}
-            className="font-mono"
-            data-testid="input-barcode-value"
-          />
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={handleAutoGenerate}
-            disabled={autoGenerateMutation.isPending}
-            data-testid="button-auto-generate"
-          >
-            {autoGenerateMutation.isPending ? "Generating..." : "Auto-Generate"}
-          </Button>
+      {mode === "create" && (
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="product-kind">Product Type</Label>
+            <Select value={productKind} onValueChange={(v: any) => setProductKind(v)}>
+              <SelectTrigger id="product-kind" data-testid="select-product-kind">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="FINISHED">Finished Product (GS1/GTIN-12)</SelectItem>
+                <SelectItem value="RAW">Raw Inventory (Internal Code)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {productKind === "FINISHED" 
+                ? "External GS1 barcode for finished products" 
+                : "Internal stock code for raw materials"}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="name">Name *</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g., Sticker Bur Roller"
+              data-testid="input-item-name"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="sku">SKU *</Label>
+            <div className="flex gap-2">
+              <Input
+                id="sku"
+                value={sku}
+                onChange={(e) => setSku(e.target.value)}
+                placeholder="e.g., SBR-001"
+                className="font-mono"
+                data-testid="input-item-sku"
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleAutoGenerateSku}
+                data-testid="button-auto-generate-sku"
+              >
+                Auto-Generate
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {productKind === "FINISHED" 
+                ? "Format: FIN-XXX-123456" 
+                : "Format: RAW-XXX-123456"}
+            </p>
+          </div>
+        </>
+      )}
+
+      {(mode === "create" || selectedProductId) && (
+        <div className="space-y-2">
+          <Label htmlFor="barcode-value">Barcode Value {mode === "assign" && "*"}</Label>
+          <div className="flex gap-2">
+            <Input
+              id="barcode-value"
+              value={barcodeValue}
+              onChange={(e) => setBarcodeValue(e.target.value)}
+              placeholder={productKind === "FINISHED" ? "Leave blank or auto-generate GS1" : "Leave blank or auto-generate RAW code"}
+              className="font-mono"
+              data-testid="input-barcode-value"
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleAutoGenerate}
+              disabled={autoGenerateMutation.isPending}
+              data-testid="button-auto-generate"
+            >
+              {autoGenerateMutation.isPending ? "Generating..." : "Auto-Generate"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {productKind === "FINISHED" 
+              ? "12-digit GTIN with check digit (requires GS1 prefix configured)" 
+              : "Format: RAW-000001, RAW-000002, etc."}
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground">
-          {productKind === "FINISHED" 
-            ? "12-digit GTIN with check digit (requires GS1 prefix configured)" 
-            : "Format: RAW-000001, RAW-000002, etc."}
-        </p>
-      </div>
+      )}
 
       <div className="flex justify-end gap-2 pt-4">
         <Button
@@ -1631,10 +1773,12 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
         </Button>
         <Button
           type="submit"
-          disabled={createItemMutation.isPending}
+          disabled={isPending || (mode === "assign" && !selectedProductId)}
           data-testid="button-save-item"
         >
-          {createItemMutation.isPending ? "Creating..." : "Create Item"}
+          {isPending 
+            ? (mode === "assign" ? "Assigning..." : "Creating...") 
+            : (mode === "assign" ? "Assign Barcode" : "Create Item")}
         </Button>
       </div>
     </form>

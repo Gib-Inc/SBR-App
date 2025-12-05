@@ -1638,38 +1638,63 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
       </div>
 
       {mode === "assign" && (
-        <div className="space-y-2">
-          <Label htmlFor="select-product">Select Product (without barcode)</Label>
-          <Select value={selectedProductId} onValueChange={handleProductSelect}>
-            <SelectTrigger id="select-product" data-testid="select-existing-product">
-              <SelectValue placeholder="Choose a product..." />
-            </SelectTrigger>
-            <SelectContent>
-              {productsWithoutBarcodes.length === 0 ? (
-                <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-                  All products already have barcodes
-                </div>
-              ) : (
-                productsWithoutBarcodes.map((product: any) => (
-                  <SelectItem key={product.id} value={product.id}>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        {product.type === "finished_product" ? "FIN" : "RAW"}
-                      </Badge>
-                      <span>{product.name}</span>
-                      <span className="text-muted-foreground font-mono text-xs">({product.sku})</span>
-                    </div>
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          {productsWithoutBarcodes.length > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {productsWithoutBarcodes.length} product{productsWithoutBarcodes.length !== 1 ? 's' : ''} without barcodes
-            </p>
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="select-product">Select Product (without barcode)</Label>
+            <Select value={selectedProductId} onValueChange={handleProductSelect}>
+              <SelectTrigger id="select-product" data-testid="select-existing-product">
+                <SelectValue placeholder="Choose a product..." />
+              </SelectTrigger>
+              <SelectContent>
+                {productsWithoutBarcodes.length === 0 ? (
+                  <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                    All products already have barcodes
+                  </div>
+                ) : (
+                  productsWithoutBarcodes.map((product: any) => (
+                    <SelectItem key={product.id} value={product.id}>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          {product.type === "finished_product" ? "FIN" : "RAW"}
+                        </Badge>
+                        <span>{product.name}</span>
+                        <span className="text-muted-foreground font-mono text-xs">({product.sku})</span>
+                      </div>
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            {productsWithoutBarcodes.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {productsWithoutBarcodes.length} product{productsWithoutBarcodes.length !== 1 ? 's' : ''} without barcodes
+              </p>
+            )}
+          </div>
+
+          {selectedProductId && (
+            <div className="space-y-2">
+              <Label>Barcode Format</Label>
+              <Select value={productKind} onValueChange={(v: "FINISHED" | "RAW") => {
+                setProductKind(v);
+                setBarcodeValue("");
+              }}>
+                <SelectTrigger data-testid="select-barcode-format">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="FINISHED">GS1 (Finished Product UPC)</SelectItem>
+                  <SelectItem value="RAW">Internal Code (Item Inventory)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {productKind === "FINISHED" 
+                  ? "12-digit GS1/UPC for retail scanning" 
+                  : "Internal warehouse code (RAW-000001 format)"}
+              </p>
+            </div>
           )}
-        </div>
+        </>
       )}
 
       {mode === "create" && (

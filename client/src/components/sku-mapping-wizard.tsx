@@ -731,8 +731,8 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
                         <div className="min-w-0 overflow-hidden">
                           <div className="font-medium truncate flex items-center gap-2">
                             <span 
-                              className={`h-2 w-2 rounded-full flex-shrink-0 ${item.type === "finished_product" ? "bg-green-500" : "bg-blue-500"}`}
-                              title={item.type === "finished_product" ? "Finished Product" : "Item Inventory"}
+                              className={`h-2 w-2 rounded-full flex-shrink-0 ${item.upc ? "bg-green-500" : "bg-blue-500"}`}
+                              title={item.upc ? "Finished Product (has UPC)" : "Item Inventory (no UPC)"}
                             />
                             {item.name}
                           </div>

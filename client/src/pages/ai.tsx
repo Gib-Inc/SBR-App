@@ -3803,7 +3803,8 @@ interface AuditLogEntry {
   source: string | null;
   status: string | null;
   description: string | null;
-  metadata: Record<string, any> | null;
+  details: Record<string, any> | null;
+  metadata?: Record<string, any> | null; // Legacy field for backward compatibility
   performedByUserId: string | null;
   createdAt: string;
 }
@@ -3816,6 +3817,149 @@ interface LogsResponse {
     pageSize: number;
     totalPages: number;
   };
+}
+
+interface SyncedRecord {
+  id: string;
+  orderNumber?: string;
+  customerName?: string;
+  status?: string;
+  totalAmount?: number;
+  currency?: string;
+  itemCount?: number;
+  syncAction?: 'created' | 'updated' | 'skipped';
+  syncReason?: string;
+}
+
+function SyncedRecordsTable({ records }: { records: SyncedRecord[] }) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterAction, setFilterAction] = useState<string>("all");
+  
+  const filteredRecords = records.filter(record => {
+    const matchesSearch = !searchTerm || 
+      record.orderNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      record.customerName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      record.id?.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesAction = filterAction === "all" || record.syncAction === filterAction;
+    
+    return matchesSearch && matchesAction;
+  });
+  
+  const createdCount = records.filter(r => r.syncAction === 'created').length;
+  const updatedCount = records.filter(r => r.syncAction === 'updated').length;
+  const skippedCount = records.filter(r => r.syncAction === 'skipped').length;
+  
+  const getActionBadge = (action?: string) => {
+    switch (action) {
+      case 'created':
+        return <Badge className="bg-green-500/10 text-green-600 hover:bg-green-500/20">Created</Badge>;
+      case 'updated':
+        return <Badge className="bg-blue-500/10 text-blue-600 hover:bg-blue-500/20">Updated</Badge>;
+      case 'skipped':
+        return <Badge className="bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20">Skipped</Badge>;
+      default:
+        return <Badge variant="outline">Unknown</Badge>;
+    }
+  };
+  
+  const formatCurrency = (amount?: number, currency?: string) => {
+    if (amount === undefined || amount === null) return "—";
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency || 'USD',
+    }).format(amount);
+  };
+  
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">Synced Records ({records.length} total)</p>
+        <div className="flex items-center gap-2">
+          <Badge className="bg-green-500/10 text-green-600">{createdCount} created</Badge>
+          <Badge className="bg-blue-500/10 text-blue-600">{updatedCount} updated</Badge>
+          {skippedCount > 0 && (
+            <Badge className="bg-yellow-500/10 text-yellow-600">{skippedCount} skipped</Badge>
+          )}
+        </div>
+      </div>
+      
+      <div className="flex items-center gap-2">
+        <Input
+          placeholder="Search by order number or customer..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="flex-1 h-8 text-sm"
+          data-testid="input-sync-records-search"
+        />
+        <Select value={filterAction} onValueChange={setFilterAction}>
+          <SelectTrigger className="w-32 h-8 text-sm" data-testid="select-sync-action-filter">
+            <SelectValue placeholder="Filter" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Actions</SelectItem>
+            <SelectItem value="created">Created</SelectItem>
+            <SelectItem value="updated">Updated</SelectItem>
+            <SelectItem value="skipped">Skipped</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      
+      <ScrollArea className="h-[300px] border rounded-lg">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-muted/90 backdrop-blur-sm">
+            <tr className="border-b">
+              <th className="text-left p-2 font-medium">Order #</th>
+              <th className="text-left p-2 font-medium">Customer</th>
+              <th className="text-left p-2 font-medium">Status</th>
+              <th className="text-right p-2 font-medium">Amount</th>
+              <th className="text-center p-2 font-medium">Items</th>
+              <th className="text-center p-2 font-medium">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRecords.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center p-4 text-muted-foreground">
+                  No records match the filter criteria
+                </td>
+              </tr>
+            ) : (
+              filteredRecords.map((record, index) => (
+                <tr 
+                  key={`${record.id}-${index}`} 
+                  className="border-b hover:bg-muted/50"
+                  data-testid={`row-sync-record-${index}`}
+                >
+                  <td className="p-2 font-mono text-xs">{record.orderNumber || record.id}</td>
+                  <td className="p-2 max-w-[150px] truncate" title={record.customerName}>
+                    {record.customerName || "—"}
+                  </td>
+                  <td className="p-2">
+                    {record.status ? (
+                      <Badge variant="outline" className="text-xs">{record.status}</Badge>
+                    ) : "—"}
+                  </td>
+                  <td className="p-2 text-right font-mono text-xs">
+                    {formatCurrency(record.totalAmount, record.currency)}
+                  </td>
+                  <td className="p-2 text-center">{record.itemCount ?? "—"}</td>
+                  <td className="p-2 text-center">
+                    {getActionBadge(record.syncAction)}
+                    {record.syncReason && (
+                      <p className="text-xs text-muted-foreground mt-1 max-w-[100px] truncate" title={record.syncReason}>
+                        {record.syncReason}
+                      </p>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </ScrollArea>
+    </div>
+  );
 }
 
 function LogsTab() {
@@ -4167,7 +4311,7 @@ function LogsTab() {
       
       {/* Log Detail Dialog */}
       <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {selectedLog && getEventIcon(selectedLog.eventType)}
@@ -4213,12 +4357,55 @@ function LogsTab() {
                 </div>
               )}
               
-              {selectedLog.metadata && Object.keys(selectedLog.metadata).length > 0 && (
+              {/* Synced Records Table for INTEGRATION_SYNC logs */}
+              {selectedLog.eventType === "INTEGRATION_SYNC" && 
+               selectedLog.details?.syncedRecords && 
+               Array.isArray(selectedLog.details.syncedRecords) && 
+               selectedLog.details.syncedRecords.length > 0 && (
+                <SyncedRecordsTable records={selectedLog.details.syncedRecords} />
+              )}
+              
+              {/* Summary stats for sync logs without detailed records */}
+              {selectedLog.eventType === "INTEGRATION_SYNC" && 
+               selectedLog.details && 
+               !selectedLog.details.syncedRecords && (
+                <div className="grid grid-cols-4 gap-3">
+                  {selectedLog.details.recordsProcessed !== undefined && (
+                    <div className="p-3 bg-muted rounded-lg text-center">
+                      <p className="text-2xl font-bold">{selectedLog.details.recordsProcessed}</p>
+                      <p className="text-xs text-muted-foreground">Processed</p>
+                    </div>
+                  )}
+                  {selectedLog.details.recordsCreated !== undefined && (
+                    <div className="p-3 bg-green-500/10 rounded-lg text-center">
+                      <p className="text-2xl font-bold text-green-600">{selectedLog.details.recordsCreated}</p>
+                      <p className="text-xs text-muted-foreground">Created</p>
+                    </div>
+                  )}
+                  {selectedLog.details.recordsUpdated !== undefined && (
+                    <div className="p-3 bg-blue-500/10 rounded-lg text-center">
+                      <p className="text-2xl font-bold text-blue-600">{selectedLog.details.recordsUpdated}</p>
+                      <p className="text-xs text-muted-foreground">Updated</p>
+                    </div>
+                  )}
+                  {selectedLog.details.recordsSkipped !== undefined && (
+                    <div className="p-3 bg-yellow-500/10 rounded-lg text-center">
+                      <p className="text-2xl font-bold text-yellow-600">{selectedLog.details.recordsSkipped}</p>
+                      <p className="text-xs text-muted-foreground">Skipped</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Show raw details for non-sync logs */}
+              {selectedLog.eventType !== "INTEGRATION_SYNC" && 
+               selectedLog.details && 
+               Object.keys(selectedLog.details).length > 0 && (
                 <div>
-                  <p className="text-sm text-muted-foreground mb-1">Metadata</p>
+                  <p className="text-sm text-muted-foreground mb-1">Details</p>
                   <ScrollArea className="h-[200px]">
                     <pre className="p-3 bg-muted rounded-lg text-xs font-mono overflow-x-auto">
-                      {JSON.stringify(selectedLog.metadata, null, 2)}
+                      {JSON.stringify(selectedLog.details, null, 2)}
                     </pre>
                   </ScrollArea>
                 </div>

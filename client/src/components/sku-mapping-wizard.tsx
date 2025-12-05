@@ -460,12 +460,13 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     },
   });
 
-  // Handle complete sync
+  // Handle complete sync - callback handles closing, so we just call it
   const handleCompleteSync = () => {
     if (onCompleteSync) {
       onCompleteSync();
+    } else {
+      onClose();
     }
-    onClose();
   };
 
   // === EXTENSIV TAB LOGIC ===

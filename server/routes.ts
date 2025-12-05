@@ -13953,5 +13953,33 @@ Generate only the email body text, no subject line.`;
     console.error("[Server] Failed to initialize Shopify Reconciliation Scheduler:", error);
   });
   
+  // Startup webhook auto-registration for Shopify (non-blocking)
+  (async () => {
+    try {
+      const users = await storage.getAllUsers();
+      if (users.length === 0) {
+        console.log("[Server] Shopify Webhooks: No users yet, skipping webhook registration");
+        return;
+      }
+      
+      const config = await storage.getIntegrationConfig(users[0].id, 'SHOPIFY');
+      const shopDomain = (config?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = config?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      
+      if (!shopDomain || !accessToken) {
+        console.log("[Server] Shopify Webhooks: No credentials configured, skipping auto-registration");
+        return;
+      }
+      
+      const apiVersion = (config?.config as any)?.apiVersion || '2024-01';
+      const { ensureWebhooks } = await import('./shopify/webhook-admin');
+      const result = await ensureWebhooks(shopDomain, accessToken, apiVersion);
+      
+      console.log(`[Server] Shopify Webhooks: Auto-registration completed - ${result.registered} registered, ${result.existing} existing, ${result.failed} failed`);
+    } catch (error: any) {
+      console.warn("[Server] Shopify Webhooks: Auto-registration failed (non-blocking):", error.message);
+    }
+  })();
+  
   return httpServer;
 }

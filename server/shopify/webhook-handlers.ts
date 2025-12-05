@@ -6,6 +6,7 @@
 import { ShopifyWebhookPayload, ShopifyWebhookContext } from './webhooks-config';
 import { storage } from '../storage';
 import { logService } from '../services/log-service';
+import { InventoryMovement } from '../services/inventory-movement';
 
 export interface WebhookHandlerResult {
   success: boolean;
@@ -87,6 +88,8 @@ export async function handleOrderCreated(
 
     console.log(`[Shopify Webhook] Created sales order ${salesOrder.id} for Shopify order ${orderName}`);
 
+    const inventoryMovement = new InventoryMovement(storage);
+    
     for (const lineItem of lineItemsWithProducts) {
       if (lineItem.productId) {
         await storage.createSalesOrderLine({
@@ -96,8 +99,51 @@ export async function handleOrderCreated(
           qtyOrdered: lineItem.qtyOrdered,
           unitPrice: lineItem.unitPrice,
         });
+        
+        const item = await storage.getItem(lineItem.productId);
+        if (item) {
+          const pivotQty = item.pivotQty ?? 0;
+          const qtyToAllocate = Math.min(lineItem.qtyOrdered, pivotQty);
+          const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
+          
+          if (qtyToAllocate > 0) {
+            await inventoryMovement.apply({
+              eventType: 'SALE',
+              itemId: lineItem.productId,
+              quantity: -qtyToAllocate,
+              location: 'PIVOT',
+              notes: `Shopify order ${orderName}`,
+              userId,
+              referenceId: salesOrder.id,
+              referenceType: 'sales_order',
+            });
+            
+            console.log(`[Shopify Webhook] Allocated ${qtyToAllocate} of ${lineItem.sku} from Pivot for order ${orderName}`);
+          }
+          
+          if (qtyBackordered > 0) {
+            console.warn(`[Shopify Webhook] Backorder: ${qtyBackordered} of ${lineItem.sku} for order ${orderName}`);
+            
+            await logService.logShopifyBackorder({
+              orderId: salesOrder.id,
+              orderNumber: orderName,
+              itemId: lineItem.productId,
+              sku: lineItem.sku,
+              qtyOrdered: lineItem.qtyOrdered,
+              qtyAllocated: qtyToAllocate,
+              qtyBackordered,
+              availableStock: pivotQty,
+            });
+          }
+        }
       } else {
         console.warn(`[Shopify Webhook] Skipping line item - no product found for SKU: ${lineItem.sku}`);
+        
+        await logService.logSkuMismatch({
+          source: 'SHOPIFY',
+          orderId: salesOrder.id,
+          externalSku: lineItem.sku,
+        });
       }
     }
 

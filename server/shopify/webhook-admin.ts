@@ -116,16 +116,21 @@ export async function deleteWebhook(userId: string, webhookId: number): Promise<
 /**
  * Ensure all configured webhook topics are registered in Shopify
  * This is the main function called on server startup
+ * 
+ * @param shopDomain - Shopify store domain
+ * @param accessToken - Shopify access token
+ * @param apiVersion - Shopify API version (defaults to 2024-01)
  */
-export async function ensureWebhooks(userId: string): Promise<{
+export async function ensureWebhooks(
+  shopDomain: string,
+  accessToken: string,
+  apiVersion: string = '2024-01'
+): Promise<{
   success: boolean;
+  registered: number;
+  existing: number;
+  failed: number;
   results: WebhookRegistrationResult[];
-  summary: {
-    total: number;
-    created: number;
-    exists: number;
-    failed: number;
-  };
 }> {
   const address = getShopifyWebhookUrl();
   
@@ -133,8 +138,10 @@ export async function ensureWebhooks(userId: string): Promise<{
     console.error('[Webhook Admin] No webhook URL configured. Set SHOPIFY_WEBHOOK_URL or REPLIT_DEV_DOMAIN.');
     return {
       success: false,
+      registered: 0,
+      existing: 0,
+      failed: SHOPIFY_WEBHOOK_TOPICS.length,
       results: [],
-      summary: { total: SHOPIFY_WEBHOOK_TOPICS.length, created: 0, exists: 0, failed: SHOPIFY_WEBHOOK_TOPICS.length },
     };
   }
 
@@ -146,45 +153,70 @@ export async function ensureWebhooks(userId: string): Promise<{
   let exists = 0;
   let failed = 0;
 
-  const existingWebhooks = await fetchExistingWebhooks(userId);
-  const existingTopics = new Map<string, ExistingWebhook>();
-  
-  for (const webhook of existingWebhooks) {
-    existingTopics.set(webhook.topic, webhook);
-  }
-
-  console.log(`[Webhook Admin] Found ${existingWebhooks.length} existing webhooks`);
-
-  for (const topic of SHOPIFY_WEBHOOK_TOPICS) {
-    const existing = existingTopics.get(topic);
+  try {
+    const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+    const existingWebhooks = await client.listWebhooks();
+    const existingTopics = new Map<string, ExistingWebhook>();
     
-    if (existing) {
-      if (existing.address === address) {
-        results.push({ topic, success: true, webhookId: existing.id, action: 'exists' });
-        exists++;
-        continue;
-      } else {
-        console.log(`[Webhook Admin] Webhook ${topic} exists but with different URL, updating...`);
-        await deleteWebhook(userId, existing.id);
-      }
+    for (const webhook of existingWebhooks) {
+      existingTopics.set(webhook.topic, webhook);
     }
 
-    const result = await createWebhook(userId, topic, address);
-    results.push(result);
-    
-    if (result.action === 'created') created++;
-    else if (result.action === 'exists') exists++;
-    else if (result.action === 'failed') failed++;
+    console.log(`[Webhook Admin] Found ${existingWebhooks.length} existing webhooks`);
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    for (const topic of SHOPIFY_WEBHOOK_TOPICS) {
+      const existing = existingTopics.get(topic);
+      
+      if (existing) {
+        if (existing.address === address) {
+          results.push({ topic, success: true, webhookId: existing.id, action: 'exists' });
+          exists++;
+          continue;
+        } else {
+          console.log(`[Webhook Admin] Webhook ${topic} exists but with different URL, updating...`);
+          try {
+            await client.deleteWebhook(existing.id);
+          } catch (e: any) {
+            console.warn(`[Webhook Admin] Failed to delete old webhook:`, e.message);
+          }
+        }
+      }
+
+      try {
+        const webhook = await client.registerWebhook(topic, address);
+        results.push({ topic, success: true, webhookId: webhook.id, action: 'created' });
+        created++;
+      } catch (error: any) {
+        if (error.message?.includes('422') && error.message?.includes('already exists')) {
+          results.push({ topic, success: true, action: 'exists' });
+          exists++;
+        } else {
+          results.push({ topic, success: false, error: error.message, action: 'failed' });
+          failed++;
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } catch (error: any) {
+    console.error('[Webhook Admin] Error during webhook registration:', error.message);
+    return {
+      success: false,
+      registered: 0,
+      existing: 0,
+      failed: SHOPIFY_WEBHOOK_TOPICS.length,
+      results: [],
+    };
   }
 
   console.log(`[Webhook Admin] Complete: ${created} created, ${exists} existing, ${failed} failed`);
 
   return {
     success: failed === 0,
+    registered: created,
+    existing: exists,
+    failed,
     results,
-    summary: { total: SHOPIFY_WEBHOOK_TOPICS.length, created, exists, failed },
   };
 }
 

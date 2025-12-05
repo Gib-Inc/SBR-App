@@ -1,0 +1,125 @@
+You are editing this Replit project for Sticker Burr Roller.
+
+Goal:
+Make the backend a proper Shopify webhook hub so it can receive LIVE data for all important Shopify events, not just the 4 existing order webhooks. I will manually paste the final webhook URL into Shopify, but I want the app to (a) expose a single /api/webhooks/shopify endpoint that can handle many topics and (b) have a helper that can auto-create any missing webhook subscriptions in Shopify via the Admin API.
+
+Context / assumptions:
+- This is a Node + TypeScript backend using Express (adjust if you detect a different framework).
+- There is already working code handling at least these topics:
+  - orders/create
+  - orders/updated
+  - orders/cancelled
+  - orders/fulfilled
+- Keep all existing functionality, just refactor and extend it.
+- Use environment variables for secrets and configuration — do NOT hard-code secrets.
+
+1) Central configuration
+Create a Shopify webhook config module, e.g. src/shopify/webhooksConfig.ts, that exports:
+
+- A constant SHOPIFY_WEBHOOK_TOPICS: string[] with at least these topics:
+
+  const SHOPIFY_WEBHOOK_TOPICS = [
+    "carts/create",
+    "orders/create",
+    "orders/updated",
+    "orders/cancelled",
+    "orders/delete",
+    "orders/edited",
+    "orders/fulfilled",
+    "orders/paid",
+    "orders/partially_fulfilled",
+    "orders/risk_assessment_changed",
+    "refunds/create",
+    "products/create",
+    "products/update",
+    "products/delete",
+    "inventory_levels/update",
+    "fulfillments/create",
+    "fulfillments/update",
+    "fulfillment_orders/cancelled",
+    "fulfillment_orders/split",
+    "fulfillment_orders/merged",
+    "fulfillment_orders/rescheduled"
+  ];
+
+- A function getShopifyWebhookUrl() that returns the public webhook URL.
+  - For now, read it from an env var: process.env.SHOPIFY_WEBHOOK_URL.
+  - I will set SHOPIFY_WEBHOOK_URL in the Replit Secrets UI to the real public URL that Replit gives me.
+- Types for a generic ShopifyWebhookPayload (use “any” internally if needed, but type the function signatures cleanly).
+
+2) Webhook handler endpoint
+Update or create the Express route at POST /api/webhooks/shopify:
+
+- Use express.raw({ type: "application/json" }) middleware (important for HMAC).
+- Read headers:
+  - x-shopify-topic
+  - x-shopify-hmac-sha256
+  - x-shopify-shop-domain
+- Read the raw body as a Buffer and verify the HMAC using the shared secret in env:
+  - process.env.SHOPIFY_WEBHOOK_SECRET
+  - Implement a helper verifyShopifyHmac(rawBody: Buffer, hmacHeader: string | undefined, secret: string): boolean using crypto.createHmac("sha256", secret).update(rawBody).digest("base64").
+- If HMAC fails, return 401 and do NOT process.
+- If HMAC is valid:
+  - Parse JSON body.
+  - Switch on the topic string.
+  - For each topic in SHOPIFY_WEBHOOK_TOPICS, create a separate handler function stub in a module like src/shopify/webhookHandlers.ts, for example:
+      handleOrderCreated(payload, shopDomain)
+      handleOrderUpdated(...)
+      handleRefundCreated(...)
+      handleInventoryLevelUpdated(...)
+      handleProductCreated(...)
+      etc.
+  - For now, these handlers can:
+      - Log the topic + id + basic info.
+      - TODO comments for where I will plug in DB logic / inventory logic later.
+- Make sure the handler always returns 200 "ok" quickly after queuing/processing. Do not block for a long time.
+
+3) “Ensure webhooks” helper
+Create a helper in e.g. src/shopify/webhookAdmin.ts that can make sure all configured topics exist in Shopify:
+
+- Read configuration from env:
+  - SHOPIFY_STORE_DOMAIN  (e.g. "stickerburrroller.myshopify.com")
+  - SHOPIFY_ACCESS_TOKEN  (private app or custom app Admin API token with webhook + read_orders + read_products + read_inventory scopes as needed)
+- Implement:
+
+  async function fetchExistingWebhooks(): Promise<Webhook[]> {
+    // GET https://{SHOPIFY_STORE_DOMAIN}/admin/api/2025-10/webhooks.json
+  }
+
+  async function createWebhook(topic: string, address: string): Promise<void> {
+    // POST https://{SHOPIFY_STORE_DOMAIN}/admin/api/2025-10/webhooks.json
+    // body: { webhook: { topic, address, format: "json" } }
+  }
+
+  async function ensureWebhooks(): Promise<void> {
+    const address = getShopifyWebhookUrl();
+    const existing = await fetchExistingWebhooks();
+    const existingTopics = new Set(existing.map(w => w.topic));
+    for (const topic of SHOPIFY_WEBHOOK_TOPICS) {
+      if (!existingTopics.has(topic)) {
+        await createWebhook(topic, address);
+      }
+    }
+  }
+
+- Add basic error handling and logging (console.warn / console.error).
+- Export ensureWebhooks so it can be called from the main server bootstrap.
+
+4) Server bootstrap hook
+In the main server startup file (e.g. src/index.ts or src/server.ts):
+
+- After environment variables are loaded and before the server starts listening, call ensureWebhooks() in a fire-and-forget way:
+    ensureWebhooks().catch(err => console.error("Failed to ensure Shopify webhooks", err));
+- Do NOT crash the server if webhook setup fails; just log the error.
+
+5) Optional: simple debug endpoint
+Add a GET /api/webhooks/shopify/debug route that:
+- Calls fetchExistingWebhooks() and returns a JSON list of current webhook topics and their addresses.
+- Protect this route with a simple check (e.g. require a shared secret header or only allow in non-production environments) so it’s not publicly exposed in production.
+
+Keep all code idiomatic, strongly typed, and organized into small modules. Do not remove or change any existing business logic; only refactor it into the new structure and add the missing topic handlers and “ensure webhooks” helper.
+
+At the end, print in the Replit console:
+- The value of getShopifyWebhookUrl()
+- The list of topics in SHOPIFY_WEBHOOK_TOPICS
+so I can confirm and then paste SHOPIFY_WEBHOOK_URL into Shopify.

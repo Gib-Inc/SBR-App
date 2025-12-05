@@ -234,6 +234,91 @@ function calculateTrend(data: any[], field?: string): { direction: string; value
   };
 }
 
+// Calculate year-over-year trend for a widget (same day last year comparison)
+async function calculateWidgetTrend(widget: any, storage: any): Promise<{ direction: string; value: number; label: string } | null> {
+  try {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    
+    // Same day last year
+    const lastYearSameDay = new Date(today);
+    lastYearSameDay.setFullYear(lastYearSameDay.getFullYear() - 1);
+    const lastYearNextDay = new Date(lastYearSameDay.getTime() + 24 * 60 * 60 * 1000);
+    
+    // Get data for the widget's data source
+    let allData: any[] = [];
+    switch (widget.dataSource) {
+      case "ITEMS":
+        allData = await storage.getAllItems();
+        break;
+      case "SALES_ORDERS":
+        allData = await storage.getAllSalesOrders();
+        break;
+      case "PURCHASE_ORDERS":
+        allData = await storage.getAllPurchaseOrders();
+        break;
+      case "RETURNS":
+        allData = await storage.getAllReturnRequests();
+        break;
+      case "SUPPLIERS":
+        allData = await storage.getAllSuppliers();
+        break;
+      case "INVENTORY_TRANSACTIONS":
+        allData = await storage.getAllInventoryTransactions();
+        break;
+      default:
+        return null;
+    }
+    
+    // Filter data for today
+    const todayData = allData.filter((item: any) => {
+      const itemDate = new Date(item.createdAt || item.orderDate || item.date);
+      return itemDate >= today && itemDate < tomorrow;
+    });
+    
+    // Filter data for same day last year
+    const lastYearData = allData.filter((item: any) => {
+      const itemDate = new Date(item.createdAt || item.orderDate || item.date);
+      return itemDate >= lastYearSameDay && itemDate < lastYearNextDay;
+    });
+    
+    // Calculate values based on widget config
+    const config = widget.config as any || {};
+    const metric = config.metric || "count";
+    const field = config.field;
+    
+    const getValue = (items: any[]) => {
+      if (metric === "count" || !field) return items.length;
+      if (metric === "sum" && field) {
+        return items.reduce((acc: number, item: any) => acc + (Number(item[field]) || 0), 0);
+      }
+      return items.length;
+    };
+    
+    const currentValue = getValue(todayData);
+    const lastYearValue = getValue(lastYearData);
+    
+    if (lastYearValue === 0 && currentValue === 0) {
+      return { direction: "stable", value: 0, label: "vs last year" };
+    }
+    
+    if (lastYearValue === 0) {
+      return { direction: "up", value: 100, label: "vs last year" };
+    }
+    
+    const percentChange = ((currentValue - lastYearValue) / lastYearValue) * 100;
+    return {
+      direction: percentChange > 0 ? "up" : percentChange < 0 ? "down" : "stable",
+      value: Math.abs(Math.round(percentChange)),
+      label: "vs last year same day",
+    };
+  } catch (error) {
+    console.error("[Reports] Error calculating widget trend:", error);
+    return null;
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   // AUTHENTICATION
@@ -13164,6 +13249,89 @@ Generate only the email body text, no subject line.`;
   // ============================================================================
   // CUSTOM DASHBOARDS & WIDGETS API
   // ============================================================================
+
+  // Get or create user's default report widgets with trend data
+  app.get("/api/report-widgets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      // Get or create the user's default dashboard
+      let dashboards = await storage.getCustomDashboardsByUserId(userId);
+      let defaultDashboard = dashboards.find(d => d.isDefault);
+      
+      if (!defaultDashboard) {
+        // Create a default dashboard if none exists
+        defaultDashboard = await storage.createCustomDashboard({
+          userId,
+          name: "My Reports",
+          description: "Default report widgets",
+          isDefault: true,
+        });
+      }
+      
+      // Get widgets for the default dashboard
+      const widgets = await storage.getWidgetsByDashboardId(defaultDashboard.id);
+      
+      // Calculate trends for each widget
+      const widgetsWithTrends = await Promise.all(widgets.map(async (widget) => {
+        const trend = await calculateWidgetTrend(widget, storage);
+        return { ...widget, trend };
+      }));
+      
+      res.json({ 
+        dashboardId: defaultDashboard.id,
+        widgets: widgetsWithTrends 
+      });
+    } catch (error: any) {
+      console.error("[Reports] Error fetching report widgets:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch report widgets" });
+    }
+  });
+
+  // Add widget to user's default report
+  app.post("/api/report-widgets", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+      
+      // Get or create the user's default dashboard
+      let dashboards = await storage.getCustomDashboardsByUserId(userId);
+      let defaultDashboard = dashboards.find(d => d.isDefault);
+      
+      if (!defaultDashboard) {
+        defaultDashboard = await storage.createCustomDashboard({
+          userId,
+          name: "My Reports",
+          description: "Default report widgets",
+          isDefault: true,
+        });
+      }
+      
+      const { type, title, dataSource, config, position } = req.body;
+      if (!type || !title || !dataSource) {
+        return res.status(400).json({ error: "Widget type, title, and data source are required" });
+      }
+      
+      const widget = await storage.createDashboardWidget({
+        dashboardId: defaultDashboard.id,
+        type,
+        title,
+        dataSource,
+        config: config || {},
+        position: position || { x: 0, y: 0, w: 1, h: 1 },
+      });
+      
+      res.status(201).json(widget);
+    } catch (error: any) {
+      console.error("[Reports] Error adding report widget:", error);
+      res.status(500).json({ error: error.message || "Failed to add report widget" });
+    }
+  });
 
   // Get all dashboards for the current user
   app.get("/api/dashboards", requireAuth, async (req: Request, res: Response) => {

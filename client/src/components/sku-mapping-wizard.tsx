@@ -1229,34 +1229,65 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
               <div className="flex-1">
                 <p className="font-medium">Import {unmappedShopifyVariants.length} products from Shopify?</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  This will create new items in your inventory:
+                  Products will be created based on their UPC/barcode:
                 </p>
-                <ul className="text-sm text-muted-foreground mt-2 space-y-1">
-                  <li className="flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-green-500" />
-                    Products with UPC/barcode → <strong>Finished Products</strong> (BOM page)
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle className="h-4 w-4 text-blue-500" />
-                    Products without UPC → <strong>Components</strong> (Item Inventory)
-                  </li>
-                </ul>
-                {importShopifyProductsMutation.isPending && (
-                  <div className="mt-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Importing {importProgress.current} of {importProgress.total}...
-                    </div>
-                    <div className="w-full bg-muted-foreground/20 rounded-full h-2 mt-2">
-                      <div 
-                        className="bg-primary h-2 rounded-full transition-all"
-                        style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
+            
+            {/* Product list with classification badges */}
+            <ScrollArea className="h-[200px] border rounded-md bg-background">
+              <div className="p-2 space-y-2">
+                {unmappedShopifyVariants.map((variant) => {
+                  const hasUpc = !!variant.barcode;
+                  return (
+                    <div 
+                      key={variant.variantId} 
+                      className="flex items-center justify-between p-2 rounded border bg-card"
+                      data-testid={`import-item-${variant.variantId}`}
+                    >
+                      <div className="flex-1 min-w-0 mr-2">
+                        <p className="text-sm font-medium truncate">{variant.fullName}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          {variant.sku && (
+                            <span className="text-xs text-muted-foreground">SKU: {variant.sku}</span>
+                          )}
+                          {variant.barcode && (
+                            <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-600 border-purple-500/30">
+                              UPC: {variant.barcode}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <Badge 
+                        variant="outline" 
+                        className={hasUpc 
+                          ? "text-xs bg-green-500/10 text-green-600 border-green-500/30 whitespace-nowrap" 
+                          : "text-xs bg-blue-500/10 text-blue-600 border-blue-500/30 whitespace-nowrap"
+                        }
+                      >
+                        {hasUpc ? "Finished Product" : "Item Inventory"}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+
+            {importShopifyProductsMutation.isPending && (
+              <div className="mt-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Importing {importProgress.current} of {importProgress.total}...
+                </div>
+                <div className="w-full bg-muted-foreground/20 rounded-full h-2 mt-2">
+                  <div 
+                    className="bg-primary h-2 rounded-full transition-all"
+                    style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button 
                 variant="outline" 

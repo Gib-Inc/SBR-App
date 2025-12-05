@@ -395,14 +395,15 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
   }, [allShopifyVariants, shopifySearchQuery]);
 
   // Compute unmapped Shopify variants (products in Shopify not linked to any item)
+  // Check ALL items (both finished_product and component types) for shopifyVariantId
   const unmappedShopifyVariants = useMemo(() => {
     const linkedVariantIds = new Set(
-      finishedProducts
+      items
         .filter(item => item.shopifyVariantId)
         .map(item => item.shopifyVariantId)
     );
     return allShopifyVariants.filter(v => !linkedVariantIds.has(v.variantId));
-  }, [allShopifyVariants, finishedProducts]);
+  }, [allShopifyVariants, items]);
 
   // State for import modal
   const [showImportPrompt, setShowImportPrompt] = useState(false);

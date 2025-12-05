@@ -96,8 +96,19 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     queryKey: ["/api/items"],
   });
 
+  // De-duplicate items by ID to prevent React key warnings
+  const uniqueItems = useMemo(() => {
+    const itemMap = new Map<string, Item>();
+    for (const item of items) {
+      if (!itemMap.has(item.id)) {
+        itemMap.set(item.id, item);
+      }
+    }
+    return Array.from(itemMap.values());
+  }, [items]);
+
   // Show all items (finished products + components) for SKU mapping
-  const allMappableItems = items as Item[];
+  const allMappableItems = uniqueItems;
   // Keep finishedProducts for backward compatibility with other tabs
   const finishedProducts = allMappableItems.filter((item) => item.type === "finished_product");
 

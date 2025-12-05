@@ -665,6 +665,15 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
               <SiShopify className="h-3 w-3" />
               {shopifyProducts.totalVariants} Variants
             </Badge>
+            <div className="h-4 w-px bg-border mx-1" />
+            <Badge variant="outline" className="gap-1.5 text-xs">
+              <span className="h-2 w-2 rounded-full bg-green-500" />
+              Finished Product
+            </Badge>
+            <Badge variant="outline" className="gap-1.5 text-xs">
+              <span className="h-2 w-2 rounded-full bg-blue-500" />
+              Item Inventory
+            </Badge>
           </div>
           <div className="flex items-center gap-2">
             {suggestedCount > 0 && (
@@ -720,8 +729,14 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
                     <CardContent className="p-3">
                       <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 items-center">
                         <div className="min-w-0 overflow-hidden">
-                          <div className="font-medium truncate">{item.name}</div>
-                          <div className="text-sm text-muted-foreground font-mono flex items-center gap-2 overflow-hidden">
+                          <div className="font-medium truncate flex items-center gap-2">
+                            <span 
+                              className={`h-2 w-2 rounded-full flex-shrink-0 ${item.type === "finished_product" ? "bg-green-500" : "bg-blue-500"}`}
+                              title={item.type === "finished_product" ? "Finished Product" : "Item Inventory"}
+                            />
+                            {item.name}
+                          </div>
+                          <div className="text-sm text-muted-foreground font-mono flex items-center gap-2 overflow-hidden ml-4">
                             <span className="flex-shrink-0">{item.sku}</span>
                             {item.upc && <Badge variant="secondary" className="text-xs flex-shrink-0">UPC: {item.upc}</Badge>}
                           </div>

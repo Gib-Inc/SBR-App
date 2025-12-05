@@ -8,7 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink, ChevronDown } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -182,9 +183,18 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     },
   });
 
-  const orderWebhooks = webhooksData?.webhooks?.filter(w => 
-    w.topic.startsWith('orders/')
-  ) || [];
+  const allWebhooks = webhooksData?.webhooks || [];
+  
+  const webhooksByCategory = {
+    orders: allWebhooks.filter(w => w.topic.startsWith('orders/')),
+    carts: allWebhooks.filter(w => w.topic.startsWith('carts/')),
+    products: allWebhooks.filter(w => w.topic.startsWith('products/')),
+    inventory: allWebhooks.filter(w => w.topic.startsWith('inventory_levels/')),
+    fulfillments: allWebhooks.filter(w => w.topic.startsWith('fulfillments/')),
+    refunds: allWebhooks.filter(w => w.topic.startsWith('refunds/')),
+  };
+  
+  const orderWebhooks = webhooksByCategory.orders;
 
   // Initialize form fields when config loads
   useEffect(() => {
@@ -692,12 +702,12 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                   {config?.apiKey && (
                     <div className="space-y-3 pt-3 border-t">
                       {/* Alert for webhooks not configured */}
-                      {orderWebhooks.length === 0 && !webhooksLoading && (
+                      {allWebhooks.length === 0 && !webhooksLoading && (
                         <Alert className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950" data-testid="alert-webhooks-needed">
                           <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
                           <AlertDescription className="text-amber-800 dark:text-amber-200">
-                            <strong>Connect Shopify Webhooks</strong> to receive instant order notifications. 
-                            Without webhooks, orders will only sync when you manually trigger a sync.
+                            <strong>Connect Shopify Webhooks</strong> to receive instant notifications for orders, inventory, products, and more. 
+                            Without webhooks, data will only sync when you manually trigger a sync.
                           </AlertDescription>
                         </Alert>
                       )}
@@ -706,7 +716,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                         <div className="space-y-0.5">
                           <Label className="flex items-center gap-1.5">
                             <Webhook className="h-4 w-4" />
-                            Real-time Order Webhooks
+                            Real-time Webhooks
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
@@ -717,13 +727,13 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                             </Tooltip>
                           </Label>
                           <p className="text-xs text-muted-foreground">
-                            Receive instant order notifications instead of polling
+                            Receive instant notifications for orders, products, inventory, and more
                           </p>
                         </div>
-                        {orderWebhooks.length > 0 ? (
+                        {allWebhooks.length > 0 ? (
                           <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50 dark:text-green-400 dark:border-green-800 dark:bg-green-950" data-testid="badge-webhooks-active">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
-                            {orderWebhooks.length} Active
+                            {allWebhooks.length} Active
                           </Badge>
                         ) : (
                           <Badge variant="outline" className="text-muted-foreground" data-testid="badge-webhooks-inactive">
@@ -736,62 +746,72 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                         <div className="flex items-center justify-center py-2">
                           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                         </div>
-                      ) : orderWebhooks.length > 0 ? (
-                        <div className="space-y-2">
-                          {orderWebhooks.map(webhook => (
-                            <div key={webhook.id} className="p-2 rounded bg-muted/50 space-y-1.5" data-testid={`webhook-row-${webhook.id}`}>
-                              <div className="flex items-center justify-between">
-                                <span className="font-mono text-sm font-medium">{webhook.topic}</span>
-                                <div className="flex items-center gap-1">
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6"
-                                        onClick={() => testWebhookMutation.mutate(webhook.id)}
-                                        disabled={testWebhookMutation.isPending && testingWebhookId === webhook.id}
-                                        data-testid={`button-test-webhook-${webhook.id}`}
-                                      >
-                                        {testWebhookMutation.isPending && testingWebhookId === webhook.id ? (
-                                          <Loader2 className="h-3 w-3 animate-spin" />
-                                        ) : (
-                                          <Play className="h-3 w-3 text-green-600" />
-                                        )}
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Test Connection</TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6"
-                                        onClick={() => deleteWebhookMutation.mutate(webhook.id)}
-                                        disabled={deleteWebhookMutation.isPending}
-                                        data-testid={`button-delete-webhook-${webhook.id}`}
-                                      >
-                                        <Trash2 className="h-3 w-3 text-destructive" />
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Remove Webhook</TooltipContent>
-                                  </Tooltip>
+                      ) : allWebhooks.length > 0 ? (
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="w-full justify-between" data-testid="button-toggle-webhooks">
+                              <span className="text-xs text-muted-foreground">
+                                {webhooksByCategory.orders.length} orders, {webhooksByCategory.carts.length} carts, {webhooksByCategory.products.length} products, {webhooksByCategory.inventory.length} inventory, {webhooksByCategory.fulfillments.length} fulfillments, {webhooksByCategory.refunds.length} refunds
+                              </span>
+                              <ChevronDown className="h-4 w-4" />
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="space-y-2 pt-2">
+                            {allWebhooks.map(webhook => (
+                              <div key={webhook.id} className="p-2 rounded bg-muted/50 space-y-1.5" data-testid={`webhook-row-${webhook.id}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className="font-mono text-sm font-medium">{webhook.topic}</span>
+                                  <div className="flex items-center gap-1">
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6"
+                                          onClick={() => testWebhookMutation.mutate(webhook.id)}
+                                          disabled={testWebhookMutation.isPending && testingWebhookId === webhook.id}
+                                          data-testid={`button-test-webhook-${webhook.id}`}
+                                        >
+                                          {testWebhookMutation.isPending && testingWebhookId === webhook.id ? (
+                                            <Loader2 className="h-3 w-3 animate-spin" />
+                                          ) : (
+                                            <Play className="h-3 w-3 text-green-600" />
+                                          )}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Test Connection</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6"
+                                          onClick={() => deleteWebhookMutation.mutate(webhook.id)}
+                                          disabled={deleteWebhookMutation.isPending}
+                                          data-testid={`button-delete-webhook-${webhook.id}`}
+                                        >
+                                          <Trash2 className="h-3 w-3 text-destructive" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Remove Webhook</TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
+                                <div className="text-xs text-muted-foreground space-y-0.5">
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-muted-foreground/70">ID:</span>
+                                    <span className="font-mono">{webhook.id}</span>
+                                  </div>
+                                  <div className="flex items-start gap-1">
+                                    <span className="text-muted-foreground/70 shrink-0">Callback:</span>
+                                    <span className="font-mono break-all">{webhook.address}</span>
+                                  </div>
                                 </div>
                               </div>
-                              <div className="text-xs text-muted-foreground space-y-0.5">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-muted-foreground/70">ID:</span>
-                                  <span className="font-mono">{webhook.id}</span>
-                                </div>
-                                <div className="flex items-start gap-1">
-                                  <span className="text-muted-foreground/70 shrink-0">Callback:</span>
-                                  <span className="font-mono break-all">{webhook.address}</span>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </CollapsibleContent>
+                        </Collapsible>
                       ) : (
                         <Button
                           variant="outline"
@@ -809,7 +829,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                           ) : (
                             <>
                               <Webhook className="h-3 w-3 mr-1.5" />
-                              Register Order Webhooks
+                              Register All Webhooks
                             </>
                           )}
                         </Button>

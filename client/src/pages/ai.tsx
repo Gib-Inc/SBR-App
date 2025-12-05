@@ -4765,18 +4765,20 @@ export default function AIAgent() {
       queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/returns"] });
       queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/SHOPIFY"] });
       
       if (result.success) {
+        const refundsPart = result.refundsCreated > 0 ? `, ${result.refundsCreated} returns synced` : '';
         if (shopifySyncMode === "merge") {
           toast({
             title: "Shopify sync completed",
-            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} orders updated, ${result.inventoryUpdated || 0} inventory records updated`,
+            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} orders updated${refundsPart}`,
           });
         } else {
           toast({
             title: "Shopify sync completed (Replace mode)",
-            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} updated, ${result.ordersArchived || 0} removed, ${result.inventoryUpdated || 0} inventory updated, ${result.inventoryMappingsCleared || 0} mappings cleared`,
+            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} updated, ${result.ordersArchived || 0} removed${refundsPart}, ${result.inventoryMappingsCleared || 0} mappings cleared`,
           });
         }
       } else {

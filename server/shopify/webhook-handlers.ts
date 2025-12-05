@@ -359,31 +359,135 @@ export async function handleRefundCreated(
   console.log(`[Shopify Webhook] refunds/create - Refund ${refundId} for Order ${orderId}`);
   
   try {
+    // Check if we already have a return for this refund (idempotency)
+    const existingReturns = await storage.getReturnRequestByExternalOrderId(`SHOPIFY-REFUND-${refundId}`);
+    if (existingReturns.length > 0) {
+      console.log(`[Shopify Webhook] Refund ${refundId} already processed as return ${existingReturns[0].id}`);
+      return {
+        success: true,
+        message: `Refund ${refundId} already processed`,
+        data: { refundId, returnRequestId: existingReturns[0].id },
+      };
+    }
+    
     let existingOrder = null;
     if (orderId) {
       const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', String(orderId));
       existingOrder = existingOrders[0];
     }
     
-    if (existingOrder) {
-      console.log(`[Shopify Webhook] Refund ${refundId} linked to local order ${existingOrder.id}`);
+    // Extract customer info from the original order or payload
+    const customerName = existingOrder?.customerName || 
+      (payload.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : 'Shopify Customer') ||
+      'Unknown Customer';
+    const customerEmail = existingOrder?.customerEmail || payload.customer?.email || null;
+    const customerPhone = existingOrder?.customerPhone || payload.customer?.phone || null;
+    
+    // Calculate total refund amount from transactions
+    const totalRefundAmount = (payload.transactions || [])
+      .filter((t: any) => t.kind === 'refund' && t.status === 'success')
+      .reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0);
+    
+    // Generate RMA number
+    const rmaNumber = await storage.getNextRMANumber();
+    
+    // Create the return request - since this comes from Shopify, the refund is already processed
+    // Status is REFUNDED (terminal) because Shopify has already completed the refund
+    const returnRequest = await storage.createReturnRequest({
+      rmaNumber,
+      salesOrderId: existingOrder?.id || null,
+      orderNumber: existingOrder?.externalOrderId || String(orderId),
+      externalOrderId: `SHOPIFY-REFUND-${refundId}`, // Use refund ID to ensure uniqueness
+      salesChannel: 'SHOPIFY',
+      source: 'SHOPIFY_WEBHOOK',
+      customerName,
+      customerEmail,
+      customerPhone,
+      status: 'REFUNDED', // Terminal status - refund already happened in Shopify
+      resolutionRequested: 'REFUND',
+      resolutionFinal: 'REFUND',
+      resolutionNotes: `Refund processed via Shopify. Amount: $${totalRefundAmount.toFixed(2)}`,
+      reason: payload.note || 'Refund from Shopify',
+      requestedAt: new Date(payload.created_at || Date.now()),
+      refundedAt: new Date(payload.processed_at || payload.created_at || Date.now()),
+      isHistorical: true, // Already complete, goes to history
+      archivedAt: new Date(),
+    });
+    
+    console.log(`[Shopify Webhook] Created return request ${returnRequest.id} (RMA: ${rmaNumber}) for refund ${refundId}`);
+    
+    // Create return items from refund_line_items
+    const refundLineItems = payload.refund_line_items || [];
+    let itemsCreated = 0;
+    
+    for (const refundLineItem of refundLineItems) {
+      const lineItem = refundLineItem.line_item || {};
+      const sku = lineItem.sku || `SHOPIFY-LINE-${refundLineItem.line_item_id}`;
+      const quantity = refundLineItem.quantity || 1;
+      const unitPrice = parseFloat(lineItem.price) || 0;
+      const productName = lineItem.title || lineItem.name || 'Unknown Product';
       
-      await logService.logSystemEvent({
-        type: 'SHOPIFY_REFUND_RECEIVED',
-        entityType: 'SALES_ORDER',
-        entityId: existingOrder.id,
-        message: `Refund ${refundId} received for Shopify order ${orderId}`,
-        details: { refundId, orderId, amount: payload.transactions?.[0]?.amount, userId },
+      // Try to find the matching inventory item
+      const item = await storage.getItemBySku(sku);
+      
+      // Create the return item
+      await storage.createReturnItem({
+        returnRequestId: returnRequest.id,
+        inventoryItemId: item?.id || null,
+        sku,
+        productName,
+        unitPrice,
+        qtyOrdered: lineItem.quantity || quantity,
+        qtyRequested: quantity,
+        qtyApproved: quantity, // Already approved since refund happened
+        qtyReceived: refundLineItem.restock_type === 'return' ? quantity : 0, // Only mark received if returned
+        condition: refundLineItem.restock_type === 'return' ? 'GOOD' : null,
+        disposition: refundLineItem.restock_type === 'return' ? 'RETURN_TO_STOCK' : null,
+        itemReason: `Shopify refund (${refundLineItem.restock_type || 'no_restock'})`,
       });
+      
+      itemsCreated++;
+      console.log(`[Shopify Webhook] Created return item for SKU ${sku} (qty: ${quantity})`);
     }
+    
+    // Log the refund event
+    await logService.logSystemEvent({
+      type: 'SHOPIFY_REFUND_RECEIVED',
+      entityType: 'RETURN_REQUEST',
+      entityId: returnRequest.id,
+      message: `Shopify refund ${refundId} created as return ${rmaNumber}`,
+      details: { 
+        refundId, 
+        orderId, 
+        amount: totalRefundAmount,
+        itemsCount: itemsCreated,
+        rmaNumber,
+        linkedSalesOrderId: existingOrder?.id,
+        userId,
+      },
+    });
     
     return { 
       success: true, 
-      message: `Refund ${refundId} recorded`,
-      data: { refundId, orderId, linkedSalesOrderId: existingOrder?.id },
+      message: `Refund ${refundId} created as return ${rmaNumber} with ${itemsCreated} items`,
+      data: { 
+        refundId, 
+        orderId, 
+        returnRequestId: returnRequest.id,
+        rmaNumber,
+        itemsCreated,
+        linkedSalesOrderId: existingOrder?.id,
+      },
     };
   } catch (error: any) {
     console.error(`[Shopify Webhook] Error handling refund:`, error);
+    await logService.logShopifyWebhookError({
+      topic: context.topic,
+      shopDomain: context.shopDomain,
+      externalOrderId: String(refundId),
+      error: error.message,
+      errorDetails: { stack: error.stack, orderId },
+    });
     return { success: false, message: error.message };
   }
 }

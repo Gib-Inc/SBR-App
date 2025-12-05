@@ -577,4 +577,137 @@ export class ShopifyClient {
       throw new Error(`Failed to get Shopify webhook: ${error.message}`);
     }
   }
+
+  /**
+   * Fetch refunds from Shopify orders within a date range
+   * @param daysBack - Number of days to look back for orders with refunds
+   * @param limit - Maximum number of orders to check (default 250)
+   * @returns Array of refund objects with order context
+   */
+  async fetchRefunds(daysBack: number = 30, limit: number = 250): Promise<ShopifyRefund[]> {
+    try {
+      const refunds: ShopifyRefund[] = [];
+      const since = new Date();
+      since.setDate(since.getDate() - daysBack);
+      
+      // Use the same approach as syncRecentOrders but request any status to catch refunded orders
+      const params = new URLSearchParams({
+        limit: String(Math.min(limit, 250)),
+        status: 'any',
+        created_at_min: since.toISOString(),
+        order: 'created_at desc',
+      });
+      
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/orders.json?${params.toString()}`;
+      let pageCount = 0;
+      const maxPages = Math.ceil(limit / 250);
+      let totalOrdersFetched = 0;
+      
+      while (nextPageUrl && pageCount < maxPages && totalOrdersFetched < limit) {
+        const response = await fetch(nextPageUrl, {
+          headers: this.getHeaders(),
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Shopify API error: ${response.status} - ${errorText}`);
+        }
+        
+        const data = await response.json();
+        const orders = data.orders || [];
+        totalOrdersFetched += orders.length;
+        pageCount++;
+        
+        // For each order, fetch its refunds if any
+        for (const order of orders) {
+          if (order.refunds && order.refunds.length > 0) {
+            // Refunds are already included in the order response
+            for (const refund of order.refunds) {
+              refunds.push({
+                id: refund.id,
+                order_id: order.id,
+                order_name: order.name,
+                created_at: refund.created_at,
+                processed_at: refund.processed_at,
+                note: refund.note,
+                user_id: refund.user_id,
+                refund_line_items: refund.refund_line_items || [],
+                transactions: refund.transactions || [],
+                order_adjustments: refund.order_adjustments || [],
+                customer: order.customer,
+              });
+            }
+          }
+        }
+        
+        // Check for next page
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+        
+        if (!nextPageUrl || orders.length < 250) {
+          break;
+        }
+      }
+      
+      console.log(`[Shopify] Found ${refunds.length} refunds from ${totalOrdersFetched} orders (last ${daysBack} days)`);
+      return refunds;
+    } catch (error: any) {
+      console.error('[Shopify] Error fetching refunds:', error.message);
+      throw error;
+    }
+  }
+}
+
+export interface ShopifyRefund {
+  id: number | string;
+  order_id: number | string;
+  order_name: string;
+  created_at: string;
+  processed_at?: string;
+  note?: string;
+  user_id?: number | string;
+  refund_line_items: Array<{
+    id: number | string;
+    line_item_id: number | string;
+    location_id?: number | string;
+    quantity: number;
+    restock_type: string; // 'no_restock' | 'cancel' | 'return' | 'legacy_restock'
+    subtotal: number;
+    total_tax: number;
+    line_item?: {
+      id: number | string;
+      variant_id?: number | string;
+      title: string;
+      quantity: number;
+      price: string;
+      sku?: string;
+      variant_title?: string;
+      product_id?: number | string;
+      name: string;
+    };
+  }>;
+  transactions: Array<{
+    id: number | string;
+    order_id: number | string;
+    amount: string;
+    kind: string;
+    gateway: string;
+    status: string;
+    created_at: string;
+  }>;
+  order_adjustments?: Array<{
+    id: number | string;
+    order_id: number | string;
+    amount: string;
+    tax_amount: string;
+    kind: string;
+    reason: string;
+  }>;
+  customer?: {
+    id?: string | number;
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+  };
 }

@@ -4356,9 +4356,112 @@ TOTAL: $${subtotal.toFixed(2)}
         }
       }
 
+      // =============== REFUNDS SYNC ===============
+      // Sync Shopify refunds as return requests
+      let refundsCreated = 0;
+      let refundsSkipped = 0;
+      
+      try {
+        console.log(`[Shopify] Syncing refunds from last ${daysBack} days...`);
+        const refunds = await client.fetchRefunds(daysBack, ordersToFetch);
+        
+        for (const refund of refunds) {
+          try {
+            const refundId = String(refund.id);
+            const orderId = String(refund.order_id);
+            
+            // Check if we already have a return for this refund (idempotency)
+            const existingReturns = await storage.getReturnRequestByExternalOrderId(`SHOPIFY-REFUND-${refundId}`);
+            if (existingReturns.length > 0) {
+              refundsSkipped++;
+              continue;
+            }
+            
+            // Find linked sales order
+            const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', orderId);
+            const existingOrder = existingOrders[0];
+            
+            // Extract customer info
+            const customerName = existingOrder?.customerName || 
+              (refund.customer ? `${refund.customer.first_name || ''} ${refund.customer.last_name || ''}`.trim() : 'Shopify Customer') ||
+              'Unknown Customer';
+            const customerEmail = existingOrder?.customerEmail || refund.customer?.email || null;
+            const customerPhone = existingOrder?.customerPhone || refund.customer?.phone || null;
+            
+            // Calculate total refund amount
+            const totalRefundAmount = (refund.transactions || [])
+              .filter((t: any) => t.kind === 'refund' && t.status === 'success')
+              .reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0);
+            
+            // Generate RMA number
+            const rmaNumber = await storage.getNextRMANumber();
+            
+            // Create the return request
+            const returnRequest = await storage.createReturnRequest({
+              rmaNumber,
+              salesOrderId: existingOrder?.id || null,
+              orderNumber: existingOrder?.externalOrderId || refund.order_name || orderId,
+              externalOrderId: `SHOPIFY-REFUND-${refundId}`,
+              salesChannel: 'SHOPIFY',
+              source: 'SHOPIFY_SYNC',
+              customerName,
+              customerEmail,
+              customerPhone,
+              status: 'REFUNDED',
+              resolutionRequested: 'REFUND',
+              resolutionFinal: 'REFUND',
+              resolutionNotes: `Refund synced from Shopify. Amount: $${totalRefundAmount.toFixed(2)}`,
+              reason: refund.note || 'Refund from Shopify',
+              requestedAt: new Date(refund.created_at || Date.now()),
+              refundedAt: new Date(refund.processed_at || refund.created_at || Date.now()),
+              isHistorical: true,
+              archivedAt: new Date(),
+            });
+            
+            // Create return items
+            for (const refundLineItem of refund.refund_line_items || []) {
+              const lineItem = refundLineItem.line_item || {};
+              const sku = lineItem.sku || `SHOPIFY-LINE-${refundLineItem.line_item_id}`;
+              const quantity = refundLineItem.quantity || 1;
+              const unitPrice = parseFloat(lineItem.price) || 0;
+              const productName = lineItem.title || lineItem.name || 'Unknown Product';
+              
+              const item = await storage.getItemBySku(sku);
+              
+              await storage.createReturnItem({
+                returnRequestId: returnRequest.id,
+                inventoryItemId: item?.id || null,
+                sku,
+                productName,
+                unitPrice,
+                qtyOrdered: lineItem.quantity || quantity,
+                qtyRequested: quantity,
+                qtyApproved: quantity,
+                qtyReceived: refundLineItem.restock_type === 'return' ? quantity : 0,
+                condition: refundLineItem.restock_type === 'return' ? 'GOOD' : null,
+                disposition: refundLineItem.restock_type === 'return' ? 'RETURN_TO_STOCK' : null,
+                itemReason: `Shopify refund (${refundLineItem.restock_type || 'no_restock'})`,
+              });
+            }
+            
+            refundsCreated++;
+            console.log(`[Shopify] Created return ${rmaNumber} for refund ${refundId}`);
+          } catch (refundErr: any) {
+            console.warn(`[Shopify] Failed to process refund ${refund.id}:`, refundErr.message);
+            errors.push(`Refund ${refund.id}: ${refundErr.message}`);
+          }
+        }
+        
+        console.log(`[Shopify] Refunds sync complete: ${refundsCreated} created, ${refundsSkipped} skipped (already exist)`);
+      } catch (refundsErr: any) {
+        console.error('[Shopify] Error syncing refunds:', refundsErr);
+        errors.push(`Refunds sync failed: ${refundsErr.message}`);
+      }
+
+      const refundsSummary = refundsCreated > 0 ? `, ${refundsCreated} refunds synced` : '';
       const summary = syncMode === "replace"
-        ? `Created ${createdCount}, updated ${updatedCount} orders. ${ordersArchived} archived, ${inventoryMappingsCleared} mappings cleared. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`
-        : `Created ${createdCount}, updated ${updatedCount} orders. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+        ? `Created ${createdCount}, updated ${updatedCount} orders. ${ordersArchived} archived, ${inventoryMappingsCleared} mappings cleared${refundsSummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`
+        : `Created ${createdCount}, updated ${updatedCount} orders${refundsSummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -4401,6 +4504,8 @@ TOTAL: $${subtotal.toFixed(2)}
         ordersArchived,
         inventoryUpdated,
         inventoryMappingsCleared,
+        refundsCreated,
+        refundsSkipped,
         unmatchedSkus,
         errors,
         message: summary,
@@ -4783,38 +4888,77 @@ TOTAL: $${subtotal.toFixed(2)}
       // ALIGN MODE: Archive removed orders + push inventory if 2-way sync enabled
       let ordersArchived = 0;
       let inventoryPushed = 0;
+      let alignFetchFailed = false;
       
       if (syncMode === "align") {
-        console.log('[Amazon] Align mode: checking for orders to archive...');
+        console.log('[Amazon] Align mode: fetching complete order list for safe archival...');
         
-        // Build set of Amazon order IDs that currently exist
-        const amazonOrderIds = new Set(normalizedOrders.map(o => o.externalOrderId));
+        // CRITICAL: For align mode, we need a comprehensive fetch (3 years like Shopify)
+        // to avoid incorrectly archiving valid older orders not in the short daysBack window
+        // Use a very high limit to avoid capping older orders
+        let allAmazonOrderIds = new Set<string>();
+        const alignMaxOrders = 50000; // Very high limit for align mode to capture all historical orders
         
-        // Get all local Amazon orders and archive those not in the current Amazon set
-        // Use a larger window for alignment to catch older orders
         try {
-          const localAmazonOrders = await storage.getSalesOrdersByChannel('AMAZON');
-          for (const localOrder of localAmazonOrders) {
-            // Skip already archived orders
-            if (localOrder.status === 'ARCHIVED' || localOrder.status === 'CANCELLED') continue;
-            
-            if (localOrder.externalOrderId && !amazonOrderIds.has(localOrder.externalOrderId)) {
-              try {
-                await storage.updateSalesOrder(localOrder.id, { 
-                  status: 'ARCHIVED',
-                  notes: `Archived by Amazon Align sync on ${new Date().toISOString()} - order no longer exists on Amazon`
-                });
-                ordersArchived++;
-                console.log(`[Amazon] Archived order ${localOrder.externalOrderId} (not in Amazon)`);
-              } catch (archiveErr: any) {
-                errors.push(`Failed to archive order ${localOrder.externalOrderId}: ${archiveErr.message}`);
-              }
-            }
+          // Fetch 3 years of orders with an unbounded limit for comprehensive archival comparison
+          console.log('[Amazon] Fetching complete order list from Amazon for align mode reconciliation (up to 50k orders, 3 years)...');
+          const allAmazonOrders = await client.syncRecentOrders(1095, alignMaxOrders);
+          allAmazonOrderIds = new Set(allAmazonOrders.map(o => o.externalOrderId));
+          console.log(`[Amazon] Fetched ${allAmazonOrderIds.size} total Amazon orders for archival comparison`);
+          
+          // Guardrail: If we hit the max limit, fail safe - skip archival to avoid false deletions
+          if (allAmazonOrders.length >= alignMaxOrders) {
+            console.warn(`[Amazon] WARNING: Fetched exactly ${alignMaxOrders} orders - order list may be truncated. Skipping archival to prevent false deletions.`);
+            errors.push(`Archival skipped: Amazon order list truncated at ${alignMaxOrders} limit`);
+            alignFetchFailed = true; // Treat as failed to skip archival
           }
-          console.log(`[Amazon] Archived ${ordersArchived} orders that no longer exist on Amazon`);
-        } catch (archiveError: any) {
-          console.error('[Amazon] Error archiving orders:', archiveError);
-          errors.push(`Failed to check orders for archiving: ${archiveError.message}`);
+        } catch (fetchErr: any) {
+          console.error('[Amazon] Failed to fetch complete order list for align mode:', fetchErr);
+          errors.push(`Failed to fetch complete Amazon order list: ${fetchErr.message}`);
+          alignFetchFailed = true;
+        }
+        
+        // Only proceed with archival if we successfully fetched the COMPLETE order list
+        if (!alignFetchFailed && allAmazonOrderIds.size > 0) {
+          console.log('[Amazon] Checking local orders against Amazon complete list...');
+          try {
+            const localAmazonOrders = await storage.getSalesOrdersByChannel('AMAZON');
+            const activeLocalOrders = localAmazonOrders.filter(o => 
+              o.status !== 'ARCHIVED' && o.status !== 'CANCELLED'
+            );
+            
+            // Additional safeguard: Log comparison metrics to detect under-fetch scenarios
+            console.log(`[Amazon] Align comparison: ${allAmazonOrderIds.size} Amazon orders vs ${activeLocalOrders.length} local active orders`);
+            
+            // CRITICAL GUARDRAIL: If we have significantly more local orders than fetched, skip archival
+            // This indicates we didn't fetch the complete Amazon order history
+            if (activeLocalOrders.length > allAmazonOrderIds.size * 1.5 && allAmazonOrderIds.size < 100) {
+              console.warn(`[Amazon] ARCHIVAL SKIPPED: Local order count (${activeLocalOrders.length}) significantly exceeds fetched (${allAmazonOrderIds.size}). Fetch may be incomplete.`);
+              errors.push(`Archival skipped: Local order count suggests incomplete Amazon fetch`);
+            } else {
+              // Safe to proceed with archival
+              for (const localOrder of activeLocalOrders) {
+                if (localOrder.externalOrderId && !allAmazonOrderIds.has(localOrder.externalOrderId)) {
+                  try {
+                    await storage.updateSalesOrder(localOrder.id, { 
+                      status: 'ARCHIVED',
+                      notes: `Archived by Amazon Align sync on ${new Date().toISOString()} - order no longer exists on Amazon`
+                    });
+                    ordersArchived++;
+                    console.log(`[Amazon] Archived order ${localOrder.externalOrderId} (not in Amazon)`);
+                  } catch (archiveErr: any) {
+                    errors.push(`Failed to archive order ${localOrder.externalOrderId}: ${archiveErr.message}`);
+                  }
+                }
+              }
+              console.log(`[Amazon] Archived ${ordersArchived} orders that no longer exist on Amazon`);
+            }
+          } catch (archiveError: any) {
+            console.error('[Amazon] Error archiving orders:', archiveError);
+            errors.push(`Failed to check orders for archiving: ${archiveError.message}`);
+          }
+        } else if (alignFetchFailed) {
+          console.log('[Amazon] Skipping order archival - could not fetch complete order list from Amazon');
         }
         
         // Check if Amazon 2-way sync is enabled and push inventory

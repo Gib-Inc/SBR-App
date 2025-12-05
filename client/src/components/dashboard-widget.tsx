@@ -160,32 +160,47 @@ function PieChartWidget({ data }: { data: { name: string; value: number; percent
   }
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <PieChart>
-        <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          innerRadius={40}
-          outerRadius={70}
-          paddingAngle={2}
-          dataKey="value"
-          label={({ name, percentage }) => `${name}: ${percentage}%`}
-          labelLine={false}
-        >
-          {data.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-          ))}
-        </Pie>
-        <Tooltip 
-          contentStyle={{ 
-            backgroundColor: "hsl(var(--popover))", 
-            border: "1px solid hsl(var(--border))",
-            borderRadius: "6px",
-          }} 
-        />
-      </PieChart>
-    </ResponsiveContainer>
+    <div className="flex flex-col h-full">
+      <ResponsiveContainer width="100%" height={140}>
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            innerRadius={30}
+            outerRadius={55}
+            paddingAngle={2}
+            dataKey="value"
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip 
+            contentStyle={{ 
+              backgroundColor: "hsl(var(--popover))", 
+              border: "1px solid hsl(var(--border))",
+              borderRadius: "6px",
+            }}
+            formatter={(value: number, name: string) => [value.toLocaleString(), name]}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 px-2 mt-1">
+        {data.map((entry, index) => (
+          <div key={entry.name} className="flex items-center gap-1.5 text-xs">
+            <div 
+              className="w-2.5 h-2.5 rounded-sm flex-shrink-0" 
+              style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}
+            />
+            <span className="text-muted-foreground truncate max-w-[80px]" title={entry.name}>
+              {entry.name}
+            </span>
+            <span className="text-foreground font-medium">{entry.percentage}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

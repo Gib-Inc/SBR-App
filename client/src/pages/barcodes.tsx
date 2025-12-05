@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building, Package, ExternalLink, Tag } from "lucide-react";
 import { SiAmazon as AmazonIcon, SiShopify as ShopifyIcon } from "react-icons/si";
 import { format } from "date-fns";
@@ -1243,11 +1244,14 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
   });
 
   const logs = data?.logs ?? [];
+  
+  const inProgressLogs = logs.filter((log: any) => log.status === 'CREATED');
+  const historyLogs = logs.filter((log: any) => log.status !== 'CREATED');
 
   function getStatusBadge(status: string) {
     switch (status) {
       case 'CREATED':
-        return <Badge variant="secondary" className="text-xs">Created</Badge>;
+        return <Badge variant="secondary" className="text-xs">In Transit</Badge>;
       case 'SCANNED_RECEIVED':
         return <Badge className="text-xs bg-green-600 text-white">Received</Badge>;
       case 'VOIDED':
@@ -1268,6 +1272,92 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
     }
   }
 
+  function renderLabelsTable(logsToRender: any[], emptyMessage: string) {
+    if (logsToRender.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+          <Tag className="h-8 w-8 text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full table-auto text-sm">
+          <thead>
+            <tr className="border-b bg-muted/50">
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Tracking #</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Type</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Carrier</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Cost</th>
+              <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
+              <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logsToRender.map((log: any) => (
+              <tr key={log.id} className="border-b hover-elevate" data-testid={`row-shippo-label-${log.id}`}>
+                <td className="p-3 whitespace-nowrap font-mono text-xs">
+                  {log.trackingNumber || '-'}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {getTypeBadge(log.type)}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  <span className="text-sm">{log.carrier || '-'}</span>
+                  {log.serviceLevel && (
+                    <span className="block text-xs text-muted-foreground">{log.serviceLevel}</span>
+                  )}
+                </td>
+                <td className="p-3 whitespace-nowrap font-mono text-xs">
+                  {log.sku || '-'}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  <span className="text-sm">{log.customerName || '-'}</span>
+                  {log.channel && (
+                    <span className="block text-xs text-muted-foreground">{log.channel}</span>
+                  )}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {getStatusBadge(log.status)}
+                </td>
+                <td className="p-3 whitespace-nowrap">
+                  {log.labelCost ? (
+                    <span className="text-sm">
+                      ${log.labelCost.toFixed(2)} {log.labelCurrency || 'USD'}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">-</span>
+                  )}
+                </td>
+                <td className="p-3 whitespace-nowrap text-muted-foreground text-sm">
+                  {log.createdAt ? format(new Date(log.createdAt), 'MMM d, yyyy') : '-'}
+                </td>
+                <td className="p-3 whitespace-nowrap text-right">
+                  {log.labelUrl && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => window.open(log.labelUrl, '_blank')}
+                      data-testid={`button-view-label-${log.id}`}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <Card>
@@ -1278,28 +1368,6 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
           </h3>
           <div className="flex justify-center py-8">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (logs.length === 0) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <h3 className="mb-4 text-lg font-semibold flex items-center gap-2">
-            <Package className="h-5 w-5" />
-            Shippo Labels
-          </h3>
-          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
-            <Tag className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              {searchQuery ? "No Shippo labels matching your search" : "No Shippo labels generated yet"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Labels are created when return requests are processed
-            </p>
           </div>
         </CardContent>
       </Card>
@@ -1318,78 +1386,41 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
             {logs.length} label{logs.length !== 1 ? 's' : ''}
           </Badge>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full table-auto text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Tracking #</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Type</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Carrier</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Cost</th>
-                <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
-                <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log: any) => (
-                <tr key={log.id} className="border-b hover-elevate" data-testid={`row-shippo-label-${log.id}`}>
-                  <td className="p-3 whitespace-nowrap font-mono text-xs">
-                    {log.trackingNumber || '-'}
-                  </td>
-                  <td className="p-3 whitespace-nowrap">
-                    {getTypeBadge(log.type)}
-                  </td>
-                  <td className="p-3 whitespace-nowrap">
-                    <span className="text-sm">{log.carrier || '-'}</span>
-                    {log.serviceLevel && (
-                      <span className="block text-xs text-muted-foreground">{log.serviceLevel}</span>
-                    )}
-                  </td>
-                  <td className="p-3 whitespace-nowrap font-mono text-xs">
-                    {log.sku || '-'}
-                  </td>
-                  <td className="p-3 whitespace-nowrap">
-                    <span className="text-sm">{log.customerName || '-'}</span>
-                    {log.channel && (
-                      <span className="block text-xs text-muted-foreground">{log.channel}</span>
-                    )}
-                  </td>
-                  <td className="p-3 whitespace-nowrap">
-                    {getStatusBadge(log.status)}
-                  </td>
-                  <td className="p-3 whitespace-nowrap">
-                    {log.labelCost ? (
-                      <span className="text-sm">
-                        ${log.labelCost.toFixed(2)} {log.labelCurrency || 'USD'}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">-</span>
-                    )}
-                  </td>
-                  <td className="p-3 whitespace-nowrap text-muted-foreground text-sm">
-                    {log.createdAt ? format(new Date(log.createdAt), 'MMM d, yyyy') : '-'}
-                  </td>
-                  <td className="p-3 whitespace-nowrap text-right">
-                    {log.labelUrl && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => window.open(log.labelUrl, '_blank')}
-                        data-testid={`button-view-label-${log.id}`}
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        
+        <Tabs defaultValue="in-progress" className="w-full">
+          <TabsList className="mb-4">
+            <TabsTrigger value="in-progress" data-testid="tab-shippo-in-progress">
+              In Progress
+              {inProgressLogs.length > 0 && (
+                <Badge variant="secondary" className="ml-2 text-xs">{inProgressLogs.length}</Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-shippo-history">
+              History
+              {historyLogs.length > 0 && (
+                <Badge variant="outline" className="ml-2 text-xs">{historyLogs.length}</Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="in-progress">
+            {renderLabelsTable(
+              inProgressLogs, 
+              searchQuery 
+                ? "No in-progress labels matching your search" 
+                : "No returns currently in transit"
+            )}
+          </TabsContent>
+          
+          <TabsContent value="history">
+            {renderLabelsTable(
+              historyLogs, 
+              searchQuery 
+                ? "No completed labels matching your search" 
+                : "No completed return labels yet"
+            )}
+          </TabsContent>
+        </Tabs>
       </CardContent>
     </Card>
   );

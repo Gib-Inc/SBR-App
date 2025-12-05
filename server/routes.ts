@@ -1613,6 +1613,63 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ error: error.message || "Failed to record rotation" });
     }
   });
+  
+  // POST /api/stale-sync/check - Check for stale syncs and create GHL alerts
+  app.post("/api/stale-sync/check", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { staleSyncAlertService } = await import('./services/stale-sync-alert-service');
+      const userId = req.session.userId!;
+      
+      const alerts = await staleSyncAlertService.checkAndAlertStaleSync(userId);
+      res.json({ 
+        message: `Stale sync check completed`,
+        staleCount: alerts.length,
+        alerts,
+        alertsCreated: alerts.filter(a => a.ghlOpportunityCreated).length,
+      });
+    } catch (error: any) {
+      console.error("[StaleSyncCheck] Error running stale sync check:", error);
+      res.status(500).json({ error: error.message || "Failed to run stale sync check" });
+    }
+  });
+  
+  // GET /api/stale-sync/status - Get current stale sync status without alerting
+  app.get("/api/stale-sync/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const sources = ['SHOPIFY', 'AMAZON', 'EXTENSIV', 'GOHIGHLEVEL', 'QUICKBOOKS'];
+      const now = new Date();
+      const STALE_THRESHOLD_HOURS = 24;
+      
+      const statuses = [];
+      for (const source of sources) {
+        const config = await storage.getIntegrationConfig(userId, source);
+        if (!config || !config.isEnabled) continue;
+        
+        const hoursSinceSync = config.lastSyncAt 
+          ? (now.getTime() - new Date(config.lastSyncAt).getTime()) / (1000 * 60 * 60)
+          : Infinity;
+        
+        const isStale = hoursSinceSync > STALE_THRESHOLD_HOURS || config.lastSyncStatus === 'FAILED';
+        
+        statuses.push({
+          source,
+          lastSyncAt: config.lastSyncAt,
+          lastSyncStatus: config.lastSyncStatus,
+          hoursSinceSync: Math.round(hoursSinceSync),
+          isStale,
+        });
+      }
+      
+      res.json({
+        statuses,
+        staleCount: statuses.filter(s => s.isStale).length,
+      });
+    } catch (error: any) {
+      console.error("[StaleSyncStatus] Error fetching stale sync status:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch stale sync status" });
+    }
+  });
 
   // ============================================================================
   // ITEMS
@@ -11349,10 +11406,12 @@ Generate only the email body text, no subject line.`;
 
   // Mark return refund as completed
   // POST /api/returns/:id/mark-refund-completed
+  // Automatically posts to QuickBooks if configured
   app.post("/api/returns/:id/mark-refund-completed", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { refundAmount } = req.body;
+      const { refundAmount, skipQuickBooks } = req.body;
+      const userId = req.session.userId!;
       
       const success = await returnsService.markRefundCompleted(id, refundAmount);
       
@@ -11362,12 +11421,94 @@ Generate only the email body text, no subject line.`;
       
       // Sync to GHL as refunded (non-blocking)
       const { triggerReturnSync } = await import("./services/ghl-sync-triggers");
-      triggerReturnSync(req.session.userId!, id, true).catch(err => {
+      triggerReturnSync(userId, id, true).catch(err => {
         console.error(`[Returns] GHL sync error:`, err.message);
       });
       
+      // Automatically post to QuickBooks if configured and not already posted
+      let quickbooksResult = null;
+      if (!skipQuickBooks) {
+        try {
+          const { QuickBooksClient, isQuickBooksConfigured } = await import("./services/quickbooks-client");
+          
+          if (isQuickBooksConfigured()) {
+            const returnRequest = await storage.getReturnRequest(id);
+            
+            // Only post if not already posted
+            if (returnRequest && !returnRequest.quickbooksRefundId) {
+              const returnItems = await storage.getReturnItemsByRequestId(id);
+              
+              if (returnItems.length > 0) {
+                // Build item map for price lookup
+                const itemSkus = returnItems.map(ri => ri.sku);
+                const allItems = await storage.getAllItems();
+                const itemMap = new Map<string, { id: string; sku: string; name: string; price?: number | null }>();
+                
+                for (const item of allItems) {
+                  if (itemSkus.includes(item.sku)) {
+                    itemMap.set(item.sku, {
+                      id: item.id,
+                      sku: item.sku,
+                      name: item.name,
+                      price: item.price,
+                    });
+                  }
+                }
+                
+                // Create QuickBooks client and post refund
+                const qbClient = new QuickBooksClient(storage, userId);
+                const result = await qbClient.createRefundFromReturn(
+                  {
+                    id: returnRequest.id,
+                    rmaNumber: returnRequest.rmaNumber,
+                    customerName: returnRequest.customerName,
+                    customerEmail: returnRequest.customerEmail,
+                    externalOrderId: returnRequest.externalOrderId,
+                    salesChannel: returnRequest.salesChannel,
+                  },
+                  returnItems.map(ri => ({
+                    sku: ri.sku,
+                    quantityReturned: ri.qtyReturned || 0,
+                    reason: ri.reason,
+                  })),
+                  itemMap
+                );
+                
+                if (result.success) {
+                  // Update return request with QB refund info
+                  await storage.updateReturnRequest(id, {
+                    quickbooksRefundId: result.refundId,
+                    quickbooksRefundType: result.refundType,
+                    quickbooksRefundCreatedAt: new Date(),
+                  });
+                  
+                  quickbooksResult = {
+                    success: true,
+                    refundId: result.refundId,
+                    refundNumber: result.refundNumber,
+                    refundType: result.refundType,
+                    totalAmount: result.totalAmount,
+                  };
+                  
+                  console.log(`[Returns] Auto-posted refund to QuickBooks: ${result.refundId}`);
+                } else {
+                  console.error(`[Returns] QuickBooks refund failed:`, result.error);
+                  quickbooksResult = { success: false, error: result.error };
+                }
+              }
+            }
+          }
+        } catch (qbError: any) {
+          console.error(`[Returns] QuickBooks auto-post error:`, qbError.message);
+          quickbooksResult = { success: false, error: qbError.message };
+        }
+      }
+      
       const returnDetails = await returnsService.getReturnWithDetails(id);
-      res.json(returnDetails);
+      res.json({
+        ...returnDetails,
+        quickbooksPostResult: quickbooksResult
+      });
     } catch (error: any) {
       console.error("[Returns] Error marking refund completed:", error);
       res.status(500).json({ error: error.message || "Failed to mark refund completed" });

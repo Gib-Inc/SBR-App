@@ -179,7 +179,7 @@ function ItemTableRow({
   };
 
   return (
-    <tr className="h-11 border-b hover-elevate" data-testid={`row-item-${item.id}`}>
+    <tr className="h-11 border-b hover-elevate transition-all duration-300" data-testid={`row-item-${item.id}`} data-item-id={item.id}>
       {/* Name Column */}
       <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "name" ? (
@@ -1763,11 +1763,35 @@ export default function BOM() {
   const [showQuickOrderDialog, setShowQuickOrderDialog] = useState(false);
   const [selectedSupplierForOrder, setSelectedSupplierForOrder] = useState<string>("");
   const [quickOrderItems, setQuickOrderItems] = useState<Array<{itemId: string; sku: string; name: string; qty: number}>>([]);
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
     const stored = loadColumnVisibility();
     setColumnVisibility(stored);
+  }, []);
+  
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const itemId = params.get('item');
+    const action = params.get('action');
+    
+    if (itemId) {
+      setHighlightedItemId(itemId);
+      
+      setTimeout(() => {
+        const itemElement = document.querySelector(`[data-item-id="${itemId}"]`);
+        if (itemElement) {
+          itemElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          itemElement.classList.add('ring-2', 'ring-primary', 'ring-offset-2');
+          setTimeout(() => {
+            itemElement.classList.remove('ring-2', 'ring-primary', 'ring-offset-2');
+          }, 3000);
+        }
+      }, 500);
+      
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
 
   const handleColumnVisibilityChange = (column: keyof ChannelColumnVisibility, visible: boolean) => {

@@ -246,6 +246,34 @@ export class InventoryRecommendationBatch {
           } catch (error: any) {
             console.error(`[AI Batch] Failed to auto-create draft PO for ${rec.sku}:`, error);
           }
+        } else if ((rec.riskLevel === "NEED_ORDER" || rec.riskLevel === "HIGH") && 
+                   rec.orderTiming === "ORDER_TODAY" &&
+                   rec.recommendedAction === "ORDER") {
+          try {
+            const productName = skuContexts.find(c => c.sku === rec.sku)?.productName || rec.sku;
+            const notificationType = rec.riskLevel === "NEED_ORDER" ? "STOCK_WARNING_CRITICAL" : "STOCK_WARNING_HIGH";
+            await this.storage.createNotification({
+              userId: defaultUserId,
+              type: notificationType,
+              title: `Critical Stock: ${rec.sku}`,
+              message: `${productName} has only ${rec.daysUntilStockout} days of stock remaining. Order ${rec.recommendedQty} units now.`,
+              severity: rec.riskLevel === "NEED_ORDER" ? "CRITICAL" : "HIGH",
+              actionUrl: `/products?item=${rec.itemId}`,
+              actionLabel: "View Item",
+              relatedEntityType: "ITEM",
+              relatedEntityId: rec.itemId,
+              isPinned: false,
+              isRead: false,
+              metadata: { 
+                sku: rec.sku, 
+                recommendedQty: rec.recommendedQty,
+                daysUntilStockout: rec.daysUntilStockout,
+                riskLevel: rec.riskLevel,
+              },
+            });
+          } catch (error: any) {
+            console.error(`[AI Batch] Failed to create stock warning notification for ${rec.sku}:`, error);
+          }
         }
       }
 

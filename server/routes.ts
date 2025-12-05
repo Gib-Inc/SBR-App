@@ -5143,6 +5143,82 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GoHighLevel - Validate Pipeline (check if pipeline and stages exist)
+  app.post("/api/integrations/gohighlevel/validate-pipeline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { pipelineId, stageIds } = req.body;
+      
+      // Validate required input
+      if (!pipelineId) {
+        return res.status(400).json({ 
+          success: false,
+          message: "Pipeline ID is required.",
+          errorCode: 'MISSING_PIPELINE_ID',
+        });
+      }
+      
+      // Get credentials from integration config
+      const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      const baseUrl = 'https://services.leadconnectorhq.com';
+      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+      const locationId = (config?.config as any)?.locationId;
+      
+      if (!apiKey || !locationId) {
+        return res.status(400).json({ 
+          success: false,
+          message: "GoHighLevel credentials not configured. Configure API key and Location ID first.",
+          errorCode: 'NOT_CONFIGURED',
+        });
+      }
+
+      const client = new GoHighLevelClient(baseUrl, apiKey, locationId);
+      
+      // Validate pipeline exists
+      const pipelineResult = await client.validatePipeline(pipelineId);
+      if (!pipelineResult.success) {
+        // Return appropriate HTTP status based on error type
+        const statusCode = pipelineResult.errorCode === 'INVALID_PIPELINE' ? 404 
+          : pipelineResult.errorCode === 'ACCESS_DENIED' ? 403 
+          : 400;
+        return res.status(statusCode).json({
+          success: false,
+          message: pipelineResult.error,
+          errorCode: pipelineResult.errorCode,
+        });
+      }
+
+      // Validate stage IDs if provided, otherwise return empty object
+      const stageValidation: Record<string, { valid: boolean; name?: string; error?: string }> = {};
+      if (stageIds && Array.isArray(stageIds)) {
+        for (const stageId of stageIds) {
+          const stage = pipelineResult.stages?.find(s => s.id === stageId);
+          if (stage) {
+            stageValidation[stageId] = { valid: true, name: stage.name };
+          } else {
+            stageValidation[stageId] = { 
+              valid: false, 
+              error: `Stage ID "${stageId}" not found in pipeline` 
+            };
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        pipelineName: pipelineResult.pipelineName,
+        stages: pipelineResult.stages,
+        stageValidation, // Always included for predictable response shape
+      });
+    } catch (error: any) {
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to validate pipeline",
+        errorCode: 'UNKNOWN',
+      });
+    }
+  });
+
   // GoHighLevel - Comprehensive Sync (pushes all data to GHL)
   // Mode: "update" (push new/changed, skip orphan removal) or "align" (push + cleanup orphans)
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {

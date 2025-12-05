@@ -963,6 +963,113 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Validate that a pipeline exists and is accessible
+   * Returns pipeline info including available stages
+   */
+  async validatePipeline(pipelineId: string): Promise<{
+    success: boolean;
+    pipelineName?: string;
+    stages?: Array<{ id: string; name: string }>;
+    error?: string;
+    errorCode?: 'INVALID_PIPELINE' | 'ACCESS_DENIED' | 'NETWORK_ERROR' | 'UNKNOWN';
+  }> {
+    try {
+      // Fetch pipeline details to validate it exists
+      const response = await fetch(
+        `${this.baseUrl}/opportunities/pipelines/${pipelineId}?locationId=${this.locationId}`,
+        {
+          headers: this.getHeaders(),
+        }
+      );
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            success: false,
+            error: `Pipeline not found. The pipeline ID "${pipelineId}" does not exist in this location.`,
+            errorCode: 'INVALID_PIPELINE',
+          };
+        }
+        if (response.status === 401 || response.status === 403) {
+          return {
+            success: false,
+            error: 'Access denied. Your API key may not have access to this pipeline.',
+            errorCode: 'ACCESS_DENIED',
+          };
+        }
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Failed to validate pipeline: ${errorText}`,
+          errorCode: 'UNKNOWN',
+        };
+      }
+
+      const data = await response.json();
+      const pipeline = data.pipeline || data;
+      
+      // Extract stages from pipeline
+      const stages = (pipeline.stages || []).map((stage: any) => ({
+        id: stage.id,
+        name: stage.name,
+      }));
+
+      return {
+        success: true,
+        pipelineName: pipeline.name || 'Unknown Pipeline',
+        stages,
+      };
+    } catch (error: any) {
+      if (error.cause?.code === 'ENOTFOUND' || error.cause?.code === 'ECONNREFUSED') {
+        return {
+          success: false,
+          error: 'Network error. Unable to reach GoHighLevel API.',
+          errorCode: 'NETWORK_ERROR',
+        };
+      }
+      return {
+        success: false,
+        error: error.message || 'Failed to validate pipeline',
+        errorCode: 'UNKNOWN',
+      };
+    }
+  }
+
+  /**
+   * Validate that a stage exists within a pipeline
+   */
+  async validateStage(pipelineId: string, stageId: string): Promise<{
+    success: boolean;
+    stageName?: string;
+    error?: string;
+    errorCode?: 'INVALID_STAGE' | 'INVALID_PIPELINE' | 'ACCESS_DENIED' | 'NETWORK_ERROR' | 'UNKNOWN';
+  }> {
+    const pipelineResult = await this.validatePipeline(pipelineId);
+    
+    if (!pipelineResult.success) {
+      return {
+        success: false,
+        error: pipelineResult.error,
+        errorCode: pipelineResult.errorCode === 'INVALID_PIPELINE' ? 'INVALID_PIPELINE' : pipelineResult.errorCode,
+      };
+    }
+
+    const stage = pipelineResult.stages?.find(s => s.id === stageId);
+    if (!stage) {
+      return {
+        success: false,
+        error: `Stage not found. The stage ID "${stageId}" does not exist in pipeline "${pipelineResult.pipelineName}".`,
+        errorCode: 'INVALID_STAGE',
+      };
+    }
+
+    return {
+      success: true,
+      stageName: stage.name,
+    };
+  }
+
+  /**
    * Sync data (placeholder for future implementation)
    */
   async sync(): Promise<{ success: boolean; message: string }> {

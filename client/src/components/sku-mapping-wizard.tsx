@@ -174,9 +174,10 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
   );
 
   const getMappingStats = (channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId") => {
-    const mapped = finishedProducts.filter((item) => item[channel]).length;
-    const unmapped = finishedProducts.length - mapped;
-    return { mapped, unmapped, total: finishedProducts.length };
+    // Use all items for consistent stats across all tabs
+    const mapped = allMappableItems.filter((item) => item[channel]).length;
+    const unmapped = allMappableItems.length - mapped;
+    return { mapped, unmapped, total: allMappableItems.length };
   };
 
   // Enhanced Shopify tab with product fetching and auto-matching

@@ -184,21 +184,25 @@ export class InventoryRecommendationBatch {
         }
 
         // Upsert recommendation
+        const skuContext = skuContexts.find(c => c.sku === rec.sku);
         await this.storage.upsertAIRecommendation({
           type: "INVENTORY",
           itemId: rec.itemId,
           sku: rec.sku,
-          productName: skuContexts.find(c => c.sku === rec.sku)?.productName || "",
+          productName: skuContext?.productName || "",
           recommendationType: rec.recommendedAction === "ORDER" ? "REORDER" : "MONITOR",
           riskLevel: rec.riskLevel === "NEED_ORDER" ? "HIGH" : rec.riskLevel,
           daysUntilStockout: rec.daysUntilStockout,
-          availableForSale: skuContexts.find(c => c.sku === rec.sku)?.availableForSale || 0,
+          availableForSale: skuContext?.availableForSale || 0,
           recommendedQty: rec.recommendedQty,
           recommendedAction: rec.recommendedAction,
           reasonSummary: rec.reasoning,
           orderTiming: rec.orderTiming,
           batchLogId: batchLog.id,
           status: "NEW",
+          adMultiplier: skuContext?.adMultiplier ?? 1.0,
+          baseVelocity: skuContext?.dailyVelocity ?? null,
+          adjustedVelocity: skuContext ? skuContext.dailyVelocity * (skuContext.adMultiplier || 1.0) : null,
         });
 
         // Auto-create draft PO for critical items with ORDER_TODAY timing
@@ -611,6 +615,18 @@ Respond with a JSON array of recommendations in this exact format:
         reasoning = `Monitor: ${Math.round(daysUntilStockout)} days of stock, ${Math.round(coverageBuffer)} days buffer.`;
       } else {
         reasoning = `Healthy: ${Math.round(daysUntilStockout)} days of stock coverage.`;
+      }
+
+      // Add demand risk context when ad multiplier indicates surge
+      if (ctx.adMultiplier > 1) {
+        const surgePercent = Math.round((ctx.adMultiplier - 1) * 100);
+        if (surgePercent >= 30) {
+          reasoning += ` WARNING: ${surgePercent}% demand surge risk from ad performance - recommend ordering now.`;
+        } else if (surgePercent >= 15) {
+          reasoning += ` Caution: ${surgePercent}% demand surge risk from ad trends.`;
+        } else if (surgePercent >= 5) {
+          reasoning += ` Note: ${surgePercent}% elevated demand from ads.`;
+        }
       }
 
       if (ctx.inboundPO > 0) {

@@ -1912,6 +1912,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: "supplierScore", label: "Supplier Score", group: "supplyChain", visible: false },
   
   // Historical
+  { id: "demandRisk", label: "Demand Risk", group: "historical", visible: true },
   { id: "salesVelocity", label: "Velocity", group: "historical", visible: true },
   { id: "velocityTrend", label: "Trend", group: "historical", visible: false },
   { id: "yoySales", label: "YoY Sales", group: "historical", visible: false },
@@ -1961,6 +1962,7 @@ interface AIRecommendationData {
   supplierScore: number | null;
   
   // Historical
+  adMultiplier: number | null;
   salesVelocity: number;
   velocityTrend: number | null;
   yoySales: number | null;
@@ -2025,6 +2027,7 @@ function AIRecommendationsTab() {
             moq: null,
             supplierName: null,
             supplierScore: null,
+            adMultiplier: rec.adMultiplier ?? null,
             salesVelocity: rec.adjustedVelocity ?? rec.baseVelocity ?? 0,
             velocityTrend: null,
             yoySales: null,
@@ -2143,6 +2146,25 @@ function AIRecommendationsTab() {
         return rec.supplierName || "-";
       case "supplierScore":
         return rec.supplierScore !== null ? `${rec.supplierScore}/100` : "-";
+      case "demandRisk":
+        if (rec.adMultiplier === null || rec.adMultiplier <= 1) {
+          return <span className="text-muted-foreground">—</span>;
+        }
+        const surgePercent = Math.round((rec.adMultiplier - 1) * 100);
+        return (
+          <Badge 
+            className={`text-xs ${
+              surgePercent >= 30 
+                ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300" 
+                : surgePercent >= 15 
+                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                  : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
+            }`}
+            title={`Ad performance indicates ${surgePercent}% potential demand increase`}
+          >
+            +{surgePercent}% surge
+          </Badge>
+        );
       case "salesVelocity":
         return `${rec.salesVelocity.toFixed(1)}/day`;
       case "velocityTrend":

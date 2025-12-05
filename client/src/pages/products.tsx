@@ -487,6 +487,37 @@ function ItemTableRow({
         </td>
       )}
 
+      {/* Days to Stockout Column (only for finished products) */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle whitespace-nowrap text-right" data-testid={`text-days-to-stockout-${item.id}`}>
+          {(() => {
+            const availableQty = item.availableForSaleQty ?? 0;
+            const velocity = item.dailyUsage || 0;
+            
+            if (velocity <= 0 || availableQty <= 0) {
+              return <span className="text-muted-foreground">—</span>;
+            }
+            
+            const daysToStockout = Math.round(availableQty / velocity);
+            
+            let cellClass = "";
+            if (daysToStockout < 7) {
+              cellClass = "bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 font-bold";
+            } else if (daysToStockout < 21) {
+              cellClass = "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 font-medium";
+            } else {
+              cellClass = "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300";
+            }
+            
+            return (
+              <span className={`px-2 py-0.5 rounded text-sm ${cellClass}`}>
+                {daysToStockout}d
+              </span>
+            );
+          })()}
+        </td>
+      )}
+
       {/* Backorders Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
@@ -2236,6 +2267,7 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Hildale Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Pivot Qty</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Available for Sale</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Days to Stockout</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorders</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>

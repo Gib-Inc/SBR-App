@@ -9452,10 +9452,10 @@ Notes: ${po.notes || 'None'}
   // Public endpoint - use HMAC verification for security
   app.post("/api/webhooks/shopify", async (req: Request, res: Response) => {
     try {
-      const shopifyWebhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+      const shopifyApiSecret = process.env.SHOPIFY_API_SECRET;
       
       // Verify HMAC signature if secret is configured
-      if (shopifyWebhookSecret) {
+      if (shopifyApiSecret) {
         const hmacHeader = req.headers['x-shopify-hmac-sha256'] as string;
         if (!hmacHeader) {
           console.error("[Shopify Webhook] Missing HMAC header");
@@ -9470,7 +9470,7 @@ Notes: ${po.notes || 'None'}
         }
         
         const calculatedHmac = crypto
-          .createHmac('sha256', shopifyWebhookSecret)
+          .createHmac('sha256', shopifyApiSecret)
           .update(rawBody)
           .digest('base64');
         
@@ -9481,7 +9481,7 @@ Notes: ${po.notes || 'None'}
         
         console.log("[Shopify Webhook] HMAC signature verified successfully");
       } else {
-        console.warn("[Shopify Webhook] SHOPIFY_WEBHOOK_SECRET not configured - skipping signature verification");
+        console.warn("[Shopify Webhook] SHOPIFY_API_SECRET not configured - skipping signature verification");
       }
 
       const topic = req.headers['x-shopify-topic'] as string;

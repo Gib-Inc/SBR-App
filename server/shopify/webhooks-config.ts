@@ -23,19 +23,6 @@ export const SHOPIFY_WEBHOOK_TOPICS = [
   "inventory_levels/disconnect",
   "fulfillments/create",
   "fulfillments/update",
-  "fulfillment_orders/cancellation_request_submitted",
-  "fulfillment_orders/cancelled",
-  "fulfillment_orders/fulfillment_request_submitted",
-  "fulfillment_orders/hold",
-  "fulfillment_orders/line_items_prepared_for_local_delivery",
-  "fulfillment_orders/merged",
-  "fulfillment_orders/moved",
-  "fulfillment_orders/order_routing_complete",
-  "fulfillment_orders/placed_on_hold",
-  "fulfillment_orders/released_from_hold",
-  "fulfillment_orders/rescheduled",
-  "fulfillment_orders/scheduled_fulfillment_order_ready",
-  "fulfillment_orders/split",
 ] as const;
 
 export type ShopifyWebhookTopic = typeof SHOPIFY_WEBHOOK_TOPICS[number];
@@ -126,19 +113,6 @@ export const WEBHOOK_CATEGORIES = {
   fulfillments: [
     "fulfillments/create",
     "fulfillments/update",
-    "fulfillment_orders/cancellation_request_submitted",
-    "fulfillment_orders/cancelled",
-    "fulfillment_orders/fulfillment_request_submitted",
-    "fulfillment_orders/hold",
-    "fulfillment_orders/line_items_prepared_for_local_delivery",
-    "fulfillment_orders/merged",
-    "fulfillment_orders/moved",
-    "fulfillment_orders/order_routing_complete",
-    "fulfillment_orders/placed_on_hold",
-    "fulfillment_orders/released_from_hold",
-    "fulfillment_orders/rescheduled",
-    "fulfillment_orders/scheduled_fulfillment_order_ready",
-    "fulfillment_orders/split",
   ],
 } as const;
 

@@ -4526,6 +4526,19 @@ TOTAL: $${subtotal.toFixed(2)}
       const unmatchedSkus: string[] = [];
       const errors: string[] = [];
       const affectedProductIds = new Set<string>();
+      
+      // Track synced records for detailed logging
+      const syncedRecords: Array<{
+        id: string;
+        orderNumber?: string;
+        customerName?: string;
+        status?: string;
+        totalAmount?: number;
+        currency?: string;
+        itemCount?: number;
+        syncAction?: 'created' | 'updated' | 'skipped';
+        syncReason?: string;
+      }> = [];
 
       // Process each order
       for (const orderData of normalizedOrders) {
@@ -4549,6 +4562,18 @@ TOTAL: $${subtotal.toFixed(2)}
               rawPayload: orderData.rawPayload,
             });
             updatedCount++;
+            
+            // Track updated record
+            syncedRecords.push({
+              id: orderData.externalOrderId,
+              orderNumber: orderData.externalOrderId,
+              customerName: orderData.customerName,
+              status: orderData.status,
+              totalAmount: orderData.totalAmount,
+              currency: orderData.currency,
+              itemCount: orderData.lineItems.length,
+              syncAction: 'updated',
+            });
           } else {
             // Determine fulfillment source using FulfillmentDecisionService
             // This decides whether to ship from Hildale or Pivot/Extensiv based on inventory thresholds
@@ -4682,6 +4707,18 @@ TOTAL: $${subtotal.toFixed(2)}
             }
 
             createdCount++;
+            
+            // Track created record
+            syncedRecords.push({
+              id: orderData.externalOrderId,
+              orderNumber: orderData.externalOrderId,
+              customerName: orderData.customerName,
+              status: orderData.status,
+              totalAmount: orderData.totalAmount,
+              currency: orderData.currency,
+              itemCount: orderData.lineItems.length,
+              syncAction: 'created',
+            });
 
             // Log sale import
             try {
@@ -4700,10 +4737,24 @@ TOTAL: $${subtotal.toFixed(2)}
         } catch (error: any) {
           errors.push(`Order ${orderData.externalOrderId}: ${error.message}`);
           console.error(`[Amazon] Failed to process order ${orderData.externalOrderId}:`, error);
+          
+          // Track skipped/failed record
+          syncedRecords.push({
+            id: orderData.externalOrderId,
+            orderNumber: orderData.externalOrderId,
+            customerName: orderData.customerName,
+            status: orderData.status,
+            totalAmount: orderData.totalAmount,
+            currency: orderData.currency,
+            itemCount: orderData.lineItems.length,
+            syncAction: 'skipped',
+            syncReason: error.message,
+          });
+          skippedCount++;
         }
       }
 
-      // Log sync completion
+      // Log sync completion with detailed records
       try {
         await AuditLogger.logIntegrationSync({
           source: 'AMAZON',
@@ -4712,6 +4763,7 @@ TOTAL: $${subtotal.toFixed(2)}
           recordsCreated: createdCount,
           recordsUpdated: updatedCount,
           recordsSkipped: skippedCount,
+          syncedRecords,
         });
       } catch (logError) {
         console.warn('[Amazon] Failed to log sync completion:', logError);

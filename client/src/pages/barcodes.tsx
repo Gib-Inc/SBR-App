@@ -1450,9 +1450,16 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
     if (product) {
       setName(product.name);
       setSku(product.sku);
-      setProductKind(product.type === "finished_product" ? "FINISHED" : "RAW");
+      // Auto-detect barcode format based on whether product has a UPC
+      // If product has UPC -> GS1 format, otherwise -> Internal code
+      const hasUpc = Boolean(product.upc);
+      setProductKind(hasUpc ? "FINISHED" : "RAW");
+      setBarcodeValue(""); // Clear any previous barcode value
     }
   };
+
+  // Get the selected product for display
+  const selectedProduct = allItems.find((p: any) => p.id === selectedProductId);
 
   const autoGenerateMutation = useMutation({
     mutationFn: async () => {
@@ -1672,25 +1679,22 @@ function BarcodeForm({ onClose }: { onClose: () => void }) {
             )}
           </div>
 
-          {selectedProductId && (
-            <div className="space-y-2">
-              <Label>Barcode Format</Label>
-              <Select value={productKind} onValueChange={(v: "FINISHED" | "RAW") => {
-                setProductKind(v);
-                setBarcodeValue("");
-              }}>
-                <SelectTrigger data-testid="select-barcode-format">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="FINISHED">GS1 (Finished Product UPC)</SelectItem>
-                  <SelectItem value="RAW">Internal Code (Item Inventory)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
+          {selectedProductId && selectedProduct && (
+            <div className="rounded-md border p-3 bg-muted/30">
+              <div className="flex items-center gap-2">
+                <Badge variant={productKind === "FINISHED" ? "default" : "secondary"}>
+                  {productKind === "FINISHED" ? "GS1 Format" : "Internal Code"}
+                </Badge>
+                <span className="text-sm text-muted-foreground">
+                  {productKind === "FINISHED" 
+                    ? `Product has UPC: ${selectedProduct.upc}` 
+                    : "No UPC found - using internal format"}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
                 {productKind === "FINISHED" 
-                  ? "12-digit GS1/UPC for retail scanning" 
-                  : "Internal warehouse code (RAW-000001 format)"}
+                  ? "Will generate a 12-digit GS1/UPC barcode for retail scanning" 
+                  : "Will generate an internal warehouse code (RAW-000001 format)"}
               </p>
             </div>
           )}

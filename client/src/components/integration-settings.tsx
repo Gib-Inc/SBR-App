@@ -134,7 +134,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   const registerWebhooksMutation = useMutation({
     mutationFn: async () => {
       const baseUrl = window.location.origin;
-      const callbackUrl = `${baseUrl}/api/shopify/webhook-receiver`;
+      const callbackUrl = `${baseUrl}/api/webhooks/shopify`;
       return apiRequest("POST", "/api/shopify/webhooks/register-orders", { callbackUrl });
     },
     onSuccess: () => {

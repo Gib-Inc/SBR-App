@@ -62,6 +62,7 @@ import {
   History,
   Zap,
   Archive,
+  RefreshCcw,
 } from "lucide-react";
 
 function GhlConversationIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -408,6 +409,30 @@ export default function SalesOrders() {
     },
   });
 
+  const syncShopifyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/shopify/reconciliation/trigger", {});
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    onSuccess: (result: { ordersCreated?: number; ordersUpdated?: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      const created = result.ordersCreated || 0;
+      const updated = result.ordersUpdated || 0;
+      toast({ 
+        title: "Shopify Sync Complete",
+        description: `${created} orders imported, ${updated} orders updated`
+      });
+    },
+    onError: (error: Error) => {
+      toast({ 
+        title: "Sync Failed", 
+        description: error.message,
+        variant: "destructive" 
+      });
+    },
+  });
+
   const form = useForm<NewOrderFormValues>({
     resolver: zodResolver(newOrderSchema),
     defaultValues: {
@@ -601,16 +626,34 @@ export default function SalesOrders() {
             </TabsList>
           </Tabs>
           {activeTab === "live" && (
-            <Button 
-              onClick={() => {
-                form.reset();
-                setShowNewOrderDialog(true);
-              }}
-              data-testid="button-new-order"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              New Order
-            </Button>
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="outline"
+                    onClick={() => syncShopifyMutation.mutate()}
+                    disabled={syncShopifyMutation.isPending}
+                    data-testid="button-sync-shopify"
+                  >
+                    <RefreshCcw className={`h-4 w-4 mr-2 ${syncShopifyMutation.isPending ? 'animate-spin' : ''}`} />
+                    {syncShopifyMutation.isPending ? "Syncing..." : "Sync Shopify"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Fetch recent orders from Shopify to catch any missed webhooks</p>
+                </TooltipContent>
+              </Tooltip>
+              <Button 
+                onClick={() => {
+                  form.reset();
+                  setShowNewOrderDialog(true);
+                }}
+                data-testid="button-new-order"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                New Order
+              </Button>
+            </>
           )}
         </div>
       </div>

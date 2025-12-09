@@ -1,0 +1,225 @@
+You are an expert TypeScript full-stack engineer working inside my existing inventory + manufacturing app.
+
+IMPORTANT CONSTRAINTS
+- Do NOT restructure or rewrite server/app.ts. You can add minimal imports/route registrations if needed, but keep the overall app wiring the same (sessions, middleware, routes, error handling).
+- Do NOT add new database tables or columns. Use the existing schema in shared/schema.ts.
+- Work with the existing fields:
+  - items.type: 'component' | 'finished_product'
+  - items.productKind: 'RAW' | 'FINISHED'
+  - items.hildaleQty
+  - items.pivotQty
+  - items.availableForSaleQty
+  - items.currentStock
+  - inventoryByBin, purchaseOrders, salesOrders, etc.
+- Goal is to correct behavior and invariants, not to redesign the system.
+
+HIGH-LEVEL DOMAIN RULES (WHAT I WANT)
+
+1) Raw vs finished (same items table, logically separate)
+- Use items.type and/or productKind to distinguish:
+  - Finished goods: type === 'finished_product' or productKind === 'FINISHED'
+  - Raw/components: type === 'component' or productKind === 'RAW'
+- Conceptual separation:
+  - Finished goods live in Hildale (internal) and Pivot/Extensiv (3PL).
+  - Raw/components live only in the internal/raw inventory (currentStock + bins).
+
+2) HildaleQty behavior (finished goods only)
+- hildaleQty represents ONLY finished products physically at Hildale.
+- Sales orders must NEVER change hildaleQty.
+- hildaleQty is allowed to change ONLY via:
+  - PRODUCTION_COMPLETED events for finished goods (consuming components, adding finished units).
+  - Explicit manual adjustments targeting HILDALE.
+  - Internal transfers that move finished goods out of Hildale (e.g. Hildale → Pivot).
+- POs must NOT update hildaleQty (see below).
+- Add comments near any hildaleQty logic explaining this invariant.
+
+3) Raw/component inventory behavior
+- Raw/components are items with type === 'component' or productKind === 'RAW'.
+- Their quantities are tracked via currentStock (and inventoryByBin) ONLY.
+- Purchase orders are ONLY for raw/components.
+- When a PO is received:
+  - Increment currentStock (and inventoryByBin) for those component items.
+  - DO NOT update hildaleQty or pivotQty.
+- For finished_product items:
+  - PURCHASE_ORDER_RECEIVED should NOT change hildaleQty.
+  - Either:
+    - Return a failure, or
+    - No-op with a warning log;
+    - But do NOT increment hildaleQty or pivotQty for finished_product on PO receipt.
+
+4) PivotQty and AvailableForSale invariants
+- pivotQty is a read-only snapshot coming from Extensiv/Pivot.
+- The ONLY place pivotQty is allowed to change is Extensiv/Pivot sync logic.
+- Sales, returns, backorders, and internal flows must NEVER mutate pivotQty directly.
+- availableForSaleQty is the field that:
+  - Is reduced by sales/orders.
+  - Increased by returns (for resellable finished goods).
+  - Reconciled when pivotQty is refreshed from Extensiv.
+- Changes to availableForSaleQty must NOT be pushed back to Extensiv.
+- After an Extensiv inventory sync:
+  - Update pivotQty from Extensiv.
+  - Recalculate or reconcile availableForSaleQty based on the new pivotQty and known local commitments (open orders, backorders, returns).
+  - Do NOT write any inventory data back to Extensiv.
+
+5) Sales orders, shortages/backorders, and GHL alert
+
+Goal behavior:
+- If a customer orders 10 rollers and we only have 8 available, we ship 8, put 2 on backorder, and create a GHL “Needs attention” alert instructing production to build at least 2 immediately.
+
+Implementation details:
+- Open:
+  - server/services/inventory-movement.ts
+  - server/services/gohighlevel-client.ts (and any GHL helpers)
+  - server/shopify/webhook-handlers.ts
+  - server/services/shopify-reconciliation-scheduler.ts
+  - Any salesOrders creation/update services.
+
+Sales allocation logic:
+- For each finished_product line:
+  - requestedQty = customer quantity.
+  - available = items.availableForSaleQty.
+- If available >= requestedQty:
+  - Allocate requestedQty.
+  - Decrement availableForSaleQty by requestedQty via InventoryMovement or equivalent.
+  - Do NOT touch pivotQty or hildaleQty.
+- If available < requestedQty (e.g. requestedQty = 10, available = 8):
+  - Allocate available units (8) as “immediate fulfillment”.
+  - Mark remaining 2 units as BACKORDER on that line.
+  - Decrement availableForSaleQty by the allocated amount (8).
+  - Do NOT touch pivotQty or hildaleQty.
+  - Trigger a GHL “Needs attention” alert (see next section).
+
+GHL “Needs attention” opportunity:
+- Add a small service if needed (e.g. server/services/ghl-stock-alert-service.ts).
+- When a shortage/backorder is detected on a line for a finished_product:
+  - Create or update a GoHighLevel opportunity in a “Needs attention” stage (pipeline and stage IDs must be configurable, not hard-coded).
+  - Notes should clearly say something like:
+    - “SKU [sku] is short by [missingQty]. Produce at least [missingQty] immediately. Order has [missingQty] units on backorder.”
+  - If an opportunity already exists for that SKU in that stage, update it instead of duplicating.
+
+6) Shopify/Sales flows must NOT touch pivotQty
+
+- Open:
+  - server/shopify/webhook-handlers.ts
+  - server/services/shopify-reconciliation-scheduler.ts
+  - Any shared sales order creation logic.
+
+Change the behavior so that:
+- For finished_product items, on SALES_ORDER_CREATED:
+  - Decrement ONLY availableForSaleQty.
+  - Do NOT decrement pivotQty.
+- On SALES_ORDER_CANCELLED for finished_product:
+  - Increase ONLY availableForSaleQty by the cancelled quantity.
+  - Do NOT increase pivotQty.
+- On SALES_ORDER_SHIPPED:
+  - For finished_product, this should generally be a no-op inventory-wise (already handled at create). Do NOT touch hildaleQty or pivotQty.
+  - For components (rare direct sale), it can still decrement currentStock as currently designed.
+- The Shopify reconciliation job should:
+  - Create/update salesOrders as it does now for missed orders.
+  - Use the same logic above (only affecting availableForSaleQty).
+  - Never change pivotQty.
+
+7) Extensiv/Pivot: V1 is strictly READ-ONLY
+
+- Open:
+  - server/services/extensiv-client.ts
+  - Any Extensiv sync scheduler/service.
+
+Requirements:
+- Extensiv and Pivot refer to the same underlying 3PL; Extensiv is the SaaS, Pivot is the business.
+- For V1:
+  - Do NOT create or update orders in Extensiv from this app.
+  - Remove or hard-disable any code that attempts to push orders or adjustments to Extensiv.
+- Inventory sync:
+  - Only update items.pivotQty and related snapshot fields here.
+  - After pivotQty is updated, recompute or reconcile availableForSaleQty as described above.
+  - Never push availableForSaleQty back to Extensiv.
+
+8) Returns should increase available-for-sale (and NOT touch pivotQty)
+
+- Open:
+  - server/services/inventory-movement.ts
+  - server/services/returns-service.ts
+
+Behavior:
+- For finished_product returns that are RESTOCK / resellable:
+  - Increase availableForSaleQty by the returned quantity.
+  - pivotQty remains untouched (still from Extensiv).
+  - It is acceptable for hildaleQty to also increase if the design expects returned product to physically sit at Hildale, but the key is:
+    - Sales reduce availableForSaleQty.
+    - Returns increase availableForSaleQty.
+- For non-resellable returns (scrap, inspect), do not increase availableForSaleQty.
+
+9) Purchase Orders (POs) – ONLY affect raw/components
+
+- Open:
+  - server/services/inventory-movement.ts (PURCHASE_ORDER_RECEIVED case)
+  - Any PO service such as server/services/purchase-orders-service.ts or po-state-machine.ts.
+
+Change behavior:
+- PURCHASE_ORDER_RECEIVED event:
+  - If item is a component/raw (type === 'component' or productKind === 'RAW'):
+    - quantityDelta = params.quantity.
+    - Increase currentStock and update inventoryByBin as appropriate.
+    - Do NOT change hildaleQty or pivotQty.
+  - If item is finished_product (productKind === 'FINISHED'):
+    - Do NOT increment hildaleQty.
+    - Either return a failure or treat it as an invalid configuration with a log, but no quantity change.
+- PO status transitions (DRAFT → APPROVAL_PENDING → APPROVED → SENT → PARTIAL_RECEIVED → RECEIVED) should stay as-is; just ensure receiving only updates raw/component inventory.
+
+10) AI InventoryRecommendationBatch – must NOT fail when optional data is missing
+
+- Open:
+  - server/services/inventory-recommendation-batch.ts
+  - server/services/llm.ts (LLMService)
+  - Any code that assembles the AI payload from ads, Extensiv, sales history, etc.
+
+Change behavior so that:
+- Signals from integrations like:
+  - Google Ads
+  - Meta Ads
+  - Extensiv (if not configured yet)
+  are treated as OPTIONAL.
+- If any of these are missing or return empty:
+  - Do NOT throw or abort the entire batch.
+  - Instead:
+    - Build the AI payload without that signal.
+    - Include a flag in the payload/context like `ads_data_available: false` (or similar) so the LLM knows data is missing.
+- Only abort the batch for truly critical failures, e.g.:
+  - Cannot load items list.
+  - Cannot load basic inventory quantities at all.
+- Ensure LLMService handles partial data gracefully and still returns a recommendation per SKU when core inventory data is present.
+
+11) Keep the app wiring stable (server/app.ts)
+
+- DO NOT:
+  - Change how Express is created or exported.
+  - Change session store configuration.
+  - Remove or heavily refactor route mounting.
+- It’s fine to:
+  - Add new small service modules and import them.
+  - Register new endpoints under existing routers.
+  - Add minimal middleware only if truly necessary for this behavior.
+
+12) Final sanity check and summary
+
+- Search for all usages of:
+  - hildaleQty
+  - pivotQty
+  - availableForSaleQty
+  - currentStock
+- Verify they now follow these rules:
+  - Sales and returns only touch availableForSaleQty (for finished goods).
+  - pivotQty only updated in Extensiv sync.
+  - hildaleQty only changed by production, manual adjustments, and transfers – NOT by POs or sales.
+  - POs only affect raw/component inventory.
+- After making changes, summarize for me:
+  - Files you modified.
+  - How the behavior of:
+    - hildaleQty
+    - pivotQty
+    - availableForSaleQty
+    - PO receiving
+    - Sales/backorders + GHL alerts
+    - AI batch with missing data
+  has changed compared to before.

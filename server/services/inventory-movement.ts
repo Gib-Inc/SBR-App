@@ -254,14 +254,19 @@ export class InventoryMovement {
           break;
 
         case "MANUAL_ADJUSTMENT":
+          // INVARIANT: Manual adjustments NEVER touch pivotQty (read-only from Extensiv)
+          // Location determines which field is adjusted for finished products
           quantityDelta = params.quantity;
           if (isFinished) {
             if (location === "HILDALE") {
+              // Adjust buffer stock at Hildale
               updates.hildaleQty = beforeState.hildaleQty + params.quantity;
             } else {
+              // Adjust sellable stock (availableForSaleQty, NOT pivotQty)
               updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
             }
           } else {
+            // Components: adjust currentStock
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
           break;
@@ -274,12 +279,18 @@ export class InventoryMovement {
           break;
 
         case "EXTENSIV_SYNC":
+          // *** THE ONLY EVENT TYPE THAT MODIFIES pivotQty ***
+          // This is the ONLY place pivotQty is allowed to change - it's the canonical
+          // source of truth from Extensiv's physical inventory snapshot.
+          // The delta is applied to availableForSaleQty to keep it in sync.
           if (isFinished) {
             const oldPivotQty = beforeState.pivotQty;
             const newPivotQty = params.quantity;
             const delta = newPivotQty - oldPivotQty;
             
+            // Update pivotQty to match Extensiv snapshot (the ONLY place this happens)
             updates.pivotQty = newPivotQty;
+            // Reconcile availableForSaleQty based on the delta
             updates.availableForSaleQty = beforeState.availableForSaleQty + delta;
             quantityDelta = delta;
           }

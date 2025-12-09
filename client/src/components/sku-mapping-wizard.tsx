@@ -622,6 +622,169 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     );
   }, [extensivProducts, extensivSearchQuery]);
 
+  // === QUICKBOOKS TAB LOGIC ===
+  interface QuickBooksItem {
+    id: string;
+    name: string;
+    sku: string | null;
+    type: string;
+    unitPrice: number | null;
+    purchaseCost: number | null;
+    active: boolean;
+  }
+
+  interface QuickBooksItemsResponse {
+    success: boolean;
+    items: QuickBooksItem[];
+    totalItems: number;
+    error?: string;
+  }
+
+  const [qbSearchQuery, setQbSearchQuery] = useState("");
+  
+  // Fetch QuickBooks items
+  const { data: qbItems, isLoading: isLoadingQb, refetch: refetchQb } = useQuery<QuickBooksItemsResponse>({
+    queryKey: ["/api/quickbooks/items"],
+    enabled: activeTab === "quickbooks",
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+
+  // Precompute maps for O(1) lookups - optimized for large catalogs
+  const { qbByName, qbBySku } = useMemo(() => {
+    const byName = new Map<string, QuickBooksItem>();
+    const bySku = new Map<string, QuickBooksItem>();
+    
+    if (qbItems?.items) {
+      for (const item of qbItems.items) {
+        byName.set(item.name.toLowerCase(), item);
+        if (item.sku) {
+          bySku.set(item.sku.toLowerCase(), item);
+        }
+      }
+    }
+    
+    return { qbByName: byName, qbBySku: bySku };
+  }, [qbItems]);
+
+  // Auto-suggest QuickBooks matches for a product (O(1) lookup)
+  const getQbSuggestedMatch = (item: Item) => {
+    // First try SKU match (highest priority for QuickBooks)
+    if (item.sku) {
+      const skuMatch = qbBySku.get(item.sku.toLowerCase());
+      if (skuMatch) return { qbItem: skuMatch, matchType: 'SKU' as const };
+    }
+    
+    // Try existing quickbooksItemId if set
+    if (item.quickbooksItemId) {
+      const existingMatch = qbItems?.items?.find(qi => qi.id === item.quickbooksItemId);
+      if (existingMatch) return { qbItem: existingMatch, matchType: 'ID' as const };
+    }
+    
+    // Then try name match (case-insensitive partial)
+    const nameMatch = qbByName.get(item.name.toLowerCase());
+    if (nameMatch) return { qbItem: nameMatch, matchType: 'Name' as const };
+    
+    return null;
+  };
+
+  // Link product to QuickBooks item
+  const linkToQbMutation = useMutation({
+    mutationFn: async (data: { itemId: string; quickbooksItemId: string; quickbooksItemName: string; quickbooksItemSku: string | null }) => {
+      const response = await apiRequest("PATCH", `/api/items/${data.itemId}`, {
+        quickbooksItemId: data.quickbooksItemId,
+        quickbooksItemName: data.quickbooksItemName,
+        quickbooksItemSku: data.quickbooksItemSku,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Linked to QuickBooks",
+        description: "Product successfully linked to QuickBooks item",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Link Failed",
+        description: error.message || "Failed to link product",
+      });
+    },
+  });
+
+  // Unlink product from QuickBooks
+  const unlinkFromQbMutation = useMutation({
+    mutationFn: async (itemId: string) => {
+      const response = await apiRequest("PATCH", `/api/items/${itemId}`, {
+        quickbooksItemId: null,
+        quickbooksItemName: null,
+        quickbooksItemSku: null,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Unlinked from QuickBooks",
+        description: "Product unlinked from QuickBooks",
+      });
+    },
+  });
+
+  // Get all suggested QuickBooks matches for bulk apply
+  const getAllQbSuggestedMatches = () => {
+    return filteredProducts
+      .filter(item => !item.quickbooksItemId) // Only unmapped items
+      .map(item => ({ item, match: getQbSuggestedMatch(item) }))
+      .filter((entry): entry is { item: Item; match: NonNullable<ReturnType<typeof getQbSuggestedMatch>> } => 
+        entry.match !== null
+      );
+  };
+
+  // Bulk apply all QuickBooks suggested matches
+  const [isApplyingAllQb, setIsApplyingAllQb] = useState(false);
+  
+  const applyAllQbSuggestedMatches = async () => {
+    const matches = getAllQbSuggestedMatches();
+    if (matches.length === 0) return;
+    
+    setIsApplyingAllQb(true);
+    try {
+      for (const { item, match } of matches) {
+        await linkToQbMutation.mutateAsync({
+          itemId: item.id,
+          quickbooksItemId: match.qbItem.id,
+          quickbooksItemName: match.qbItem.name,
+          quickbooksItemSku: match.qbItem.sku,
+        });
+      }
+      toast({
+        title: "All Matches Applied",
+        description: `Successfully linked ${matches.length} product${matches.length > 1 ? 's' : ''} to QuickBooks`,
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Bulk Apply Failed",
+        description: "Some products could not be linked. Please try again.",
+      });
+    } finally {
+      setIsApplyingAllQb(false);
+    }
+  };
+
+  // Filter QuickBooks items by search
+  const filteredQbItems = useMemo(() => {
+    if (!qbItems?.items) return [];
+    if (!qbSearchQuery) return qbItems.items;
+    const query = qbSearchQuery.toLowerCase();
+    return qbItems.items.filter(item => 
+      item.name.toLowerCase().includes(query) ||
+      (item.sku?.toLowerCase().includes(query))
+    );
+  }, [qbItems, qbSearchQuery]);
+
   // Render enhanced Shopify tab
   const renderShopifyTab = () => {
     // Use all items for Shopify mapping stats (not just finished products)
@@ -1063,6 +1226,232 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     );
   };
 
+  // Render enhanced QuickBooks tab with auto-matching
+  const renderQuickBooksTab = () => {
+    const mappedCount = allMappableItems.filter(p => p.quickbooksItemId).length;
+    const unmappedCount = allMappableItems.length - mappedCount;
+
+    if (isLoadingQb) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          <span className="ml-2 text-muted-foreground">Loading QuickBooks items...</span>
+        </div>
+      );
+    }
+
+    if (!qbItems?.success) {
+      return (
+        <div className="text-center py-8">
+          <SiQuickbooks className="h-12 w-12 text-[#2ca01c] mx-auto mb-3" />
+          <p className="font-medium">Connect QuickBooks to Enable Auto-Matching</p>
+          <p className="text-sm text-muted-foreground mb-4 max-w-md mx-auto">
+            {qbItems?.error?.includes("not connected") 
+              ? "Connect your QuickBooks account in AI Agent → Data Sources to automatically match products by SKU."
+              : qbItems?.error || "Configure QuickBooks integration to enable product matching."}
+          </p>
+          <div className="flex justify-center gap-2">
+            <Button variant="outline" onClick={() => refetchQb()} data-testid="button-retry-quickbooks">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const suggestedMatches = getAllQbSuggestedMatches();
+    const suggestedCount = suggestedMatches.length;
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="gap-1">
+              <CheckCircle className="h-3 w-3 text-green-500" />
+              {mappedCount} Linked
+            </Badge>
+            <Badge variant="outline" className="gap-1">
+              <XCircle className="h-3 w-3 text-orange-500" />
+              {unmappedCount} Unmapped
+            </Badge>
+            {suggestedCount > 0 && (
+              <Badge variant="default" className="gap-1 bg-green-600">
+                <Sparkles className="h-3 w-3" />
+                {suggestedCount} Suggested
+              </Badge>
+            )}
+            <Badge variant="secondary" className="gap-1">
+              <SiQuickbooks className="h-3 w-3" />
+              {qbItems.totalItems} Items
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {suggestedCount > 0 && (
+              <Button
+                size="sm"
+                onClick={applyAllQbSuggestedMatches}
+                disabled={isApplyingAllQb}
+                data-testid="button-apply-all-quickbooks"
+              >
+                {isApplyingAllQb ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4 mr-1" />
+                )}
+                Apply All ({suggestedCount})
+              </Button>
+            )}
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => refetchQb()}
+              data-testid="button-refresh-quickbooks"
+            >
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        <ScrollArea className="h-[400px] pr-4">
+          <div className="space-y-2">
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                {searchQuery ? "No products match your search" : "No products found"}
+              </div>
+            ) : (
+              filteredProducts.map((item) => {
+                const isLinked = !!item.quickbooksItemId;
+                const suggestedMatch = !isLinked ? getQbSuggestedMatch(item) : null;
+                const linkedQbItem = isLinked && qbItems.items 
+                  ? qbItems.items.find(qi => qi.id === item.quickbooksItemId)
+                  : null;
+
+                return (
+                  <Card key={item.id} className={`${isLinked ? "border-green-500/50" : suggestedMatch ? "border-primary/50" : ""} overflow-hidden`}>
+                    <CardContent className="p-3">
+                      <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3 items-center">
+                        <div className="min-w-0 overflow-hidden">
+                          <div className="font-medium truncate flex items-center gap-2">
+                            <span 
+                              className={`h-2 w-2 rounded-full flex-shrink-0 ${item.upc ? "bg-green-500" : "bg-blue-500"}`}
+                              title={item.upc ? "Finished Product (has UPC)" : "Component (no UPC)"}
+                            />
+                            {item.name}
+                          </div>
+                          <div className="text-sm text-muted-foreground font-mono ml-4">{item.sku}</div>
+                        </div>
+                        <div className="min-w-0">
+                          {isLinked ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 min-w-0">
+                                  <Link2 className="h-4 w-4 flex-shrink-0" />
+                                  <span className="font-medium truncate">
+                                    {linkedQbItem?.name || item.quickbooksItemName || `ID: ${item.quickbooksItemId}`}
+                                  </span>
+                                </div>
+                                {linkedQbItem?.sku && (
+                                  <div className="text-xs text-green-600 dark:text-green-400 ml-5">
+                                    SKU: {linkedQbItem.sku}
+                                  </div>
+                                )}
+                              </div>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => unlinkFromQbMutation.mutate(item.id)}
+                                disabled={unlinkFromQbMutation.isPending}
+                                data-testid={`button-unlink-quickbooks-${item.id}`}
+                              >
+                                <Unlink className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : suggestedMatch ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 min-w-0 px-3 py-2 bg-green-50 dark:bg-green-950 rounded border border-green-200 dark:border-green-800 overflow-hidden">
+                                <div className="flex items-center gap-1 text-sm text-green-700 dark:text-green-300 min-w-0">
+                                  <Sparkles className="h-4 w-4 flex-shrink-0" />
+                                  <span className="font-medium truncate">{suggestedMatch.qbItem.name}</span>
+                                </div>
+                                <div className="text-xs text-green-600 dark:text-green-400 ml-5">
+                                  {suggestedMatch.qbItem.sku && `SKU: ${suggestedMatch.qbItem.sku} | `}
+                                  Match: {suggestedMatch.matchType}
+                                </div>
+                              </div>
+                              <Button
+                                size="icon"
+                                onClick={() => linkToQbMutation.mutate({
+                                  itemId: item.id,
+                                  quickbooksItemId: suggestedMatch.qbItem.id,
+                                  quickbooksItemName: suggestedMatch.qbItem.name,
+                                  quickbooksItemSku: suggestedMatch.qbItem.sku,
+                                })}
+                                disabled={linkToQbMutation.isPending}
+                                data-testid={`button-accept-quickbooks-match-${item.id}`}
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <Select
+                              value=""
+                              onValueChange={(qbItemId) => {
+                                if (qbItemId) {
+                                  const selectedQbItem = qbItems.items.find(qi => qi.id === qbItemId);
+                                  if (selectedQbItem) {
+                                    linkToQbMutation.mutate({
+                                      itemId: item.id,
+                                      quickbooksItemId: selectedQbItem.id,
+                                      quickbooksItemName: selectedQbItem.name,
+                                      quickbooksItemSku: selectedQbItem.sku,
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-full" data-testid={`select-quickbooks-item-${item.id}`}>
+                                <SelectValue placeholder="Select QuickBooks item..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <div className="p-2">
+                                  <Input
+                                    placeholder="Search items..."
+                                    value={qbSearchQuery}
+                                    onChange={(e) => setQbSearchQuery(e.target.value)}
+                                    className="mb-2"
+                                  />
+                                </div>
+                                <ScrollArea className="h-[200px]">
+                                  {filteredQbItems.slice(0, 50).map((qbItem) => (
+                                    <SelectItem key={qbItem.id} value={qbItem.id}>
+                                      <div className="flex flex-col">
+                                        <span className="truncate">{qbItem.name}</span>
+                                        <span className="text-xs text-muted-foreground">
+                                          {qbItem.sku && `SKU: ${qbItem.sku} | `}
+                                          Type: {qbItem.type}
+                                        </span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </ScrollArea>
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  };
+
   const renderChannelTab = (
     channel: "shopifySku" | "amazonSku" | "extensivSku" | "quickbooksItemId",
     channelLabel: string,
@@ -1223,7 +1612,7 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
             </TabsContent>
 
             <TabsContent value="quickbooks" className="mt-4">
-              {renderChannelTab("quickbooksItemId", "QuickBooks", "Enter QuickBooks Item ID")}
+              {renderQuickBooksTab()}
             </TabsContent>
           </Tabs>
         </div>

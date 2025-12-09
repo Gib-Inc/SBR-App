@@ -1091,6 +1091,89 @@ export class QuickBooksClient {
   }
 
   /**
+   * Fetch all items from QuickBooks for SKU mapping wizard
+   * Returns inventory and non-inventory items with their SKUs
+   */
+  async fetchItems(): Promise<{
+    success: boolean;
+    items: Array<{
+      id: string;
+      name: string;
+      sku: string | null;
+      type: string;
+      unitPrice: number | null;
+      purchaseCost: number | null;
+      active: boolean;
+    }>;
+    totalItems: number;
+    error?: string;
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, items: [], totalItems: 0, error: 'QuickBooks not connected' };
+      }
+
+      // Fetch all active items (inventory and non-inventory)
+      const query = encodeURIComponent(
+        `SELECT * FROM Item WHERE Active = true MAXRESULTS 1000`
+      );
+      
+      const result = await this.apiRequest<{ 
+        QueryResponse: { 
+          Item?: Array<{
+            Id: string;
+            Name: string;
+            Sku?: string;
+            Type: string;
+            UnitPrice?: number;
+            PurchaseCost?: number;
+            Active?: boolean;
+          }>;
+          totalCount?: number;
+        } 
+      }>(`/query?query=${query}`);
+
+      const items = (result.QueryResponse?.Item || []).map(item => ({
+        id: item.Id,
+        name: item.Name,
+        sku: item.Sku || null,
+        type: item.Type,
+        unitPrice: item.UnitPrice || null,
+        purchaseCost: item.PurchaseCost || null,
+        active: item.Active !== false,
+      }));
+
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'ITEMS_FETCHED',
+        status: 'INFO',
+        description: `Fetched ${items.length} items from QuickBooks`,
+      });
+
+      return {
+        success: true,
+        items,
+        totalItems: items.length,
+      };
+    } catch (error: any) {
+      console.error('[QuickBooks] Error fetching items:', error);
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'ITEMS_FETCH_ERROR',
+        status: 'ERROR',
+        description: `Failed to fetch QuickBooks items: ${error.message}`,
+      });
+      return {
+        success: false,
+        items: [],
+        totalItems: 0,
+        error: error.message || 'Failed to fetch items',
+      };
+    }
+  }
+
+  /**
    * Get sales snapshots for AI forecasting
    */
   async getSalesSnapshotsForSku(sku: string): Promise<QuickbooksSalesSnapshot[]> {

@@ -12938,6 +12938,24 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/quickbooks/items - Fetch items from QuickBooks for SKU mapping
+  app.get("/api/quickbooks/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id || 'system';
+      const qbClient = new QuickBooksClient(storage, userId);
+      const result = await qbClient.fetchItems();
+      
+      if (!result.success) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('[QuickBooks] Items fetch error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to fetch items' });
+    }
+  });
+
   // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================

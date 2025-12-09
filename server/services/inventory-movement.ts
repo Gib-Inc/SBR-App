@@ -8,56 +8,76 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  * 
  * This system uses PATTERN B: INTERNAL-DRIVEN inventory movements.
  * 
- * ABSOLUTE RULE: Sales Orders ONLY impact Pivot inventory, NEVER Hildale inventory.
+ * KEY INVARIANTS:
  * 
- * Core Principle:
- * - Sales Orders in THIS app are the canonical source of stock movements
- * - Shopify/Amazon/external channels FEED order data into our Sales Orders
- * - External channels do NOT move stock directly - only our Sales Orders do
+ * 1. pivotQty is READ-ONLY from Extensiv
+ *    - The ONLY place pivotQty changes is EXTENSIV_SYNC
+ *    - Sales, returns, transfers, backorders NEVER mutate pivotQty
+ *    - pivotQty represents physical stock at Pivot 3PL (as reported by Extensiv)
+ * 
+ * 2. availableForSaleQty is the working sellable field
+ *    - Reduced by sales orders
+ *    - Increased by cancellations, returns (resellable), and transfers
+ *    - Reconciled when pivotQty is refreshed from Extensiv
+ * 
+ * 3. hildaleQty is buffer/production stock
+ *    - ONLY changed by: production, manual adjustments, transfers (decrement)
+ *    - Sales orders NEVER touch hildaleQty
+ *    - PO receipts do NOT update hildaleQty (POs are for components only)
+ * 
+ * 4. POs are ONLY for raw/components
+ *    - PURCHASE_ORDER_RECEIVED only affects currentStock for components
+ *    - If item is finished_product, PO receipt logs warning and does nothing
  * 
  * Movement Rules:
  * 
  * SALES_ORDER_CREATED (from Shopify/Amazon/Direct):
- *   - ALL sales orders decrement pivotQty/availableForSaleQty ONLY
- *   - NEVER touches hildaleQty regardless of fulfillment source
+ *   - Decrements availableForSaleQty ONLY (NOT pivotQty)
+ *   - NEVER touches hildaleQty
  *   - ONE movement per order line - no double counting
  * 
  * SALES_ORDER_SHIPPED:
  *   - No additional movement (stock already decremented at create)
- *   - NEVER touches hildaleQty
+ *   - NEVER touches hildaleQty or pivotQty
  * 
  * SALES_ORDER_CANCELLED:
- *   - Restores pivotQty/availableForSaleQty
+ *   - Restores availableForSaleQty ONLY (NOT pivotQty)
  *   - NEVER touches hildaleQty
  * 
  * RETURN_RECEIVED:
- *   - Returns ALWAYS go to HILDALE only (not Pivot, not availableForSale)
- *   - Increments hildaleQty ONLY - NOT availableForSaleQty
- *   - Returned items are buffer stock until explicitly transferred to Pivot
- *   - Only on RESTOCK disposition, not SCRAP/INSPECT
- *   - Extensiv is READ-ONLY - no write-back for returns
+ *   - For resellable finished products: increments availableForSaleQty
+ *   - For components: increments currentStock
+ *   - NEVER touches pivotQty (read-only from Extensiv)
  * 
  * PURCHASE_ORDER_RECEIVED:
- *   - Increments hildaleQty ONLY for finished products (POs always go to Hildale)
- *   - Increments currentStock for components
- *   - NEVER touches pivotQty (Pivot stock comes from Extensiv sync or transfers)
+ *   - For components (type === 'component'): increments currentStock
+ *   - For finished products: NO-OP with warning (POs are for components only)
+ *   - NEVER touches hildaleQty, pivotQty, or availableForSaleQty
  * 
  * EXTENSIV_SYNC:
- *   - READ-ONLY sync from Extensiv/3PL warehouse
+ *   - THE ONLY event that updates pivotQty
  *   - Updates pivotQty to match Extensiv snapshot
- *   - Adjusts availableForSaleQty by delta (newPivotQty - oldPivotQty)
+ *   - Reconciles availableForSaleQty based on delta
  *   - NO write-back to Extensiv ever
  * 
+ * PRODUCTION_COMPLETED:
+ *   - Increments hildaleQty for finished products
+ *   - This is how finished goods are created
+ * 
  * TRANSFER (Hildale → Pivot):
- *   - Decrements hildaleQty and increments pivotQty/availableForSaleQty
- *   - Only way to move stock from Hildale to sellable Pivot inventory
+ *   - Decrements hildaleQty
+ *   - Increments availableForSaleQty (makes stock sellable)
+ *   - Does NOT modify pivotQty (that updates via Extensiv sync)
+ * 
+ * MANUAL_ADJUSTMENT:
+ *   - Location HILDALE: adjusts hildaleQty
+ *   - Location PIVOT: adjusts availableForSaleQty
+ *   - NEVER touches pivotQty (read-only)
  * 
  * HILDALE INVENTORY CHANGES ONLY FROM:
- *   - PO receipts into Hildale
- *   - Production/BOM builds
+ *   - Production/BOM builds (increment)
  *   - Hildale → Pivot transfers (decrement)
- *   - Manual adjustments in Hildale
- *   - Returns received (RESTOCK disposition)
+ *   - Manual adjustments targeting HILDALE
  * 
  * IDEMPOTENCY:
  * - Unique constraint on (channel, externalOrderId) prevents duplicate imports
@@ -158,36 +178,43 @@ export class InventoryMovement {
 
       switch (params.eventType) {
         case "PURCHASE_ORDER_RECEIVED":
-          // PO receipts ALWAYS go to Hildale warehouse (not Pivot)
-          // Finished products become available for sale only after Hildale → Pivot transfer
-          quantityDelta = params.quantity;
+          // INVARIANT: POs are ONLY for raw/components, NOT finished products
+          // Finished products are created via PRODUCTION_COMPLETED, not PO receipts
           if (isFinished) {
-            updates.hildaleQty = beforeState.hildaleQty + params.quantity;
-            // DO NOT touch pivotQty or availableForSaleQty - those come from Extensiv sync or transfers
+            // Log warning but do NOT update hildaleQty - this is an invalid configuration
+            console.warn(`[InventoryMovement] WARNING: PO receipt attempted for finished product ${item.sku}. POs should only be for components. No inventory change applied.`);
+            // Return success with zero change to avoid breaking PO flow, but log the issue
+            quantityDelta = 0;
+            // No updates applied for finished products
           } else {
+            // Components: increment currentStock as expected
+            quantityDelta = params.quantity;
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
           break;
 
         case "RETURN_RECEIVED":
-          // Returns ALWAYS go to HILDALE only - NOT available for sale until transferred to Pivot
-          // This enforces Extensiv as READ-ONLY and requires explicit Hildale → Pivot transfer
+          // Returns for resellable finished products go directly to availableForSaleQty
+          // This makes the returned stock immediately sellable again
+          // INVARIANT: pivotQty is READ-ONLY from Extensiv, so we only update availableForSaleQty
           quantityDelta = params.quantity;
           if (isFinished) {
-            // Only increment hildaleQty - NOT availableForSaleQty
-            // Item must be transferred to Pivot via scan/transfer workflow to become sellable
-            updates.hildaleQty = beforeState.hildaleQty + params.quantity;
+            // Increment availableForSaleQty - makes returned stock immediately sellable
+            // Note: pivotQty remains unchanged (read-only from Extensiv)
+            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           } else {
+            // Components: increment currentStock
             updates.currentStock = beforeState.currentStock + params.quantity;
           }
           break;
 
         case "SALES_ORDER_CREATED":
-          // ABSOLUTE RULE: Sales ONLY impact Pivot inventory (pivotQty), NEVER hildaleQty
-          // All sales are fulfilled from Pivot/3PL warehouse
+          // INVARIANT: Sales only decrement availableForSaleQty, NOT pivotQty
+          // pivotQty is READ-ONLY from Extensiv - only EXTENSIV_SYNC can change it
+          // hildaleQty is NEVER touched by sales orders
           if (isFinished) {
             quantityDelta = -params.quantity;
-            updates.pivotQty = Math.max(0, beforeState.pivotQty - params.quantity);
+            // ONLY decrement availableForSaleQty - pivotQty stays unchanged (read-only)
             updates.availableForSaleQty = Math.max(0, beforeState.availableForSaleQty - params.quantity);
           }
           break;
@@ -216,11 +243,12 @@ export class InventoryMovement {
           break;
 
         case "SALES_ORDER_CANCELLED":
-          // ABSOLUTE RULE: Sales ONLY impact Pivot inventory (pivotQty), NEVER hildaleQty
-          // Restore the stock that was decremented at create
+          // INVARIANT: Cancellations only restore availableForSaleQty, NOT pivotQty
+          // pivotQty is READ-ONLY from Extensiv - only EXTENSIV_SYNC can change it
+          // hildaleQty is NEVER touched by sales orders
           if (isFinished) {
             quantityDelta = params.quantity;
-            updates.pivotQty = beforeState.pivotQty + params.quantity;
+            // ONLY restore availableForSaleQty - pivotQty stays unchanged (read-only)
             updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
           }
           break;
@@ -262,12 +290,13 @@ export class InventoryMovement {
           break;
 
         case "TRANSFER":
-          // Hildale → Pivot transfer: decrements hildaleQty, increments pivotQty + availableForSaleQty
-          // This is the ONLY way to move stock from Hildale to sellable Pivot inventory
+          // Hildale → Pivot transfer: decrements hildaleQty, increments availableForSaleQty
+          // INVARIANT: pivotQty is READ-ONLY from Extensiv, so we only update availableForSaleQty
+          // The physical stock at Pivot will be reflected in pivotQty after next Extensiv sync
           if (isFinished) {
             if (beforeState.hildaleQty >= params.quantity) {
               updates.hildaleQty = beforeState.hildaleQty - params.quantity;
-              updates.pivotQty = beforeState.pivotQty + params.quantity;
+              // ONLY increment availableForSaleQty - pivotQty is read-only from Extensiv
               updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
               quantityDelta = 0; // Net change is zero (moving between locations)
             } else {

@@ -7,6 +7,7 @@ import { ShopifyWebhookPayload, ShopifyWebhookContext } from './webhooks-config'
 import { storage } from '../storage';
 import { logService } from '../services/log-service';
 import { InventoryMovement } from '../services/inventory-movement';
+import { triggerShortageAlertsForOrder } from '../services/ghl-stock-alert-service';
 
 export interface WebhookHandlerResult {
   success: boolean;
@@ -90,39 +91,57 @@ export async function handleOrderCreated(
 
     const inventoryMovement = new InventoryMovement(storage);
     
+    // Track line items for GHL shortage alerts
+    const lineItemsForAlerts: Array<{
+      itemId: string;
+      sku: string;
+      itemName: string;
+      requestedQty: number;
+      allocatedQty: number;
+      backorderQty: number;
+      contactId?: string;
+    }> = [];
+    
     for (const lineItem of lineItemsWithProducts) {
       if (lineItem.productId) {
+        const item = await storage.getItem(lineItem.productId);
+        
+        // Use availableForSaleQty for allocation (NOT pivotQty - pivotQty is read-only from Extensiv)
+        const availableStock = item?.availableForSaleQty ?? 0;
+        const qtyToAllocate = Math.min(lineItem.qtyOrdered, availableStock);
+        const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
+        
+        // Create sales order line with allocation info
         await storage.createSalesOrderLine({
           salesOrderId: salesOrder.id,
           productId: lineItem.productId,
           sku: lineItem.sku,
           qtyOrdered: lineItem.qtyOrdered,
+          qtyAllocated: qtyToAllocate,
+          backorderQty: qtyBackordered,
           unitPrice: lineItem.unitPrice,
         });
         
-        const item = await storage.getItem(lineItem.productId);
-        if (item) {
-          const pivotQty = item.pivotQty ?? 0;
-          const qtyToAllocate = Math.min(lineItem.qtyOrdered, pivotQty);
-          const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
-          
+        if (item && item.type === 'finished_product') {
+          // Apply inventory movement for the allocated quantity
+          // INVARIANT: Sales only decrement availableForSaleQty, NOT pivotQty
           if (qtyToAllocate > 0) {
             await inventoryMovement.apply({
-              eventType: 'SALE',
+              eventType: 'SALES_ORDER_CREATED',
               itemId: lineItem.productId,
-              quantity: -qtyToAllocate,
+              quantity: qtyToAllocate, // Positive quantity - the service handles the decrement
               location: 'PIVOT',
+              source: 'SHOPIFY',
+              orderId: salesOrder.id,
               notes: `Shopify order ${orderName}`,
               userId,
-              referenceId: salesOrder.id,
-              referenceType: 'sales_order',
             });
             
-            console.log(`[Shopify Webhook] Allocated ${qtyToAllocate} of ${lineItem.sku} from Pivot for order ${orderName}`);
+            console.log(`[Shopify Webhook] Allocated ${qtyToAllocate} of ${lineItem.sku} (availableForSaleQty decremented) for order ${orderName}`);
           }
           
           if (qtyBackordered > 0) {
-            console.warn(`[Shopify Webhook] Backorder: ${qtyBackordered} of ${lineItem.sku} for order ${orderName}`);
+            console.warn(`[Shopify Webhook] BACKORDER: ${qtyBackordered} of ${lineItem.sku} for order ${orderName}`);
             
             await logService.logShopifyBackorder({
               orderId: salesOrder.id,
@@ -132,7 +151,17 @@ export async function handleOrderCreated(
               qtyOrdered: lineItem.qtyOrdered,
               qtyAllocated: qtyToAllocate,
               qtyBackordered,
-              availableStock: pivotQty,
+              availableStock,
+            });
+            
+            // Track for GHL shortage alert
+            lineItemsForAlerts.push({
+              itemId: lineItem.productId,
+              sku: lineItem.sku,
+              itemName: item.name,
+              requestedQty: lineItem.qtyOrdered,
+              allocatedQty: qtyToAllocate,
+              backorderQty: qtyBackordered,
             });
           }
         }
@@ -145,6 +174,23 @@ export async function handleOrderCreated(
           externalSku: lineItem.sku,
         });
       }
+    }
+    
+    // Trigger GHL "Needs Attention" alerts for any backorders
+    if (lineItemsForAlerts.length > 0) {
+      triggerShortageAlertsForOrder(
+        storage,
+        salesOrder.id,
+        orderName,
+        lineItemsForAlerts,
+        'SHOPIFY',
+        userId
+      )
+        .then(results => {
+          const successful = results.filter(r => r.success).length;
+          console.log(`[Shopify Webhook] GHL shortage alerts: ${successful}/${results.length} created for order ${orderName}`);
+        })
+        .catch(err => console.warn(`[Shopify Webhook] GHL shortage alert failed (non-blocking):`, err.message));
     }
 
     triggerSalesOrderSync(userId, salesOrder.id, false)

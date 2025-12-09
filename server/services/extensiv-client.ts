@@ -347,59 +347,23 @@ export class ExtensivClient {
 
   /**
    * Create an outbound fulfillment order in Extensiv
-   * This pushes a sales order to the 3PL for fulfillment
+   * 
+   * V1 MODE: DISABLED - Extensiv is READ-ONLY
+   * This method is disabled for V1 to enforce read-only integration with Extensiv.
+   * Orders should be pushed to Extensiv through their native integrations (Shopify, etc.)
+   * 
    * @param request - Order details including shipping address and line items
    */
   async createOrder(request: CreateExtensivOrderRequest): Promise<ExtensivOrderResponse> {
-    try {
-      const payload = {
-        externalOrderId: request.externalOrderId,
-        orderSource: request.channel,
-        warehouseId: request.warehouseId,
-        shipTo: {
-          name: request.shippingAddress.name,
-          company: request.shippingAddress.company,
-          address1: request.shippingAddress.street1,
-          address2: request.shippingAddress.street2,
-          city: request.shippingAddress.city,
-          state: request.shippingAddress.state,
-          postalCode: request.shippingAddress.postalCode,
-          country: request.shippingAddress.country,
-          phone: request.shippingAddress.phone,
-          email: request.shippingAddress.email,
-        },
-        items: request.lineItems.map(item => ({
-          sku: item.sku,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          description: item.description,
-        })),
-        shippingMethod: request.shippingMethod,
-        notes: request.notes,
-      };
-
-      const response = await fetch(`${this.baseUrl}/orders`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload),
-      });
-
-      const data = await this.handleResponse(response, 'createOrder');
-      
-      return {
-        orderId: String(data.orderId || data.id || data.order?.id),
-        status: data.status || data.orderStatus || 'PENDING',
-        createdAt: data.createdAt || data.created_at,
-        trackingNumber: data.trackingNumber,
-        carrier: data.carrier,
-      };
-    } catch (error: any) {
-      if (error instanceof ExtensivApiError) throw error;
-      throw new ExtensivApiError(
-        ExtensivErrorCode.ORDER_CREATION_FAILED,
-        `Failed to create order: ${error.message}`
-      );
-    }
+    // V1: Extensiv is READ-ONLY - do not push orders
+    console.warn(`[Extensiv] createOrder DISABLED for V1 read-only mode. Order ${request.externalOrderId} not pushed to Extensiv.`);
+    
+    // Return a mock response indicating the operation was skipped
+    return {
+      orderId: `LOCAL-${request.externalOrderId}`,
+      status: 'SKIPPED_V1_READONLY',
+      createdAt: new Date().toISOString(),
+    };
   }
 
   /**
@@ -523,6 +487,11 @@ export class ExtensivClient {
 
   /**
    * Adjust inventory quantity for a SKU at a warehouse (for returns, corrections, etc.)
+   * 
+   * V1 MODE: DISABLED - Extensiv is READ-ONLY
+   * This method is disabled for V1 to enforce read-only integration with Extensiv.
+   * Inventory adjustments should be made directly in Extensiv's interface.
+   * 
    * @param warehouseId - The warehouse ID or location code
    * @param sku - The SKU to adjust
    * @param quantityChange - The quantity to add (positive) or subtract (negative)
@@ -534,69 +503,32 @@ export class ExtensivClient {
     quantityChange: number,
     reason: string = 'Inventory adjustment'
   ): Promise<{ success: boolean; message: string }> {
-    try {
-      const response = await fetch(`${this.baseUrl}/inventory/adjust`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({
-          warehouseId,
-          sku,
-          quantityChange,
-          reason,
-          source: 'inventory_app',
-        }),
-      });
-
-      await this.handleResponse(response, 'adjustInventory');
-      
-      return {
-        success: true,
-        message: `Successfully adjusted inventory for SKU ${sku} by ${quantityChange}`,
-      };
-    } catch (error: any) {
-      if (error instanceof ExtensivApiError) {
-        return {
-          success: false,
-          message: `Failed to adjust inventory: ${error.message} (${error.code})`,
-        };
-      }
-      return {
-        success: false,
-        message: `Failed to adjust inventory: ${error.message}`,
-      };
-    }
+    // V1: Extensiv is READ-ONLY - do not push adjustments
+    console.warn(`[Extensiv] adjustInventory DISABLED for V1 read-only mode. SKU ${sku} adjustment of ${quantityChange} not pushed to Extensiv.`);
+    
+    return {
+      success: false,
+      message: `V1 READ-ONLY: Inventory adjustments to Extensiv are disabled. Adjust directly in Extensiv. (SKU: ${sku}, qty: ${quantityChange})`,
+    };
   }
 
   /**
    * Cancel an order in Extensiv
+   * 
+   * V1 MODE: DISABLED - Extensiv is READ-ONLY
+   * This method is disabled for V1 to enforce read-only integration with Extensiv.
+   * Order cancellations should be made directly in Extensiv's interface.
+   * 
    * @param orderId - Extensiv order ID to cancel
    * @param reason - Reason for cancellation
    */
   async cancelOrder(orderId: string, reason?: string): Promise<{ success: boolean; message: string }> {
-    try {
-      const response = await fetch(`${this.baseUrl}/orders/${orderId}/cancel`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ reason }),
-      });
-
-      await this.handleResponse(response, 'cancelOrder');
-      
-      return {
-        success: true,
-        message: `Successfully cancelled order ${orderId}`,
-      };
-    } catch (error: any) {
-      if (error instanceof ExtensivApiError) {
-        return {
-          success: false,
-          message: `Failed to cancel order: ${error.message} (${error.code})`,
-        };
-      }
-      return {
-        success: false,
-        message: `Failed to cancel order: ${error.message}`,
-      };
-    }
+    // V1: Extensiv is READ-ONLY - do not push cancellations
+    console.warn(`[Extensiv] cancelOrder DISABLED for V1 read-only mode. Order ${orderId} cancellation not pushed to Extensiv.`);
+    
+    return {
+      success: false,
+      message: `V1 READ-ONLY: Order cancellations to Extensiv are disabled. Cancel directly in Extensiv. (Order: ${orderId})`,
+    };
   }
 }

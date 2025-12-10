@@ -272,6 +272,19 @@ function formatDate(date: Date | string | null | undefined): string {
   return format(d, "MM/dd/yyyy");
 }
 
+function calculateLeadTime(sentAt: Date | string | null | undefined, receivedAt: Date | string | null | undefined): string {
+  if (!sentAt || !receivedAt) return "—";
+  const sent = new Date(sentAt);
+  const received = new Date(receivedAt);
+  if (isNaN(sent.getTime()) || isNaN(received.getTime())) return "—";
+  const diffMs = received.getTime() - sent.getTime();
+  if (diffMs < 0) return "—";
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return "<1 day";
+  if (diffDays === 1) return "1 day";
+  return `${diffDays} days`;
+}
+
 export default function PurchaseOrders() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
@@ -764,6 +777,7 @@ export default function PurchaseOrders() {
                   <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Items</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order Date</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Expected</th>
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total</th>
                   <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
@@ -771,7 +785,7 @@ export default function PurchaseOrders() {
               <tbody>
                 {sortedPOs.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="h-32 text-center text-muted-foreground">
+                    <td colSpan={10} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -822,6 +836,9 @@ export default function PurchaseOrders() {
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.orderDate)}</td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.expectedDate)}</td>
+                      <td className="p-3 align-middle whitespace-nowrap text-center text-muted-foreground" data-testid={`text-lead-time-${po.id}`}>
+                        {calculateLeadTime(po.sentAt, po.receivedAt)}
+                      </td>
                       <td className="p-3 align-middle whitespace-nowrap text-right font-medium">
                         {formatCurrency(po.total)}
                       </td>

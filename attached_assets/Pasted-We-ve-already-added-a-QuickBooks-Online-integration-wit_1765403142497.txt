@@ -1,0 +1,98 @@
+We’ve already added a QuickBooks Online integration with Client ID and Secret in env vars, and a callback route like /auth/qbo/callback. The QuickBooks data source card in the “AI Agent → Data Sources” UI shows “Not Configured”, and when I click the “Configure” button nothing happens.
+
+My V1 requirements for the QuickBooks integration are:
+
+Refund flow (GHL → Replit → Shippo → QuickBooks)
+
+When a refund is initiated in GoHighLevel (via our AI agent or workflow), GHL calls my backend (you decide the exact endpoint, e.g. POST /api/refunds/create), sending order id, customer, items, amount, and reason.
+
+My app:
+
+Calls Shippo (we already use Shippo elsewhere) to create a return label and store the Shippo label id.
+
+Posts a refund into QuickBooks Online as a RefundReceipt via the Accounting API (POST /v3/company/{realmId}/refundreceipt). Use appropriate accounts for income, AR/AP, etc., but factor all account/mapping logic into a single helper so we can tweak it later with an accountant. 
+intuit.github.io
++1
+
+Sets a RefundStatus custom field on the RefundReceipt to "Pending" when the label is issued. Use QBO custom fields on RefundReceipt. 
+Intuit Developer
+
+When our own system decides the refund is actually complete (for now assume another endpoint, e.g. POST /api/refunds/mark-complete with the QuickBooks RefundReceipt Id), the app should:
+
+Update the same RefundReceipt via a sparse update to set the custom field RefundStatus = "Refunded" (POST /v3/company/{realmId}/refundreceipt?operation=update). 
+Knit
+
+All QuickBooks calls must use the OAuth tokens stored from our auth flow; if the access token is expired, automatically refresh using the refresh token.
+
+Daily sales + trend flow (for the LLM)
+
+Once per day (e.g., via a scheduled job or cron-like task), after the selling day is closed:
+
+Either:
+
+Option A: Call the Reports API to get that day’s total sales for the company (and optionally by product or class) using something like the Profit and Loss or Sales report endpoints. 
+Intuit Developer
+
+OR Option B (if easier given current code): create a summary SalesReceipt in QuickBooks for the day with aggregated numbers (total sales, tax, discounts, shipping, fees) like QuickBooks’ “record total daily sales” pattern. 
+QuickBooks
++1
+
+Store in our own database a DailySalesSnapshot record with: date, totalSales, channel (Shopify / Amazon etc.), plus last year’s same-month values if available (e.g., rolling 30-day and prior-year same month totals).
+
+Expose an internal function that the LLM can call to answer questions like “sales are up/down 10% day over day” and “this month vs same month last year.” The LLM doesn’t need raw QBO access; it should get pre-computed numbers from this table.
+
+QuickBooks connect / configure UX
+
+Find the QuickBooks data source card in the AI Agent → Data Sources UI (the one that currently says “Not Configured” with a “Configure” button and no click action). Wire it up so that:
+
+Clicking Configure calls a backend route like POST /api/integrations/quickbooks/start-auth. That route should:
+
+Initialize the QuickBooks OAuthClient using env vars (QBO_CLIENT_ID, QBO_CLIENT_SECRET, QBO_REDIRECT_URI, QBO_ENV).
+
+Generate the OAuth authorize URL with the Accounting scope. 
+Intuit Developer
++1
+
+Return that URL to the frontend, and the frontend should open it in a new tab so the user can log in and authorize.
+
+The callback route (currently /auth/qbo/callback, and also a legacy /api/quickbooks/callback if one exists) must:
+
+Exchange the auth code for access + refresh tokens using the intuit-oauth library.
+
+Store the token JSON, realmId, and environment in our database (not just in memory) associated with the current user/account.
+
+Mark the QuickBooks data source as “Connected”, update “Last Rotated” to now, and compute Next Required token rotation date (~90 days) for display on the card.
+
+Redirect the user back to the AI Agent Data Sources screen with a success message.
+
+The Sync button on the card should trigger a backend route like POST /api/integrations/quickbooks/sync-test that simply calls a trivial QuickBooks endpoint (for example CompanyInfo) to verify the tokens and update a “Last Sync” timestamp; show any errors in the UI. 
+Intuit Developer
++1
+
+Config and security
+
+Confirm that we have the following env vars defined and actually used:
+
+QBO_CLIENT_ID, QBO_CLIENT_SECRET, QBO_REDIRECT_URI, QBO_ENV (sandbox vs production).
+
+If you add webhooks later, also support QBO_WEBHOOK_VERIFIER_TOKEN. For now, we don’t strictly need QuickBooks webhooks for V1, so only implement them if you think it’s low effort. 
+Intuit Developer
++1
+
+Make sure all secrets are only in env vars / Replit secrets, never hard-coded.
+
+Centralize QuickBooks API calls in a single helper/service module: token refresh, HTTP request, error logging, and rate-limit handling.
+
+What I want you to do now
+
+Scan the existing codebase for any QuickBooks-related routes, helpers, and UI components. Clean up dead/duplicate routes (for example if both /api/quickbooks/callback and /auth/qbo/callback exist, consolidate them).
+
+Implement or update the refund and daily sales flows above, including any necessary DB models and migrations.
+
+Fix the QuickBooks data source card so Configure and Sync work end-to-end with the OAuth flow and a sample API call.
+
+Add clear logging for: auth success/failure, refund create/update calls, daily sales runs, and failed sync attempts.
+
+When you’re done, give me a short summary in plain English of what changed (files touched, new routes, any new env vars) so I can review and test.
+
+Please keep the implementation idiomatic with the current stack (TypeScript / Node / whatever you detect), reuse existing patterns for other data sources like Shopify and GHL, and don’t break anything that’s already working.

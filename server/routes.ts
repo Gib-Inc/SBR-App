@@ -12885,11 +12885,12 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Redirect to settings page with success
-      res.redirect('/settings?quickbooks=connected');
+      // Redirect to AI Agent Data Sources page with success
+      console.log('[QuickBooks] OAuth successful for user:', userId, 'company:', companyName);
+      res.redirect('/ai?tab=data-sources&quickbooks=connected');
     } catch (error: any) {
       console.error('[QuickBooks] OAuth callback error:', error);
-      res.redirect('/settings?quickbooks=error');
+      res.redirect('/ai?tab=data-sources&quickbooks=error');
     }
   });
 
@@ -12989,39 +12990,12 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Close popup and refresh parent
-      res.send(`
-        <html>
-          <body>
-            <script>
-              if (window.opener) {
-                window.opener.location.reload();
-                window.close();
-              } else {
-                window.location.href = '/settings?quickbooks=connected';
-              }
-            </script>
-            <p>QuickBooks connected successfully! You can close this window.</p>
-          </body>
-        </html>
-      `);
+      // Redirect to AI Agent Data Sources page with success
+      console.log('[QuickBooks] OAuth successful for user:', userId, 'company:', companyName);
+      res.redirect('/ai?tab=data-sources&quickbooks=connected');
     } catch (error: any) {
       console.error('[QuickBooks] OAuth callback error:', error);
-      res.send(`
-        <html>
-          <body>
-            <script>
-              if (window.opener) {
-                window.opener.location.reload();
-                window.close();
-              } else {
-                window.location.href = '/settings?quickbooks=error';
-              }
-            </script>
-            <p>Error connecting to QuickBooks. Please try again.</p>
-          </body>
-        </html>
-      `);
+      res.redirect('/ai?tab=data-sources&quickbooks=error');
     }
   });
 

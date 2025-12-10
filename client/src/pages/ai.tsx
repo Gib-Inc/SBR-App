@@ -4459,6 +4459,33 @@ export default function AIAgent() {
   const [qbClientSecret, setQbClientSecret] = useState("");
   const [savingQbCredentials, setSavingQbCredentials] = useState(false);
 
+  // Handle QuickBooks OAuth callback params
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const qbStatus = urlParams.get('quickbooks');
+    
+    if (qbStatus === 'connected') {
+      toast({
+        title: "QuickBooks Connected",
+        description: "Successfully connected to QuickBooks. You can now sync sales data.",
+      });
+      // Clean up URL params
+      const newUrl = window.location.pathname + (urlParams.has('tab') ? `?tab=${urlParams.get('tab')}` : '');
+      window.history.replaceState({}, '', newUrl);
+      // Refetch status
+      refetchQbStatus();
+    } else if (qbStatus === 'error') {
+      toast({
+        title: "Connection Failed",
+        description: "Failed to connect to QuickBooks. Please try again.",
+        variant: "destructive",
+      });
+      // Clean up URL params
+      const newUrl = window.location.pathname + (urlParams.has('tab') ? `?tab=${urlParams.get('tab')}` : '');
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, []);
+
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({
     queryKey: ["/api/settings"],
@@ -4539,8 +4566,8 @@ export default function AIAgent() {
     try {
       const response = await apiRequest("GET", "/api/quickbooks/auth-url");
       if (response.authUrl) {
-        // Open in new tab - most reliable for OAuth flows
-        window.open(response.authUrl, "_blank");
+        // Direct navigation - browsers don't block this like popups
+        window.location.href = response.authUrl;
       }
     } catch (error: any) {
       toast({

@@ -4452,6 +4452,12 @@ export default function AIAgent() {
   const [showQuickBooksSyncModal, setShowQuickBooksSyncModal] = useState(false);
   const [quickbooksSyncMode, setQuickbooksSyncMode] = useState<"append" | "rebuild">("append");
   const [quickbooksRebuildMonths, setQuickbooksRebuildMonths] = useState(24);
+  
+  // QuickBooks Credentials Modal state
+  const [showQbCredentialsModal, setShowQbCredentialsModal] = useState(false);
+  const [qbClientId, setQbClientId] = useState("");
+  const [qbClientSecret, setQbClientSecret] = useState("");
+  const [savingQbCredentials, setSavingQbCredentials] = useState(false);
 
   // Fetch settings (for LLM provider status)
   const { data: settingsData } = useQuery<any>({

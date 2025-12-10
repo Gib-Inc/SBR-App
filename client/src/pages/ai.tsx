@@ -2213,6 +2213,7 @@ function InsightsTab() {
   const [createPOOpen, setCreatePOOpen] = useState(false);
   const [createPOData, setCreatePOData] = useState<{
     supplierId?: string;
+    recommendationId?: string; // Track recommendation ID for cache invalidation
     items: Array<{
       itemId: string;
       quantity: number;
@@ -2235,6 +2236,16 @@ function InsightsTab() {
       return response.json();
     },
   });
+  
+  // Sync selectedItem with fresh data when recsData updates (e.g., after PO creation)
+  useEffect(() => {
+    if (selectedItem && recsData?.recommendations) {
+      const fresh = recsData.recommendations.find(r => r.id === selectedItem.id);
+      if (fresh && JSON.stringify(fresh) !== JSON.stringify(selectedItem)) {
+        setSelectedItem(fresh);
+      }
+    }
+  }, [recsData, selectedItem]);
   
   // Refresh mutation - triggers decision engine recalculation and persistence
   const refreshMutation = useMutation({
@@ -2362,12 +2373,14 @@ function InsightsTab() {
         // Set up PO data with pre-filled values including supplier
         setCreatePOData({
           supplierId: data.supplier?.id,
+          recommendationId: rec.id,
           items: [itemData],
         });
       } else {
         // Supplier not found or error - still open sheet without supplier
         console.warn("No designated supplier found for item:", rec.itemId);
         setCreatePOData({
+          recommendationId: rec.id,
           items: [itemData],
         });
       }
@@ -2376,6 +2389,7 @@ function InsightsTab() {
       console.error("Failed to get supplier info:", error);
       // Still open the PO sheet, just without pre-filled supplier
       setCreatePOData({
+        recommendationId: rec.id,
         items: [itemData],
       });
       setCreatePOOpen(true);
@@ -2388,6 +2402,14 @@ function InsightsTab() {
       title: "PO Created",
       description: "Purchase order created from recommendation. Status updated to Accepted.",
     });
+    // Invalidate linked POs cache so the modal shows the new PO
+    // Use createPOData.recommendationId as it's always set, even when modal isn't open
+    const recId = createPOData?.recommendationId || selectedItem?.id;
+    if (recId) {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations", recId, "linked-pos"] });
+    }
+    // Also invalidate the main recommendations list to update status
+    queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
     setCreatePOOpen(false);
     setCreatePOData(null);
   };
@@ -2985,6 +3007,18 @@ function InsightsTab() {
                       <XCircle className="mr-2 h-4 w-4" />
                       Dismiss
                     </Button>
+                    {selectedItem.recommendationType !== "OK" && selectedItem.recommendedQty && selectedItem.recommendedQty > 0 && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          handleCreatePO(selectedItem);
+                        }}
+                        data-testid="button-modal-create-po"
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        Create PO
+                      </Button>
+                    )}
                     <Button
                       onClick={() => {
                         updateStatusMutation.mutate({ id: selectedItem.id, status: "ACCEPTED" });

@@ -12893,6 +12893,138 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Alternative OAuth callback route - matches QuickBooks app redirect URI
+  app.get("/auth/qbo/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, realmId, state } = req.query;
+      
+      if (!code || !realmId) {
+        return res.status(400).send('Missing required OAuth parameters');
+      }
+
+      const clientId = process.env.QUICKBOOKS_CLIENT_ID;
+      const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/auth/qbo/callback`;
+
+      if (!clientId || !clientSecret) {
+        return res.status(500).send('QuickBooks credentials not configured');
+      }
+
+      // Exchange code for tokens
+      const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code as string,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('[QuickBooks] Token exchange failed:', errorText);
+        return res.status(400).send('Failed to exchange OAuth code for tokens');
+      }
+
+      const tokens = await tokenResponse.json() as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        x_refresh_token_expires_in: number;
+      };
+
+      // Get company info
+      let companyName = 'Unknown Company';
+      try {
+        const companyResponse = await fetch(
+          `https://quickbooks.api.intuit.com/v3/company/${realmId}/companyinfo/${realmId}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${tokens.access_token}`,
+              'Accept': 'application/json',
+            },
+          }
+        );
+        if (companyResponse.ok) {
+          const companyData = await companyResponse.json() as { CompanyInfo?: { CompanyName?: string } };
+          companyName = companyData.CompanyInfo?.CompanyName || companyName;
+        }
+      } catch (e) {
+        console.error('[QuickBooks] Failed to fetch company info:', e);
+      }
+
+      // Parse user ID from state
+      const userId = (state as string) || 'system';
+      const now = new Date();
+      const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
+      const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
+
+      // Check if auth record exists
+      const existingAuth = await storage.getQuickbooksAuth(userId);
+      
+      if (existingAuth) {
+        await storage.updateQuickbooksAuth(existingAuth.id, {
+          realmId: realmId as string,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          accessTokenExpiresAt,
+          refreshTokenExpiresAt,
+          companyName,
+          isConnected: true,
+        });
+      } else {
+        await storage.createQuickbooksAuth({
+          userId,
+          realmId: realmId as string,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          accessTokenExpiresAt,
+          refreshTokenExpiresAt,
+          companyName,
+          isConnected: true,
+        });
+      }
+
+      // Close popup and refresh parent
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.location.reload();
+                window.close();
+              } else {
+                window.location.href = '/settings?quickbooks=connected';
+              }
+            </script>
+            <p>QuickBooks connected successfully! You can close this window.</p>
+          </body>
+        </html>
+      `);
+    } catch (error: any) {
+      console.error('[QuickBooks] OAuth callback error:', error);
+      res.send(`
+        <html>
+          <body>
+            <script>
+              if (window.opener) {
+                window.opener.location.reload();
+                window.close();
+              } else {
+                window.location.href = '/settings?quickbooks=error';
+              }
+            </script>
+            <p>Error connecting to QuickBooks. Please try again.</p>
+          </body>
+        </html>
+      `);
+    }
+  });
+
   // GET /api/quickbooks/auth-url - Get OAuth authorization URL
   app.get("/api/quickbooks/auth-url", requireAuth, async (req: Request, res: Response) => {
     try {

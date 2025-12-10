@@ -97,3 +97,8 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+QUICKBOOKS_REDIRECT_URI = "https://bfcab733-c192-4844-b024-de0caf23728c-00-1zhsa00hqdpdm.spock.replit.dev/auth/qbo/callback"

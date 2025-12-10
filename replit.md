@@ -61,6 +61,14 @@ Preferred communication style: Simple, everyday language.
     *   Comprehensive return lifecycle with RMA generation and state machine.
     *   Shippo integration for return label generation.
     *   GoHighLevel integration for refund opportunity sync.
+    *   QuickBooks Credit Memo creation for accounting via `/api/returns/:id/post-to-quickbooks`.
+*   **Daily Sales Snapshots** (for LLM trend analysis):
+    *   Aggregated daily totals stored in `daily_sales_snapshots` table.
+    *   Metrics: totalRevenue, totalOrders, totalUnits, totalRefunds, netRevenue.
+    *   Channel breakdown (Shopify, Amazon, direct) stored as JSONB.
+    *   Trend metrics: day-over-day, week-over-week, month-over-month, year-over-year percentage changes.
+    *   Rolling averages: 7-day and 30-day moving averages.
+    *   API endpoints: `/api/daily-sales-snapshots`, `/api/daily-sales-snapshots/years`, `/api/daily-sales-snapshots/:date`.
 *   **Integrations**:
     *   **AI Agent Rules**: Per-user settings for automation (e.g., auto-send critical POs, two-way inventory sync with Shopify/Amazon, safety buffers).
     *   **Sync Mode Confirmation Modals**: All four data sources (GHL, Amazon, Extensiv, QuickBooks) have confirmation modals with safe vs. align modes:

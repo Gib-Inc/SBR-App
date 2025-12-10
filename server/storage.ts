@@ -83,6 +83,8 @@ import {
   type InsertQuickbooksItemMapping,
   type QuickbooksBill,
   type InsertQuickbooksBill,
+  type DailySalesSnapshot,
+  type InsertDailySalesSnapshot,
   type AdPlatformConfig,
   type InsertAdPlatformConfig,
   type AdSkuMapping,
@@ -499,6 +501,12 @@ export interface IStorage {
   getQuickbooksBillByPurchaseOrderId(purchaseOrderId: string): Promise<QuickbooksBill | null>;
   createQuickbooksBill(bill: InsertQuickbooksBill): Promise<QuickbooksBill>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
+
+  // Daily Sales Snapshots (for LLM trend analysis)
+  getDailySalesSnapshot(date: string): Promise<DailySalesSnapshot | null>;
+  getDailySalesSnapshotsInRange(startDate: string, endDate: string): Promise<DailySalesSnapshot[]>;
+  upsertDailySalesSnapshot(snapshot: InsertDailySalesSnapshot): Promise<DailySalesSnapshot>;
+  getDailySalesSnapshotYears(): Promise<number[]>;
 
   // Ad Platform Configs (Meta, Google Ads)
   getAdPlatformConfig(userId: string, platform: string): Promise<AdPlatformConfig | undefined>;
@@ -3132,6 +3140,23 @@ export class MemStorage implements IStorage {
 
   async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
     return null;
+  }
+
+  // Daily Sales Snapshots (not supported in MemStorage)
+  async getDailySalesSnapshot(_date: string): Promise<DailySalesSnapshot | null> {
+    return null;
+  }
+
+  async getDailySalesSnapshotsInRange(_startDate: string, _endDate: string): Promise<DailySalesSnapshot[]> {
+    return [];
+  }
+
+  async upsertDailySalesSnapshot(_snapshot: InsertDailySalesSnapshot): Promise<DailySalesSnapshot> {
+    throw new Error('Daily Sales Snapshots not supported in MemStorage');
+  }
+
+  async getDailySalesSnapshotYears(): Promise<number[]> {
+    return [];
   }
 
   // Ad Platform Configs
@@ -6077,6 +6102,57 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.quickbooksBills.id, id))
       .returning();
     return result[0] || null;
+  }
+
+  // Daily Sales Snapshots (for LLM trend analysis)
+  async getDailySalesSnapshot(date: string): Promise<DailySalesSnapshot | null> {
+    const results = await this.db.select().from(schema.dailySalesSnapshots)
+      .where(eq(schema.dailySalesSnapshots.date, date));
+    return results[0] || null;
+  }
+
+  async getDailySalesSnapshotsInRange(startDate: string, endDate: string): Promise<DailySalesSnapshot[]> {
+    return await this.db.select().from(schema.dailySalesSnapshots)
+      .where(and(
+        gte(schema.dailySalesSnapshots.date, startDate),
+        lte(schema.dailySalesSnapshots.date, endDate)
+      ))
+      .orderBy(schema.dailySalesSnapshots.date);
+  }
+
+  async upsertDailySalesSnapshot(snapshot: InsertDailySalesSnapshot): Promise<DailySalesSnapshot> {
+    // Check if snapshot exists for this date
+    const existing = await this.getDailySalesSnapshot(snapshot.date);
+    
+    if (existing) {
+      // Update existing
+      const result = await this.db.update(schema.dailySalesSnapshots)
+        .set({ ...snapshot, updatedAt: new Date() })
+        .where(eq(schema.dailySalesSnapshots.date, snapshot.date))
+        .returning();
+      return result[0];
+    } else {
+      // Insert new
+      const id = randomUUID();
+      const now = new Date();
+      const result = await this.db.insert(schema.dailySalesSnapshots).values({
+        ...snapshot,
+        id,
+        createdAt: now,
+        updatedAt: now,
+      }).returning();
+      return result[0];
+    }
+  }
+
+  async getDailySalesSnapshotYears(): Promise<number[]> {
+    // Extract distinct years from the date field
+    const results = await this.db.execute(drizzleSql`
+      SELECT DISTINCT EXTRACT(YEAR FROM date)::integer as year 
+      FROM daily_sales_snapshots 
+      ORDER BY year DESC
+    `);
+    return (results.rows as { year: number }[]).map(r => r.year);
   }
 
   // Ad Platform Configs

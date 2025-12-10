@@ -12718,6 +12718,72 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ========================================================================
+  // DAILY SALES SNAPSHOTS (Aggregated daily totals for LLM trend analysis)
+  // ========================================================================
+
+  // GET /api/daily-sales-snapshots - Get daily sales snapshots in a date range
+  app.get("/api/daily-sales-snapshots", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, days } = req.query;
+      
+      let start: string;
+      let end: string;
+      
+      if (startDate && endDate) {
+        start = startDate as string;
+        end = endDate as string;
+      } else {
+        // Default to last N days (default 30)
+        const daysBack = days ? parseInt(days as string) : 30;
+        const endDt = new Date();
+        const startDt = new Date();
+        startDt.setDate(startDt.getDate() - daysBack);
+        
+        start = startDt.toISOString().split('T')[0];
+        end = endDt.toISOString().split('T')[0];
+      }
+      
+      const snapshots = await storage.getDailySalesSnapshotsInRange(start, end);
+      res.json({
+        snapshots,
+        dateRange: { startDate: start, endDate: end },
+        count: snapshots.length,
+      });
+    } catch (error: any) {
+      console.error("[DailySales] Error fetching snapshots:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch daily sales snapshots" });
+    }
+  });
+
+  // GET /api/daily-sales-snapshots/years - Get available years
+  app.get("/api/daily-sales-snapshots/years", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const years = await storage.getDailySalesSnapshotYears();
+      res.json({ years });
+    } catch (error: any) {
+      console.error("[DailySales] Error fetching years:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch years" });
+    }
+  });
+
+  // GET /api/daily-sales-snapshots/:date - Get snapshot for a specific date
+  app.get("/api/daily-sales-snapshots/:date", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { date } = req.params;
+      const snapshot = await storage.getDailySalesSnapshot(date);
+      
+      if (!snapshot) {
+        return res.status(404).json({ error: "No snapshot found for this date" });
+      }
+      
+      res.json(snapshot);
+    } catch (error: any) {
+      console.error("[DailySales] Error fetching snapshot:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch snapshot" });
+    }
+  });
+
   // POST /api/purchase-orders/:id/create-bill - Create QuickBooks Bill from PO
   app.post("/api/purchase-orders/:id/create-bill", requireAuth, async (req: Request, res: Response) => {
     try {

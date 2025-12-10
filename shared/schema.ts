@@ -1717,6 +1717,41 @@ export const insertQuickbooksBillSchema = createInsertSchema(quickbooksBills).om
 export type InsertQuickbooksBill = z.infer<typeof insertQuickbooksBillSchema>;
 export type QuickbooksBill = typeof quickbooksBills.$inferSelect;
 
+// Daily Sales Snapshots for LLM trend analysis
+// Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
+export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: date("date").notNull(), // The date for this snapshot (YYYY-MM-DD)
+  // Aggregated metrics
+  totalRevenue: real("total_revenue").notNull().default(0), // Total revenue for the day
+  totalOrders: integer("total_orders").notNull().default(0), // Number of orders
+  totalUnits: integer("total_units").notNull().default(0), // Total units sold
+  totalRefunds: real("total_refunds").notNull().default(0), // Total refund amount
+  netRevenue: real("net_revenue").notNull().default(0), // totalRevenue - totalRefunds
+  // Channel breakdown (JSONB for flexibility)
+  channelBreakdown: jsonb("channel_breakdown"), // { shopify: { revenue, orders }, amazon: { ... }, direct: { ... } }
+  // Trend metrics (computed during nightly job)
+  dayOverDayChange: real("day_over_day_change"), // Percentage change vs yesterday
+  weekOverWeekChange: real("week_over_week_change"), // Percentage change vs same day last week
+  monthOverMonthChange: real("month_over_month_change"), // Percentage change vs same day last month
+  yearOverYearChange: real("year_over_year_change"), // Percentage change vs same day last year
+  // Rolling averages for LLM context
+  rolling7DayAvgRevenue: real("rolling_7_day_avg_revenue"), // 7-day moving average
+  rolling30DayAvgRevenue: real("rolling_30_day_avg_revenue"), // 30-day moving average
+  // Metadata
+  source: text("source").notNull().default('QUICKBOOKS'), // 'QUICKBOOKS', 'SHOPIFY', 'COMBINED'
+  lastSyncedAt: timestamp("last_synced_at").notNull().default(sql`now()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  dateIdx: uniqueIndex("daily_sales_snapshots_date_idx").on(table.date),
+  dateRangeIdx: index("daily_sales_snapshots_date_range_idx").on(table.date),
+}));
+
+export const insertDailySalesSnapshotSchema = createInsertSchema(dailySalesSnapshots).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertDailySalesSnapshot = z.infer<typeof insertDailySalesSnapshotSchema>;
+export type DailySalesSnapshot = typeof dailySalesSnapshots.$inferSelect;
+
 // ============================================================================
 // AD PLATFORM INTEGRATIONS (Meta Ads, Google Ads)
 // ============================================================================

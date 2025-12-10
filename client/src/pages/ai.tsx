@@ -1615,6 +1615,31 @@ function RulesTab() {
   );
 }
 
+interface DailySalesSnapshot {
+  id: string;
+  date: string;
+  totalRevenue: number;
+  totalOrders: number;
+  totalUnits: number;
+  totalRefunds: number;
+  netRevenue: number;
+  channelBreakdown: { shopify?: { revenue: number; orders: number }; amazon?: { revenue: number; orders: number }; direct?: { revenue: number; orders: number } } | null;
+  dayOverDayChange: number | null;
+  weekOverWeekChange: number | null;
+  monthOverMonthChange: number | null;
+  yearOverYearChange: number | null;
+  rolling7DayAvgRevenue: number | null;
+  rolling30DayAvgRevenue: number | null;
+  source: string;
+  lastSyncedAt: string;
+}
+
+interface DailySalesResponse {
+  snapshots: DailySalesSnapshot[];
+  dateRange: { startDate: string; endDate: string };
+  count: number;
+}
+
 function QuickBooksDemandHistoryTab() {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
@@ -1622,6 +1647,7 @@ function QuickBooksDemandHistoryTab() {
   const [monthFilter, setMonthFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const pageSize = 25;
+  const { toast } = useToast();
   
   const queryParams = new URLSearchParams();
   if (search) queryParams.set("search", search);
@@ -1640,6 +1666,47 @@ function QuickBooksDemandHistoryTab() {
       return response.json();
     },
   });
+
+  // Daily sales snapshots for trend cards
+  const { data: dailySalesData } = useQuery<DailySalesResponse>({
+    queryKey: ["/api/daily-sales-snapshots", 30],
+    queryFn: async () => {
+      const response = await fetch(`/api/daily-sales-snapshots?days=30`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch daily sales");
+      return response.json();
+    },
+  });
+
+  // Backfill mutation
+  const backfillMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/daily-sales-snapshots/backfill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ days: 30 }),
+      });
+      if (!response.ok) throw new Error("Failed to backfill");
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Backfill Complete", description: `Processed ${data.processed} days of sales data` });
+      queryClient.invalidateQueries({ queryKey: ["/api/daily-sales-snapshots"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Backfill Failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // Get today's snapshot
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todaySnapshot = dailySalesData?.snapshots.find(s => s.date === todayStr);
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
+  const yesterdaySnapshot = dailySalesData?.snapshots.find(s => s.date === yesterdayStr);
 
   const monthNames = [
     "", "January", "February", "March", "April", "May", "June",
@@ -1678,20 +1745,114 @@ function QuickBooksDemandHistoryTab() {
   const isFiltered = search || yearFilter !== "all" || monthFilter !== "all";
   
   const lastSyncedAt = data?.items?.[0]?.lastSyncedAt || data?.items?.[0]?.updatedAt;
+  const hasDailySalesData = dailySalesData && dailySalesData.count > 0;
+
+  const formatChange = (change: number | null | undefined) => {
+    if (change === null || change === undefined) return "-";
+    const sign = change >= 0 ? "+" : "";
+    return `${sign}${change.toFixed(1)}%`;
+  };
+
+  const getChangeColor = (change: number | null | undefined) => {
+    if (change === null || change === undefined) return "text-muted-foreground";
+    if (change > 10) return "text-green-600 dark:text-green-400";
+    if (change > 0) return "text-green-500";
+    if (change > -10) return "text-red-500";
+    return "text-red-600 dark:text-red-400";
+  };
 
   return (
-    <Card>
-      <CardHeader className="pb-4">
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Database className="h-5 w-5" />
-              QuickBooks Demand History
+    <div className="space-y-4">
+      {/* Daily Sales Trend Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Today's Revenue</CardDescription>
+            <CardTitle className="text-2xl">
+              {todaySnapshot ? formatCurrency(todaySnapshot.totalRevenue) : "-"}
             </CardTitle>
-            <CardDescription>
-              Read-only historical demand imported from QuickBooks for forecasting.
-            </CardDescription>
-          </div>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">vs Yesterday:</span>
+              <span className={getChangeColor(todaySnapshot?.dayOverDayChange)}>
+                {formatChange(todaySnapshot?.dayOverDayChange)}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Yesterday's Revenue</CardDescription>
+            <CardTitle className="text-2xl">
+              {yesterdaySnapshot ? formatCurrency(yesterdaySnapshot.totalRevenue) : "-"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">{yesterdaySnapshot?.totalOrders ?? 0} orders</span>
+              <span className="text-muted-foreground">{yesterdaySnapshot?.totalUnits ?? 0} units</span>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>7-Day Avg Revenue</CardDescription>
+            <CardTitle className="text-2xl">
+              {todaySnapshot?.rolling7DayAvgRevenue 
+                ? formatCurrency(todaySnapshot.rolling7DayAvgRevenue) 
+                : (yesterdaySnapshot?.rolling7DayAvgRevenue 
+                    ? formatCurrency(yesterdaySnapshot.rolling7DayAvgRevenue) 
+                    : "-")}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">vs Same Week Last Year:</span>
+              <span className={getChangeColor(yesterdaySnapshot?.yearOverYearChange)}>
+                {formatChange(yesterdaySnapshot?.yearOverYearChange)}
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Data Status</CardDescription>
+            <CardTitle className="text-lg">
+              {hasDailySalesData ? `${dailySalesData.count} days` : "No data"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => backfillMutation.mutate()}
+              disabled={backfillMutation.isPending}
+              data-testid="button-backfill-daily-sales"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${backfillMutation.isPending ? "animate-spin" : ""}`} />
+              {backfillMutation.isPending ? "Processing..." : "Backfill 30 Days"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Original QuickBooks Demand History Card */}
+      <Card>
+        <CardHeader className="pb-4">
+          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Database className="h-5 w-5" />
+                QuickBooks Demand History
+              </CardTitle>
+              <CardDescription>
+                Read-only historical demand imported from QuickBooks for forecasting.
+              </CardDescription>
+            </div>
           {lastSyncedAt && (
             <span className="text-xs text-muted-foreground whitespace-nowrap">
               Last synced: {formatRelativeTime(lastSyncedAt)}
@@ -1882,6 +2043,7 @@ function QuickBooksDemandHistoryTab() {
         </CardFooter>
       )}
     </Card>
+    </div>
   );
 }
 

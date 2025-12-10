@@ -12784,6 +12784,37 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // POST /api/daily-sales-snapshots/trigger - Manually trigger daily sales aggregation
+  app.post("/api/daily-sales-snapshots/trigger", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { date } = req.body;
+      const { triggerAggregation } = await import("./services/daily-sales-scheduler");
+      
+      const targetDate = date ? new Date(date) : new Date();
+      const result = await triggerAggregation(targetDate);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[DailySales] Error triggering aggregation:", error);
+      res.status(500).json({ error: error.message || "Failed to trigger aggregation" });
+    }
+  });
+
+  // POST /api/daily-sales-snapshots/backfill - Backfill historical daily sales data
+  app.post("/api/daily-sales-snapshots/backfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { days = 30 } = req.body;
+      const { backfillDailySales } = await import("./services/daily-sales-scheduler");
+      
+      const result = await backfillDailySales(days);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[DailySales] Error backfilling:", error);
+      res.status(500).json({ error: error.message || "Failed to backfill daily sales" });
+    }
+  });
+
   // POST /api/purchase-orders/:id/create-bill - Create QuickBooks Bill from PO
   app.post("/api/purchase-orders/:id/create-bill", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -14285,6 +14316,14 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Shopify Reconciliation Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Shopify Reconciliation Scheduler:", error);
+  });
+  
+  // Initialize Daily Sales Scheduler for nightly aggregation at 11:59 PM Mountain time
+  import("./services/daily-sales-scheduler").then(({ initializeDailySalesScheduler }) => {
+    initializeDailySalesScheduler();
+    console.log("[Server] Daily Sales Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Daily Sales Scheduler:", error);
   });
   
   // Startup webhook auto-registration for Shopify (non-blocking)

@@ -1,0 +1,143 @@
+You already have the full codebase loaded for my Manufacturing Inventory Management System.
+
+GOALS FOR THIS EDIT:
+1) Make the Purchase Order system production-ready:
+   - Clean receive flow (partial vs full).
+   - Track lead times (creation → arrival).
+   - Ensure email + PDF POs look professional and are wired end-to-end.
+2) Make the "Order Feedback" tab behave like an AI agent decision log:
+   - Surface view: table log of AI recommendations + what we actually ordered.
+   - Detail view: right-side drawer that shows a Shopify-style timeline of what the agent considered before making a decision.
+3) Do NOT change the database schema or drastically restructure server/app.ts.
+
+Please read this carefully before editing files.
+
+A) PURCHASE ORDER SYSTEM
+
+1. Receiving logic
+- File: server/services/po-state-machine.ts
+- Implement/verify `POStateMachine.receiveItems` to:
+  - Only allow receiving when status is one of: APPROVED, SENT, PARTIAL_RECEIVED.
+  - For each line in receiptData:
+    * Increment purchaseOrderLines.qtyReceived (up to qtyOrdered, never above).
+    * Insert a row into purchaseOrderReceipts with:
+      - purchaseOrderId
+      - dateReceived (default now)
+      - warehouseLocation
+      - receivedBy
+      - notes
+  - After updating lines:
+    * If all lines have qtyReceived === qtyOrdered:
+      - Set status to RECEIVED.
+      - Set receivedAt = new Date().
+    * Else if at least one line has qtyReceived > 0:
+      - Set status to PARTIAL_RECEIVED.
+  - Make sure we recalc totals if needed and return a proper TransitionResult.
+
+2. Create PO from AI recommendations
+- Files:
+  - client/src/components/create-po-sheet.tsx
+  - server/routes.ts (PO create route and any helper in storage)
+- Behavior:
+  - When CreatePOSheet is opened from an AI recommendation:
+    * Pre-fill PO lines with:
+      - aiRecommendationId = rec.id
+      - recommendedQtyAtOrderTime = rec.recommendedQty
+      - qtyOrdered defaulting to that recommendation (user can edit).
+  - On PO creation:
+    * Persist purchaseOrderLines.aiRecommendationId on each relevant line.
+    * Persist purchaseOrderLines.recommendedQtyAtOrderTime.
+    * Persist purchaseOrderLines.finalOrderedQty = qtyOrdered.
+  - Ensure storage.recalculatePOTotals is called so subtotal/total reflect current lines.
+
+3. Lead time utilities (no schema changes)
+- Add a small service: server/services/po-metrics-service.ts with:
+  - async getPoLeadTime(poId: string): 
+    * Load the PO and its receipts.
+    * Find the earliest purchaseOrderReceipts.dateReceived.
+    * Compute leadTimeDays = difference between that date and (po.approvedAt || po.sentAt || po.createdAt).
+    * Return { leadTimeDays, firstReceiptDate }.
+  - async getSupplierLeadTime(supplierId: string):
+    * For all RECEIVED POs for that supplier, compute avg/median leadTimeDays.
+- Expose this via a small API endpoint if needed (e.g. GET /api/purchase-orders/:id/metrics) so we can use it later in the AI context and PO detail screen.
+
+4. Verify PO email + PDF path
+- Files:
+  - server/services/po-email-service.ts
+  - server/services/po-pdf-service.ts
+- Check:
+  - Email send:
+    * Uses SENDGRID_API_KEY and a clear From name/email (use an env-driven default).
+    * Includes a functional acknowledgement link that updates acknowledgementStatus and ackTokenExpiresAt.
+  - PDF:
+    * Includes buyer and supplier blocks, PO number, dates, incoterms, payment terms, and line table.
+  - Do NOT change the overall structure, just fix any obvious bugs or missing wiring.
+
+B) ORDER FEEDBACK / AGENT DECISION LOG
+
+We want the "Order Feedback" main tab (which uses InsightsTab) to act as a decision log with a timeline drawer.
+
+1. Surface table: enhance InsightsTab recommendations table
+- File: client/src/pages/ai.tsx (InsightsTab)
+- In the "recommendations" subtab of InsightsTab:
+  - Ensure each row includes:
+    * Timestamp (createdAt) with a readable format.
+    * SKU and productName.
+    * Decision (recommendationType + recommendedAction) with a colored badge.
+    * riskLevel.
+    * daysUntilStockout.
+    * availableForSale and qtyOnPo.
+    * recommendedQty.
+    * actuallyOrderedQty = sum of finalOrderedQty for all purchaseOrderLines with aiRecommendationId = rec.id.
+    * orderTiming (ORDER_TODAY vs SAFE_UNTIL_TOMORROW) if present.
+    * status (NEW, ACCEPTED, DISMISSED).
+  - Keep existing filters (status, risk, type).
+  - Clicking a row should set selectedItem(rec) and open the detail drawer.
+
+2. Detail drawer: Shopify-style timeline of the decision
+- Still in InsightsTab, extend the existing <Sheet> for Source Signals Breakdown:
+  - Make the Sheet feel like a "Decision Timeline" for sheetItem:
+    * Top section:
+      - Final recommendation summary (decision, risk, daysUntilStockout, recommendedQty, actuallyOrderedQty, orderTiming).
+      - Basic item info (SKU, productName).
+    * Middle section: vertical timeline component.
+      - Build an ordered array of steps using:
+        - L1: Batch context from aiBatchLogs (via sheetItem.batchLogId): startedAt, reason, processedSkus, criticalItemsFound.
+        - L2: Source signals from sheetItem.sourceSignals and sheetItem.sourceDecisionsJson.sourceDecisions:
+          For example, steps like:
+            - "Shopify sales velocity" with metrics from SHOPIFY sourceDecision.
+            - "Inventory snapshot (Extensiv + app)" from inventory-related signals.
+            - "QuickBooks demand/seasonality" when available.
+            - "Ads performance" (Meta/Google) as later V2.
+        - L3: LLM synthesis (sheetItem.reasonSummary, orderTiming, llmResponseTimeMs).
+      - Render these as a vertical list with timestamp labels where available and a short explanation text.
+    * Bottom section:
+      - If there are POs tied to this recommendation:
+        - List POs (poNumber, createdAt, total ordered qty for this SKU, first receipt date, computed leadTimeDays via new metrics endpoint).
+  - The goal is: from this drawer, a human can see what the agent looked at and how it reached "order X" vs "monitor".
+
+3. Wire actuallyOrderedQty and PO links on the backend
+- Add a helper in storage or a new endpoint (e.g. GET /api/ai/recommendations/persisted) that:
+  - Returns persisted recommendations plus:
+    * actuallyOrderedQty for each via a join/aggregation to purchaseOrderLines.
+    * optionally, a list of PO IDs/numbers linked to the recommendation.
+- Update InsightsTab to use this enriched payload instead of manually recomputing on the client.
+
+C) GENERAL CONSTRAINTS
+
+- Do NOT introduce new tables or columns.
+- Do NOT rewrite server/app.ts or the core Express wiring.
+- Keep changes focused in:
+  - shared/schema.ts (only if you find bugs in existing definitions, but avoid structural changes).
+  - server/services/po-state-machine.ts
+  - server/services/po-email-service.ts
+  - server/services/po-pdf-service.ts
+  - server/services/po-metrics-service.ts (new file)
+  - server/routes.ts (for any new PO metrics or AI endpoints)
+  - client/src/components/create-po-sheet.tsx
+  - client/src/pages/ai.tsx (InsightsTab) and any related components used by the Order Feedback tab.
+
+After you complete these changes, summarize:
+- How PO receiving and lead time behavior works now.
+- What the "Order Feedback" tab shows in the table vs in the detail drawer.
+- How AI recommendations link through to real POs and back.

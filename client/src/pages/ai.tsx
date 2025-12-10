@@ -4536,12 +4536,18 @@ export default function AIAgent() {
   };
 
   const handleQuickBooksConnect = async () => {
+    // Open popup synchronously to avoid browser blocking
+    const popup = window.open("about:blank", "_blank", "width=600,height=700");
     try {
       const response = await apiRequest("GET", "/api/quickbooks/auth-url");
-      if (response.authUrl) {
-        window.open(response.authUrl, "_blank", "width=600,height=700");
+      if (response.authUrl && popup) {
+        popup.location.href = response.authUrl;
+      } else if (!popup) {
+        // Fallback to redirect if popup was blocked
+        window.location.href = response.authUrl;
       }
     } catch (error: any) {
+      if (popup) popup.close();
       toast({
         title: "Connection Error",
         description: error.message || "Failed to initiate QuickBooks connection",

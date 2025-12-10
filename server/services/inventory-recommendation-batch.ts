@@ -185,6 +185,22 @@ export class InventoryRecommendationBatch {
 
         // Upsert recommendation
         const skuContext = skuContexts.find(c => c.sku === rec.sku);
+        
+        // Build source signals from context (flat structure for UI compatibility)
+        const sourceSignals = skuContext ? {
+          hildaleQty: skuContext.hildaleQty,
+          pivotQty: skuContext.pivotQty,
+          availableForSale: skuContext.availableForSale,
+          dailyVelocity: skuContext.dailyVelocity,
+          adMultiplier: skuContext.adMultiplier,
+          leadTimeDays: skuContext.leadTimeDays,
+          inboundPO: skuContext.inboundPO,
+          daysUntilStockout: skuContext.daysUntilStockout,
+          safetyStockDays: skuContext.safetyStockDays,
+          backorders: skuContext.backorders,
+          returnRate: skuContext.returnRate,
+        } : null;
+        
         await this.storage.upsertAIRecommendation({
           type: "INVENTORY",
           itemId: rec.itemId,
@@ -203,6 +219,8 @@ export class InventoryRecommendationBatch {
           adMultiplier: skuContext?.adMultiplier ?? 1.0,
           baseVelocity: skuContext?.dailyVelocity ?? null,
           adjustedVelocity: skuContext ? skuContext.dailyVelocity * (skuContext.adMultiplier || 1.0) : null,
+          sourceSignals: sourceSignals,
+          contextSnapshot: skuContext ? { ...skuContext, batchReason: params.reason } : null,
         });
 
         // Auto-create draft PO for critical items with ORDER_TODAY timing

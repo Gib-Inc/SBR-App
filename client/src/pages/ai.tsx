@@ -2150,432 +2150,54 @@ interface AIRecommendationData {
 }
 
 function AIRecommendationsTab() {
-  const { toast } = useToast();
-  const [columns, setColumns] = useState<ColumnConfig[]>(DEFAULT_COLUMNS);
-  const [showColumnEditor, setShowColumnEditor] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [riskFilter, setRiskFilter] = useState<string>("all");
-  const [timingFilter, setTimingFilter] = useState<string>("all");
-  
-  // Fetch comprehensive recommendation data
-  const { data: recsData, isLoading, isFetching } = useQuery<{ recommendations: AIRecommendationData[]; summary: any }>({
-    queryKey: ["/api/ai/recommendations/comprehensive"],
-    queryFn: async () => {
-      const response = await fetch("/api/ai/recommendations/comprehensive", {
-        credentials: "include",
-      });
-      if (!response.ok) {
-        // Fallback to regular recommendations if comprehensive endpoint doesn't exist yet
-        const fallbackResponse = await fetch("/api/ai/recommendations?status=active", {
-          credentials: "include",
-        });
-        if (!fallbackResponse.ok) throw new Error("Failed to fetch recommendations");
-        const fallbackData = await fallbackResponse.json();
-        // Transform to comprehensive format
-        return {
-          recommendations: (fallbackData.recommendations || []).map((rec: any) => ({
-            id: rec.id,
-            sku: rec.sku,
-            productName: rec.productName,
-            itemId: rec.itemId,
-            riskLevel: rec.riskLevel,
-            orderTiming: rec.orderTiming,
-            daysUntilStockout: rec.daysUntilStockout,
-            availableForSale: rec.availableForSale ?? 0,
-            hildaleQty: 0,
-            pivotQty: rec.availableForSale ?? 0,
-            supplierLeadTime: 14,
-            qtyOnPO: rec.qtyOnPo ?? 0,
-            moq: null,
-            supplierName: null,
-            supplierScore: null,
-            adMultiplier: rec.adMultiplier ?? null,
-            salesVelocity: rec.adjustedVelocity ?? rec.baseVelocity ?? 0,
-            velocityTrend: null,
-            yoySales: null,
-            stockoutHistory: 0,
-            returnRate: null,
-            unitCost: null,
-            margin: null,
-            revenueImpact: null,
-            carryingCost: null,
-            bomComponents: 0,
-            productionCapacity: null,
-            criticality: null,
-            recommendedQty: rec.recommendedQty ?? 0,
-            reasonSummary: rec.reasonSummary,
-            status: rec.status,
-            createdAt: rec.createdAt,
-          })),
-          summary: fallbackData.summary,
-        };
-      }
-      return response.json();
-    },
-  });
-  
-  const visibleColumns = columns.filter(c => c.visible);
-  
-  // Filter recommendations
-  const filteredRecs = (recsData?.recommendations || []).filter(rec => {
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      if (!rec.sku.toLowerCase().includes(query) && 
-          !rec.productName.toLowerCase().includes(query)) {
-        return false;
-      }
-    }
-    if (riskFilter !== "all" && rec.riskLevel !== riskFilter) return false;
-    if (timingFilter !== "all") {
-      if (timingFilter === "ORDER_TODAY" && rec.orderTiming !== "ORDER_TODAY") return false;
-      if (timingFilter === "SAFE" && rec.orderTiming === "ORDER_TODAY") return false;
-    }
-    return true;
-  });
-  
-  // Sort by risk level (HIGH first, then ORDER_TODAY)
-  const sortedRecs = [...filteredRecs].sort((a, b) => {
-    const riskOrder = { HIGH: 0, MEDIUM: 1, LOW: 2, UNKNOWN: 3 };
-    const riskDiff = (riskOrder[a.riskLevel] || 3) - (riskOrder[b.riskLevel] || 3);
-    if (riskDiff !== 0) return riskDiff;
-    if (a.orderTiming === "ORDER_TODAY" && b.orderTiming !== "ORDER_TODAY") return -1;
-    if (b.orderTiming === "ORDER_TODAY" && a.orderTiming !== "ORDER_TODAY") return 1;
-    return (a.daysUntilStockout ?? 999) - (b.daysUntilStockout ?? 999);
-  });
-  
-  const getRiskBadgeVariant = (risk: string): "destructive" | "secondary" | "outline" | "default" => {
-    switch (risk) {
-      case "HIGH": return "destructive";
-      case "MEDIUM": return "secondary";
-      case "LOW": return "outline";
-      default: return "outline";
-    }
-  };
-  
-  const formatNumber = (val: number | null | undefined): string => {
-    if (val === null || val === undefined) return "-";
-    return val.toLocaleString();
-  };
-  
-  const formatPercent = (val: number | null | undefined): string => {
-    if (val === null || val === undefined) return "-";
-    return `${(val * 100).toFixed(1)}%`;
-  };
-  
-  const formatCurrency = (val: number | null | undefined): string => {
-    if (val === null || val === undefined) return "-";
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(val);
-  };
-  
-  const renderCellValue = (rec: AIRecommendationData, columnId: string): React.ReactNode => {
-    switch (columnId) {
-      case "sku":
-        return <span className="font-mono text-sm">{rec.sku}</span>;
-      case "productName":
-        return <span className="max-w-[200px] truncate block">{rec.productName}</span>;
-      case "riskLevel":
-        return (
-          <Badge variant={getRiskBadgeVariant(rec.riskLevel)} className="text-xs">
-            {rec.riskLevel}
-          </Badge>
-        );
-      case "orderTiming":
-        return rec.orderTiming === "ORDER_TODAY" ? (
-          <Badge className="bg-amber-500 hover:bg-amber-600 text-white text-xs">Order Today</Badge>
-        ) : (
-          <Badge variant="outline" className="text-xs">Safe</Badge>
-        );
-      case "daysUntilStockout":
-        const days = rec.daysUntilStockout;
-        return (
-          <span className={days !== null && days < 7 ? "text-destructive font-medium" : ""}>
-            {days !== null ? `${days}d` : "-"}
-          </span>
-        );
-      case "availableForSale":
-        return <span className={rec.availableForSale < 0 ? "text-destructive" : ""}>{formatNumber(rec.availableForSale)}</span>;
-      case "hildaleQty":
-        return formatNumber(rec.hildaleQty);
-      case "pivotQty":
-        return formatNumber(rec.pivotQty);
-      case "supplierLeadTime":
-        return `${rec.supplierLeadTime}d`;
-      case "qtyOnPO":
-        return formatNumber(rec.qtyOnPO);
-      case "moq":
-        return formatNumber(rec.moq);
-      case "supplierName":
-        return rec.supplierName || "-";
-      case "supplierScore":
-        return rec.supplierScore !== null ? `${rec.supplierScore}/100` : "-";
-      case "demandRisk":
-        if (rec.adMultiplier === null || rec.adMultiplier <= 1) {
-          return <span className="text-muted-foreground">—</span>;
-        }
-        const surgePercent = Math.round((rec.adMultiplier - 1) * 100);
-        return (
-          <Badge 
-            className={`text-xs ${
-              surgePercent >= 30 
-                ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300" 
-                : surgePercent >= 15 
-                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                  : "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300"
-            }`}
-            title={`Ad performance indicates ${surgePercent}% potential demand increase`}
-          >
-            +{surgePercent}% surge
-          </Badge>
-        );
-      case "salesVelocity":
-        return `${rec.salesVelocity.toFixed(1)}/day`;
-      case "velocityTrend":
-        if (rec.velocityTrend === null) return "-";
-        const trend = rec.velocityTrend;
-        return (
-          <span className={trend > 0 ? "text-green-600" : trend < 0 ? "text-red-600" : ""}>
-            {trend > 0 ? "+" : ""}{(trend * 100).toFixed(0)}%
-          </span>
-        );
-      case "yoySales":
-        return formatNumber(rec.yoySales);
-      case "stockoutHistory":
-        return rec.stockoutHistory > 0 ? (
-          <span className="text-orange-600">{rec.stockoutHistory}x</span>
-        ) : "0";
-      case "returnRate":
-        return formatPercent(rec.returnRate);
-      case "unitCost":
-        return formatCurrency(rec.unitCost);
-      case "margin":
-        return formatPercent(rec.margin);
-      case "revenueImpact":
-        return formatCurrency(rec.revenueImpact);
-      case "carryingCost":
-        return formatCurrency(rec.carryingCost);
-      case "bomComponents":
-        return rec.bomComponents > 0 ? `${rec.bomComponents} parts` : "-";
-      case "productionCapacity":
-        return formatNumber(rec.productionCapacity);
-      case "criticality":
-        return rec.criticality ? (
-          <Badge variant={rec.criticality === "HIGH" ? "destructive" : rec.criticality === "MEDIUM" ? "secondary" : "outline"} className="text-xs">
-            {rec.criticality}
-          </Badge>
-        ) : "-";
-      default:
-        return "-";
-    }
-  };
-  
-  const toggleColumn = (columnId: string) => {
-    setColumns(prev => prev.map(col => 
-      col.id === columnId ? { ...col, visible: !col.visible } : col
-    ));
-  };
-  
-  const toggleGroupColumns = (group: string, visible: boolean) => {
-    setColumns(prev => prev.map(col => 
-      col.group === group ? { ...col, visible } : col
-    ));
-  };
-  
-  if (isLoading) {
-    return (
-      <Card className="mt-8">
-        <CardContent className="pt-6">
-          <Skeleton className="h-64 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
-  
+  // V2 Placeholder - This tab will be enhanced in a future version
+  // For now, AI decision feedback is displayed in the "Order Feedback" tab
   return (
-    <div className="space-y-4 mt-8">
+    <div className="mt-8">
       <Card>
         <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Brain className="h-5 w-5" />
-                AI Recommendations
-              </CardTitle>
-              <CardDescription>
-                Comprehensive inventory recommendations with all decision factors.
-                {recsData?.summary && (
-                  <span className="block text-xs mt-1">
-                    {recsData.summary.highRisk || 0} critical • {recsData.summary.total || 0} total items
-                  </span>
-                )}
-              </CardDescription>
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+              <Brain className="h-6 w-6 text-primary" />
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search SKU or product..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 w-48"
-                  data-testid="input-ai-rec-search"
-                />
-              </div>
-              <Select value={riskFilter} onValueChange={setRiskFilter}>
-                <SelectTrigger className="w-28" data-testid="select-risk-filter-main">
-                  <Filter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Risk" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Risks</SelectItem>
-                  <SelectItem value="HIGH">High</SelectItem>
-                  <SelectItem value="MEDIUM">Medium</SelectItem>
-                  <SelectItem value="LOW">Low</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={timingFilter} onValueChange={setTimingFilter}>
-                <SelectTrigger className="w-36" data-testid="select-timing-filter">
-                  <Clock className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Timing" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All</SelectItem>
-                  <SelectItem value="ORDER_TODAY">Order Today</SelectItem>
-                  <SelectItem value="SAFE">Safe Until Tomorrow</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowColumnEditor(true)}
-                data-testid="button-edit-columns"
-              >
-                <Settings2 className="h-4 w-4 mr-2" />
-                Edit Columns
-              </Button>
+            <div>
+              <CardTitle>AI Recommendations</CardTitle>
+              <CardDescription>Advanced AI-powered inventory optimization</CardDescription>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-auto max-h-[calc(100vh-350px)]">
-            <table className="w-full">
-              <thead className="bg-muted sticky top-0 z-10">
-                <tr className="border-b">
-                  {visibleColumns.map(col => (
-                    <th 
-                      key={col.id} 
-                      className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap"
-                      data-testid={`th-${col.id}`}
-                    >
-                      {col.label}
-                    </th>
-                  ))}
-                  <th className="px-3 py-2 text-left text-xs font-medium whitespace-nowrap">Rec Qty</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedRecs.length === 0 ? (
-                  <tr>
-                    <td colSpan={visibleColumns.length + 1} className="h-32 text-center text-muted-foreground">
-                      No recommendations found
-                    </td>
-                  </tr>
-                ) : (
-                  sortedRecs.map(rec => (
-                    <tr 
-                      key={rec.id} 
-                      className={`border-b last:border-b-0 hover-elevate ${
-                        rec.orderTiming === "ORDER_TODAY" ? "bg-amber-50 dark:bg-amber-950/20" : ""
-                      }`}
-                      data-testid={`row-ai-rec-${rec.id}`}
-                    >
-                      {visibleColumns.map(col => (
-                        <td key={col.id} className="px-3 py-2 text-sm whitespace-nowrap">
-                          {renderCellValue(rec, col.id)}
-                        </td>
-                      ))}
-                      <td className="px-3 py-2 text-sm whitespace-nowrap font-medium">
-                        {rec.recommendedQty > 0 ? (
-                          <Badge variant="default">{rec.recommendedQty}</Badge>
-                        ) : "-"}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+        <CardContent>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-muted mb-6">
+              <Sparkles className="h-10 w-10 text-muted-foreground" />
+            </div>
+            <h3 className="text-xl font-semibold mb-2">Coming in V2</h3>
+            <p className="text-muted-foreground max-w-md mb-6">
+              This tab will feature advanced AI capabilities including predictive analytics, 
+              automated reorder suggestions, and multi-source demand forecasting.
+            </p>
+            <div className="flex flex-col gap-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <span>LLM-powered demand analysis</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <span>Cross-channel inventory optimization</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+                <span>Automated supplier selection</span>
+              </div>
+            </div>
+            <div className="mt-8 p-4 bg-muted/50 rounded-lg">
+              <p className="text-sm text-muted-foreground">
+                For current AI decision feedback, visit the <span className="font-medium text-foreground">Order Feedback</span> tab
+              </p>
+            </div>
           </div>
         </CardContent>
-        <CardFooter className="justify-between border-t p-4">
-          <p className="text-sm text-muted-foreground">
-            Showing {sortedRecs.length} of {recsData?.recommendations?.length || 0} recommendations
-          </p>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              {visibleColumns.length} of {columns.length} columns visible
-            </span>
-          </div>
-        </CardFooter>
       </Card>
-      
-      {/* Column Editor Dialog */}
-      <Dialog open={showColumnEditor} onOpenChange={setShowColumnEditor}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Settings2 className="h-5 w-5" />
-              Edit Visible Columns
-            </DialogTitle>
-            <DialogDescription>
-              Select which columns to display. Hidden columns are excluded from AI decision context.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-6 py-4">
-            {Object.entries(COLUMN_GROUPS).map(([groupKey, groupConfig]) => (
-              <div key={groupKey} className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className={`text-sm font-medium px-2 py-1 rounded ${groupConfig.color}`}>
-                    {groupConfig.label}
-                  </span>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => toggleGroupColumns(groupKey, true)}
-                      data-testid={`button-show-all-${groupKey}`}
-                    >
-                      Show All
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => toggleGroupColumns(groupKey, false)}
-                      data-testid={`button-hide-all-${groupKey}`}
-                    >
-                      Hide All
-                    </Button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {columns.filter(c => c.group === groupKey).map(col => (
-                    <div 
-                      key={col.id} 
-                      className="flex items-center gap-2 p-2 border rounded hover-elevate cursor-pointer"
-                      onClick={() => toggleColumn(col.id)}
-                    >
-                      <Switch
-                        checked={col.visible}
-                        onCheckedChange={() => toggleColumn(col.id)}
-                        data-testid={`switch-column-${col.id}`}
-                      />
-                      <Label className="cursor-pointer text-sm">{col.label}</Label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

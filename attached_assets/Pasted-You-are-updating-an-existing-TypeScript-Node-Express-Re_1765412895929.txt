@@ -1,0 +1,372 @@
+You are updating an existing TypeScript / Node / Express + React inventory app for Sticker Burr Roller that already has PostgreSQL schemas for returns and external integrations. The app is deployed on Replit.
+
+Current state:
+- AI Agent → Connected Data Sources page shows cards for Extensiv/Pivot, Shopify, Amazon Seller Central, GoHighLevel, PhantomBuster, QuickBooks, Meta Ads, Google Ads.
+- There is currently NO Shippo integration card.
+- Returns are modeled with tables like: return_requests, return_items, return_shipments, shippo_label_logs (stub), barcodes, inventory_transactions, items, sales_orders.
+- GHL is connected and used for opportunities/tasks.
+- QuickBooks integration is NOT yet configured and should NOT be used to auto-issue refunds in V1.
+
+Your job: in ONE pass, implement a complete V1 Shippo-powered returns flow that is aligned with Sticker Burr Roller’s current posted return policy and creates human refund tasks in GHL, but DOES NOT issue refunds automatically.
+
+=====================================================================
+SECTION 1 – BUSINESS RULES FROM STICKER BURR ROLLER POLICY
+=====================================================================
+
+Match the current policy at https://www.stickerburrroller.com/pages/return-policy:
+
+1) Return window:
+   - Customer may return non-defective products within 30 days of delivery.
+   - If more than 30 days have passed since delivery, the order is NOT REFUNDABLE and no label should be created.
+
+2) Condition & fees:
+   - Unused, clean, sellable condition:
+     - Eligible for full product refund, MINUS original shipping paid.
+   - Used/dirty/damaged but still returnable:
+     - Apply a 20% restocking fee on the product amount.
+   - Not returnable (heavily used or damaged beyond policy):
+     - No refund.
+
+3) Shipping costs:
+   - Outbound shipping from the original order is never refunded.
+   - If the customer uses a prepaid return label we provide (via Shippo):
+     - Deduct the cost of that label from the refund.
+     - Use a MINIMUM fee of $30 (configurable) to stay within policy. If Shippo’s actual label cost is greater than $30, deduct the actual cost.
+   - If the customer arranges their own shipping (not V1 focus), there is no label fee deduction.
+
+4) Refund timing:
+   - Refunds are only processed AFTER the product is received and inspected at the Hildale warehouse.
+   - Policy says refunds should be issued within ~2–5 business days of receipt; in V1 this is a human responsibility. The app should only calculate and recommend the refund amount and create a “Needs Attention” task in GHL.
+
+5) V1 automation boundary:
+   - The app MUST NOT issue refunds automatically (no automatic QuickBooks Refund Receipt / Credit Memo in V1).
+   - Instead, after warehouse scan and refund calculation, the app must:
+     - Compute final refund amount (product subtotal only, minus shipping, label cost, and restocking fee).
+     - Create or update a GoHighLevel Opportunity in the “Replit” pipeline, “Needs Attention” stage, instructing a human to issue the refund manually in the correct system (e.g., Amazon, Shopify, etc.).
+
+=====================================================================
+SECTION 2 – PRE-BUILD: ADD SHIPPO AS A DATA SOURCE / INTEGRATION
+=====================================================================
+
+1) Integration provider enum & config
+   - Locate the integration provider enum / type used for the Connected Data Sources grid (e.g., IntegrationProvider or similar in shared/schema.ts or shared/types).
+   - Add a new provider: 'SHIPPO'.
+   - Ensure integration-config storage can handle provider = 'SHIPPO' with fields:
+     - apiKey (optional, if storing in DB)
+     - mode / environment if needed (LIVE/SANDBOX)
+     - defaultReturnLabelMinFeeUsd (env override, default 30)
+
+   - IMPORTANT: The SHIPPO_API_KEY itself should come from environment vars for production; the integration config can store a label or “configured” flag, but not the raw secret in plain text if your project already follows that pattern.
+
+2) Connected Data Sources UI card
+   - File: the React page that renders the “Connected Data Sources” grid for AI Agent (the one shown in the screenshot).
+   - Add a new card for Shippo in that grid, consistent with the existing style:
+     - Title: “Shippo”
+     - Subtitle: “Return labels & shipping”
+     - Status states: Not Configured / Connected / Error.
+     - Buttons:
+       - Configure → opens a side sheet / modal for Shippo
+       - Sync → optional; for V1 it can be disabled or simply trigger a test call to Shippo (e.g., get account info) to validate credentials.
+   - Configure sheet:
+     - Fields:
+       - API Key (if you store it; or show “Configured via environment variable” if using env only).
+       - Return label minimum fee (USD, default 30).
+       - Hildale warehouse address (if not already configured globally).
+     - Save these to the integration-configs API for provider = 'SHIPPO'.
+
+3) Backend integration config handling
+   - Extend GET/POST /api/integration-configs to support provider = 'SHIPPO'.
+   - Ensure the “status” field for Shippo reflects:
+     - NOT_CONFIGURED if there is no usable API key + warehouse address.
+     - CONNECTED if a test ping to Shippo succeeds.
+     - ERROR if the last connection attempt failed.
+
+=====================================================================
+SECTION 3 – SHIPPO CLIENT ("WIRING" LAYER)
+=====================================================================
+
+Create a small Shippo client service to centralize all Shippo API calls.
+
+1) New service: server/services/shippo-client.ts
+   - Use env var SHIPPO_API_KEY (and optionally base URL).
+   - Export:
+     - async createReturnShipment(input):
+       - Input includes:
+         - fromAddress (customer)
+         - toAddress (Hildale warehouse)
+         - parcel (weight, dimensions)
+       - Calls Shippo to create a Shipment.
+       - Returns Shipment object and available rates.
+     - async purchaseReturnLabel({ rateId, metadata }):
+       - Purchases the label (Shippo Transaction).
+       - Returns:
+         - transactionId
+         - trackingNumber
+         - labelUrl
+         - carrier
+         - serviceLevel
+         - labelCost
+         - labelCurrency
+
+   - Follow existing project patterns for HTTP client (e.g., node-fetch/axios wrapper).
+
+2) Warehouse address
+   - Centralize Hildale warehouse address:
+     - Either in env vars (HILDALE_SHIPTO_*), or a global settings row already used by other parts of the app.
+   - Shippo client must use this address for the “to” side of all return labels.
+
+=====================================================================
+SECTION 4 – GHL → RETURNS ENDPOINT (ELIGIBILITY + LABEL CREATION)
+=====================================================================
+
+Create a single endpoint that GHL or a GHL AI Agent can call when a customer says “I want a refund.”
+
+1) Endpoint: POST /api/returns/from-ghl
+   - Authentication: same as other internal APIs (require auth / API token).
+   - Request body:
+     - ghlContactId
+     - externalOrderId (e.g., Shopify/Amazon order id)
+     - salesChannel: 'SHOPIFY' | 'AMAZON' | 'DIRECT' | 'OTHER'
+     - customerName
+     - customerEmail
+     - customerPhone
+     - shippingAddress (full)
+     - items: array of { sku, qtyRequested, unitPrice }
+     - reason (string)
+
+2) Return eligibility logic:
+   - Find the underlying sales order by externalOrderId + salesChannel (or fail gracefully if not found).
+   - Determine deliveryDate:
+     - Prefer stored `deliveredAt` on sales order if present.
+     - Else fallback to `shippedAt` + typical transit days (configurable, e.g., 5 days).
+   - Compute daysSinceDelivery = today - deliveryDate.
+   - If daysSinceDelivery > 30:
+     - DO NOT create return_requests.
+     - Return JSON:
+       - eligible: false
+       - reasonCode: 'OUTSIDE_RETURN_WINDOW'
+       - messageText: clear explanation that the order is past the 30-day return window and cannot be refunded.
+     - Stop.
+
+3) If eligible (<= 30 days):
+   - Create return_requests row:
+     - status = 'REQUESTED'
+     - resolution_requested = 'REFUND'
+     - labelProvider = 'SHIPPO'
+     - source = 'GHL'
+     - ghlContactId, externalOrderId, salesChannel, customerName, customerEmail, customerPhone
+     - shippingAddress
+     - store link to salesOrderId if available.
+   - Create return_items rows:
+     - For each item: sku, qtyRequested, unitPrice.
+   - Emit return_events row of type 'GHL_REQUEST'.
+   - For V1, auto-approve straightforward non-defective returns:
+     - status = 'APPROVED'
+     - return_events: 'STATUS_CHANGE' (REQUESTED → APPROVED).
+   - Call helper createReturnLabelForRequest(returnRequestId) (next section).
+   - Respond to caller with:
+     - eligible: true
+     - messageText for GHL agent to send to customer (plain language summary of:
+       - 30-day window
+       - shipping not refunded
+       - possible restocking fee for used items
+       - return label cost will be deducted)
+     - labelUrl
+     - carrier
+     - trackingNumber
+     - returnRequestId
+
+=====================================================================
+SECTION 5 – LABEL CREATION + BARCODE + SHIPPO LOGS
+=====================================================================
+
+Implement helper to encapsulate Shippo calls and local logging.
+
+1) Helper: createReturnLabelForRequest(returnRequestId: string)
+   - Loads:
+     - return_requests
+     - return_items
+     - item metadata (for weights/dimensions)
+     - Hildale warehouse address
+   - Calls ShippoClient.createReturnShipment with:
+     - fromAddress = customer shippingAddress
+     - toAddress = Hildale address
+     - parcel = derived or default (configurable).
+   - Picks a rate:
+     - Cheapest or preferred carrier/service (configurable).
+   - Calls ShippoClient.purchaseReturnLabel(rateId).
+   - Updates return_requests with:
+     - shippoShipmentId
+     - shippoTransactionId
+     - carrier
+     - trackingNumber
+     - labelUrl
+     - labelCost
+     - labelCurrency
+     - labelCreatedAt = now()
+     - status = 'LABEL_CREATED'
+   - Inserts into shippo_label_logs:
+     - type = 'RETURN'
+     - shippoShipmentId, shippoTransactionId
+     - labelUrl, trackingNumber, carrier, serviceLevel, labelCost, labelCurrency
+     - status = 'CREATED'
+     - scanCode = trackingNumber
+     - returnRequestId
+     - sku info for quick reference (first or all SKUs)
+     - channel = salesChannel
+     - customerName, customerEmail
+   - Ensure there is a barcodes record:
+     - If no barcode with value = trackingNumber:
+       - Insert barcodes:
+         - value = trackingNumber
+         - name = `Shippo Return – ${customerName}`
+         - sku = first SKU or null
+         - purpose = 'finished_product' (or dedicated 'shippo_label' if already supported).
+     - Save barcodeId on shippo_label_logs.
+   - Emit return_events of type 'LABEL_CREATED' and 'STATUS_CHANGE' (APPROVED → LABEL_CREATED).
+
+=====================================================================
+SECTION 6 – OPTIONAL SHIPPO WEBHOOK (TRACKING)
+=====================================================================
+
+Add a webhook for shipment tracking (not critical for refund timing but good for visibility).
+
+1) Endpoint: POST /api/shippo/webhook
+   - Parse payload; verify signature if Shippo supports it.
+   - Find shippo_label_logs by transactionId or trackingNumber.
+   - Update shippo_label_logs.status to:
+     - 'IN_TRANSIT', 'DELIVERED', 'LOST', 'CANCELLED', etc.
+     - Update lastTrackingUpdate timestamp.
+   - Optionally:
+     - On first carrier scan: set return_requests.status = 'IN_TRANSIT'.
+     - On carrier-delivered: set a boolean flag but do NOT treat as final receipt (warehouse scan is the source of truth).
+
+=====================================================================
+SECTION 7 – WAREHOUSE SCAN, INVENTORY UPDATE, REFUND CALCULATION
+=====================================================================
+
+Warehouse scan is the critical moment when the product is actually received and inspected. This is the only moment when refunds are calculated.
+
+1) Endpoint: POST /api/shippo/scan
+   - Request body:
+     - scanCode (string; typically trackingNumber barcode)
+     - scannedBy (user id / name)
+     - per-item condition info:
+       - items: [{ returnItemId, condition: 'GOOD_UNUSED' | 'USED_RETURNABLE' | 'NOT_RETURNABLE', qtyReceived }]
+   - Steps:
+     1) Find shippo_label_logs by scanCode.
+        - If not found, return 404.
+     2) Load associated return_requests + return_items.
+     3) Update shippo_label_logs:
+        - status = 'SCANNED_RECEIVED'
+        - scannedAt = now()
+        - scannedBy.
+     4) Update return_requests:
+        - status = 'RETURNED'
+        - receivedAt = now()
+     5) Inventory adjustments (Hildale only):
+        - For each items entry:
+          - If condition is GOOD_UNUSED or USED_RETURNABLE:
+            - Insert inventory_transactions row:
+              - itemId, type = 'RECEIVE', location = 'HILDALE', quantity = qtyReceived, notes referencing return + trackingNumber.
+            - Increase items.hildaleQty by qtyReceived.
+          - If NOT_RETURNABLE:
+            - No inventory increment; optionally insert a SCRAP transaction type.
+     6) Refund math:
+        - Determine productSubtotal:
+          - For each return_items row, use unitPrice * qtyReceived.
+          - Do NOT include original shipping charges (shipping is not refunded).
+        - Outbound shipping amount:
+          - If sales order has a separate shippingAmount, include it in logs but not in refund.
+        - Restocking fee:
+          - For items where condition == GOOD_UNUSED: restocking fee = 0 on those lines.
+          - For items where condition == USED_RETURNABLE:
+            - Apply 20% of the product line subtotal for those items.
+        - Label fee:
+          - Use actual labelCost from return_requests.
+          - Also load configured RETURN_LABEL_MIN_FEE_USD (default 30).
+          - labelFeeAmount = max(labelCost, RETURN_LABEL_MIN_FEE_USD).
+        - Compute:
+          - baseRefundAmount = productSubtotal (sum of product line subtotals).
+          - totalDeduction = restockingFeeAmount + labelFeeAmount.
+          - finalRefundAmount = max(baseRefundAmount - totalDeduction, 0).
+          - If all items are NOT_RETURNABLE, set finalRefundAmount = 0 and mark as non-refundable.
+     7) Persist on return_requests:
+        - baseRefundAmount
+        - restockingFeeAmount
+        - labelFeeAmount
+        - finalRefundAmount
+        - currency
+        - conditionSummary / notes
+        - status = 'REFUND_CALCULATED'
+     8) Emit return_events:
+        - 'WAREHOUSE_SCAN'
+        - 'ITEM_RECEIVED' per item
+        - 'REFUND_CALCULATED'
+        - 'STATUS_CHANGE' (RETURNED → REFUND_CALCULATED)
+
+=====================================================================
+SECTION 8 – GHL "NEEDS ATTENTION" OPPORTUNITY (NO AUTO REFUND)
+=====================================================================
+
+Instead of automatically issuing refunds, create tasks in GHL Replit pipeline.
+
+1) Config
+   - Add configuration for:
+     - GHL_REPLIT_PIPELINE_ID
+     - GHL_REPLIT_NEEDS_ATTENTION_STAGE_ID
+   - Do NOT hard-code these; read from env or integration config.
+
+2) Helper: createOrUpdateRefundAttentionOpportunity(returnRequestId: string)
+   - Load:
+     - return_requests (including finalRefundAmount, currency, salesChannel, customerName, customerEmail, externalOrderId).
+     - Linked GHL contact (ghlContactId) if available.
+     - Underlying sales order to compute:
+       - totalPaid (product + shipping) if stored.
+       - shippingAmount (for context).
+   - Build:
+     - refundAmount = finalRefundAmount.
+     - saleSource = salesChannel (e.g., 'Amazon', 'Shopify', etc.).
+   - Use existing GHL client to:
+     - Either create or update an Opportunity in the Replit pipeline, Needs Attention stage:
+       - Pipeline: GHL_REPLIT_PIPELINE_ID
+       - Stage: GHL_REPLIT_NEEDS_ATTENTION_STAGE_ID
+       - Contact: ghlContactId or customer email.
+       - Opportunity name:
+         - `Refund ${customerName} ${currency}${refundAmount} in ${saleSource}`
+       - Custom fields / notes:
+         - External order ID
+         - Total paid vs finalRefundAmount
+         - Shipping not refunded
+         - Label fee and restocking fee values used
+         - ReturnRequestId for cross-linking.
+   - Ensure idempotency:
+     - If an opportunity already exists for this returnRequestId, update it instead of creating duplicates (e.g., store ghlRefundOpportunityId on return_requests).
+
+3) Trigger:
+   - After refund calculation in POST /api/shippo/scan completes (and finalRefundAmount is computed), call createOrUpdateRefundAttentionOpportunity(returnRequestId).
+   - Do NOT call QuickBooks from this helper; the human user will see the GHL opportunity and perform the refund manually in Amazon/Shopify/QuickBooks.
+
+4) Status transitions:
+   - After creating the GHL opportunity:
+     - return_requests.status stays 'REFUND_CALCULATED' until a human marks it as refunded.
+   - Add a simple endpoint for the future (but DO NOT integrate automatically in V1):
+     - POST /api/returns/:id/mark-refunded
+       - Marks status = 'REFUNDED' and refundedAt = now(), but is only called manually or by a future QuickBooks integration.
+
+=====================================================================
+SECTION 9 – GENERAL CONSTRAINTS & WRAP-UP
+=====================================================================
+
+- Do NOT change core server/app.ts wiring or the database schema unless strictly necessary. Prefer using existing tables/fields like return_requests, return_items, shippo_label_logs, barcodes, inventory_transactions, integration-configs.
+- Keep all secrets (Shippo API key, GHL IDs) in environment variables or your existing secure config patterns.
+- Make sure:
+  - Sales orders STILL only affect pivotQty / availableForSaleQty appropriately; returns increase hildaleQty via the scan flow.
+  - Refunds are NEVER issued automatically in V1; the system only calculates and recommends the refund and creates GHL tasks.
+- After implementing, ensure the following manual test paths work:
+  1) GHL customer says “I want a refund” < 30 days from delivery → POST /api/returns/from-ghl → return request created, label generated, barcode appears under Barcodes, GHL gets label URL + policy message.
+  2) Same as above but > 30 days → endpoint denies return with clear reason, no label created.
+  3) Warehouse scans tracking barcode via /api/shippo/scan → hildaleQty increases for acceptable items, refund math matches policy (minus shipping, minus label fee, restocking fee if used), return_requests updated, and a GHL “Needs Attention” opportunity is created with the correct human refund instructions.
+  4) Shippo webhook updates tracking status without affecting refund timing (refund is still tied to warehouse scan).
+
+Implement all code changes using the existing project structure and coding style. Focus on correctness, adherence to Sticker Burr Roller’s return policy, and clear integration with GHL for human refund processing.

@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -2361,7 +2362,7 @@ function BatchTimelineModal({
   );
 }
 
-function AIRecommendationsTab() {
+function BatchDecisionsSection() {
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   
   // Fetch batch decisions
@@ -2833,6 +2834,12 @@ function InsightsTab() {
         </TabsContent>
 
         <TabsContent value="recommendations">
+          {/* Batch Decisions Table - Timeline View */}
+          <BatchDecisionsSection />
+          
+          {/* Divider */}
+          <Separator className="my-6" />
+          
           {isLoading ? (
             <Card>
               <CardContent className="pt-6">
@@ -2846,7 +2853,7 @@ function InsightsTab() {
                 <CardHeader>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                      <CardTitle>AI Recommendations</CardTitle>
+                      <CardTitle>Item-Level Recommendations</CardTitle>
                       <CardDescription>
                         Actionable inventory recommendations. Accept or dismiss to track decisions.
                         {recsData?.fetchedAt && (

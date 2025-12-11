@@ -2718,25 +2718,30 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // Seed Katana suppliers - Upserts real supplier records from Katana system
-  // Can be run multiple times safely - will not create duplicates
-  // IMPORTANT: Contact data is placeholder and must be verified/updated before live use
-  app.post("/api/suppliers/seed-katana", requireAuth, async (req: Request, res: Response) => {
+  // Upsert Katana suppliers - Updates existing or creates new supplier records
+  // Can be run multiple times safely - updates existing, creates missing, no duplicates
+  // Contains real contact data from Katana system
+  app.post("/api/suppliers/upsert-katana", requireAuth, async (req: Request, res: Response) => {
     try {
       const katanaSuppliers = [
-        { name: "PEDNAR" },
-        { name: "AMAZON" },
-        { name: "ACU-FORM PLASTICS, INC" },
-        { name: "MCMASTER-CARR" },
-        { name: "HOME DEPOT" },
-        { name: "FX INDUSTRIES" },
-        { name: "SILVER FOX LLC" },
-        { name: "LISTON METALWORKS, LLC" },
-        { name: "AUSTI ENTERPRISES" },
+        { name: "FX INDUSTRIES", email: "james@fxindustries.net", phone: "435-229-6641", notes: "Sarah and James are contacts" },
+        { name: "LISTON METALWORKS, LLC", email: "lisa@listonmetalworks.com", phone: "435-705-4248", notes: null },
+        { name: "STAR NURSERY", email: null, phone: "435-986-0820", notes: null },
+        { name: "ULINE", email: null, phone: null, notes: null },
+        { name: "PEDNAR", email: "accounting@pednar.com", phone: "626-447-5464", notes: "CC: NickNarevsky@pednar.com" },
+        { name: "SILVER FOX LLC", email: "allisonknudson@gmail.com", phone: "702-334-0224", notes: null },
+        { name: "LEE SPRING", email: "sales@leespring.com", phone: "718-236-2222", notes: null },
+        { name: "AUSTI ENTERPRISES", email: null, phone: "702-335-5250", notes: null },
+        { name: "ACU-FORM PLASTICS, INC", email: null, phone: "435-229-2700", notes: "Connie Walling" },
+        { name: "HOME DEPOT", email: null, phone: null, notes: null },
+        { name: "AMAZON", email: null, phone: null, notes: null },
+        { name: "MCMASTER-CARR", email: "la.sales@mcmaster.com", phone: "562-692-5911", notes: null },
+        { name: "STICKER BURR ROLLER (INTERNAL)", email: null, phone: null, notes: "Internal supplier for in-house production" },
+        { name: "SILVER", email: null, phone: null, notes: null },
       ];
       
       const existingSuppliers = await storage.getAllSuppliers();
-      const results: { name: string; action: 'created' | 'updated' | 'skipped' }[] = [];
+      const results: { name: string; action: 'created' | 'updated' }[] = [];
       
       for (const katanaSupplier of katanaSuppliers) {
         const existing = existingSuppliers.find(
@@ -2744,38 +2749,49 @@ TOTAL: $${subtotal.toFixed(2)}
         );
         
         if (existing) {
-          results.push({ name: katanaSupplier.name, action: 'skipped' });
+          // Update existing supplier with non-null values from Katana data
+          const updates: any = {};
+          if (katanaSupplier.email) updates.email = katanaSupplier.email;
+          if (katanaSupplier.phone) updates.phone = katanaSupplier.phone;
+          if (katanaSupplier.notes) updates.notes = katanaSupplier.notes;
+          
+          if (Object.keys(updates).length > 0) {
+            await storage.updateSupplier(existing.id, updates);
+          }
+          results.push({ name: katanaSupplier.name, action: 'updated' });
+          console.log(`Upserted supplier "${katanaSupplier.name}" (id: ${existing.id})`);
         } else {
-          await storage.createSupplier({
+          const newSupplier = await storage.createSupplier({
             name: katanaSupplier.name,
             contactName: "Purchasing Department",
-            email: null,
-            phone: null,
+            email: katanaSupplier.email,
+            phone: katanaSupplier.phone,
             streetAddress: null,
             city: null,
             stateRegion: null,
             postalCode: null,
             country: null,
-            notes: "Migrated from Katana. Contact details need to be updated.",
+            notes: katanaSupplier.notes,
             paymentTerms: null,
           });
           results.push({ name: katanaSupplier.name, action: 'created' });
+          console.log(`Upserted supplier "${katanaSupplier.name}" (id: ${newSupplier.id})`);
         }
       }
       
       const created = results.filter(r => r.action === 'created').length;
-      const skipped = results.filter(r => r.action === 'skipped').length;
+      const updated = results.filter(r => r.action === 'updated').length;
       
-      console.log(`[Suppliers] Katana seed complete: ${created} created, ${skipped} already existed`);
+      console.log(`[Suppliers] Katana upsert complete: ${created} created, ${updated} updated`);
       
       res.json({
         success: true,
-        message: `Seeded ${created} new suppliers, ${skipped} already existed`,
+        message: `Upserted ${results.length} suppliers: ${created} created, ${updated} updated`,
         results,
       });
     } catch (error: any) {
-      console.error("[Suppliers] Katana seed error:", error);
-      res.status(500).json({ error: error.message || "Failed to seed Katana suppliers" });
+      console.error("[Suppliers] Katana upsert error:", error);
+      res.status(500).json({ error: error.message || "Failed to upsert Katana suppliers" });
     }
   });
 

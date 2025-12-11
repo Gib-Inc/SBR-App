@@ -772,15 +772,129 @@ Respond with a JSON array of recommendations in this exact format:
       lineTotal: lineTotal,
     });
     
-    // Create GHL "Needs Attention" opportunity for critical auto-sent PO
-    try {
-      await this.createGHLCriticalPOOpportunity(po, supplier, quantity, reasoning, item);
-    } catch (ghlError: any) {
-      console.warn(`[AI Batch] Failed to create GHL opportunity for auto-draft PO: ${ghlError.message}`);
-      // Don't fail the PO creation if GHL fails
+    // Check if supplier is missing email or mandatory business info
+    const missingFields = this.getSupplierMissingFields(supplier);
+    
+    if (missingFields.length > 0) {
+      // Create GHL "Needs Attention" opportunity for missing supplier info
+      try {
+        await this.createGHLMissingSupplierInfoOpportunity(po, supplier, missingFields, item);
+      } catch (ghlError: any) {
+        console.warn(`[AI Batch] Failed to create GHL opportunity for missing supplier info: ${ghlError.message}`);
+      }
+    } else {
+      // Create GHL "Needs Attention" opportunity for critical auto-sent PO
+      try {
+        await this.createGHLCriticalPOOpportunity(po, supplier, quantity, reasoning, item);
+      } catch (ghlError: any) {
+        console.warn(`[AI Batch] Failed to create GHL opportunity for auto-draft PO: ${ghlError.message}`);
+        // Don't fail the PO creation if GHL fails
+      }
     }
     
     return po;
+  }
+  
+  /**
+   * Check supplier for missing mandatory fields required to send a PO
+   * Returns array of missing field names
+   */
+  private getSupplierMissingFields(supplier: any): string[] {
+    const missingFields: string[] = [];
+    
+    // Email is required to send PO
+    if (!supplier.email) {
+      missingFields.push('Email');
+    }
+    
+    // Contact name is helpful for addressing POs
+    if (!supplier.contactName) {
+      missingFields.push('Contact Name');
+    }
+    
+    return missingFields;
+  }
+  
+  /**
+   * Create a GHL "Needs Attention" opportunity when supplier is missing email or mandatory info
+   */
+  private async createGHLMissingSupplierInfoOpportunity(
+    po: any,
+    supplier: any,
+    missingFields: string[],
+    item: any
+  ): Promise<void> {
+    // Initialize GHL service - get any user with GHL config
+    const users = await this.storage.getAllUsers();
+    let initialized = false;
+    for (const user of users) {
+      const success = await ghlOpportunitiesService.initialize(user.id);
+      if (success && ghlOpportunitiesService.isConfigured()) {
+        initialized = true;
+        break;
+      }
+    }
+    
+    if (!initialized) {
+      console.log('[AI Batch] GHL not configured, skipping missing supplier info opportunity');
+      return;
+    }
+    
+    // Get system contact (replit admin)
+    const systemContactId = await ghlOpportunitiesService.getOrCreateSystemContact();
+    if (!systemContactId) {
+      console.log('[AI Batch] No system contact available for GHL opportunity');
+      return;
+    }
+    
+    const stageId = GHL_CONFIG.stages.STALE_SYNC_ALERT; // "Needs Attention" stage
+    
+    const opportunityName = `Needed PO is missing supplier info - ${supplier.name}`;
+    const externalKey = `missing-supplier-info-${po.id}`;
+    
+    // Create the opportunity
+    const createResult = await ghlOpportunitiesService.upsertOpportunity({
+      externalKey,
+      name: opportunityName,
+      pipelineStageId: stageId,
+      status: 'open',
+      amount: po.total ?? 0,
+      contactId: systemContactId,
+    });
+    
+    if (!createResult.success || !createResult.opportunityId) {
+      console.warn(`[AI Batch] Failed to create GHL missing supplier info opportunity: ${createResult.error}`);
+      return;
+    }
+    
+    // Add notes with details
+    const dateCreated = new Date().toLocaleString('en-US', { 
+      timeZone: 'America/Denver',
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+    
+    const notes = [
+      `ACTION REQUIRED: SUPPLIER INFO MISSING`,
+      ``,
+      `A Purchase Order was auto-drafted but cannot be sent because the supplier is missing required information.`,
+      ``,
+      `PO Number: ${po.poNumber}`,
+      `Supplier: ${supplier.name}`,
+      `Date Created: ${dateCreated}`,
+      `PO Amount: $${(po.total ?? 0).toFixed(2)}`,
+      ``,
+      `Missing Fields:`,
+      ...missingFields.map(field => `- ${field}`),
+      ``,
+      `Item Needed: ${item.sku} - ${item.name}`,
+      ``,
+      `Please update the supplier's contact information in the Suppliers page, then manually send the PO.`,
+    ].join('\n');
+    
+    await ghlOpportunitiesService.addNoteToOpportunity(systemContactId, createResult.opportunityId, notes);
+    
+    console.log(`[AI Batch] Created GHL "Needs Attention" opportunity for missing supplier info: ${supplier.name}`);
   }
   
   /**

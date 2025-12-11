@@ -1,0 +1,137 @@
+You’re editing my Sticker Burr Roller inventory / PO app in this Replit project.
+
+I already asked you to upsert suppliers from my old Katana system, but some suppliers and real contact details are still missing. I now want you to:
+
+1) UPDATE existing suppliers with real email / phone / comments taken from the Katana screenshot.
+2) ADD any suppliers that weren’t included before.
+
+Use the existing Supplier model / repository (the one used by:
+- Suppliers → Existing tab
+- The New Purchase Order “Supplier” dropdown).
+
+Do NOT create duplicates; everything must be upserted by supplier `name`.
+
+--------------------------------------------------
+SUPPLIERS TO ENSURE EXIST (WITH DETAILS)
+--------------------------------------------------
+
+For each supplier below, upsert a Supplier record with at least:
+- `name`
+- `email` (if present)
+- `phoneNumber` (or whatever field we use)
+- `currency` (set to "USD")
+- `notes` / `comment` (if we have a field for that)
+
+Use exactly these values where present; if a value is blank below, leave it null/empty so I can fill it later in the UI.
+
+1) FX INDUSTRIES
+   - email: `james@fxindustries.net`
+   - phone: `435-229-6641`
+   - notes/comment: `Sarah and James are contacts`
+   - currency: `USD`
+
+2) LISTON METALWORKS, LLC
+   - email: `lisa@listonmetalworks.com`
+   - phone: `435-705-4248`
+   - notes: `` (blank)
+   - currency: `USD`
+
+3) STAR NURSERY
+   - email: `` (blank)
+   - phone: `435-986-0820`
+   - notes: `` (blank)
+   - currency: `USD`
+
+4) ULINE
+   - email: `` (blank)
+   - phone: `` (blank)
+   - notes: `` (blank)
+   - currency: `USD`
+
+5) PEDNAR
+   - email: `accounting@pednar.com`
+   - phone: `626-447-5464`
+   - notes: `CC: NickNarevsky@pednar.com`
+   - currency: `USD`
+
+6) SILVER FOX LLC
+   - email: `allisonknudson@gmail.com`
+   - phone: `702-334-0224`
+   - notes: `` (blank)
+   - currency: `USD`
+
+7) LEE SPRING
+   - email: `sales@leespring.com`
+   - phone: `718-236-2222`
+   - notes: `` (blank)
+   - currency: `USD`
+
+8) AUSTI ENTERPRISES
+   - email: `` (blank)
+   - phone: `702-335-5250`
+   - notes: `` (blank)
+   - currency: `USD`
+
+9) ACU-FORM PLASTICS, INC
+   - email: `` (blank)
+   - phone: `435-229-2700`
+   - notes: `Connie Walling`
+   - currency: `USD`
+
+10) HOME DEPOT
+    - email: `` (blank)
+    - phone: `` (blank)
+    - notes: `` (blank)
+    - currency: `USD`
+
+11) AMAZON
+    - email: `` (blank)
+    - phone: `` (blank)
+    - notes: `` (blank)
+    - currency: `USD`
+
+12) MCMASTER-CARR
+    - email: `la.sales@mcmaster.com`
+    - phone: `562-692-5911`
+    - notes: `` (blank)
+    - currency: `USD`
+
+13) STICKER BURR ROLLER (INTERNAL)
+    - email: `` (blank)
+    - phone: `` (blank)
+    - notes: `` (blank)
+    - currency: `USD`
+
+14) SILVER
+    - email: `` (blank)
+    - phone: `` (blank)
+    - notes: `` (blank)
+    - currency: `USD`
+
+(If any of these names already exist in the DB, UPDATE their fields with the values above instead of creating new rows.)
+
+--------------------------------------------------
+IMPLEMENTATION DETAILS
+--------------------------------------------------
+
+A) Create or extend a utility function (for example `upsertCoreSuppliers()` in a seed/maintenance script) that:
+   - Iterates through the list above.
+   - For each entry:
+     - Looks up a supplier by exact `name`.
+     - If found, updates `email`, `phoneNumber`, `currency`, and `notes/comment` with the values above (only overwrite if the value in the script is non-empty).
+     - If not found, creates a new Supplier with those values.
+   - Logs to the console something like:
+     `Upserted supplier "<name>" (id: <id>)`.
+
+B) Expose this function in a way I can run it again without creating duplicates, e.g.:
+   - An npm script `"upsert:suppliers"` that calls this function, OR
+   - A small CLI entry point that I can trigger from the Replit shell.
+
+C) After running the upsert:
+   - All of these suppliers must appear in the Suppliers → Existing tab with the correct email/phone/notes.
+   - The New Purchase Order “Supplier” dropdown must show the same supplier names.
+   - There must not be duplicate records with slightly different names.
+
+D) Do not change any email-sending logic in this step. This change is only about supplier records and contact data. I will decide later which suppliers actually receive POs.
+
+Please follow existing patterns for DB access and logging and keep changes localized to supplier upsert / seeding code and any necessary small wiring.

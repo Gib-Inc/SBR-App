@@ -167,14 +167,30 @@ export function CreatePODialog({
     }
   }, []);
 
+  // Filter to component items only (matching Stock Inventory) and deduplicate by ID
+  const stockInventoryItems = useMemo(() => {
+    // Filter for component type only (raw materials / Stock Inventory items)
+    // POs are for ordering raw materials, not finished products
+    const componentItems = items.filter(item => item.type === "component");
+    
+    // Deduplicate by item ID to prevent duplicates from joins
+    const uniqueItems = new Map<string, Item>();
+    for (const item of componentItems) {
+      if (!uniqueItems.has(item.id)) {
+        uniqueItems.set(item.id, item);
+      }
+    }
+    return Array.from(uniqueItems.values());
+  }, [items]);
+
   const filteredItems = useMemo(() => {
-    if (!productSearchQuery) return items;
+    if (!productSearchQuery) return stockInventoryItems;
     const query = productSearchQuery.toLowerCase();
-    return items.filter(item =>
+    return stockInventoryItems.filter(item =>
       item.name.toLowerCase().includes(query) ||
       item.sku.toLowerCase().includes(query)
     );
-  }, [items, productSearchQuery]);
+  }, [stockInventoryItems, productSearchQuery]);
 
   const subtotal = useMemo(() => {
     return lineItems.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
@@ -586,17 +602,17 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[400px] p-0" align="end">
-                    <Command className="max-h-[400px]">
+                  <PopoverContent className="w-[450px] p-0" align="end">
+                    <Command className="max-h-[450px]">
                       <CommandInput 
                         placeholder="Search by SKU or name..." 
                         value={productSearchQuery}
                         onValueChange={setProductSearchQuery}
                         data-testid="input-product-search"
                       />
-                      <CommandList className="max-h-[350px] overflow-y-auto">
-                        <CommandEmpty>No items found.</CommandEmpty>
-                        <CommandGroup heading="Products">
+                      <CommandList className="max-h-[380px] overflow-y-auto">
+                        <CommandEmpty>No items found in Stock Inventory.</CommandEmpty>
+                        <CommandGroup heading={`Stock Inventory (${filteredItems.length} items)`}>
                           {filteredItems.map((item) => (
                             <CommandItem
                               key={item.id}
@@ -606,12 +622,12 @@ export function CreatePODialog({
                               data-testid={`item-option-${item.id}`}
                             >
                               <Package className="mr-2 h-4 w-4 text-muted-foreground" />
-                              <div className="flex-1">
+                              <div className="flex-1 min-w-0">
                                 <span className="font-medium">{item.sku}</span>
-                                <span className="ml-2 text-muted-foreground">{item.name}</span>
+                                <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
                               </div>
-                              <span className="text-xs text-muted-foreground">
-                                Stock: {item.currentStock}
+                              <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                                Stock: {item.currentStock ?? 0}
                               </span>
                             </CommandItem>
                           ))}

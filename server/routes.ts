@@ -2663,6 +2663,10 @@ TOTAL: $${subtotal.toFixed(2)}
           });
         }
         if (Object.keys(changes).length > 0) {
+          // Console log as requested by user
+          const changedFields = Object.keys(changes).join(', ');
+          console.log(`Updated supplier ${supplier.id} (${supplier.name}) – fields changed: ${changedFields}`);
+          
           await AuditLogger.logSupplierUpdated({
             supplierId: supplier.id,
             supplierName: supplier.name,

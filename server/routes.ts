@@ -6540,6 +6540,60 @@ Notes: ${po.notes || 'None'}
   });
 
   // ============================================================================
+  // SHIPPO INTEGRATION
+  // ============================================================================
+
+  // Shippo - Test Connection
+  app.post("/api/integrations/shippo/test", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const config = await storage.getIntegrationConfigByProvider("SHIPPO");
+      
+      if (!config || !config.apiKey) {
+        return res.json({
+          success: false,
+          message: "Shippo not configured. Please add your API key first."
+        });
+      }
+
+      // Test the API key by making a simple request to Shippo
+      const response = await fetch("https://api.goshippo.com/addresses/", {
+        method: "GET",
+        headers: {
+          "Authorization": `ShippoToken ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        return res.json({
+          success: true,
+          message: "Successfully connected to Shippo API"
+        });
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        return res.json({
+          success: false,
+          message: `Shippo API error: ${errorData.detail || response.statusText}`
+        });
+      }
+    } catch (error: any) {
+      console.error("[Shippo Test] Error:", error);
+      return res.json({
+        success: false,
+        message: error.message || "Failed to test Shippo connection"
+      });
+    }
+  });
+
+  // Shippo - Sync (placeholder - Shippo is event-driven via return labels)
+  app.post("/api/integrations/shippo/sync", requireAuth, async (_req: Request, res: Response) => {
+    res.json({ 
+      success: true,
+      message: "Shippo integration is event-driven. Labels are created on-demand when processing returns." 
+    });
+  });
+
+  // ============================================================================
   // AD PLATFORMS (Meta Ads, Google Ads)
   // ============================================================================
   

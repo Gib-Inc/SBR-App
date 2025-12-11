@@ -139,6 +139,7 @@ export default function Suppliers() {
                           <TableHead className="min-w-[140px]">Phone</TableHead>
                           <TableHead className="min-w-[250px]">Address</TableHead>
                           <TableHead className="min-w-[100px]">Payment Terms</TableHead>
+                          <TableHead className="min-w-[100px]">PO Activity</TableHead>
                           <TableHead className="w-[80px] text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -198,6 +199,14 @@ export default function Suppliers() {
                               ) : (
                                 <span className="text-muted-foreground">—</span>
                               )}
+                            </TableCell>
+                            <TableCell data-testid={`text-po-activity-${supplier.id}`}>
+                              <div className="flex items-center gap-1 text-sm">
+                                <span className="font-medium">{supplier.poSentCount || 0}</span>
+                                <span className="text-muted-foreground">/</span>
+                                <span className="font-medium">{supplier.poReceivedCount || 0}</span>
+                                <span className="text-muted-foreground text-xs ml-1">(sent/recv)</span>
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
                               <Button

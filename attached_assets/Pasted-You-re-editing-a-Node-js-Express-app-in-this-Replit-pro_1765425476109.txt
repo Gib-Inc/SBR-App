@@ -1,0 +1,62 @@
+You’re editing a Node.js / Express app in this Replit project. This app is a Sticker Burr Roller purchasing/PO system. I’ve already created a SendGrid account, authenticated my domain, created an API key, and configured a SendGrid Event Webhook to POST to:
+  https://bfcab733-c192-4844-b024-de0caf23728c-00-1zhsa00hqdpdm.spock.replit.dev/sendgrid/events
+
+I also set these environment variables in Replit:
+- SENDGRID_API_KEY
+- SENDGRID_FROM_EMAIL
+- SENDGRID_FROM_NAME
+
+I need you to FINISH all the wiring so POs can be emailed and their email status is tracked inside the app.
+
+Please inspect the existing code and then implement the following end-to-end:
+
+### 1) PO email send function using SendGrid
+1. Find the place in the code where POs are created or where we currently intend to send POs by email. If none exists, create a clear service module like `services/poEmailService.js`.
+2. Implement a function like `sendPurchaseOrderEmail(poId)` that:
+   - Loads the PO and its supplier data from our existing data store (use whatever ORM/DB the project is already using).
+   - Generates or loads the PO PDF we already produce. If no PDF generator exists, create a simple placeholder that makes a basic PDF with PO number, date, line items, and totals, and mark clearly in comments where the real PDF generator should be plugged in.
+   - Uses `@sendgrid/mail` (or the existing SendGrid client if we already have one) to send an email to the supplier with:
+     - from: `{ email: process.env.SENDGRID_FROM_EMAIL, name: process.env.SENDGRID_FROM_NAME }`
+     - to: supplier email
+     - subject like `Purchase Order #<poNumber>`
+     - body text/HTML that references the attached PO.
+     - the PO PDF attached.
+     - `custom_args: { poId: String(poId) }` so that SendGrid’s Event Webhook includes this PO id in every event.
+3. Make sure this function is called at the right time (e.g., when a PO is created, approved, or when I click a “Send PO” action). Add or wire a route/controller or button handler as needed.
+
+### 2) Store a PO email status field
+4. In the PO data model, add a field like `emailStatus` (string) and optionally `emailStatusUpdatedAt` (Date). Use the project’s existing migration/ORM pattern.
+5. When `sendPurchaseOrderEmail(poId)` is called, set the PO’s `emailStatus` initially to something like `"Queued"` or `"Sent to SendGrid"` and save it.
+
+### 3) Implement the `/sendgrid/events` webhook endpoint
+6. Add an Express POST endpoint at `/sendgrid/events` (if not already present). You can put it in a dedicated router file, but the final URL must be exactly `/sendgrid/events`.
+7. The endpoint must:
+   - Accept JSON and treat the body as an **array of event objects** from SendGrid.
+   - Validate that `req.body` is an array; if not, log an error and return HTTP 400.
+   - Loop over each event `e` in the array. For each event:
+     - Read `const poId = e.custom_args?.poId;` and skip if it’s missing.
+     - Map `e.event` (which can be `"processed"`, `"delivered"`, `"open"`, `"click"`, `"bounce"`, `"dropped"`, `"spamreport"`, etc.) to a human-friendly PO email status string, for example:
+       - `processed` → `Email Queued`
+       - `delivered` → `Email Delivered`
+       - `open` → `Email Opened`
+       - `click` → `Link Clicked`
+       - `bounce` or `dropped` or `spamreport` → `Email Error`
+     - Update the PO record with that `emailStatus` and also update `emailStatusUpdatedAt`. Use the app’s existing DB/ORM patterns.
+   - Always respond quickly with HTTP 200 `"OK"` after processing, so SendGrid does not retry excessively.
+8. Add clear comments in this handler explaining that later we may add signature verification (for SendGrid Signed Webhooks) or IP allowlisting for security.
+
+### 4) Show email status in the UI
+9. In whatever UI or API is used to show POs, surface the `emailStatus` field:
+   - On the PO detail view, show a label like `Email status: <status>` and optionally the last updated time.
+   - If there is a PO list view, it’s ideal to add a small column or badge so I can quickly see whether the PO email was delivered, opened, or bounced.
+10. Make sure the PO API responses include `emailStatus` so the front-end components can display it.
+
+### 5) Testing
+11. Add a simple test helper or script I can run to:
+    - Create a test PO (or pick an existing one),
+    - Call `sendPurchaseOrderEmail(poId)`,
+    - Log the SendGrid response,
+    - And log any webhook event processing for that PO id so I can see the status progressing in the console.
+12. Do NOT implement OAuth verification or signed-webhook verification yet—just leave TODO comments where that logic should go later.
+
+Please modify the existing codebase cleanly, reuse existing patterns (routing, DB, services), and include comments where I should later swap the placeholder PDF logic and hard-coded status mapping for more advanced behavior. Do not change unrelated parts of the app.

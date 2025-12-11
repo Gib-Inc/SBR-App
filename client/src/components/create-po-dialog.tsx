@@ -24,6 +24,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -51,6 +52,7 @@ import {
   Package,
   Search,
   AlertCircle,
+  UserPlus,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -96,6 +98,11 @@ export function CreatePODialog({
   const [qbModalOpen, setQbModalOpen] = useState(false);
   const [pendingItem, setPendingItem] = useState<Item | null>(null);
 
+  // Add Supplier inline modal state
+  const [addSupplierOpen, setAddSupplierOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [newSupplierEmail, setNewSupplierEmail] = useState("");
+
   const { data: suppliers = [] } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
     enabled: open,
@@ -105,6 +112,59 @@ export function CreatePODialog({
     queryKey: ['/api/items'],
     enabled: open,
   });
+
+  // Create supplier mutation
+  const createSupplierMutation = useMutation({
+    mutationFn: async (data: { name: string; email: string }) => {
+      const res = await apiRequest("POST", "/api/suppliers", data);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Failed to create supplier");
+      }
+      return res.json();
+    },
+    onSuccess: (newSupplier: Supplier) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/suppliers'] });
+      setSupplierId(newSupplier.id);
+      setAddSupplierOpen(false);
+      setNewSupplierName("");
+      setNewSupplierEmail("");
+      toast({
+        title: "Supplier created",
+        description: `${newSupplier.name} has been added and selected`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleCreateSupplier = useCallback(() => {
+    if (!newSupplierName.trim()) {
+      toast({
+        title: "Name required",
+        description: "Please enter a supplier name",
+        variant: "destructive",
+      });
+      return;
+    }
+    createSupplierMutation.mutate({
+      name: newSupplierName.trim(),
+      email: newSupplierEmail.trim() || "",
+    });
+  }, [newSupplierName, newSupplierEmail, createSupplierMutation, toast]);
+
+  const handleSupplierChange = useCallback((value: string) => {
+    if (value === "__add_new__") {
+      setAddSupplierOpen(true);
+    } else {
+      setSupplierId(value);
+    }
+  }, []);
 
   const filteredItems = useMemo(() => {
     if (!productSearchQuery) return items.slice(0, 50);
@@ -394,7 +454,7 @@ export function CreatePODialog({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="supplier">Supplier *</Label>
-                <Select value={supplierId} onValueChange={setSupplierId}>
+                <Select value={supplierId} onValueChange={handleSupplierChange}>
                   <SelectTrigger 
                     id="supplier" 
                     className={cn(!supplierId && errors.supplier && "border-destructive")}
@@ -417,6 +477,18 @@ export function CreatePODialog({
                         )}
                       </SelectItem>
                     ))}
+                    {suppliers.length > 0 && (
+                      <SelectSeparator />
+                    )}
+                    <SelectItem 
+                      value="__add_new__"
+                      data-testid="select-supplier-add-new"
+                    >
+                      <span className="flex items-center gap-2 text-primary">
+                        <UserPlus className="h-4 w-4" />
+                        + Add Supplier Manually
+                      </span>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 {selectedSupplier && (
@@ -725,6 +797,75 @@ export function CreatePODialog({
         onApply={handleQBApply}
         onManual={handleQBManual}
       />
+
+      {/* Add Supplier Inline Dialog */}
+      <Dialog open={addSupplierOpen} onOpenChange={setAddSupplierOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add New Supplier</DialogTitle>
+            <DialogDescription>
+              Enter the supplier details. You can add more info later in Suppliers.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="new-supplier-name">Supplier Name *</Label>
+              <Input
+                id="new-supplier-name"
+                value={newSupplierName}
+                onChange={(e) => setNewSupplierName(e.target.value)}
+                placeholder="e.g., Acme Manufacturing"
+                data-testid="input-new-supplier-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-supplier-email">Email (optional)</Label>
+              <Input
+                id="new-supplier-email"
+                type="email"
+                value={newSupplierEmail}
+                onChange={(e) => setNewSupplierEmail(e.target.value)}
+                placeholder="e.g., orders@acme.com"
+                data-testid="input-new-supplier-email"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used for sending purchase orders
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAddSupplierOpen(false);
+                setNewSupplierName("");
+                setNewSupplierEmail("");
+              }}
+              disabled={createSupplierMutation.isPending}
+              data-testid="button-cancel-supplier"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateSupplier}
+              disabled={!newSupplierName.trim() || createSupplierMutation.isPending}
+              data-testid="button-create-supplier"
+            >
+              {createSupplierMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  Add Supplier
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

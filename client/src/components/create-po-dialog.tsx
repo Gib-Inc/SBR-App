@@ -168,12 +168,12 @@ export function CreatePODialog({
   }, []);
 
   const filteredItems = useMemo(() => {
-    if (!productSearchQuery) return items.slice(0, 50);
+    if (!productSearchQuery) return items;
     const query = productSearchQuery.toLowerCase();
     return items.filter(item =>
       item.name.toLowerCase().includes(query) ||
       item.sku.toLowerCase().includes(query)
-    ).slice(0, 50);
+    );
   }, [items, productSearchQuery]);
 
   const subtotal = useMemo(() => {
@@ -587,7 +587,7 @@ export function CreatePODialog({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[400px] p-0" align="end">
-                    <Command className="max-h-[400px] !overflow-visible">
+                    <Command className="max-h-[400px]">
                       <CommandInput 
                         placeholder="Search by SKU or name..." 
                         value={productSearchQuery}

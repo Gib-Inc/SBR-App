@@ -239,6 +239,7 @@ export interface IStorage {
   // Inventory Transactions
   getAllInventoryTransactions(): Promise<InventoryTransaction[]>;
   getInventoryTransactionsByItem(itemId: string): Promise<InventoryTransaction[]>;
+  getInventoryTransactionsByDateRange(startDate: Date, endDate: Date): Promise<InventoryTransaction[]>;
   createInventoryTransaction(transaction: InsertInventoryTransaction): Promise<InventoryTransaction>;
 
   // AI Recommendations
@@ -260,6 +261,7 @@ export interface IStorage {
   getAIBatchLogsByReason(reason: string): Promise<AIBatchLog[]>;
   createAIBatchLog(log: InsertAIBatchLog): Promise<AIBatchLog>;
   updateAIBatchLog(id: string, log: Partial<InsertAIBatchLog>): Promise<AIBatchLog | undefined>;
+  getAIRecommendationsByBatchId(batchLogId: string): Promise<AIRecommendation[]>;
 
   // Purchase Orders
   getAllPurchaseOrders(): Promise<PurchaseOrder[]>;
@@ -283,6 +285,7 @@ export interface IStorage {
   // Purchase Order Receipts
   getAllPurchaseOrderReceipts(): Promise<PurchaseOrderReceipt[]>;
   getPurchaseOrderReceiptsByPOId(purchaseOrderId: string): Promise<PurchaseOrderReceipt[]>;
+  getPurchaseOrderReceiptsByDateRange(startDate: Date, endDate: Date): Promise<PurchaseOrderReceipt[]>;
   getPurchaseOrderReceipt(id: string): Promise<PurchaseOrderReceipt | undefined>;
   createPurchaseOrderReceipt(receipt: InsertPurchaseOrderReceipt): Promise<PurchaseOrderReceipt>;
   updatePurchaseOrderReceipt(id: string, receipt: Partial<InsertPurchaseOrderReceipt>): Promise<PurchaseOrderReceipt | undefined>;
@@ -392,6 +395,7 @@ export interface IStorage {
   getSalesOrder(id: string): Promise<SalesOrder | undefined>;
   getSalesOrdersByExternalId(channel: string, externalOrderId: string): Promise<SalesOrder[]>;
   getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]>;
+  getSalesOrdersByDateRange(startDate: Date, endDate: Date): Promise<SalesOrder[]>;
   getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined>;
   createSalesOrder(order: InsertSalesOrder): Promise<SalesOrder>;
   updateSalesOrder(id: string, order: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined>;
@@ -1723,6 +1727,12 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async getInventoryTransactionsByDateRange(startDate: Date, endDate: Date): Promise<InventoryTransaction[]> {
+    return Array.from(this.inventoryTransactions.values())
+      .filter(t => t.createdAt >= startDate && t.createdAt <= endDate)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
   async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
     const id = randomUUID();
     const transaction: InventoryTransaction = {
@@ -1896,6 +1906,11 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
+  async getAIRecommendationsByBatchId(batchLogId: string): Promise<AIRecommendation[]> {
+    return Array.from(this.aiRecommendations.values())
+      .filter(r => r.batchLogId === batchLogId);
+  }
+
   // Purchase Orders
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
     return Array.from(this.purchaseOrders.values());
@@ -2036,6 +2051,10 @@ export class MemStorage implements IStorage {
   }
 
   async getPurchaseOrderReceiptsByPOId(_purchaseOrderId: string): Promise<PurchaseOrderReceipt[]> {
+    throw new Error("Not implemented in MemStorage - use DatabaseStorage");
+  }
+
+  async getPurchaseOrderReceiptsByDateRange(_startDate: Date, _endDate: Date): Promise<PurchaseOrderReceipt[]> {
     throw new Error("Not implemented in MemStorage - use DatabaseStorage");
   }
 
@@ -2649,6 +2668,19 @@ export class MemStorage implements IStorage {
     return Array.from(this.salesOrders.values()).filter(
       order => order.channel === channel
     );
+  }
+
+  async getSalesOrdersByDateRange(startDate: Date, endDate: Date): Promise<SalesOrder[]> {
+    return Array.from(this.salesOrders.values())
+      .filter(order => {
+        const orderDate = order.orderDate || order.createdAt;
+        return orderDate >= startDate && orderDate <= endDate;
+      })
+      .sort((a, b) => {
+        const dateA = a.orderDate || a.createdAt;
+        const dateB = b.orderDate || b.createdAt;
+        return dateB.getTime() - dateA.getTime();
+      });
   }
 
   async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {
@@ -4380,6 +4412,18 @@ export class PostgresStorage implements IStorage {
     return results;
   }
 
+  async getInventoryTransactionsByDateRange(startDate: Date, endDate: Date): Promise<InventoryTransaction[]> {
+    const results = await this.db
+      .select()
+      .from(schema.inventoryTransactions)
+      .where(and(
+        gte(schema.inventoryTransactions.createdAt, startDate),
+        lte(schema.inventoryTransactions.createdAt, endDate)
+      ))
+      .orderBy(drizzleSql`${schema.inventoryTransactions.createdAt} DESC`);
+    return results;
+  }
+
   async createInventoryTransaction(insertTransaction: InsertInventoryTransaction): Promise<InventoryTransaction> {
     const results = await this.db.insert(schema.inventoryTransactions).values(insertTransaction).returning();
     return results[0];
@@ -4560,6 +4604,11 @@ export class PostgresStorage implements IStorage {
     return results[0];
   }
 
+  async getAIRecommendationsByBatchId(batchLogId: string): Promise<AIRecommendation[]> {
+    return await this.db.select().from(schema.aiRecommendations)
+      .where(eq(schema.aiRecommendations.batchLogId, batchLogId));
+  }
+
   // Purchase Orders
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
     return await this.db.select().from(schema.purchaseOrders);
@@ -4668,6 +4717,15 @@ export class PostgresStorage implements IStorage {
 
   async getPurchaseOrderReceiptsByPOId(purchaseOrderId: string): Promise<PurchaseOrderReceipt[]> {
     return await this.db.select().from(schema.purchaseOrderReceipts).where(eq(schema.purchaseOrderReceipts.purchaseOrderId, purchaseOrderId));
+  }
+
+  async getPurchaseOrderReceiptsByDateRange(startDate: Date, endDate: Date): Promise<PurchaseOrderReceipt[]> {
+    return await this.db.select().from(schema.purchaseOrderReceipts)
+      .where(and(
+        gte(schema.purchaseOrderReceipts.createdAt, startDate),
+        lte(schema.purchaseOrderReceipts.createdAt, endDate)
+      ))
+      .orderBy(desc(schema.purchaseOrderReceipts.createdAt));
   }
 
   async getPurchaseOrderReceipt(id: string): Promise<PurchaseOrderReceipt | undefined> {
@@ -5433,6 +5491,15 @@ export class PostgresStorage implements IStorage {
   async getSalesOrdersByChannel(channel: string): Promise<SalesOrder[]> {
     return await this.db.select().from(schema.salesOrders)
       .where(eq(schema.salesOrders.channel, channel));
+  }
+
+  async getSalesOrdersByDateRange(startDate: Date, endDate: Date): Promise<SalesOrder[]> {
+    return await this.db.select().from(schema.salesOrders)
+      .where(and(
+        gte(schema.salesOrders.createdAt, startDate),
+        lte(schema.salesOrders.createdAt, endDate)
+      ))
+      .orderBy(desc(schema.salesOrders.createdAt));
   }
 
   async getSalesOrderWithLines(id: string): Promise<(SalesOrder & { lines: SalesOrderLine[] }) | undefined> {

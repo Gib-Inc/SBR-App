@@ -2149,11 +2149,267 @@ interface AIRecommendationData {
   createdAt: string;
 }
 
-function AIRecommendationsTab() {
-  // V2 Placeholder - This tab will be enhanced in a future version
-  // For now, AI decision feedback is displayed in the "Order Feedback" tab
+// Batch Decision Timeline Types
+interface BatchDecision {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  reason: string;
+  totalSkus: number | null;
+  processedSkus: number | null;
+  criticalItemsFound: number | null;
+  orderTodayCount: number | null;
+  safeUntilTomorrowCount: number | null;
+  llmProvider: string | null;
+  llmModel: string | null;
+  llmResponseTimeMs: number | null;
+  errorMessage: string | null;
+  aiDecisionSummary: string | null;
+  staffDecisionSummary: string | null;
+  percentDifference: number | null;
+  urgencyLevel: string | null;
+  primarySupplierId: string | null;
+  supplierName: string | null;
+  recommendationsCount: number;
+  acceptedCount: number;
+  dismissedCount: number;
+}
+
+interface TimelineEvent {
+  id: string;
+  type: "SALE" | "PO_RECEIPT" | "RETURN" | "INVENTORY_ADJUST" | "TRANSFER" | "LLM_DECISION";
+  timestamp: string;
+  description: string;
+  details?: Record<string, unknown>;
+  channel?: string;
+  quantity?: number;
+  sku?: string;
+}
+
+interface BatchTimelineResponse {
+  batchLog: BatchDecision;
+  timeline: TimelineEvent[];
+  windowStart: string;
+  windowEnd: string;
+}
+
+// Timeline Event Card Component - Shopify inspired single-line card
+function TimelineEventCard({ event }: { event: TimelineEvent }) {
+  const getEventIcon = () => {
+    switch (event.type) {
+      case "SALE":
+        return <ShoppingBag className="h-4 w-4 text-blue-500" />;
+      case "PO_RECEIPT":
+        return <Package className="h-4 w-4 text-green-500" />;
+      case "RETURN":
+        return <RotateCcw className="h-4 w-4 text-orange-500" />;
+      case "INVENTORY_ADJUST":
+        return <Scale className="h-4 w-4 text-purple-500" />;
+      case "TRANSFER":
+        return <Send className="h-4 w-4 text-cyan-500" />;
+      case "LLM_DECISION":
+        return <Brain className="h-4 w-4 text-primary" />;
+      default:
+        return <Clock className="h-4 w-4 text-muted-foreground" />;
+    }
+  };
+
+  const getEventBgColor = () => {
+    switch (event.type) {
+      case "LLM_DECISION":
+        return "bg-primary/10 border-primary/20";
+      case "SALE":
+        return "bg-blue-500/10 border-blue-500/20";
+      case "PO_RECEIPT":
+        return "bg-green-500/10 border-green-500/20";
+      case "RETURN":
+        return "bg-orange-500/10 border-orange-500/20";
+      default:
+        return "bg-muted/50 border-border";
+    }
+  };
+
   return (
-    <div className="mt-8">
+    <div 
+      className={`flex items-center gap-3 px-3 py-2 rounded-md border ${getEventBgColor()}`}
+      data-testid={`timeline-event-${event.type.toLowerCase()}-${event.id}`}
+    >
+      <div className="flex-shrink-0">{getEventIcon()}</div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm truncate" data-testid={`text-event-description-${event.id}`}>{event.description}</p>
+      </div>
+      {event.quantity !== undefined && (
+        <Badge variant="secondary" className="flex-shrink-0 text-xs" data-testid={`badge-quantity-${event.id}`}>
+          {event.quantity > 0 ? "+" : ""}{event.quantity}
+        </Badge>
+      )}
+      <span className="text-xs text-muted-foreground flex-shrink-0 whitespace-nowrap" data-testid={`text-time-${event.id}`}>
+        {new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      </span>
+    </div>
+  );
+}
+
+// Batch Timeline Modal Component
+function BatchTimelineModal({ 
+  batchId, 
+  isOpen, 
+  onClose 
+}: { 
+  batchId: string | null; 
+  isOpen: boolean; 
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery<BatchTimelineResponse>({
+    queryKey: ["/api/ai-batch-logs", batchId, "timeline"],
+    queryFn: async () => {
+      const res = await fetch(`/api/ai-batch-logs/${batchId}/timeline`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch timeline");
+      return res.json();
+    },
+    enabled: !!batchId && isOpen,
+  });
+
+  if (!batchId) return null;
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" data-testid="dialog-batch-timeline">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2" data-testid="text-timeline-title">
+            <Brain className="h-5 w-5 text-primary" />
+            AI Batch Decision Timeline
+          </DialogTitle>
+          <DialogDescription data-testid="text-timeline-description">
+            Events leading to this LLM decision
+          </DialogDescription>
+        </DialogHeader>
+        
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          </div>
+        ) : data ? (
+          <div className="flex-1 overflow-hidden">
+            {/* Batch Summary Header */}
+            <div className="mb-4 p-3 bg-muted/50 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant={data.batchLog.urgencyLevel === "HIGH" ? "destructive" : data.batchLog.urgencyLevel === "MEDIUM" ? "default" : "secondary"}>
+                    {data.batchLog.urgencyLevel || "N/A"}
+                  </Badge>
+                  <span className="text-sm font-medium">
+                    {data.batchLog.reason?.replace(/_/g, " ")}
+                  </span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(data.batchLog.startedAt).toLocaleString()}
+                </span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {data.batchLog.aiDecisionSummary || `Analyzed ${data.batchLog.totalSkus || 0} SKUs, found ${data.batchLog.criticalItemsFound || 0} critical items`}
+              </p>
+              {data.batchLog.supplierName && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Primary Supplier: {data.batchLog.supplierName}
+                </p>
+              )}
+            </div>
+
+            {/* Timeline */}
+            <ScrollArea className="h-[400px] pr-4">
+              <div className="relative">
+                {/* Vertical timeline line */}
+                <div className="absolute left-[19px] top-0 bottom-0 w-px bg-border" />
+                
+                <div className="space-y-2">
+                  {data.timeline.map((event, index) => (
+                    <div key={event.id} className="relative pl-10">
+                      {/* Timeline dot */}
+                      <div className={`absolute left-[15px] top-3 w-2 h-2 rounded-full ${
+                        event.type === "LLM_DECISION" ? "bg-primary" : "bg-muted-foreground/50"
+                      }`} />
+                      
+                      <TimelineEventCard event={event} />
+                      
+                      {/* Date separator for first event of each day */}
+                      {index === 0 || new Date(event.timestamp).toDateString() !== new Date(data.timeline[index - 1]?.timestamp).toDateString() ? (
+                        <div className="absolute -left-2 -top-5 text-xs font-medium text-muted-foreground bg-background px-1">
+                          {new Date(event.timestamp).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+                
+                {data.timeline.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No events found in the 24-hour window before this decision
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            Failed to load timeline data
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AIRecommendationsTab() {
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  
+  // Fetch batch decisions
+  const { data: batchDecisions, isLoading } = useQuery<BatchDecision[]>({
+    queryKey: ["/api/ai-batch-decisions"],
+    queryFn: async () => {
+      const res = await fetch("/api/ai-batch-decisions", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch batch decisions");
+      return res.json();
+    },
+  });
+
+  const getUrgencyBadge = (urgency: string | null) => {
+    switch (urgency) {
+      case "HIGH":
+        return <Badge variant="destructive">High</Badge>;
+      case "MEDIUM":
+        return <Badge variant="default">Medium</Badge>;
+      case "LOW":
+        return <Badge variant="secondary">Low</Badge>;
+      default:
+        return <Badge variant="outline">-</Badge>;
+    }
+  };
+
+  const getReasonLabel = (reason: string) => {
+    switch (reason) {
+      case "SCHEDULED_10AM":
+        return "10AM Batch";
+      case "SCHEDULED_3PM":
+        return "3PM Batch";
+      case "CRITICAL_TRIGGER":
+        return "Critical";
+      case "MANUAL":
+        return "Manual";
+      default:
+        return reason;
+    }
+  };
+
+  const formatPercentDiff = (diff: number | null) => {
+    if (diff === null) return "-";
+    const sign = diff >= 0 ? "+" : "";
+    return `${sign}${diff.toFixed(0)}%`;
+  };
+
+  return (
+    <div className="mt-8 space-y-4">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-3">
@@ -2161,43 +2417,108 @@ function AIRecommendationsTab() {
               <Brain className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <CardTitle>AI Recommendations</CardTitle>
-              <CardDescription>Advanced AI-powered inventory optimization</CardDescription>
+              <CardTitle>AI Batch Decisions</CardTitle>
+              <CardDescription>
+                Timeline view of LLM inventory decisions. Click a row to see events that led to each decision.
+              </CardDescription>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-muted mb-6">
-              <Sparkles className="h-10 w-10 text-muted-foreground" />
+      </Card>
+
+      <Card>
+        <CardContent className="p-0">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
             </div>
-            <h3 className="text-xl font-semibold mb-2">Coming in V2</h3>
-            <p className="text-muted-foreground max-w-md mb-6">
-              This tab will feature advanced AI capabilities including predictive analytics, 
-              automated reorder suggestions, and multi-source demand forecasting.
-            </p>
-            <div className="flex flex-col gap-2 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                <span>LLM-powered demand analysis</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                <span>Cross-channel inventory optimization</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                <span>Automated supplier selection</span>
-              </div>
+          ) : !batchDecisions?.length ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p>No batch decisions yet.</p>
+              <p className="text-sm mt-1">Decisions run automatically at 10AM and 3PM Mountain time.</p>
             </div>
-            <div className="mt-8 p-4 bg-muted/50 rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                For current AI decision feedback, visit the <span className="font-medium text-foreground">Order Feedback</span> tab
-              </p>
+          ) : (
+            <div className="overflow-x-auto" data-testid="table-batch-decisions">
+              <table className="w-full table-auto text-sm">
+                <thead className="bg-muted/50">
+                  <tr className="h-11 border-b">
+                    <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-date">Date</th>
+                    <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-ai-decision">AI Decision</th>
+                    <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-staff-decision">Staff Decision</th>
+                    <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-accuracy">Accuracy</th>
+                    <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-urgency">Urgency</th>
+                    <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-supplier">Supplier</th>
+                    <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-trigger">Trigger</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batchDecisions.map((batch) => (
+                    <tr
+                      key={batch.id}
+                      data-testid={`row-batch-${batch.id}`}
+                      className="h-12 border-b hover-elevate cursor-pointer"
+                      onClick={() => setSelectedBatchId(batch.id)}
+                    >
+                      <td className="px-4 align-middle whitespace-nowrap" data-testid={`cell-date-${batch.id}`}>
+                        <div className="flex flex-col">
+                          <span className="font-medium">
+                            {new Date(batch.startedAt).toLocaleDateString()}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(batch.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 align-middle max-w-[250px]" data-testid={`cell-ai-decision-${batch.id}`}>
+                        <p className="truncate">
+                          {batch.aiDecisionSummary || `${batch.orderTodayCount || 0} items need ordering, ${batch.criticalItemsFound || 0} critical`}
+                        </p>
+                      </td>
+                      <td className="px-4 align-middle max-w-[200px]" data-testid={`cell-staff-decision-${batch.id}`}>
+                        <p className="truncate text-muted-foreground">
+                          {batch.staffDecisionSummary || `${batch.acceptedCount}/${batch.recommendationsCount} accepted`}
+                        </p>
+                      </td>
+                      <td className="px-4 align-middle text-center" data-testid={`cell-accuracy-${batch.id}`}>
+                        <span className={`font-mono ${
+                          batch.percentDifference !== null 
+                            ? batch.percentDifference >= 0 
+                              ? "text-green-600" 
+                              : "text-red-500"
+                            : ""
+                        }`}>
+                          {formatPercentDiff(batch.percentDifference)}
+                        </span>
+                      </td>
+                      <td className="px-4 align-middle text-center" data-testid={`cell-urgency-${batch.id}`}>
+                        {getUrgencyBadge(batch.urgencyLevel)}
+                      </td>
+                      <td className="px-4 align-middle whitespace-nowrap max-w-[150px]" data-testid={`cell-supplier-${batch.id}`}>
+                        <span className="truncate block">
+                          {batch.supplierName || "-"}
+                        </span>
+                      </td>
+                      <td className="px-4 align-middle text-center" data-testid={`cell-trigger-${batch.id}`}>
+                        <Badge variant={batch.reason === "CRITICAL_TRIGGER" ? "destructive" : "outline"} className="text-xs" data-testid={`badge-trigger-${batch.id}`}>
+                          {getReasonLabel(batch.reason)}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
+          )}
         </CardContent>
       </Card>
+
+      {/* Timeline Modal */}
+      <BatchTimelineModal
+        batchId={selectedBatchId}
+        isOpen={!!selectedBatchId}
+        onClose={() => setSelectedBatchId(null)}
+      />
     </div>
   );
 }

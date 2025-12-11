@@ -8165,6 +8165,139 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Get timeline events for a specific batch log (Shopify-inspired timeline)
+  app.get("/api/ai-batch-logs/:id/timeline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const log = await storage.getAIBatchLog(id);
+      
+      if (!log) {
+        return res.status(404).json({ error: "Batch log not found" });
+      }
+      
+      // Define time window: 24 hours before the batch ran
+      const batchTime = new Date(log.startedAt);
+      const windowStart = new Date(batchTime.getTime() - 24 * 60 * 60 * 1000);
+      
+      // Collect timeline events from multiple sources
+      const timelineEvents: Array<{
+        id: string;
+        type: "SALE" | "PO_RECEIPT" | "RETURN" | "INVENTORY_ADJUST" | "TRANSFER" | "LLM_DECISION";
+        timestamp: Date;
+        description: string;
+        details?: any;
+        channel?: string;
+        quantity?: number;
+        sku?: string;
+      }> = [];
+      
+      // 1. Add the LLM decision itself at the top
+      timelineEvents.push({
+        id: `decision-${log.id}`,
+        type: "LLM_DECISION",
+        timestamp: batchTime,
+        description: log.aiDecisionSummary || `AI analyzed ${log.totalSkus || 0} SKUs, found ${log.criticalItemsFound || 0} critical items`,
+        details: {
+          orderTodayCount: log.orderTodayCount,
+          safeUntilTomorrowCount: log.safeUntilTomorrowCount,
+          llmProvider: log.llmProvider,
+          llmModel: log.llmModel,
+        },
+      });
+      
+      // 2. Get sales orders in window
+      const salesOrders = await storage.getSalesOrdersByDateRange(windowStart, batchTime);
+      for (const order of salesOrders) {
+        timelineEvents.push({
+          id: `sale-${order.id}`,
+          type: "SALE",
+          timestamp: new Date(order.orderDate || order.createdAt),
+          description: `${order.channel || "Direct"} order #${order.externalOrderId || order.id}`,
+          channel: order.channel || undefined,
+          quantity: order.totalItems || 1,
+        });
+      }
+      
+      // 3. Get PO receipts in window
+      const poReceipts = await storage.getPurchaseOrderReceiptsByDateRange(windowStart, batchTime);
+      for (const receipt of poReceipts) {
+        timelineEvents.push({
+          id: `receipt-${receipt.id}`,
+          type: "PO_RECEIPT",
+          timestamp: new Date(receipt.receivedAt || receipt.createdAt),
+          description: `Received ${receipt.quantityReceived} units`,
+          quantity: receipt.quantityReceived,
+        });
+      }
+      
+      // 4. Get inventory transactions in window
+      const transactions = await storage.getInventoryTransactionsByDateRange(windowStart, batchTime);
+      for (const tx of transactions) {
+        let type: "INVENTORY_ADJUST" | "TRANSFER" | "RETURN" = "INVENTORY_ADJUST";
+        if (tx.eventType === "TRANSFER") type = "TRANSFER";
+        if (tx.eventType === "RETURN") type = "RETURN";
+        
+        timelineEvents.push({
+          id: `tx-${tx.id}`,
+          type,
+          timestamp: new Date(tx.createdAt),
+          description: `${tx.eventType}: ${tx.quantityChange > 0 ? "+" : ""}${tx.quantityChange} units`,
+          quantity: tx.quantityChange,
+          sku: tx.sku || undefined,
+        });
+      }
+      
+      // Sort by timestamp descending (newest first)
+      timelineEvents.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      
+      res.json({
+        batchLog: log,
+        timeline: timelineEvents,
+        windowStart,
+        windowEnd: batchTime,
+      });
+    } catch (error: any) {
+      console.error("[AIBatchLog] Error fetching batch timeline:", error);
+      res.status(500).json({ error: "Failed to fetch batch timeline" });
+    }
+  });
+
+  // Get enriched batch logs with supplier info for table display
+  app.get("/api/ai-batch-decisions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { limit } = req.query;
+      const logs = await storage.getAllAIBatchLogs(limit ? parseInt(limit as string) : 50);
+      
+      // Enrich each log with supplier name and compute staff decision metrics
+      const enrichedLogs = await Promise.all(logs.map(async (log) => {
+        let supplierName = null;
+        if (log.primarySupplierId) {
+          const supplier = await storage.getSupplier(log.primarySupplierId);
+          supplierName = supplier?.name || null;
+        }
+        
+        // Get linked recommendations to compute staff decision difference
+        const recommendations = await storage.getAIRecommendationsByBatchId(log.id);
+        const acceptedCount = recommendations.filter(r => r.status === "ACCEPTED").length;
+        const dismissedCount = recommendations.filter(r => r.status === "DISMISSED").length;
+        const totalCount = recommendations.length;
+        
+        return {
+          ...log,
+          supplierName,
+          recommendationsCount: totalCount,
+          acceptedCount,
+          dismissedCount,
+        };
+      }));
+      
+      res.json(enrichedLogs);
+    } catch (error: any) {
+      console.error("[AIBatchDecisions] Error fetching batch decisions:", error);
+      res.status(500).json({ error: "Failed to fetch batch decisions" });
+    }
+  });
+
   app.get("/api/ai-batch-scheduler/status", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getSchedulerStatus } = await import("./services/ai-batch-scheduler");

@@ -846,6 +846,13 @@ export const aiBatchLogs = pgTable("ai_batch_logs", {
   llmResponseTimeMs: integer("llm_response_time_ms"),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  // New batch summary fields for timeline UI
+  aiDecisionSummary: text("ai_decision_summary"), // e.g. "Order 5 items from 2 suppliers"
+  staffDecisionSummary: text("staff_decision_summary"), // What was actually ordered in PO(s)
+  percentDifference: real("percent_difference"), // +/- accuracy between AI vs staff
+  urgencyLevel: text("urgency_level"), // 'HIGH', 'MEDIUM', 'LOW' overall urgency
+  primarySupplierId: varchar("primary_supplier_id").references(() => suppliers.id),
+  timelineEventsJson: jsonb("timeline_events_json"), // Snapshot of events that led to this decision
 }, (table) => ({
   startedAtIdx: index("ai_batch_logs_started_at_idx").on(table.startedAt),
   reasonIdx: index("ai_batch_logs_reason_idx").on(table.reason),

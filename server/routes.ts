@@ -9654,6 +9654,94 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Alias for SendGrid webhook without /api prefix (matches SendGrid dashboard config)
+  // TODO: Add SendGrid signed webhook verification for production security
+  app.post("/sendgrid/events", async (req: Request, res: Response) => {
+    try {
+      const events = req.body;
+      
+      if (!Array.isArray(events)) {
+        return res.status(400).json({ error: "Invalid event format" });
+      }
+
+      console.log(`[SendGrid Webhook] Received ${events.length} events at /sendgrid/events`);
+
+      for (const event of events) {
+        const poId = event.po_id || event.customArgs?.po_id;
+        const messageId = event.sg_message_id;
+        const eventType = event.event;
+        const timestamp = event.timestamp ? new Date(event.timestamp * 1000) : new Date();
+
+        if (!poId && !messageId) {
+          console.log(`[SendGrid Webhook] Skipping event without PO identifier:`, eventType);
+          continue;
+        }
+
+        let po = null;
+        if (poId) {
+          po = await storage.getPurchaseOrder(poId);
+        }
+        if (!po && messageId) {
+          const allPOs = await storage.getAllPurchaseOrders();
+          po = allPOs.find(p => p.lastEmailProviderMessageId === messageId);
+        }
+
+        if (!po) {
+          console.log(`[SendGrid Webhook] PO not found for event:`, { poId, messageId, eventType });
+          continue;
+        }
+
+        const updateData: any = {
+          lastEmailEventAt: timestamp,
+          lastEmailEventType: eventType,
+        };
+
+        switch (eventType) {
+          case 'processed':
+            updateData.lastEmailStatus = 'SENT';
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email queued/processed`);
+            break;
+          case 'delivered':
+            updateData.lastEmailStatus = 'SENT';
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email delivered`);
+            break;
+          case 'open':
+            updateData.lastEmailStatus = 'OPENED';
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email opened`);
+            break;
+          case 'click':
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} link clicked`);
+            break;
+          case 'bounce':
+          case 'dropped':
+          case 'spamreport':
+          case 'unsubscribe':
+            updateData.lastEmailStatus = 'FAILED';
+            updateData.lastEmailError = `Email ${eventType}: ${event.reason || event.status || 'Unknown reason'}`;
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} email failed: ${eventType}`);
+            
+            await storage.createSystemLog({
+              type: 'PO_EMAIL_FAILED',
+              message: `PO ${po.poNumber} email ${eventType}`,
+              details: { poId: po.id, poNumber: po.poNumber, reason: event.reason || event.status },
+              source: 'EXTERNAL',
+            });
+            break;
+          default:
+            console.log(`[SendGrid Webhook] PO ${po.poNumber} event: ${eventType}`);
+            continue;
+        }
+
+        await storage.updatePurchaseOrder(po.id, updateData);
+      }
+
+      res.status(200).send('OK');
+    } catch (error: any) {
+      console.error("[SendGrid Webhook] Error processing events:", error);
+      res.status(200).send('Error logged');
+    }
+  });
+
   // Shopify webhook endpoint - handles all webhook topics via modular handlers
   // Public endpoint - use HMAC verification for security
   app.post("/api/webhooks/shopify", async (req: Request, res: Response) => {

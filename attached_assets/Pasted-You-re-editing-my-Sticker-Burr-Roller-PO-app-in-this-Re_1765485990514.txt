@@ -1,0 +1,72 @@
+You’re editing my Sticker Burr Roller PO app in this Replit project. I want you to clean up the supplier-facing PO email that is sent through SendGrid.
+
+Right now the email is long and shows a giant raw URL. I want a short, friendly email with a clear “View PO” button, while still attaching the PDF PO.
+
+Please do the following:
+
+1. Find the code that builds and sends the PO email (the one that produced an email like:
+   Subject: “Purchase Order PO-2025-0007 – walker test”
+   Body: long block of text with a big SendGrid URL).
+
+2. Replace the current email HTML body with a new, well-formatted HTML template that matches this content and order:
+
+   a) Greeting using the supplier contact name:
+      “Hello {contact name},”
+
+   b) Intro line:
+      “We’re needing some more parts. Please take a look at your purchase order at your earliest convenience.”
+
+   c) Heading:
+      “Here are the order details:”
+
+   d) Order details block with clear labels (use proper HTML, like `<p>` or `<table>`), containing:
+      - `PO #: {poNumber}` (e.g., PO-2025-0007)
+      - `Order Date: {orderDateFormatted}` (e.g., December 11, 2025)
+      - `Items Ordered: {human-readable item list}`
+          * For `Items Ordered`, show item NAMES (e.g. “Rollers, Roller Net, Pipe”) rather than raw inventory IDs.
+          * Use the product/item model that the PO already references to look up each item’s display name.
+      - `Delivery Address: 1020 W Utah Ave, Hildale UT 84784`
+
+   e) A prominent “View PO” button that links to the existing PO link you already generate:
+      - Use the same URL variable that currently appears as the long link in the email (e.g. `poViewUrl` or similar).
+      - Implement it as an HTML `<a>` styled as a button, for example:
+
+        ```html
+        <a href="{{VIEW_PO_URL}}" style="display:inline-block;padding:12px 24px;background-color:#1a73e8;color:#ffffff;text-decoration:none;border-radius:4px;font-weight:bold;">
+          View PO
+        </a>
+        ```
+
+        Replace `{{VIEW_PO_URL}}` with the actual variable holding the PO view URL. That URL should still go through SendGrid’s tracking; it just needs to be behind the button instead of shown as a long string.
+
+   f) Below the button, add this line as a separate paragraph:
+      “Below is a PDF copy of this purchase order for your convenience.”
+
+   g) Add the support line:
+      “If you have any questions about this order, please email us at stickerburrroller@gmail.com.”
+
+   h) Add the sign-off:
+      “Best regards,”
+      “StickerBurr Team”
+
+3. Make sure the PDF PO attachment logic stays exactly as it is now. The email should still include the PDF file of the PO.
+
+4. Keep the email subject pattern the same (still including the PO number) unless you see a simple improvement like adding the supplier name, but do not remove the PO number.
+
+5. If the code currently sends both `html` and `text` versions to SendGrid:
+   - Update the **text** version to a clean plain-text version of the same content.
+   - In the text version, you cannot use a button, so include a line:
+     “View PO: {VIEW_PO_URL}”
+   - Ensure the text version still references the PO number, order date, items ordered (names), and delivery address.
+
+6. Do not change any of the SendGrid plumbing:
+   - Keep using `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`, `SENDGRID_FROM_NAME`.
+   - Keep the same `to` address (supplier email from the PO).
+   - Keep `custom_args` (including any `poId`) so the Event Webhook logic continues to work.
+
+7. After implementing, add a small helper or comment that shows how I can trigger a test PO email (e.g., sending a PO to my own email) so I can visually confirm:
+   - The email body matches this new structure and wording.
+   - The giant raw link has been replaced with a “View PO” button.
+   - The PO PDF is still attached.
+
+Do not refactor unrelated parts of the codebase; keep all changes focused on the PO email generation and template.

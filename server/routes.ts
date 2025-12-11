@@ -965,20 +965,22 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const statusFilter = req.query.status as string | undefined;
       
+      // Fetch all recommendations once and filter in memory (avoids duplicate DB calls)
+      const allRecs = await storage.getAllAIRecommendations();
+      
       let recommendations;
       if (!statusFilter || statusFilter === "active") {
         // Default or "active": get only active recommendations (NEW + ACCEPTED)
-        recommendations = await storage.getActiveAIRecommendations();
+        recommendations = allRecs.filter(r => r.status === "NEW" || r.status === "ACCEPTED");
       } else if (statusFilter === "all") {
-        // "all": get all recommendations regardless of status
-        recommendations = await storage.getAllAIRecommendations();
+        // "all": return all recommendations
+        recommendations = allRecs;
       } else {
         // Specific status: NEW, ACCEPTED, DISMISSED
-        recommendations = await storage.getAIRecommendationsByStatus(statusFilter);
+        recommendations = allRecs.filter(r => r.status === statusFilter);
       }
       
-      // Calculate summary counts
-      const allRecs = await storage.getAllAIRecommendations();
+      // Calculate summary counts from the single fetch
       const summary = {
         total: allRecs.length,
         new: allRecs.filter(r => r.status === "NEW").length,

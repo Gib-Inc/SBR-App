@@ -1236,11 +1236,24 @@ export default function Barcodes() {
 }
 
 function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
+  // Build URL with query params for proper fetching
+  const url = searchQuery 
+    ? `/api/shippo-label-logs?search=${encodeURIComponent(searchQuery)}`
+    : "/api/shippo-label-logs";
+    
   const { data, isLoading } = useQuery<{
     logs: any[];
     total: number;
   }>({
-    queryKey: ["/api/shippo-label-logs", { search: searchQuery || undefined }],
+    // Use base path for cache invalidation, add search as discriminator
+    queryKey: ["/api/shippo-label-logs", searchQuery || ""],
+    queryFn: async () => {
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) {
+        throw new Error(`Failed to fetch: ${res.status}`);
+      }
+      return res.json();
+    },
   });
 
   const logs = data?.logs ?? [];

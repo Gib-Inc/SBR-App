@@ -155,13 +155,18 @@ export class GHLOpportunitiesService {
       body.monetaryValue = params.amount;
     }
 
-    // Use contactId if provided directly, otherwise fall back to contact details
+    // GHL API requires contactId - cannot use contactName/contactEmail directly
     if (params.contactId) {
       body.contactId = params.contactId;
-    } else if (params.contact) {
-      if (params.contact.name) body.contactName = params.contact.name;
-      if (params.contact.email) body.contactEmail = params.contact.email;
-      if (params.contact.phone) body.contactPhone = params.contact.phone;
+    } else {
+      // Fall back to system contact if no contactId provided
+      const systemContactId = await this.getOrCreateSystemContact();
+      if (systemContactId) {
+        body.contactId = systemContactId;
+      } else {
+        console.warn(`[GHL Opps] No contactId provided and unable to get system contact`);
+        return { success: false, error: "No contactId available" };
+      }
     }
 
     if (params.customFields) {

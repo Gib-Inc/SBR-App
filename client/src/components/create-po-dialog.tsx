@@ -587,65 +587,66 @@ export function CreatePODialog({
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label className="text-base font-medium">Line Items *</Label>
-                <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
-                  <PopoverTrigger asChild>
-                    <Button size="sm" data-testid="button-add-line-item">
-                      <Plus className="h-4 w-4 mr-1" />
-                      Add Item
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent 
-                    className="flex w-[450px] max-h-[400px] flex-col p-0 overflow-hidden" 
-                    align="end"
-                  >
-                    {/* Search header - fixed at top */}
-                    <div className="flex items-center border-b px-3 py-2 shrink-0">
-                      <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
-                      <Input
-                        placeholder="Search by SKU or name..."
-                        value={productSearchQuery}
-                        onChange={(e) => setProductSearchQuery(e.target.value)}
-                        className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                        data-testid="input-product-search"
-                      />
+                <Button size="sm" onClick={() => setProductSearchOpen(true)} data-testid="button-add-line-item">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Item
+                </Button>
+                
+                {/* Add Item Modal - uses Dialog for guaranteed scrolling */}
+                <Dialog open={productSearchOpen} onOpenChange={setProductSearchOpen}>
+                  <DialogContent className="max-w-md p-0">
+                    <DialogHeader className="px-4 pt-4 pb-2">
+                      <DialogTitle>Add Item from Stock Inventory</DialogTitle>
+                      <DialogDescription>
+                        Select an item to add to this purchase order
+                      </DialogDescription>
+                    </DialogHeader>
+                    
+                    {/* Search input */}
+                    <div className="px-4 pb-2">
+                      <div className="flex items-center border rounded-md px-3 py-2">
+                        <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                        <Input
+                          placeholder="Search by SKU or name..."
+                          value={productSearchQuery}
+                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                          data-testid="input-product-search"
+                        />
+                      </div>
                     </div>
-                    {/* Count header - fixed */}
-                    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground border-b shrink-0">
+                    
+                    {/* Count */}
+                    <div className="px-4 py-1 text-xs font-medium text-muted-foreground">
                       Stock Inventory ({filteredItems.length} items)
                     </div>
+                    
                     {/* 
-                      Scrollable items list container.
-                      This list uses the same Stock Inventory data as Products → Stock Inventory 
-                      (items where type === "component") and is constrained with a scrollable 
-                      container so all items are visible.
+                      Scrollable items list - uses Stock Inventory data (type === "component").
+                      Fixed height with overflow-y-auto ensures scrolling works.
                     */}
-                    <div className="flex-1 overflow-y-auto p-1">
+                    <div className="px-2 pb-4" style={{ maxHeight: '300px', overflowY: 'auto' }}>
                       {filteredItems.length === 0 ? (
                         <div className="py-6 text-center text-sm text-muted-foreground">
-                          No items found in Stock Inventory.
+                          No items found.
                         </div>
                       ) : (
                         filteredItems.map((item) => (
-                          <div
+                          <button
                             key={item.id}
+                            type="button"
                             onClick={() => handleAddItem(item)}
-                            className="relative flex cursor-pointer gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+                            className="w-full text-left px-2 py-2 rounded hover:bg-accent hover:text-accent-foreground"
                             data-testid={`item-option-${item.id}`}
                           >
-                            <Package className="h-4 w-4 text-muted-foreground shrink-0" />
-                            <div className="flex-1 min-w-0">
-                              <span className="font-medium">{item.sku}</span>
-                              <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
-                            </div>
-                            <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                              Stock: {item.currentStock ?? 0}
-                            </span>
-                          </div>
+                            <span className="font-mono text-sm font-medium">{item.sku}</span>
+                            <span className="ml-2 text-sm text-muted-foreground">{item.name}</span>
+                          </button>
                         ))
                       )}
                     </div>
-                  </PopoverContent>
-                </Popover>
+                  </DialogContent>
+                </Dialog>
               </div>
 
               {lineItems.length === 0 ? (

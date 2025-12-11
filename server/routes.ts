@@ -8935,6 +8935,9 @@ Notes: ${po.notes || 'None'}
           lastSendMessageId: ghlResult.messageId || null,
           lastSendError: null, // Clear any previous error
         });
+        
+        // Increment supplier PO sent count for tracking/AI selection
+        await storage.incrementSupplierPOSentCount(finalSupplierId);
 
         // Write audit log for successful send
         await storage.createAuditLog({
@@ -9233,6 +9236,11 @@ Notes: ${po.notes || 'None'}
   app.post("/api/purchase-orders/:id/mark-sent", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+      
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'SENT',
         sentAt: new Date(),
@@ -9241,6 +9249,9 @@ Notes: ${po.notes || 'None'}
       if (!updated) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
+      
+      // Increment supplier PO sent count for tracking/AI selection
+      await storage.incrementSupplierPOSentCount(po.supplierId);
 
       res.json(updated);
     } catch (error: any) {
@@ -9252,6 +9263,11 @@ Notes: ${po.notes || 'None'}
   app.post("/api/purchase-orders/:id/mark-received", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) {
+        return res.status(404).json({ error: "Purchase order not found" });
+      }
+      
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'RECEIVED',
         receivedAt: new Date(),
@@ -9260,6 +9276,9 @@ Notes: ${po.notes || 'None'}
       if (!updated) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
+      
+      // Increment supplier PO received count for tracking/AI selection
+      await storage.incrementSupplierPOReceivedCount(po.supplierId);
 
       // Sync to GHL (non-blocking)
       const { triggerPOSync } = await import("./services/ghl-sync-triggers");
@@ -9515,6 +9534,9 @@ Notes: ${po.notes || 'None'}
       };
 
       const updated = await storage.updatePurchaseOrder(id, updateData);
+      
+      // Increment supplier PO sent count for tracking/AI selection
+      await storage.incrementSupplierPOSentCount(po.supplierId);
       
       console.log(`[PurchaseOrder] PO ${po.poNumber} sent via email to ${emailResult.recipientEmail}`);
 
@@ -10443,6 +10465,9 @@ Notes: ${po.notes || 'None'}
         status: 'RECEIVED',
         receivedAt: new Date(),
       });
+      
+      // Increment supplier PO received count for tracking/AI selection
+      await storage.incrementSupplierPOReceivedCount(po.supplierId);
 
       // Auto-fulfill backorders for all items that received stock
       const receivedItemIds = [...new Set(linesToProcess.map(l => l.line.itemId))];

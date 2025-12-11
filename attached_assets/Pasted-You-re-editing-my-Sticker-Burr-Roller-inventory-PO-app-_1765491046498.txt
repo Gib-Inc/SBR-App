@@ -1,0 +1,120 @@
+You’re editing my Sticker Burr Roller inventory / PO app in this Replit project.
+
+Two tasks:
+1) Fix the item inventory picker on the New Purchase Order screen.
+2) Pre-create real Supplier records (from my previous Katana system) so I can use them in production, with contact info editable in the UI.
+
+Please inspect the existing code and then do the following.
+
+--------------------------------------------------
+PART 1 – Fix the New Purchase Order item picker
+--------------------------------------------------
+
+Context: On the “New Purchase Order” modal, when I click “Add Item”, a product list opens. Right now:
+- It is NOT properly scrollable.
+- It does not reliably reflect the same items that appear in the Products → Item Inventory data table.
+
+Goal: The “Add Item” product picker must be:
+- Scrollable (with a fixed max height and vertical scroll).
+- Completely driven by the same data source as the Products / Item Inventory table, so every product that appears in Products appears here.
+
+Implementation requirements:
+
+1. Find the component that renders the “Add Item” product picker in the New Purchase Order screen (the panel with the search box and items list). Also find the component / API used for the Products → Item Inventory table.
+
+2. Data source alignment:
+   - Make sure the product picker uses the SAME underlying product model and query as the Products table.
+   - If the Products table uses an API like `/api/products` or a product repository/service, reuse that instead of any hard-coded or separate lists.
+   - The picker should:
+     - Load all active products that are visible in Products / Item Inventory.
+     - Show key fields: SKU, product name, maybe stock quantity, etc. (whatever is already present in the picker).
+
+3. Scroll behavior:
+   - Set a reasonable max height (for example 350–450px) on the items list portion of the picker and enable vertical scrolling.
+   - Implementation examples (depending on the UI stack you are using):
+     - If CSS: wrap the list in a container with something like `max-height: 400px; overflow-y: auto;`.
+     - If using a UI library (e.g., a Table or List component), use its built-in scroll props or container.
+   - The result should be:
+     - When there are many products, the picker does NOT grow off-screen.
+     - The user can scroll to see all products.
+   - Do NOT break existing search and selection functionality.
+
+4. Search:
+   - Ensure the search box in the picker filters over the exact same fields as the Products table (at least product name and SKU).
+   - When I add a new product in Products / Item Inventory, and then open the PO “Add Item” picker, that product must appear and be searchable.
+
+5. Safety / integration:
+   - Do not duplicate product records.
+   - Line items on the PO must still reference the product ID / SKU consistently with the rest of the app.
+   - Add console logging only where useful for debugging (or remove logging when done).
+
+--------------------------------------------------
+PART 2 – Create real Supplier records from Katana list
+--------------------------------------------------
+
+I am migrating real supplier names from Katana, and I want them as normal Suppliers in this app (NOT dev-only seed). The names are:
+
+- PEDNAR
+- AMAZON
+- ACU-FORM PLASTICS, INC
+- MCMASTER-CARR
+- HOME DEPOT
+- FX INDUSTRIES
+- SILVER FOX LLC
+- LISTON METALWORKS, LLC
+- AUSTI ENTERPRISES
+
+Requirements:
+
+6. Use the existing Supplier model / table used by:
+   - The Suppliers page (Existing tab).
+   - The “Supplier” dropdown on the New Purchase Order screen.
+
+7. Implement a small upsert utility or migration-style function that:
+   - Ensures there is ONE Supplier record for each name in the list above.
+   - If a supplier with the same name already exists, update it instead of creating a duplicate.
+   - For now, fill only safe base fields:
+     - `name`: exactly as listed above.
+     - Optional placeholders:
+       - `contactName`: “Purchasing Department” (can be edited later).
+       - `phone`, `street`, `city`, `state`, `postalCode`, `country`: simple placeholders (e.g., `""` or “To be filled”).
+     - IMPORTANT: For `email`, either:
+       - Leave it blank/null, OR
+       - Use an obvious placeholder like `TODO@update-this-email.com`.
+     - DO NOT auto-invent realistic email addresses for these real companies; I will fill in the correct ones manually in the Suppliers UI.
+
+8. After the upsert runs:
+   - All these suppliers must be visible on the Suppliers → Existing tab.
+   - The New Purchase Order “Supplier” dropdown must show these names.
+   - When I update a supplier’s email or address in the Suppliers page, that info should be used for any new POs created for that supplier (no duplicate supplier entities).
+
+9. Wire the upsert function so it can be run safely:
+   - Either as a CLI/seed script (e.g., `npm run upsert:suppliers`) OR as a one-time internal function that you can document in comments.
+   - Running it multiple times must NOT create duplicates; it should upsert by supplier `name`.
+
+10. UI consideration:
+   - On the Suppliers page, make sure I can edit each supplier’s contact info, especially the email.
+   - It should be clear in the UI (e.g., via validation or an indicator) that suppliers without a valid email cannot receive PO emails yet.
+   - Do NOT automatically send any emails from this upsert; this is purely data creation.
+
+11. Keep everything production-safe:
+   - Treat these suppliers as real; do not mark them as “test only” in code.
+   - The only “fake” part is placeholder contact details, which I will manually replace with real ones in the app before sending real POs.
+   - Leave a short comment in the upsert code explaining that the contact data is placeholder and must be verified/updated before live use.
+
+--------------------------------------------------
+Final checks
+--------------------------------------------------
+
+When you’re done:
+
+- On the New Purchase Order modal:
+  - The “Add Item” picker shows the full product list that matches Products / Item Inventory.
+  - The picker is scrollable and usable even with many items.
+
+- On the Suppliers page:
+  - I see PEDNAR, AMAZON, ACU-FORM PLASTICS, etc., in the Existing tab.
+  - I can edit their email/contact info.
+  - In the PO screen, I can choose those suppliers from the Supplier dropdown and their updated info is used for new POs.
+
+Please follow existing project patterns (framework, styling, API structure) and do not refactor unrelated modules.

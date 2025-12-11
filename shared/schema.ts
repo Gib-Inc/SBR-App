@@ -160,6 +160,10 @@ export const suppliers = pgTable("suppliers", {
   catalogUrl: text("catalog_url"),
   logoUrl: text("logo_url"),
   ghlContactId: text("ghl_contact_id"),
+  // Supplier metrics for AI supplier selection
+  poSentCount: integer("po_sent_count").default(0).notNull(),
+  poReceivedCount: integer("po_received_count").default(0).notNull(),
+  lastPoSentAt: timestamp("last_po_sent_at"),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });

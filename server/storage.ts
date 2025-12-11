@@ -171,6 +171,8 @@ export interface IStorage {
   createSupplier(supplier: InsertSupplier): Promise<Supplier>;
   updateSupplier(id: string, supplier: Partial<InsertSupplier>): Promise<Supplier | undefined>;
   deleteSupplier(id: string): Promise<boolean>;
+  incrementSupplierPOSentCount(supplierId: string): Promise<void>;
+  incrementSupplierPOReceivedCount(supplierId: string): Promise<void>;
 
   // Supplier Items
   getAllSupplierItems(): Promise<SupplierItem[]>;
@@ -1288,6 +1290,21 @@ export class MemStorage implements IStorage {
 
   async deleteSupplier(id: string): Promise<boolean> {
     return this.suppliers.delete(id);
+  }
+
+  async incrementSupplierPOSentCount(supplierId: string): Promise<void> {
+    const supplier = this.suppliers.get(supplierId);
+    if (supplier) {
+      supplier.poSentCount = (supplier.poSentCount || 0) + 1;
+      supplier.lastPoSentAt = new Date();
+    }
+  }
+
+  async incrementSupplierPOReceivedCount(supplierId: string): Promise<void> {
+    const supplier = this.suppliers.get(supplierId);
+    if (supplier) {
+      supplier.poReceivedCount = (supplier.poReceivedCount || 0) + 1;
+    }
   }
 
   // Supplier Items
@@ -4070,6 +4087,23 @@ export class PostgresStorage implements IStorage {
   async deleteSupplier(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.suppliers).where(eq(schema.suppliers.id, id)).returning();
     return results.length > 0;
+  }
+
+  async incrementSupplierPOSentCount(supplierId: string): Promise<void> {
+    await this.db.update(schema.suppliers)
+      .set({ 
+        poSentCount: drizzleSql`${schema.suppliers.poSentCount} + 1`,
+        lastPoSentAt: new Date()
+      })
+      .where(eq(schema.suppliers.id, supplierId));
+  }
+
+  async incrementSupplierPOReceivedCount(supplierId: string): Promise<void> {
+    await this.db.update(schema.suppliers)
+      .set({ 
+        poReceivedCount: drizzleSql`${schema.suppliers.poReceivedCount} + 1`
+      })
+      .where(eq(schema.suppliers.id, supplierId));
   }
 
   // Supplier Items

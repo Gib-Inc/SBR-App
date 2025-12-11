@@ -19,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2 } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2, Building, History } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
@@ -2252,7 +2252,7 @@ function TimelineEventCard({ event }: { event: TimelineEvent }) {
   );
 }
 
-// Batch Timeline Modal Component
+// Batch Timeline Modal Component - Shopify-inspired design
 function BatchTimelineModal({ 
   batchId, 
   isOpen, 
@@ -2262,98 +2262,268 @@ function BatchTimelineModal({
   isOpen: boolean; 
   onClose: () => void;
 }) {
+  const [showAllEvents, setShowAllEvents] = useState(false);
+  
+  // Reset showAllEvents when batchId changes
+  useEffect(() => {
+    setShowAllEvents(false);
+  }, [batchId]);
+  
   const { data, isLoading } = useQuery<BatchTimelineResponse>({
     queryKey: ["/api/ai-batch-logs", batchId, "timeline"],
-    queryFn: async () => {
-      const res = await fetch(`/api/ai-batch-logs/${batchId}/timeline`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch timeline");
-      return res.json();
-    },
     enabled: !!batchId && isOpen,
   });
 
   if (!batchId) return null;
 
+  // Helper to get urgency color classes
+  const getUrgencyStyles = (urgency: string | null) => {
+    switch (urgency) {
+      case "HIGH":
+        return { bg: "bg-red-500/10", border: "border-red-500/30", text: "text-red-600 dark:text-red-400", icon: "text-red-500" };
+      case "MEDIUM":
+        return { bg: "bg-amber-500/10", border: "border-amber-500/30", text: "text-amber-600 dark:text-amber-400", icon: "text-amber-500" };
+      case "LOW":
+        return { bg: "bg-green-500/10", border: "border-green-500/30", text: "text-green-600 dark:text-green-400", icon: "text-green-500" };
+      default:
+        return { bg: "bg-muted/50", border: "border-border", text: "text-muted-foreground", icon: "text-muted-foreground" };
+    }
+  };
+
+  // Helper to format trigger reason
+  const formatTriggerReason = (reason: string) => {
+    switch (reason) {
+      case "SCHEDULED_10AM": return "10:00 AM Scheduled";
+      case "SCHEDULED_3PM": return "3:00 PM Scheduled";
+      case "CRITICAL_TRIGGER": return "Critical Threshold";
+      case "MANUAL": return "Manual Trigger";
+      default: return reason?.replace(/_/g, " ");
+    }
+  };
+
+  // Group timeline events by type for display
+  const visibleEvents = showAllEvents ? data?.timeline : data?.timeline.slice(0, 8);
+  const hiddenCount = (data?.timeline.length || 0) - 8;
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" data-testid="dialog-batch-timeline">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2" data-testid="text-timeline-title">
-            <Brain className="h-5 w-5 text-primary" />
-            AI Batch Decision Timeline
-          </DialogTitle>
-          <DialogDescription data-testid="text-timeline-description">
-            Events leading to this LLM decision
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col p-0" data-testid="dialog-batch-timeline">
+        {/* Header */}
+        <div className="px-6 pt-6 pb-4 border-b">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl" data-testid="text-timeline-title">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                <Brain className="h-5 w-5 text-primary" />
+              </div>
+              AI Batch Decision
+            </DialogTitle>
+            <DialogDescription data-testid="text-timeline-description">
+              Review the AI analysis and events that informed this decision
+            </DialogDescription>
+          </DialogHeader>
+        </div>
         
         {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <div className="flex items-center justify-center py-16">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           </div>
         ) : data ? (
-          <div className="flex-1 overflow-hidden">
-            {/* Batch Summary Header */}
-            <div className="mb-4 p-3 bg-muted/50 rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant={data.batchLog.urgencyLevel === "HIGH" ? "destructive" : data.batchLog.urgencyLevel === "MEDIUM" ? "default" : "secondary"}>
-                    {data.batchLog.urgencyLevel || "N/A"}
-                  </Badge>
-                  <span className="text-sm font-medium">
-                    {data.batchLog.reason?.replace(/_/g, " ")}
-                  </span>
+          <div className="flex-1 overflow-y-auto">
+            {/* Agent Decision Card - Shopify inspired prominent card */}
+            <div className="p-6">
+              <div className={`rounded-xl border-2 ${getUrgencyStyles(data.batchLog.urgencyLevel).border} ${getUrgencyStyles(data.batchLog.urgencyLevel).bg} overflow-hidden`}>
+                {/* Decision Header with Urgency */}
+                <div className="px-5 py-4 border-b border-inherit">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                        data.batchLog.urgencyLevel === "HIGH" ? "bg-red-500" : 
+                        data.batchLog.urgencyLevel === "MEDIUM" ? "bg-amber-500" : "bg-green-500"
+                      }`}>
+                        {data.batchLog.urgencyLevel === "HIGH" ? (
+                          <AlertTriangle className="h-5 w-5 text-white" />
+                        ) : data.batchLog.urgencyLevel === "MEDIUM" ? (
+                          <Clock className="h-5 w-5 text-white" />
+                        ) : (
+                          <CheckCircle className="h-5 w-5 text-white" />
+                        )}
+                      </div>
+                      <div>
+                        <h3 className={`font-semibold text-lg ${getUrgencyStyles(data.batchLog.urgencyLevel).text}`}>
+                          {data.batchLog.urgencyLevel === "HIGH" ? "Urgent Action Required" :
+                           data.batchLog.urgencyLevel === "MEDIUM" ? "Action Recommended" : "Inventory Healthy"}
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          {formatTriggerReason(data.batchLog.reason)}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge 
+                      variant={data.batchLog.urgencyLevel === "HIGH" ? "destructive" : data.batchLog.urgencyLevel === "MEDIUM" ? "default" : "secondary"}
+                      className="text-sm px-3 py-1"
+                      data-testid="badge-urgency-level"
+                    >
+                      {data.batchLog.urgencyLevel || "Unknown"} Priority
+                    </Badge>
+                  </div>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  {new Date(data.batchLog.startedAt).toLocaleString()}
-                </span>
+
+                {/* Decision Reasoning - Multi-line prominent text */}
+                <div className="px-5 py-4">
+                  <p className="text-base leading-relaxed" data-testid="text-decision-summary">
+                    {data.batchLog.aiDecisionSummary || 
+                     `Analyzed ${data.batchLog.totalSkus || 0} products and identified ${data.batchLog.criticalItemsFound || 0} items requiring immediate attention. ${
+                       data.batchLog.orderTodayCount ? `${data.batchLog.orderTodayCount} products should be ordered today to prevent stockouts.` : 
+                       "Current inventory levels are sufficient for the near term."
+                     }`}
+                  </p>
+                </div>
+
+                {/* Metrics Grid */}
+                <div className="px-5 py-4 border-t border-inherit bg-background/50">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="text-center p-3 rounded-lg bg-background border">
+                      <div className="text-2xl font-bold text-foreground" data-testid="metric-total-skus">
+                        {data.batchLog.totalSkus || 0}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Products Analyzed</div>
+                    </div>
+                    <div className="text-center p-3 rounded-lg bg-background border">
+                      <div className="text-2xl font-bold text-red-600" data-testid="metric-critical-items">
+                        {data.batchLog.criticalItemsFound || 0}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Critical Items</div>
+                    </div>
+                    <div className="text-center p-3 rounded-lg bg-background border">
+                      <div className="text-2xl font-bold text-amber-600" data-testid="metric-order-today">
+                        {data.batchLog.orderTodayCount || 0}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Order Today</div>
+                    </div>
+                    <div className="text-center p-3 rounded-lg bg-background border">
+                      <div className="text-2xl font-bold text-green-600" data-testid="metric-safe">
+                        {data.batchLog.safeUntilTomorrowCount || 0}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Safe Until Tomorrow</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metadata Chips */}
+                <div className="px-5 py-3 border-t border-inherit flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="text-xs gap-1">
+                    <Clock className="h-3 w-3" />
+                    {new Date(data.batchLog.startedAt).toLocaleString([], { 
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
+                    })}
+                  </Badge>
+                  {data.batchLog.llmResponseTimeMs && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Zap className="h-3 w-3" />
+                      {(data.batchLog.llmResponseTimeMs / 1000).toFixed(1)}s response
+                    </Badge>
+                  )}
+                  {data.batchLog.llmModel && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Brain className="h-3 w-3" />
+                      {data.batchLog.llmModel}
+                    </Badge>
+                  )}
+                  {data.batchLog.supplierName && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Building className="h-3 w-3" />
+                      {data.batchLog.supplierName}
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Quick Action Buttons */}
+                {(data.batchLog.criticalItemsFound ?? 0) > 0 && (
+                  <div className="px-5 py-4 border-t border-inherit bg-background/30 flex flex-wrap items-center justify-end gap-3">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        onClose();
+                        window.location.href = "/ai?tab=order-feedback";
+                      }}
+                      data-testid="button-view-critical-skus"
+                    >
+                      <AlertTriangle className="h-4 w-4 mr-2" />
+                      View Critical SKUs
+                    </Button>
+                    {data.batchLog.primarySupplierId && (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          onClose();
+                          window.location.href = `/purchase-orders?create=true&supplier=${data.batchLog.primarySupplierId}`;
+                        }}
+                        data-testid="button-create-po"
+                      >
+                        <Send className="h-4 w-4 mr-2" />
+                        Create Purchase Order
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
-              <p className="text-sm text-muted-foreground">
-                {data.batchLog.aiDecisionSummary || `Analyzed ${data.batchLog.totalSkus || 0} SKUs, found ${data.batchLog.criticalItemsFound || 0} critical items`}
-              </p>
-              {data.batchLog.supplierName && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Primary Supplier: {data.batchLog.supplierName}
-                </p>
-              )}
             </div>
 
-            {/* Timeline */}
-            <ScrollArea className="h-[400px] pr-4">
+            {/* Timeline Section */}
+            <div className="px-6 pb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <History className="h-4 w-4" />
+                  Events Leading to Decision ({data.timeline.length})
+                </h4>
+              </div>
+
               <div className="relative">
                 {/* Vertical timeline line */}
-                <div className="absolute left-[19px] top-0 bottom-0 w-px bg-border" />
+                <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-border rounded-full" />
                 
                 <div className="space-y-2">
-                  {data.timeline.map((event, index) => (
-                    <div key={event.id} className="relative pl-10">
+                  {visibleEvents?.map((event, index) => (
+                    <div key={event.id} className="relative pl-8">
                       {/* Timeline dot */}
-                      <div className={`absolute left-[15px] top-3 w-2 h-2 rounded-full ${
-                        event.type === "LLM_DECISION" ? "bg-primary" : "bg-muted-foreground/50"
+                      <div className={`absolute left-[7px] top-3 w-2.5 h-2.5 rounded-full ring-2 ring-background ${
+                        event.type === "LLM_DECISION" ? "bg-primary" : 
+                        event.type === "SALE" ? "bg-blue-500" :
+                        event.type === "PO_RECEIPT" ? "bg-green-500" :
+                        event.type === "RETURN" ? "bg-orange-500" :
+                        "bg-muted-foreground"
                       }`} />
                       
                       <TimelineEventCard event={event} />
-                      
-                      {/* Date separator for first event of each day */}
-                      {index === 0 || new Date(event.timestamp).toDateString() !== new Date(data.timeline[index - 1]?.timestamp).toDateString() ? (
-                        <div className="absolute -left-2 -top-5 text-xs font-medium text-muted-foreground bg-background px-1">
-                          {new Date(event.timestamp).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
-                        </div>
-                      ) : null}
                     </div>
                   ))}
                 </div>
                 
+                {/* Show more button */}
+                {hiddenCount > 0 && !showAllEvents && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-3 ml-8 text-muted-foreground"
+                    onClick={() => setShowAllEvents(true)}
+                    data-testid="button-show-more-events"
+                  >
+                    Show {hiddenCount} more events
+                    <ChevronDown className="h-4 w-4 ml-1" />
+                  </Button>
+                )}
+                
                 {data.timeline.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
+                  <div className="text-center py-8 text-muted-foreground ml-8">
                     No events found in the 24-hour window before this decision
                   </div>
                 )}
               </div>
-            </ScrollArea>
+            </div>
           </div>
         ) : (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-16 text-muted-foreground">
             Failed to load timeline data
           </div>
         )}

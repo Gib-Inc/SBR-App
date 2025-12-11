@@ -67,6 +67,7 @@ interface DraftLineItem {
   name: string;
   qtyOrdered: number;
   unitCost: number;
+  taxAmount: number; // Manual tax input
   taxRate?: number | null; // Tax percentage from QuickBooks
   quickbooksItemId?: string | null;
 }
@@ -179,6 +180,11 @@ export function CreatePODialog({
     return lineItems.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
   }, [lineItems]);
 
+  // Calculate taxes from manual line item taxAmount inputs
+  const lineTaxTotal = useMemo(() => {
+    return lineItems.reduce((sum, line) => sum + (line.taxAmount || 0), 0);
+  }, [lineItems]);
+
   // Calculate taxes from line item tax rates (from QuickBooks)
   const calculatedTaxFromLines = useMemo(() => {
     return lineItems.reduce((sum, line) => {
@@ -190,13 +196,16 @@ export function CreatePODialog({
     }, 0);
   }, [lineItems]);
 
-  // Use calculated tax from lines if available, otherwise use manual input
+  // Use line tax amounts first, then QB calculated tax, then manual input
   const effectiveTaxes = useMemo(() => {
+    if (lineTaxTotal > 0) {
+      return lineTaxTotal;
+    }
     if (calculatedTaxFromLines > 0) {
       return calculatedTaxFromLines;
     }
     return parseFloat(taxes) || 0;
-  }, [calculatedTaxFromLines, taxes]);
+  }, [lineTaxTotal, calculatedTaxFromLines, taxes]);
 
   const total = useMemo(() => {
     const shipping = parseFloat(shippingCost) || 0;
@@ -257,6 +266,7 @@ export function CreatePODialog({
           itemId: line.itemId,
           qtyOrdered: line.qtyOrdered,
           unitCost: line.unitCost,
+          taxAmount: line.taxAmount || 0,
         })),
       };
 
@@ -360,6 +370,7 @@ export function CreatePODialog({
       name: pendingItem.name,
       qtyOrdered: 1,
       unitCost: data.unitCost,
+      taxAmount: 0,
       taxRate: data.taxRate,
       quickbooksItemId: data.quickbooksItemId,
     };
@@ -404,6 +415,7 @@ export function CreatePODialog({
       name: pendingItem.name,
       qtyOrdered: 1,
       unitCost: defaultCost,
+      taxAmount: 0,
     };
     setLineItems(prev => [...prev, newLine]);
     setPendingItem(null);
@@ -420,6 +432,13 @@ export function CreatePODialog({
     if (cost < 0) return;
     setLineItems(prev => prev.map(l => 
       l.id === lineId ? { ...l, unitCost: cost } : l
+    ));
+  }, []);
+
+  const handleUpdateLineTax = useCallback((lineId: string, tax: number) => {
+    if (tax < 0) return;
+    setLineItems(prev => prev.map(l => 
+      l.id === lineId ? { ...l, taxAmount: tax } : l
     ));
   }, []);
 
@@ -567,15 +586,15 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[400px] p-0" align="end">
-                    <Command>
+                  <PopoverContent className="w-[400px] p-0 max-h-[400px]" align="end">
+                    <Command className="max-h-[400px]">
                       <CommandInput 
                         placeholder="Search by SKU or name..." 
                         value={productSearchQuery}
                         onValueChange={setProductSearchQuery}
                         data-testid="input-product-search"
                       />
-                      <CommandList className="max-h-[300px] overflow-y-auto">
+                      <CommandList className="max-h-[300px] overflow-y-auto overflow-x-hidden">
                         <CommandEmpty>No items found.</CommandEmpty>
                         <CommandGroup heading="Products">
                           {filteredItems.map((item) => (
@@ -614,11 +633,12 @@ export function CreatePODialog({
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[50%]">Item</TableHead>
-                        <TableHead className="w-[15%] text-center">Qty</TableHead>
+                        <TableHead className="w-[40%]">Item</TableHead>
+                        <TableHead className="w-[10%] text-center">Qty</TableHead>
                         <TableHead className="w-[15%] text-right">Unit Cost</TableHead>
+                        <TableHead className="w-[12%] text-right">Tax</TableHead>
                         <TableHead className="w-[15%] text-right">Line Total</TableHead>
-                        <TableHead className="w-[5%]"></TableHead>
+                        <TableHead className="w-[8%]"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -651,13 +671,27 @@ export function CreatePODialog({
                                 step="0.01"
                                 value={line.unitCost}
                                 onChange={(e) => handleUpdateLineUnitCost(line.id, parseFloat(e.target.value) || 0)}
-                                className="w-24 text-right"
+                                className="w-20 text-right"
                                 data-testid={`input-cost-${line.id}`}
                               />
                             </div>
                           </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <span className="text-muted-foreground">$</span>
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={line.taxAmount}
+                                onChange={(e) => handleUpdateLineTax(line.id, parseFloat(e.target.value) || 0)}
+                                className="w-16 text-right"
+                                data-testid={`input-tax-${line.id}`}
+                              />
+                            </div>
+                          </TableCell>
                           <TableCell className="text-right font-medium">
-                            {formatCurrency(line.qtyOrdered * line.unitCost)}
+                            {formatCurrency(line.qtyOrdered * line.unitCost + line.taxAmount)}
                           </TableCell>
                           <TableCell>
                             <Button

@@ -64,6 +64,7 @@ interface DraftLineItem {
   name: string;
   qtyOrdered: number;
   unitCost: number;
+  taxAmount: number;
 }
 
 interface POWithLines extends PurchaseOrder {
@@ -158,6 +159,7 @@ export function EditPODialog({
           name: line.itemName || "",
           qtyOrdered: line.qtyOrdered,
           unitCost: line.unitCost,
+          taxAmount: line.taxAmount || 0,
         }));
         setLineItems(mappedLines);
       } else {
@@ -179,11 +181,15 @@ export function EditPODialog({
     return lineItems.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
   }, [lineItems]);
 
+  const lineTaxTotal = useMemo(() => {
+    return lineItems.reduce((sum, line) => sum + (line.taxAmount || 0), 0);
+  }, [lineItems]);
+
   const total = useMemo(() => {
     const shipping = parseFloat(shippingCost) || 0;
     const other = parseFloat(otherFees) || 0;
-    return subtotal + shipping + other;
-  }, [subtotal, shippingCost, otherFees]);
+    return subtotal + lineTaxTotal + shipping + other;
+  }, [subtotal, lineTaxTotal, shippingCost, otherFees]);
 
   const isValid = useMemo(() => {
     if (!supplierId) return false;
@@ -234,6 +240,7 @@ export function EditPODialog({
           itemId: line.itemId,
           qtyOrdered: line.qtyOrdered,
           unitCost: line.unitCost,
+          taxAmount: line.taxAmount || 0,
         })),
       };
 
@@ -288,6 +295,7 @@ export function EditPODialog({
         name: item.name,
         qtyOrdered: 1,
         unitCost: 0,
+        taxAmount: 0,
       };
       setLineItems(prev => [...prev, newLine]);
     }
@@ -306,6 +314,13 @@ export function EditPODialog({
     if (cost < 0) return;
     setLineItems(prev => prev.map(l => 
       l.id === lineId ? { ...l, unitCost: cost } : l
+    ));
+  }, []);
+
+  const handleUpdateLineTax = useCallback((lineId: string, tax: number) => {
+    if (tax < 0) return;
+    setLineItems(prev => prev.map(l => 
+      l.id === lineId ? { ...l, taxAmount: tax } : l
     ));
   }, []);
 
@@ -489,15 +504,15 @@ export function EditPODialog({
                           Add Item
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[400px] p-0" align="end">
-                        <Command>
+                      <PopoverContent className="w-[400px] p-0 max-h-[400px]" align="end">
+                        <Command className="max-h-[400px]">
                           <CommandInput 
                             placeholder="Search by SKU or name..." 
                             value={productSearchQuery}
                             onValueChange={setProductSearchQuery}
                             data-testid="input-edit-product-search"
                           />
-                          <CommandList className="max-h-[300px] overflow-y-auto">
+                          <CommandList className="max-h-[300px] overflow-y-auto overflow-x-hidden">
                             <CommandEmpty>No items found.</CommandEmpty>
                             <CommandGroup heading="Products">
                               {filteredItems.map((item) => (
@@ -536,11 +551,12 @@ export function EditPODialog({
                       <Table>
                         <TableHeader>
                           <TableRow>
-                            <TableHead className="w-[50%]">Item</TableHead>
-                            <TableHead className="w-[15%] text-center">Qty</TableHead>
+                            <TableHead className="w-[40%]">Item</TableHead>
+                            <TableHead className="w-[10%] text-center">Qty</TableHead>
                             <TableHead className="w-[15%] text-right">Unit Cost</TableHead>
+                            <TableHead className="w-[12%] text-right">Tax</TableHead>
                             <TableHead className="w-[15%] text-right">Line Total</TableHead>
-                            <TableHead className="w-[5%]"></TableHead>
+                            <TableHead className="w-[8%]"></TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -573,13 +589,27 @@ export function EditPODialog({
                                     step="0.01"
                                     value={line.unitCost}
                                     onChange={(e) => handleUpdateLineUnitCost(line.id, parseFloat(e.target.value) || 0)}
-                                    className="w-24 text-right"
+                                    className="w-20 text-right"
                                     data-testid={`edit-input-cost-${line.id}`}
                                   />
                                 </div>
                               </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <span className="text-muted-foreground">$</span>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={line.taxAmount}
+                                    onChange={(e) => handleUpdateLineTax(line.id, parseFloat(e.target.value) || 0)}
+                                    className="w-16 text-right"
+                                    data-testid={`edit-input-tax-${line.id}`}
+                                  />
+                                </div>
+                              </TableCell>
                               <TableCell className="text-right font-medium">
-                                {formatCurrency(line.qtyOrdered * line.unitCost)}
+                                {formatCurrency(line.qtyOrdered * line.unitCost + line.taxAmount)}
                               </TableCell>
                               <TableCell>
                                 <Button
@@ -642,6 +672,10 @@ export function EditPODialog({
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Subtotal ({lineItems.length} items)</span>
                       <span data-testid="text-edit-subtotal">{formatCurrency(subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Tax</span>
+                      <span data-testid="text-edit-tax">{formatCurrency(lineTaxTotal)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Shipping</span>

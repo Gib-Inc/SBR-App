@@ -401,7 +401,8 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
   
   // Pricing
   unitCost: real("unit_cost").notNull().default(0),
-  lineTotal: real("line_total").notNull().default(0), // qtyOrdered * unitCost
+  taxAmount: real("tax_amount").notNull().default(0), // Manual tax input per line
+  lineTotal: real("line_total").notNull().default(0), // qtyOrdered * unitCost + taxAmount
   
   // Per-line dates
   expectedArrivalDate: timestamp("expected_arrival_date"),

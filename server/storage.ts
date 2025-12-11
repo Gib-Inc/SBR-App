@@ -4805,26 +4805,32 @@ export class PostgresStorage implements IStorage {
     const lines = await this.getPurchaseOrderLinesByPOId(purchaseOrderId);
     
     let subtotal = 0;
+    let lineTaxTotal = 0;
     let totalItemsOrdered = 0;
     for (const line of lines) {
-      const lineTotal = Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
+      const taxAmount = Number(line.taxAmount) || 0;
+      const lineTotal = Math.round(((line.qtyOrdered || 0) * (line.unitCost || 0) + taxAmount) * 100) / 100;
       if (lineTotal !== line.lineTotal) {
         await this.updatePurchaseOrderLine(line.id, { lineTotal, updatedAt: new Date() });
       }
-      subtotal += lineTotal;
+      subtotal += Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
+      lineTaxTotal += taxAmount;
       totalItemsOrdered += line.qtyOrdered || 0;
     }
     subtotal = Math.round(subtotal * 100) / 100;
+    lineTaxTotal = Math.round(lineTaxTotal * 100) / 100;
     
     const po = await this.getPurchaseOrder(purchaseOrderId);
     if (!po) return undefined;
     
     const shippingCost = po.shippingCost || 0;
-    const taxesAmount = po.taxes || 0;
+    // Use line tax total if available, otherwise use PO-level taxes
+    const taxesAmount = lineTaxTotal > 0 ? lineTaxTotal : (po.taxes || 0);
     const total = Math.round((subtotal + shippingCost + taxesAmount) * 100) / 100;
     
     return this.updatePurchaseOrder(purchaseOrderId, {
       subtotal,
+      taxes: taxesAmount,
       total,
       totalItemsOrdered,
       updatedAt: new Date(),

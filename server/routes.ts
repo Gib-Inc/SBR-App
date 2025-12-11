@@ -8573,6 +8573,11 @@ Notes: ${po.notes || 'None'}
             }
           }
           
+          const taxAmount = Math.round((Number(line.taxAmount) || 0) * 100) / 100;
+          const unitCost = Number(line.unitCost) || 0;
+          const qtyOrdered = Number(line.quantity) || Number(line.qtyOrdered) || 1;
+          const lineTotal = Math.round((qtyOrdered * unitCost + taxAmount) * 100) / 100;
+          
           const validatedLine = insertPurchaseOrderLineSchema.parse({
             ...line,
             purchaseOrderId: purchaseOrder.id,
@@ -8582,6 +8587,8 @@ Notes: ${po.notes || 'None'}
             // Ensure itemName and sku are properly set from item record
             itemName: line.itemName || item?.name || 'Unknown Item',
             sku: line.sku || item?.sku || null,
+            taxAmount,
+            lineTotal,
           });
           await storage.createPurchaseOrderLine(validatedLine);
         }
@@ -9165,7 +9172,8 @@ Notes: ${po.notes || 'None'}
           const item = await storage.getItem(line.itemId);
           if (!item) continue;
 
-          const lineTotal = Math.round((line.qtyOrdered * line.unitCost) * 100) / 100;
+          const taxAmount = Math.round((Number(line.taxAmount) || 0) * 100) / 100;
+          const lineTotal = Math.round((line.qtyOrdered * line.unitCost + taxAmount) * 100) / 100;
 
           if (line.id && existingLineIds.has(line.id)) {
             // Update existing line
@@ -9175,6 +9183,7 @@ Notes: ${po.notes || 'None'}
               itemName: item.name,
               qtyOrdered: line.qtyOrdered,
               unitCost: Math.round((Number(line.unitCost) || 0) * 100) / 100,
+              taxAmount,
               lineTotal,
             });
           } else {
@@ -9186,6 +9195,7 @@ Notes: ${po.notes || 'None'}
               itemName: item.name,
               qtyOrdered: line.qtyOrdered,
               unitCost: Math.round((Number(line.unitCost) || 0) * 100) / 100,
+              taxAmount,
               lineTotal,
               qtyReceived: 0,
             });

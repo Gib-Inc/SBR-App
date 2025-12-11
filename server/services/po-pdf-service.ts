@@ -163,11 +163,12 @@ export class POPdfService {
     const startY = doc.y;
     const colX = {
       item: 50,
-      sku: 180,
-      qty: 280,
-      unit: 330,
-      price: 400,
-      total: 480,
+      sku: 165,
+      qty: 255,
+      unit: 295,
+      price: 345,
+      tax: 415,
+      total: 485,
     };
 
     doc.fillColor("#F3F4F6");
@@ -180,6 +181,7 @@ export class POPdfService {
     doc.text("Qty", colX.qty, startY + 5);
     doc.text("Unit", colX.unit, startY + 5);
     doc.text("Unit Price", colX.price, startY + 5);
+    doc.text("Tax", colX.tax, startY + 5);
     doc.text("Total", colX.total, startY + 5);
 
     let y = startY + 25;
@@ -198,8 +200,8 @@ export class POPdfService {
       }
 
       const itemName = line.itemName || `Item #${line.itemId}`;
-      doc.text(itemName.substring(0, 25), colX.item + 5, y);
-      doc.text(line.sku || "-", colX.sku, y);
+      doc.text(itemName.substring(0, 20), colX.item + 5, y);
+      doc.text((line.sku || "-").substring(0, 12), colX.sku, y);
       doc.text(line.qtyOrdered.toString(), colX.qty, y);
       doc.text(line.unitOfMeasure || "EA", colX.unit, y);
       doc.text(
@@ -207,7 +209,9 @@ export class POPdfService {
         colX.price,
         y
       );
-      const lineTotal = Number(line.lineTotal) || Number(line.qtyOrdered) * Number(line.unitCost) || 0;
+      const taxAmount = Number((line as any).taxAmount) || 0;
+      doc.text(`$${taxAmount.toFixed(2)}`, colX.tax, y);
+      const lineTotal = Number(line.lineTotal) || (Number(line.qtyOrdered) * Number(line.unitCost) + taxAmount) || 0;
       doc.text(`$${lineTotal.toFixed(2)}`, colX.total, y);
 
       y += 18;

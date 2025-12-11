@@ -6544,9 +6544,17 @@ Notes: ${po.notes || 'None'}
   // ============================================================================
 
   // Shippo - Test Connection
-  app.post("/api/integrations/shippo/test", requireAuth, async (_req: Request, res: Response) => {
+  app.post("/api/integrations/shippo/test", requireAuth, async (req: Request, res: Response) => {
     try {
-      const config = await storage.getIntegrationConfigByProvider("SHIPPO");
+      const userId = req.session.userId;
+      if (!userId) {
+        return res.json({
+          success: false,
+          message: "Not authenticated"
+        });
+      }
+
+      const config = await storage.getIntegrationConfig(userId, "SHIPPO");
       
       if (!config || !config.apiKey) {
         return res.json({

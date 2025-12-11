@@ -2718,6 +2718,67 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Seed Katana suppliers - Upserts real supplier records from Katana system
+  // Can be run multiple times safely - will not create duplicates
+  // IMPORTANT: Contact data is placeholder and must be verified/updated before live use
+  app.post("/api/suppliers/seed-katana", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const katanaSuppliers = [
+        { name: "PEDNAR" },
+        { name: "AMAZON" },
+        { name: "ACU-FORM PLASTICS, INC" },
+        { name: "MCMASTER-CARR" },
+        { name: "HOME DEPOT" },
+        { name: "FX INDUSTRIES" },
+        { name: "SILVER FOX LLC" },
+        { name: "LISTON METALWORKS, LLC" },
+        { name: "AUSTI ENTERPRISES" },
+      ];
+      
+      const existingSuppliers = await storage.getAllSuppliers();
+      const results: { name: string; action: 'created' | 'updated' | 'skipped' }[] = [];
+      
+      for (const katanaSupplier of katanaSuppliers) {
+        const existing = existingSuppliers.find(
+          s => s.name.toUpperCase() === katanaSupplier.name.toUpperCase()
+        );
+        
+        if (existing) {
+          results.push({ name: katanaSupplier.name, action: 'skipped' });
+        } else {
+          await storage.createSupplier({
+            name: katanaSupplier.name,
+            contactName: "Purchasing Department",
+            email: null,
+            phone: null,
+            streetAddress: null,
+            city: null,
+            stateRegion: null,
+            postalCode: null,
+            country: null,
+            notes: "Migrated from Katana. Contact details need to be updated.",
+            paymentTerms: null,
+          });
+          results.push({ name: katanaSupplier.name, action: 'created' });
+        }
+      }
+      
+      const created = results.filter(r => r.action === 'created').length;
+      const skipped = results.filter(r => r.action === 'skipped').length;
+      
+      console.log(`[Suppliers] Katana seed complete: ${created} created, ${skipped} already existed`);
+      
+      res.json({
+        success: true,
+        message: `Seeded ${created} new suppliers, ${skipped} already existed`,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[Suppliers] Katana seed error:", error);
+      res.status(500).json({ error: error.message || "Failed to seed Katana suppliers" });
+    }
+  });
+
   // Supplier Items
   app.get("/api/supplier-items", requireAuth, async (req: Request, res: Response) => {
     try {

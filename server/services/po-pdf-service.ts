@@ -121,13 +121,12 @@ export class POPdfService {
     doc.font("Helvetica-Bold").fontSize(10);
     doc.text("FROM:", leftCol + 10, boxY);
     doc.font("Helvetica").fontSize(9);
-    doc.text(data.po.buyerCompanyName || "Company Name", leftCol + 10, boxY + 15);
-    if (data.po.buyerAddress) {
-      const addrLines = data.po.buyerAddress.split("\n");
-      addrLines.forEach((line, idx) => {
-        doc.text(line, leftCol + 10, boxY + 30 + idx * 12);
-      });
-    }
+    // StickerBurr company info (hardcoded as system of record)
+    doc.text("Sticker Burr Roller", leftCol + 10, boxY + 15);
+    doc.text("1020 W Utah Ave", leftCol + 10, boxY + 27);
+    doc.text("Hildale, UT 84784", leftCol + 10, boxY + 39);
+    doc.text("1-435-383-4377", leftCol + 10, boxY + 51);
+    doc.text("stickerburrroller@gmail.com", leftCol + 10, boxY + 63);
 
     doc.font("Helvetica-Bold").fontSize(10);
     doc.text("TO:", rightCol + 10, boxY);

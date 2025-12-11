@@ -8579,6 +8579,9 @@ Notes: ${po.notes || 'None'}
             aiRecommendationId: recommendationId || null,
             recommendedQtyAtOrderTime: recommendedQty || null,
             finalOrderedQty: line.quantity,
+            // Ensure itemName and sku are properly set from item record
+            itemName: line.itemName || item?.name || 'Unknown Item',
+            sku: line.sku || item?.sku || null,
           });
           await storage.createPurchaseOrderLine(validatedLine);
         }
@@ -8776,6 +8779,9 @@ Notes: ${po.notes || 'None'}
           aiRecommendationId: recommendationId || null,
           recommendedQtyAtOrderTime: recommendedQty,
           finalOrderedQty: item.quantity,
+          // Ensure itemName and sku are properly set from item record
+          itemName: item.itemName || itemRecord?.name || 'Unknown Item',
+          sku: item.sku || itemRecord?.sku || null,
         });
       }
       
@@ -9700,12 +9706,12 @@ Notes: ${po.notes || 'None'}
         orderDate: po.orderDate,
         expectedDate: po.expectedDate,
         supplierName: supplier?.name || po.supplierName || 'Unknown',
-        buyerCompanyName: po.buyerCompanyName,
+        buyerCompanyName: po.buyerCompanyName || 'Sticker Burr Roller',
         total: po.total,
         currency: po.currency,
         acknowledgementStatus: po.acknowledgementStatus,
         lines: lines.map(line => ({
-          itemName: line.itemName,
+          itemName: line.itemName || 'Unknown Item',
           sku: line.sku,
           qtyOrdered: line.qtyOrdered,
           unitCost: line.unitCost,

@@ -23,15 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  RadioGroup,
-  RadioGroupItem,
-} from "@/components/ui/radio-group";
-import {
   Plus,
   Minus,
   Send,
   Mail,
-  MessageSquare,
   Building2,
   Package,
   AlertTriangle,
@@ -87,7 +82,6 @@ export function CreatePOSheet({
   const [supplierPhone, setSupplierPhone] = useState("");
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sendVia, setSendVia] = useState<"EMAIL" | "SMS">("EMAIL");
   const [notes, setNotes] = useState("");
   const [generatedContent, setGeneratedContent] = useState<{
     subject: string;
@@ -190,7 +184,6 @@ export function CreatePOSheet({
     setSupplierPhone("");
     setSelectedItems([]);
     setSearchQuery("");
-    setSendVia("EMAIL");
     setNotes("");
     setGeneratedContent(null);
     setHasInitializedPrefill(false);
@@ -268,7 +261,7 @@ export function CreatePOSheet({
       supplierEmail: supplierEmail || selectedSupplier?.email || undefined,
       supplierPhone: supplierPhone || selectedSupplier?.phone || undefined,
       items: selectedItems,
-      sendVia,
+      sendVia: "EMAIL",
       notes,
       isNewSupplier,
     });
@@ -571,36 +564,6 @@ export function CreatePOSheet({
               );
             })}
           </div>
-        </div>
-
-        <div className="space-y-3">
-          <Label>Send via:</Label>
-          <RadioGroup
-            value={sendVia}
-            onValueChange={(value) => setSendVia(value as "EMAIL" | "SMS")}
-            className="flex gap-4"
-          >
-            <div className="flex items-center gap-2">
-              <RadioGroupItem value="EMAIL" id="send-email" disabled={!email} data-testid="radio-send-email" />
-              <Label
-                htmlFor="send-email"
-                className={`flex items-center gap-2 ${!email ? 'opacity-50' : ''}`}
-              >
-                <Mail className="h-4 w-4" />
-                Email
-              </Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <RadioGroupItem value="SMS" id="send-sms" disabled={!phone} data-testid="radio-send-sms" />
-              <Label
-                htmlFor="send-sms"
-                className={`flex items-center gap-2 ${!phone ? 'opacity-50' : ''}`}
-              >
-                <MessageSquare className="h-4 w-4" />
-                SMS
-              </Label>
-            </div>
-          </RadioGroup>
         </div>
 
         <div className="space-y-2">

@@ -1,0 +1,87 @@
+You’re editing my “AgentSeniorStack” inventory / PO app in this Replit project.
+
+I need you to FIX the “Add Item” menu on the New Purchase Order modal so that:
+
+1) The small pop-up panel is SCROLLABLE.
+2) It pulls ONLY the items from the same “Stock Inventory” data table used on Products → Stock Inventory.
+
+Replit has tried this several times and it keeps getting it wrong, so follow these instructions carefully and do not stop early.
+
+--------------------------------------------------
+STEP 1 – Use the correct data source
+--------------------------------------------------
+
+1. Find the component that renders the Products → “Stock Inventory” data table.
+   - You can search the codebase for the literal text `Stock Inventory` and locate the Products page component that shows that table and the “Stock Inventory (N items)” label.
+
+2. Identify the function / hook / query that actually loads that data (for example a call such as `getStockInventory`, `useStockInventory`, `stockInventoryQuery`, `stockInventory.findMany`, etc.).
+   - This is the **single source of truth** for stock items.
+
+3. Find the component that renders the “Add Item” pop-up in the New Purchase Order flow.
+   - Search for the “Add Item” button and the “Search by SKU or name…” placeholder you see in the UI.
+   - This component is what shows the “Stock Inventory (17 items)” list when the modal is open.
+
+4. Replace any ad-hoc / duplicated product fetching in the “Add Item” component with the **same data source** used by the Products → Stock Inventory table:
+   - Import and call the same hook/service/query you found in step 2.
+   - Ensure the list is filtered the same way as the Stock Inventory table (e.g., only active SKUs that are actually in stock inventory, not BOM-only items or archived products).
+   - The array used to render the items in this menu must be exactly the same array (or an equivalent mapping) that powers the Stock Inventory table.
+
+5. Keep search behavior:
+   - The search box in the Add Item menu must filter over the SKUs and names from the Stock Inventory data (no extra or missing products).
+
+--------------------------------------------------
+STEP 2 – Make the “Add Item” items list scrollable
+--------------------------------------------------
+
+6. In the “Add Item” component, locate the element that directly contains the repeated list of stock items (e.g., a `<div>` that maps over `stockItems`, or a `List`/`Table` component).
+
+7. Wrap that list in a scroll container with a fixed max height and vertical scroll:
+   - For example (React + CSS/Tailwind style; adapt to the UI library you’re using):
+
+     ```jsx
+     <div className="add-item-list-container">
+       {items.map(...)}
+     </div>
+     ```
+
+   - And in CSS (or Tailwind className equivalent), ensure:
+
+     - `max-height` is limited (e.g. `max-height: 400px;` or `max-height: min(60vh, 420px);`)
+     - `overflow-y: auto;`
+     - `overflow-x: hidden;`
+
+   - If you’re using a design system component (like a `ScrollArea`, `Table` with `scroll={{ y: ... }}`, etc.), configure it so that:
+     - The BODY of the items list scrolls.
+     - The header (search bar, “Stock Inventory (N items)” label) stays fixed and visible.
+
+8. IMPORTANT: make sure you apply scrolling on the **inner list container**, not the entire modal:
+   - The overall New PO modal should NOT scroll horizontally or break layout.
+   - Only the items list block inside the Add Item pop-up should get a scrollbar when there are more items than fit in the max height.
+
+9. Test behavior:
+   - Add enough products in Products → Stock Inventory so that the list would exceed the max height.
+   - Open New Purchase Order → click “Add Item”.
+   - Expected:
+     - The Add Item pop-up stays the same size.
+     - A vertical scrollbar appears within the items list area.
+     - You can scroll down to see **all** stock items.
+     - The count (“Stock Inventory (N items)”) matches the number of records in Products → Stock Inventory.
+     - No extra non-inventory items appear.
+
+--------------------------------------------------
+STEP 3 – Clean up and verify
+--------------------------------------------------
+
+10. Remove any previous attempts that:
+    - Fetched products from a different table or dummy list.
+    - Applied `overflow-y: auto` on the wrong element (such as `<body>` or the whole modal).
+
+11. Keep all existing functionality:
+    - Selecting an item still works and adds the correct product to the PO line items.
+    - Search still filters the same Stock Inventory list.
+    - No regressions on mobile/responsive behavior.
+
+12. Add a short code comment near the list container explaining:
+    - “This list uses the same Stock Inventory data as Products → Stock Inventory and is constrained with a scrollable container so all items are visible.”
+
+Only change what’s needed in the Products Stock Inventory data loading and the Add Item menu component; don’t refactor unrelated parts of the app.

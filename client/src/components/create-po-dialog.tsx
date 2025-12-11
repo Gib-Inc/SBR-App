@@ -595,45 +595,54 @@ export function CreatePODialog({
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[450px] p-0" align="end">
-                    <div className="flex flex-col max-h-[400px]">
-                      <div className="flex items-center border-b px-3 py-2 shrink-0">
-                        <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
-                        <Input
-                          placeholder="Search by SKU or name..."
-                          value={productSearchQuery}
-                          onChange={(e) => setProductSearchQuery(e.target.value)}
-                          className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                          data-testid="input-product-search"
-                        />
-                      </div>
-                      <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground shrink-0">
-                        Stock Inventory ({filteredItems.length} items)
-                      </div>
-                      <div className="overflow-y-auto flex-1 p-1">
-                        {filteredItems.length === 0 ? (
-                          <div className="py-6 text-center text-sm text-muted-foreground">
-                            No items found in Stock Inventory.
-                          </div>
-                        ) : (
-                          filteredItems.map((item) => (
-                            <div
-                              key={item.id}
-                              onClick={() => handleAddItem(item)}
-                              className="relative flex cursor-pointer gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
-                              data-testid={`item-option-${item.id}`}
-                            >
-                              <Package className="h-4 w-4 text-muted-foreground shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <span className="font-medium">{item.sku}</span>
-                                <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
-                              </div>
-                              <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                                Stock: {item.currentStock ?? 0}
-                              </span>
+                    {/* Search header - fixed at top */}
+                    <div className="flex items-center border-b px-3 py-2">
+                      <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                      <Input
+                        placeholder="Search by SKU or name..."
+                        value={productSearchQuery}
+                        onChange={(e) => setProductSearchQuery(e.target.value)}
+                        className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                        data-testid="input-product-search"
+                      />
+                    </div>
+                    {/* Count header - fixed */}
+                    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground border-b">
+                      Stock Inventory ({filteredItems.length} items)
+                    </div>
+                    {/* 
+                      Scrollable items list container.
+                      This list uses the same Stock Inventory data as Products → Stock Inventory 
+                      (items where type === "component") and is constrained with a scrollable 
+                      container so all items are visible.
+                    */}
+                    <div 
+                      className="p-1"
+                      style={{ maxHeight: '320px', overflowY: 'auto', overflowX: 'hidden' }}
+                    >
+                      {filteredItems.length === 0 ? (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          No items found in Stock Inventory.
+                        </div>
+                      ) : (
+                        filteredItems.map((item) => (
+                          <div
+                            key={item.id}
+                            onClick={() => handleAddItem(item)}
+                            className="relative flex cursor-pointer gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+                            data-testid={`item-option-${item.id}`}
+                          >
+                            <Package className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <span className="font-medium">{item.sku}</span>
+                              <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
                             </div>
-                          ))
-                        )}
-                      </div>
+                            <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                              Stock: {item.currentStock ?? 0}
+                            </span>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </PopoverContent>
                 </Popover>

@@ -4762,8 +4762,8 @@ export class PostgresStorage implements IStorage {
     if (!po) return undefined;
     
     const shippingCost = po.shippingCost || 0;
-    const otherFees = po.otherFees || 0;
-    const total = Math.round((subtotal + shippingCost + otherFees) * 100) / 100;
+    const taxesAmount = po.taxes || 0;
+    const total = Math.round((subtotal + shippingCost + taxesAmount) * 100) / 100;
     
     return this.updatePurchaseOrder(purchaseOrderId, {
       subtotal,

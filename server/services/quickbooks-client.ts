@@ -1439,6 +1439,122 @@ export class QuickBooksClient {
       return '1';
     }
   }
+
+  /**
+   * Look up an item by SKU and return purchase cost + preferred vendor info
+   * This ensures the cost and vendor data come from the same QuickBooks record
+   */
+  async lookupItemBySku(sku: string): Promise<{
+    success: boolean;
+    item?: {
+      quickbooksItemId: string;
+      name: string;
+      sku: string;
+      purchaseCost: number | null;
+      unitPrice: number | null;
+      type: string;
+    };
+    vendor?: {
+      quickbooksVendorId: string;
+      name: string;
+      email: string | null;
+      phone: string | null;
+    };
+    error?: string;
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, error: 'QuickBooks not connected' };
+      }
+
+      // Search for item by SKU - QuickBooks uses doubled single quotes for escaping
+      const escapedSku = sku.replace(/'/g, "''");
+      const itemQuery = encodeURIComponent(
+        `SELECT * FROM Item WHERE Sku = '${escapedSku}' AND Active = true`
+      );
+      
+      const itemResult = await this.apiRequest<{
+        QueryResponse: {
+          Item?: Array<{
+            Id: string;
+            Name: string;
+            Sku?: string;
+            Type: string;
+            PurchaseCost?: number;
+            UnitPrice?: number;
+            PrefVendorRef?: { value: string; name?: string };
+          }>;
+        };
+      }>(`/query?query=${itemQuery}`);
+
+      const qbItem = itemResult.QueryResponse?.Item?.[0];
+      if (!qbItem) {
+        return { success: false, error: `No QuickBooks item found with SKU: ${sku}` };
+      }
+
+      const result: {
+        success: boolean;
+        item: {
+          quickbooksItemId: string;
+          name: string;
+          sku: string;
+          purchaseCost: number | null;
+          unitPrice: number | null;
+          type: string;
+        };
+        vendor?: {
+          quickbooksVendorId: string;
+          name: string;
+          email: string | null;
+          phone: string | null;
+        };
+      } = {
+        success: true,
+        item: {
+          quickbooksItemId: qbItem.Id,
+          name: qbItem.Name,
+          sku: qbItem.Sku || sku,
+          purchaseCost: qbItem.PurchaseCost ?? null,
+          unitPrice: qbItem.UnitPrice ?? null,
+          type: qbItem.Type,
+        },
+      };
+
+      // If item has a preferred vendor, fetch vendor details
+      if (qbItem.PrefVendorRef?.value) {
+        try {
+          const vendorResult = await this.apiRequest<{
+            Vendor: {
+              Id: string;
+              DisplayName: string;
+              PrimaryEmailAddr?: { Address: string };
+              PrimaryPhone?: { FreeFormNumber: string };
+            };
+          }>(`/vendor/${qbItem.PrefVendorRef.value}`);
+
+          const vendor = vendorResult.Vendor;
+          result.vendor = {
+            quickbooksVendorId: vendor.Id,
+            name: vendor.DisplayName,
+            email: vendor.PrimaryEmailAddr?.Address || null,
+            phone: vendor.PrimaryPhone?.FreeFormNumber || null,
+          };
+        } catch (vendorError: any) {
+          console.warn(`[QuickBooks] Failed to fetch preferred vendor: ${vendorError.message}`);
+          // Still return the item info even if vendor lookup fails
+        }
+      }
+
+      return result;
+    } catch (error: any) {
+      console.error('[QuickBooks] Error looking up item by SKU:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to lookup item',
+      };
+    }
+  }
 }
 
 /**

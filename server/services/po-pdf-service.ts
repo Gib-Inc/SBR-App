@@ -242,10 +242,10 @@ export class POPdfService {
       );
     }
 
-    if (Number(data.po.otherFees) > 0) {
-      doc.text("Other Fees:", rightCol, y + 36);
+    if (Number(data.po.taxes) > 0) {
+      doc.text("Taxes:", rightCol, y + 36);
       doc.text(
-        `$${(Number(data.po.otherFees) || 0).toFixed(2)}`,
+        `$${(Number(data.po.taxes) || 0).toFixed(2)}`,
         valueCol,
         y + 36,
         { align: "right", width: 80 }

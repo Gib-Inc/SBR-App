@@ -83,7 +83,7 @@ export function CreatePODialog({
   const [orderDate, setOrderDate] = useState<Date>(new Date());
   const [expectedDate, setExpectedDate] = useState<Date | undefined>(undefined);
   const [shippingCost, setShippingCost] = useState<string>("0");
-  const [otherFees, setOtherFees] = useState<string>("0");
+  const [taxes, setTaxes] = useState<string>("0");
   const [lineItems, setLineItems] = useState<DraftLineItem[]>([]);
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState("");
@@ -114,9 +114,9 @@ export function CreatePODialog({
 
   const total = useMemo(() => {
     const shipping = parseFloat(shippingCost) || 0;
-    const other = parseFloat(otherFees) || 0;
-    return subtotal + shipping + other;
-  }, [subtotal, shippingCost, otherFees]);
+    const tax = parseFloat(taxes) || 0;
+    return subtotal + shipping + tax;
+  }, [subtotal, shippingCost, taxes]);
 
   const isValid = useMemo(() => {
     if (!supplierId) return false;
@@ -146,7 +146,7 @@ export function CreatePODialog({
     return Object.keys(newErrors).length === 0;
   }, [supplierId, lineItems]);
 
-  const createMutation = useMutation({
+  const createAndSendMutation = useMutation({
     mutationFn: async () => {
       if (!validateForm()) {
         throw new Error("Please fix the form errors before submitting");
@@ -157,7 +157,7 @@ export function CreatePODialog({
         orderDate: orderDate.toISOString(),
         expectedDate: expectedDate ? expectedDate.toISOString() : undefined,
         shippingCost: parseFloat(shippingCost) || 0,
-        otherFees: parseFloat(otherFees) || 0,
+        taxes: parseFloat(taxes) || 0,
         lines: lineItems.map(line => ({
           itemId: line.itemId,
           qtyOrdered: line.qtyOrdered,
@@ -165,18 +165,38 @@ export function CreatePODialog({
         })),
       };
 
-      const res = await apiRequest("POST", '/api/purchase-orders', payload);
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
+      // Step 1: Create the PO
+      const createRes = await apiRequest("POST", '/api/purchase-orders', payload);
+      if (!createRes.ok) {
+        const errorData = await createRes.json().catch(() => ({}));
         throw new Error(errorData.error || "Failed to create purchase order");
       }
-      return res.json();
+      const createdPO = await createRes.json();
+
+      // Step 2: Send the PO via email
+      const sendRes = await apiRequest("POST", `/api/purchase-orders/${createdPO.id}/send`);
+      if (!sendRes.ok) {
+        const sendError = await sendRes.json().catch(() => ({}));
+        // PO was created but send failed - still return success with warning
+        return { ...createdPO, sendError: sendError.error || "Email send failed" };
+      }
+      
+      const sendResult = await sendRes.json();
+      return { ...createdPO, sent: true, emailResult: sendResult };
     },
     onSuccess: (result: any) => {
-      toast({
-        title: "Purchase Order Created",
-        description: `PO ${result.poNumber || result.id} has been created successfully.`,
-      });
+      if (result.sendError) {
+        toast({
+          title: "PO Created (Email Failed)",
+          description: `PO ${result.poNumber} was created but email failed: ${result.sendError}. You can resend from the PO details.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Purchase Order Sent",
+          description: `PO ${result.poNumber || result.id} has been created and sent to the supplier.`,
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       if (onPOCreated && result.id) {
         onPOCreated(result.id);
@@ -186,7 +206,7 @@ export function CreatePODialog({
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to create purchase order",
+        description: error.message || "Failed to create and send purchase order",
         variant: "destructive",
       });
     },
@@ -197,14 +217,14 @@ export function CreatePODialog({
     setOrderDate(new Date());
     setExpectedDate(undefined);
     setShippingCost("0");
-    setOtherFees("0");
+    setTaxes("0");
     setLineItems([]);
     setProductSearchQuery("");
     setErrors({});
     onOpenChange(false);
   }, [onOpenChange]);
 
-  const handleAddItem = useCallback((item: Item) => {
+  const handleAddItem = useCallback(async (item: Item) => {
     const existingLine = lineItems.find(l => l.itemId === item.id);
     if (existingLine) {
       setLineItems(prev => prev.map(l => 
@@ -214,10 +234,44 @@ export function CreatePODialog({
       ));
     } else {
       const itemWithAny = item as any;
-      const defaultCost = itemWithAny.defaultPurchaseCost || 
-                          itemWithAny.primarySupplier?.unitCost || 
-                          itemWithAny.primarySupplier?.price || 
-                          0;
+      let defaultCost = itemWithAny.defaultPurchaseCost || 
+                        itemWithAny.primarySupplier?.unitCost || 
+                        itemWithAny.primarySupplier?.price || 
+                        0;
+      
+      // Try to fetch purchase cost from QuickBooks
+      try {
+        const qbResponse = await fetch(`/api/quickbooks/items/lookup/${encodeURIComponent(item.sku)}`);
+        if (qbResponse.ok) {
+          const qbData = await qbResponse.json();
+          if (qbData.success && qbData.item?.purchaseCost) {
+            defaultCost = qbData.item.purchaseCost;
+            toast({
+              title: "Price loaded from QuickBooks",
+              description: `Unit cost for ${item.sku}: $${defaultCost.toFixed(2)}`,
+            });
+            
+            // If we have vendor info and no supplier selected, suggest the vendor
+            if (qbData.vendor && !supplierId) {
+              // Find matching supplier by name
+              const matchingSupplier = suppliers.find(s => 
+                s.name.toLowerCase() === qbData.vendor.name.toLowerCase()
+              );
+              if (matchingSupplier) {
+                setSupplierId(matchingSupplier.id);
+                toast({
+                  title: "Supplier suggested",
+                  description: `${matchingSupplier.name} is the preferred vendor for this item in QuickBooks`,
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // QuickBooks lookup failed - use default cost
+        console.log('QuickBooks lookup failed, using default cost');
+      }
+      
       const newLine: DraftLineItem = {
         id: `temp-${Date.now()}`,
         itemId: item.id,
@@ -230,7 +284,7 @@ export function CreatePODialog({
     }
     setProductSearchOpen(false);
     setProductSearchQuery("");
-  }, [lineItems]);
+  }, [lineItems, supplierId, suppliers, toast]);
 
   const handleUpdateLineQty = useCallback((lineId: string, qty: number) => {
     if (qty < 1) return;
@@ -509,18 +563,18 @@ export function CreatePODialog({
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="otherFees">Other Fees</Label>
+                    <Label htmlFor="taxes">Taxes</Label>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
                       <Input
-                        id="otherFees"
+                        id="taxes"
                         type="number"
                         min="0"
                         step="0.01"
-                        value={otherFees}
-                        onChange={(e) => setOtherFees(e.target.value)}
+                        value={taxes}
+                        onChange={(e) => setTaxes(e.target.value)}
                         className="pl-7"
-                        data-testid="input-other-fees"
+                        data-testid="input-taxes"
                       />
                     </div>
                   </div>
@@ -537,8 +591,8 @@ export function CreatePODialog({
                   <span>{formatCurrency(parseFloat(shippingCost) || 0)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Other Fees</span>
-                  <span>{formatCurrency(parseFloat(otherFees) || 0)}</span>
+                  <span className="text-muted-foreground">Taxes</span>
+                  <span>{formatCurrency(parseFloat(taxes) || 0)}</span>
                 </div>
                 <div className="border-t pt-2 flex justify-between font-medium">
                   <span>Total</span>
@@ -572,23 +626,23 @@ export function CreatePODialog({
           <Button 
             variant="outline" 
             onClick={resetAndClose}
-            disabled={createMutation.isPending}
+            disabled={createAndSendMutation.isPending}
             data-testid="button-cancel"
           >
             Cancel
           </Button>
           <Button 
-            onClick={() => createMutation.mutate()}
-            disabled={!isValid || createMutation.isPending}
-            data-testid="button-save-po"
+            onClick={() => createAndSendMutation.mutate()}
+            disabled={!isValid || createAndSendMutation.isPending}
+            data-testid="button-send-po"
           >
-            {createMutation.isPending ? (
+            {createAndSendMutation.isPending ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Creating...
+                Sending...
               </>
             ) : (
-              "Save PO"
+              "Send PO"
             )}
           </Button>
         </DialogFooter>

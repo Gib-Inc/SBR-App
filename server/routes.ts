@@ -785,7 +785,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           expectedDate,
           subtotal,
           shippingCost: 0,
-          otherFees: 0,
+          taxes: 0,
           total: subtotal,
           status: 'DRAFT',
           notes: `Auto-generated from Stock Warning Banner on ${today}. Earliest stockout: ${Math.floor(earliestStockout)} days.`,
@@ -8876,7 +8876,7 @@ Notes: ${po.notes || 'None'}
         return res.status(404).json({ error: "Purchase order not found" });
       }
 
-      if ('shippingCost' in validatedUpdates || 'otherFees' in validatedUpdates) {
+      if ('shippingCost' in validatedUpdates || 'taxes' in validatedUpdates) {
         const recalculated = await storage.recalculatePOTotals(id);
         if (recalculated) {
           const lines = await storage.getPurchaseOrderLinesByPOId(id);
@@ -8894,7 +8894,7 @@ Notes: ${po.notes || 'None'}
   app.post("/api/purchase-orders/:id/update-financials", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { shippingCost, otherFees } = req.body;
+      const { shippingCost, taxes } = req.body;
       
       const po = await storage.getPurchaseOrder(id);
       if (!po) {
@@ -8905,8 +8905,8 @@ Notes: ${po.notes || 'None'}
       if (shippingCost !== undefined) {
         updates.shippingCost = Math.round((Number(shippingCost) || 0) * 100) / 100;
       }
-      if (otherFees !== undefined) {
-        updates.otherFees = Math.round((Number(otherFees) || 0) * 100) / 100;
+      if (taxes !== undefined) {
+        updates.taxes = Math.round((Number(taxes) || 0) * 100) / 100;
       }
       
       await storage.updatePurchaseOrder(id, updates);
@@ -8928,7 +8928,7 @@ Notes: ${po.notes || 'None'}
   app.put("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { supplierId, orderDate, expectedDate, shippingCost, otherFees, notes, lines } = req.body;
+      const { supplierId, orderDate, expectedDate, shippingCost, taxes, notes, lines } = req.body;
 
       const existingPO = await storage.getPurchaseOrder(id);
       if (!existingPO) {
@@ -8986,7 +8986,7 @@ Notes: ${po.notes || 'None'}
       if (orderDate) poUpdates.orderDate = new Date(orderDate);
       if (expectedDate !== undefined) poUpdates.expectedDate = expectedDate ? new Date(expectedDate) : null;
       if (shippingCost !== undefined) poUpdates.shippingCost = Math.round((Number(shippingCost) || 0) * 100) / 100;
-      if (otherFees !== undefined) poUpdates.otherFees = Math.round((Number(otherFees) || 0) * 100) / 100;
+      if (taxes !== undefined) poUpdates.taxes = Math.round((Number(taxes) || 0) * 100) / 100;
       if (notes !== undefined) poUpdates.notes = notes;
 
       await storage.updatePurchaseOrder(id, poUpdates);
@@ -13218,6 +13218,29 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error('[QuickBooks] Items fetch error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to fetch items' });
+    }
+  });
+
+  // GET /api/quickbooks/items/lookup/:sku - Look up item by SKU with purchase cost and preferred vendor
+  app.get("/api/quickbooks/items/lookup/:sku", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sku } = req.params;
+      if (!sku) {
+        return res.status(400).json({ success: false, error: 'SKU is required' });
+      }
+
+      const userId = req.user?.id || 'system';
+      const qbClient = new QuickBooksClient(storage, userId);
+      const result = await qbClient.lookupItemBySku(sku);
+      
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('[QuickBooks] Item lookup error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to lookup item' });
     }
   });
 

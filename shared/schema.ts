@@ -224,7 +224,7 @@ export const purchaseOrders = pgTable("purchase_orders", {
   // Financial Summary
   subtotal: real("subtotal").notNull().default(0),
   shippingCost: real("shipping_cost").notNull().default(0),
-  otherFees: real("other_fees").notNull().default(0),
+  taxes: real("taxes").notNull().default(0),
   total: real("total").notNull().default(0),
   
   // Issue & Refund Tracking

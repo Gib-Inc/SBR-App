@@ -8371,6 +8371,14 @@ Notes: ${po.notes || 'None'}
         poData.shipToLocation = 'HILDALE';
       }
       
+      // Convert date strings to Date objects for Zod validation
+      if (poData.orderDate && typeof poData.orderDate === 'string') {
+        poData.orderDate = new Date(poData.orderDate);
+      }
+      if (poData.expectedDate && typeof poData.expectedDate === 'string') {
+        poData.expectedDate = new Date(poData.expectedDate);
+      }
+      
       const validatedPO = insertPurchaseOrderSchema.parse(poData);
       const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
       createdPOId = purchaseOrder.id;

@@ -1,0 +1,54 @@
+You’re editing my “AgentSeniorStack” inventory/manufacturing app in this Replit project.
+
+I want you to upgrade the **Suppliers** page so it becomes the single place where I can view and EDIT all supplier info that is used throughout the app (including the supplier dropdown on the New Purchase Order screen, e.g. the “walker test” supplier).
+
+Follow the existing stack, routing, and UI patterns already used in this project (same framework, same design system, same table components you use for Products, etc.). Don’t break any existing functionality.
+
+### Goal
+
+On the Suppliers page:
+
+1. Add a tabbed layout with two tabs:
+   - **Existing** (default selected).
+   - **Discover** (for V2, just put a centered “Coming soon – supplier discover tools” placeholder).
+
+2. Inside the **Existing** tab, add an EDITABLE data table that:
+   - Lists ALL suppliers in the system (full history) from the same Supplier model/collection that the Purchase Order screen uses for its “Supplier” dropdown.
+   - Each row should at least show:
+     - Supplier Name
+     - Contact Name
+     - Email
+     - Phone
+     - Street Address
+     - City
+     - State/Region
+     - Postal Code
+     - Country
+     - (Optionally) Notes / Payment Terms if these fields already exist in the model.
+   - Supports:
+     - Creating a new supplier (“Add Supplier” button) using the same create-supplier logic that currently exists on “+ Add Supplier Manually” in the PO flow, so there is only ONE source of truth.
+     - Editing an existing supplier (either inline or via a modal/side panel). Use whichever pattern the app already uses for editing Products or other entities to keep UX consistent.
+     - Saving changes back to the database so that if I correct the email for an existing supplier (for example, fixing the typo in the “walker test” supplier email), that new data is used everywhere in the app.
+
+3. Ensure all existing places that reference suppliers are wired to this same data:
+   - The Purchase Order “Supplier” dropdown must read from the same supplier records being shown in the Suppliers table.
+   - After editing a supplier in the table (e.g., change email or phone), any new POs created for that supplier should use the updated info automatically (no duplicate supplier records and no stale copies).
+   - If the codebase currently stores supplier info directly on PO documents as a snapshot, leave that behavior but make sure the supplier select widget always pulls its options from the updated supplier list.
+
+4. Implementation details:
+   - Add any necessary API endpoints / service functions / DB queries for:
+     - Listing suppliers with pagination/search (if appropriate).
+     - Creating a supplier.
+     - Updating a supplier.
+   - Reuse existing validation rules for supplier fields. If none exist yet, add basic validation for email format and required name fields.
+   - Add a simple search/filter box above the table that filters suppliers by name or email (following whatever search pattern you use on other list pages).
+
+5. Safety / logging:
+   - When a supplier is updated, log a concise message to the server console such as:
+     `Updated supplier <id> (<name>) – fields changed: ...`
+   - Do NOT remove or refactor unrelated modules; keep the change localized to the Suppliers page + any necessary supplier service/API code.
+
+After implementing, make sure:
+- Navigating to “Suppliers” shows the two tabs, defaulting to “Existing”.
+- The “Existing” tab lists the same suppliers that appear in the New Purchase Order supplier dropdown.
+- Editing the “walker test” supplier’s email in the table causes new POs created with that supplier to use the corrected email.

@@ -8422,12 +8422,13 @@ Notes: ${po.notes || 'None'}
               });
             }
           } else {
-            // Fall back to latest recommendation lookup
-            const latestRecommendation = await storage.getLatestAIRecommendationForItem(
-              line.itemId,
-              location
-            );
-            if (latestRecommendation) {
+            // Fall back to latest recommendation lookup - get all and find most recent active one
+            const recs = await storage.getAIRecommendationsByItem(line.itemId);
+            const activeRecs = recs.filter(r => r.status === 'NEW' || r.status === 'ACCEPTED');
+            if (activeRecs.length > 0) {
+              // Sort by createdAt descending and take first
+              activeRecs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+              const latestRecommendation = activeRecs[0];
               recommendationId = latestRecommendation.id;
               recommendedQty = latestRecommendation.recommendedQty;
             }

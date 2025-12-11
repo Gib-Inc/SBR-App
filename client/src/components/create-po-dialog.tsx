@@ -29,14 +29,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
   Table,
   TableBody,
   TableCell,
@@ -602,38 +594,49 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[450px] p-0 h-[400px]" align="end">
-                    <Command className="h-full w-full flex flex-col overflow-hidden">
-                      <CommandInput 
-                        placeholder="Search by SKU or name..." 
-                        value={productSearchQuery}
-                        onValueChange={setProductSearchQuery}
-                        data-testid="input-product-search"
-                      />
-                      <CommandList className="flex-1 overflow-y-auto">
-                        <CommandEmpty>No items found in Stock Inventory.</CommandEmpty>
-                        <CommandGroup heading={`Stock Inventory (${filteredItems.length} items)`}>
-                          {filteredItems.map((item) => (
-                            <CommandItem
-                              key={item.id}
-                              value={`${item.sku} ${item.name}`}
-                              onSelect={() => handleAddItem(item)}
-                              className="cursor-pointer"
-                              data-testid={`item-option-${item.id}`}
-                            >
-                              <Package className="mr-2 h-4 w-4 text-muted-foreground" />
-                              <div className="flex-1 min-w-0">
-                                <span className="font-medium">{item.sku}</span>
-                                <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
+                  <PopoverContent className="w-[450px] p-0" align="end">
+                    <div className="flex flex-col">
+                      <div className="flex items-center border-b px-3 py-2">
+                        <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                        <Input
+                          placeholder="Search by SKU or name..."
+                          value={productSearchQuery}
+                          onChange={(e) => setProductSearchQuery(e.target.value)}
+                          className="h-8 border-0 p-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                          data-testid="input-product-search"
+                        />
+                      </div>
+                      <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+                        Stock Inventory ({filteredItems.length} items)
+                      </div>
+                      <ScrollArea className="h-[300px]">
+                        <div className="p-1">
+                          {filteredItems.length === 0 ? (
+                            <div className="py-6 text-center text-sm text-muted-foreground">
+                              No items found in Stock Inventory.
+                            </div>
+                          ) : (
+                            filteredItems.map((item) => (
+                              <div
+                                key={item.id}
+                                onClick={() => handleAddItem(item)}
+                                className="relative flex cursor-pointer gap-2 select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+                                data-testid={`item-option-${item.id}`}
+                              >
+                                <Package className="h-4 w-4 text-muted-foreground shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <span className="font-medium">{item.sku}</span>
+                                  <span className="ml-2 text-muted-foreground truncate">{item.name}</span>
+                                </div>
+                                <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                                  Stock: {item.currentStock ?? 0}
+                                </span>
                               </div>
-                              <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                                Stock: {item.currentStock ?? 0}
-                              </span>
-                            </CommandItem>
-                          ))}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
+                            ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </div>
                   </PopoverContent>
                 </Popover>
               </div>

@@ -497,7 +497,7 @@ export function EditPODialog({
                             onValueChange={setProductSearchQuery}
                             data-testid="input-edit-product-search"
                           />
-                          <CommandList>
+                          <CommandList className="max-h-[300px] overflow-y-auto">
                             <CommandEmpty>No items found.</CommandEmpty>
                             <CommandGroup heading="Products">
                               {filteredItems.map((item) => (

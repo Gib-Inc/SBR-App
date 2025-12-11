@@ -5317,7 +5317,7 @@ export default function AIAgent() {
       </div>
 
       <Tabs defaultValue="data-sources" className="w-full">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="data-sources" data-testid="tab-data-sources">
             Data Sources
           </TabsTrigger>
@@ -5326,9 +5326,6 @@ export default function AIAgent() {
           </TabsTrigger>
           <TabsTrigger value="llm-config" data-testid="tab-llm-config">
             LLM Config
-          </TabsTrigger>
-          <TabsTrigger value="ai-recommendations" data-testid="tab-ai-recommendations-main">
-            AI Recommendations
           </TabsTrigger>
           <TabsTrigger value="order-feedback" data-testid="tab-order-feedback">
             Order Feedback
@@ -5523,11 +5520,6 @@ export default function AIAgent() {
         {/* LLM Config Tab */}
         <TabsContent value="llm-config" className="space-y-4">
           <LLMConfigTab settingsData={settingsData} />
-        </TabsContent>
-
-        {/* AI Recommendations Tab - New comprehensive view */}
-        <TabsContent value="ai-recommendations" className="space-y-4">
-          <AIRecommendationsTab />
         </TabsContent>
 
         {/* Order Feedback Tab (formerly Insights) */}

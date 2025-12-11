@@ -586,15 +586,15 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[400px] p-0 max-h-[400px]" align="end">
-                    <Command className="max-h-[400px]">
+                  <PopoverContent className="w-[400px] p-0" align="end">
+                    <Command className="max-h-[400px] !overflow-visible">
                       <CommandInput 
                         placeholder="Search by SKU or name..." 
                         value={productSearchQuery}
                         onValueChange={setProductSearchQuery}
                         data-testid="input-product-search"
                       />
-                      <CommandList className="max-h-[300px] overflow-y-auto overflow-x-hidden">
+                      <CommandList className="max-h-[350px] overflow-y-auto">
                         <CommandEmpty>No items found.</CommandEmpty>
                         <CommandGroup heading="Products">
                           {filteredItems.map((item) => (

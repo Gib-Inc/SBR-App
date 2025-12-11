@@ -112,7 +112,7 @@ interface SKURecommendation {
   };
 }
 
-interface InsightsResponse {
+interface OrderFeedbackResponse {
   recommendations: SKURecommendation[];
   computedAt: string;
   rulesApplied: AIRules;
@@ -2524,9 +2524,9 @@ function BatchDecisionsSection() {
   );
 }
 
-function InsightsTab() {
+function OrderFeedbackTab() {
   const { toast } = useToast();
-  const [insightsSubTab, setInsightsSubTab] = useState<string>("recommendations");
+  const [feedbackSubTab, setFeedbackSubTab] = useState<string>("recommendations");
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -2576,7 +2576,7 @@ function InsightsTab() {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to refresh");
-      return response.json() as Promise<InsightsResponse>;
+      return response.json() as Promise<OrderFeedbackResponse>;
     },
     onSuccess: (data) => {
       // Invalidate all recommendation queries (different status filters)
@@ -2817,7 +2817,7 @@ function InsightsTab() {
   return (
     <div className="space-y-4 mt-8">
       {/* Internal Tabs Switcher */}
-      <Tabs value={insightsSubTab} onValueChange={setInsightsSubTab}>
+      <Tabs value={feedbackSubTab} onValueChange={setFeedbackSubTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="recommendations" data-testid="tab-ai-recommendations" className="gap-2">
             <Brain className="h-4 w-4" />
@@ -4852,7 +4852,7 @@ export default function AIAgent() {
 
         {/* Order Feedback Tab (formerly Insights) */}
         <TabsContent value="order-feedback" className="space-y-4">
-          <InsightsTab />
+          <OrderFeedbackTab />
         </TabsContent>
 
         {/* Logs Tab */}
@@ -5204,7 +5204,7 @@ export default function AIAgent() {
                   </div>
                   <p className="text-xs text-amber-600 flex items-center gap-1 mt-2">
                     <AlertTriangle className="h-3 w-3" />
-                    Products, SKUs, orders, and BOM rows are never deleted.
+                    Products, SKUs, orders, and product rows are never deleted.
                   </p>
                 </div>
               </div>
@@ -5233,7 +5233,7 @@ export default function AIAgent() {
           </DialogHeader>
           <div className="space-y-6 py-4">
             <div className="text-sm text-muted-foreground space-y-2">
-              <p>QuickBooks is used to build demand history for forecasting. No core inventory tables (BOM, Barcodes, Sales Orders, POs) are modified.</p>
+              <p>QuickBooks is used to build demand history for forecasting. No core inventory tables (Products, Barcodes, Sales Orders, POs) are modified.</p>
             </div>
             
             <RadioGroup 

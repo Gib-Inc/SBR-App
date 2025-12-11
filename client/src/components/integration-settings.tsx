@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink, ChevronDown } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink, ChevronDown, Eye, EyeOff } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -104,6 +104,8 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   const [shippoApiKey, setShippoApiKey] = useState("");
   const [shippoReturnLabelMinFee, setShippoReturnLabelMinFee] = useState("30");
   const [shippoHildaleAddress, setShippoHildaleAddress] = useState("");
+  const [shippoPricingMode, setShippoPricingMode] = useState<"actual" | "fixed">("actual");
+  const [showShippoApiKey, setShowShippoApiKey] = useState(false);
 
   // Fetch integration config
   const { data: config, isLoading } = useQuery<IntegrationConfig | null>({
@@ -252,6 +254,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         setShippoApiKey("");
         setShippoReturnLabelMinFee(config.config?.returnLabelMinFeeUsd?.toString() || "30");
         setShippoHildaleAddress(config.config?.hildaleAddress || "");
+        // Default to "fixed" if existing fee is set and no explicit pricingMode stored (backward compat)
+        const storedMode = config.config?.pricingMode;
+        const hasExistingFee = config.config?.returnLabelMinFeeUsd !== undefined && config.config?.returnLabelMinFeeUsd !== null;
+        setShippoPricingMode(storedMode || (hasExistingFee ? "fixed" : "actual"));
+        setShowShippoApiKey(false);
       }
     }
   }, [config, integrationType]);
@@ -345,8 +352,9 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         };
       } else if (integrationType === "SHIPPO") {
         configData = {
-          returnLabelMinFeeUsd: parseFloat(shippoReturnLabelMinFee) || 30,
           hildaleAddress: shippoHildaleAddress,
+          pricingMode: shippoPricingMode,
+          ...(shippoPricingMode === "fixed" && { returnLabelMinFeeUsd: parseFloat(shippoReturnLabelMinFee) || 30 }),
         };
       }
 
@@ -1142,34 +1150,76 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     <Label htmlFor="shippo-api-key" data-testid="label-shippo-api-key">
                       API Key
                     </Label>
-                    <Input
-                      id="shippo-api-key"
-                      type="password"
-                      placeholder="Enter your Shippo API key"
-                      value={shippoApiKey}
-                      onChange={(e) => setShippoApiKey(e.target.value)}
-                      data-testid="input-shippo-api-key"
-                    />
+                    <div className="relative">
+                      <Input
+                        id="shippo-api-key"
+                        type={showShippoApiKey ? "text" : "password"}
+                        placeholder="Enter your Shippo API key"
+                        value={shippoApiKey}
+                        onChange={(e) => setShippoApiKey(e.target.value)}
+                        className="pr-10"
+                        data-testid="input-shippo-api-key"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                        onClick={() => setShowShippoApiKey(!showShippoApiKey)}
+                        data-testid="button-toggle-shippo-api-key"
+                      >
+                        {showShippoApiKey ? (
+                          <EyeOff className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Get your API key from Shippo Dashboard → API → API Tokens
                     </p>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="shippo-min-fee" data-testid="label-shippo-min-fee">
-                      Return Label Minimum Fee (USD)
+                    <Label data-testid="label-shippo-pricing-mode">
+                      Label Pricing Mode
                     </Label>
-                    <Input
-                      id="shippo-min-fee"
-                      type="number"
-                      placeholder="30"
-                      value={shippoReturnLabelMinFee}
-                      onChange={(e) => setShippoReturnLabelMinFee(e.target.value)}
-                      data-testid="input-shippo-min-fee"
-                    />
+                    <div className="flex items-center gap-3 p-3 rounded-md border bg-muted/30">
+                      <span className={`text-sm ${shippoPricingMode === "actual" ? "font-medium" : "text-muted-foreground"}`}>
+                        Actual Cost
+                      </span>
+                      <Switch
+                        checked={shippoPricingMode === "fixed"}
+                        onCheckedChange={(checked) => setShippoPricingMode(checked ? "fixed" : "actual")}
+                        data-testid="switch-shippo-pricing-mode"
+                      />
+                      <span className={`text-sm ${shippoPricingMode === "fixed" ? "font-medium" : "text-muted-foreground"}`}>
+                        Fixed Price
+                      </span>
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      Minimum fee to deduct from refunds for return labels. If actual label cost is higher, actual cost is used.
+                      {shippoPricingMode === "actual" 
+                        ? "Use the actual Shippo label cost for return label fees" 
+                        : "Always charge the fixed price below for return labels"}
                     </p>
                   </div>
+                  {shippoPricingMode === "fixed" && (
+                    <div className="space-y-2">
+                      <Label htmlFor="shippo-min-fee" data-testid="label-shippo-min-fee">
+                        Fixed Return Label Fee (USD)
+                      </Label>
+                      <Input
+                        id="shippo-min-fee"
+                        type="number"
+                        placeholder="30"
+                        value={shippoReturnLabelMinFee}
+                        onChange={(e) => setShippoReturnLabelMinFee(e.target.value)}
+                        data-testid="input-shippo-min-fee"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Fixed fee to charge customers for return labels, regardless of actual cost.
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     <Label htmlFor="shippo-hildale-address" data-testid="label-shippo-hildale-address">
                       Hildale Warehouse Address

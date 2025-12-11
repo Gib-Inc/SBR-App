@@ -1690,7 +1690,8 @@ TOTAL: $${subtotal.toFixed(2)}
       });
       
       res.json(cleanedItems);
-    } catch (error) {
+    } catch (error: any) {
+      console.error("[Items] Error fetching items:", error);
       res.status(500).json({ error: "Failed to fetch items" });
     }
   });

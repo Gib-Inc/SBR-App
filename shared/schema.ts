@@ -80,6 +80,7 @@ export const items = pgTable("items", {
   quickbooksItemId: text("quickbooks_item_id"), // QB itemRef.id for mapped products
   quickbooksItemName: text("quickbooks_item_name"), // QB item display name (for debugging)
   quickbooksItemSku: text("quickbooks_item_sku"), // QB item SKU (for debugging)
+  quickbooksItemType: text("quickbooks_item_type"), // 'Inventory' or 'NonInventory' - determines if PO-eligible
 }, (table) => ({
   shopifySkuUniqueIdx: uniqueIndex("items_shopify_sku_unique_idx").on(table.shopifySku).where(sql`shopify_sku IS NOT NULL`),
   amazonSkuUniqueIdx: uniqueIndex("items_amazon_sku_unique_idx").on(table.amazonSku).where(sql`amazon_sku IS NOT NULL`),

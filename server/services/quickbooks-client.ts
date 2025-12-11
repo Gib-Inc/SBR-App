@@ -1092,7 +1092,9 @@ export class QuickBooksClient {
 
   /**
    * Fetch all items from QuickBooks for SKU mapping wizard
-   * Returns inventory and non-inventory items with their SKUs
+   * Returns Inventory and NonInventory items only (PO-eligible types)
+   * Inventory = finished products (for sales data/LLM forecasting)
+   * NonInventory = raw materials/components (for PO workflows)
    */
   async fetchItems(): Promise<{
     success: boolean;
@@ -1104,6 +1106,9 @@ export class QuickBooksClient {
       unitPrice: number | null;
       purchaseCost: number | null;
       active: boolean;
+      preferredVendorId: string | null;
+      preferredVendorName: string | null;
+      purchaseTaxCodeRef: string | null;
     }>;
     totalItems: number;
     error?: string;
@@ -1114,9 +1119,10 @@ export class QuickBooksClient {
         return { success: false, items: [], totalItems: 0, error: 'QuickBooks not connected' };
       }
 
-      // Fetch all active items (inventory and non-inventory)
+      // Fetch only Inventory and NonInventory items (PO-relevant types)
+      // Service, Category, Group, Bundle are excluded
       const query = encodeURIComponent(
-        `SELECT * FROM Item WHERE Active = true MAXRESULTS 1000`
+        `SELECT * FROM Item WHERE Active = true AND (Type = 'Inventory' OR Type = 'NonInventory') MAXRESULTS 1000`
       );
       
       const result = await this.apiRequest<{ 
@@ -1129,6 +1135,8 @@ export class QuickBooksClient {
             UnitPrice?: number;
             PurchaseCost?: number;
             Active?: boolean;
+            PrefVendorRef?: { value: string; name?: string };
+            PurchaseTaxCodeRef?: { value: string };
           }>;
           totalCount?: number;
         } 
@@ -1142,13 +1150,16 @@ export class QuickBooksClient {
         unitPrice: item.UnitPrice || null,
         purchaseCost: item.PurchaseCost || null,
         active: item.Active !== false,
+        preferredVendorId: item.PrefVendorRef?.value || null,
+        preferredVendorName: item.PrefVendorRef?.name || null,
+        purchaseTaxCodeRef: item.PurchaseTaxCodeRef?.value || null,
       }));
 
       await AuditLogger.logEvent({
         source: 'QUICKBOOKS',
         eventType: 'ITEMS_FETCHED',
         status: 'INFO',
-        description: `Fetched ${items.length} items from QuickBooks`,
+        description: `Fetched ${items.length} PO-eligible items from QuickBooks (Inventory: ${items.filter(i => i.type === 'Inventory').length}, NonInventory: ${items.filter(i => i.type === 'NonInventory').length})`,
       });
 
       return {
@@ -1170,6 +1181,50 @@ export class QuickBooksClient {
         totalItems: 0,
         error: error.message || 'Failed to fetch items',
       };
+    }
+  }
+
+  /**
+   * Resolve a PurchaseTaxCodeRef to get the actual tax rate percentage
+   */
+  async getTaxRateForCode(taxCodeId: string): Promise<number | null> {
+    try {
+      const result = await this.apiRequest<{
+        TaxCode: {
+          Id: string;
+          Name: string;
+          SalesTaxRateList?: {
+            TaxRateDetail?: Array<{
+              TaxRateRef?: { value: string };
+            }>;
+          };
+          PurchaseTaxRateList?: {
+            TaxRateDetail?: Array<{
+              TaxRateRef?: { value: string };
+            }>;
+          };
+        };
+      }>(`/taxcode/${taxCodeId}`);
+
+      // Get the purchase tax rate reference
+      const taxRateRef = result.TaxCode?.PurchaseTaxRateList?.TaxRateDetail?.[0]?.TaxRateRef?.value;
+      if (!taxRateRef) {
+        return null;
+      }
+
+      // Fetch the actual tax rate
+      const taxRateResult = await this.apiRequest<{
+        TaxRate: {
+          Id: string;
+          Name: string;
+          RateValue: number;
+        };
+      }>(`/taxrate/${taxRateRef}`);
+
+      return taxRateResult.TaxRate?.RateValue ?? null;
+    } catch (error: any) {
+      console.warn(`[QuickBooks] Failed to resolve tax rate for code ${taxCodeId}:`, error.message);
+      return null;
     }
   }
 
@@ -1441,8 +1496,9 @@ export class QuickBooksClient {
   }
 
   /**
-   * Look up an item by SKU and return purchase cost + preferred vendor info
-   * This ensures the cost and vendor data come from the same QuickBooks record
+   * Look up an item by SKU and return purchase cost + preferred vendor info + tax rate
+   * This ensures the cost, vendor, and tax data come from the same QuickBooks record
+   * For PO workflows - only NonInventory items should be used for ordering
    */
   async lookupItemBySku(sku: string): Promise<{
     success: boolean;
@@ -1453,6 +1509,7 @@ export class QuickBooksClient {
       purchaseCost: number | null;
       unitPrice: number | null;
       type: string;
+      taxRate: number | null; // Tax percentage (e.g., 7.5 for 7.5%)
     };
     vendor?: {
       quickbooksVendorId: string;
@@ -1484,6 +1541,7 @@ export class QuickBooksClient {
             PurchaseCost?: number;
             UnitPrice?: number;
             PrefVendorRef?: { value: string; name?: string };
+            PurchaseTaxCodeRef?: { value: string };
           }>;
         };
       }>(`/query?query=${itemQuery}`);
@@ -1491,6 +1549,12 @@ export class QuickBooksClient {
       const qbItem = itemResult.QueryResponse?.Item?.[0];
       if (!qbItem) {
         return { success: false, error: `No QuickBooks item found with SKU: ${sku}` };
+      }
+
+      // Resolve tax rate if PurchaseTaxCodeRef is present
+      let taxRate: number | null = null;
+      if (qbItem.PurchaseTaxCodeRef?.value) {
+        taxRate = await this.getTaxRateForCode(qbItem.PurchaseTaxCodeRef.value);
       }
 
       const result: {
@@ -1502,6 +1566,7 @@ export class QuickBooksClient {
           purchaseCost: number | null;
           unitPrice: number | null;
           type: string;
+          taxRate: number | null;
         };
         vendor?: {
           quickbooksVendorId: string;
@@ -1518,6 +1583,7 @@ export class QuickBooksClient {
           purchaseCost: qbItem.PurchaseCost ?? null,
           unitPrice: qbItem.UnitPrice ?? null,
           type: qbItem.Type,
+          taxRate,
         },
       };
 
@@ -1552,6 +1618,67 @@ export class QuickBooksClient {
       return {
         success: false,
         error: error.message || 'Failed to lookup item',
+      };
+    }
+  }
+
+  /**
+   * Search for QuickBooks items by name similarity for fallback matching
+   * Returns NonInventory items only since these are PO-eligible
+   */
+  async searchItemsByName(searchTerm: string, limit: number = 10): Promise<{
+    success: boolean;
+    items: Array<{
+      id: string;
+      name: string;
+      sku: string | null;
+      type: string;
+      purchaseCost: number | null;
+      preferredVendorName: string | null;
+    }>;
+    error?: string;
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, items: [], error: 'QuickBooks not connected' };
+      }
+
+      // Search for NonInventory items with matching name (PO-eligible only)
+      const escapedTerm = searchTerm.replace(/'/g, "''");
+      const query = encodeURIComponent(
+        `SELECT * FROM Item WHERE Active = true AND Type = 'NonInventory' AND Name LIKE '%${escapedTerm}%' MAXRESULTS ${limit}`
+      );
+      
+      const result = await this.apiRequest<{
+        QueryResponse: {
+          Item?: Array<{
+            Id: string;
+            Name: string;
+            Sku?: string;
+            Type: string;
+            PurchaseCost?: number;
+            PrefVendorRef?: { value: string; name?: string };
+          }>;
+        };
+      }>(`/query?query=${query}`);
+
+      const items = (result.QueryResponse?.Item || []).map(item => ({
+        id: item.Id,
+        name: item.Name,
+        sku: item.Sku || null,
+        type: item.Type,
+        purchaseCost: item.PurchaseCost || null,
+        preferredVendorName: item.PrefVendorRef?.name || null,
+      }));
+
+      return { success: true, items };
+    } catch (error: any) {
+      console.error('[QuickBooks] Error searching items:', error);
+      return {
+        success: false,
+        items: [],
+        error: error.message || 'Failed to search items',
       };
     }
   }

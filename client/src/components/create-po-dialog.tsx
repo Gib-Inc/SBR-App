@@ -56,6 +56,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier, Item } from "@shared/schema";
 import { cn } from "@/lib/utils";
+import { QBConfirmModal } from "@/components/qb-confirm-modal";
 
 interface DraftLineItem {
   id: string;
@@ -64,6 +65,8 @@ interface DraftLineItem {
   name: string;
   qtyOrdered: number;
   unitCost: number;
+  taxRate?: number | null; // Tax percentage from QuickBooks
+  quickbooksItemId?: string | null;
 }
 
 interface CreatePODialogProps {
@@ -88,6 +91,10 @@ export function CreatePODialog({
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  
+  // QuickBooks confirmation modal state
+  const [qbModalOpen, setQbModalOpen] = useState(false);
+  const [pendingItem, setPendingItem] = useState<Item | null>(null);
 
   const { data: suppliers = [] } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
@@ -112,11 +119,29 @@ export function CreatePODialog({
     return lineItems.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
   }, [lineItems]);
 
+  // Calculate taxes from line item tax rates (from QuickBooks)
+  const calculatedTaxFromLines = useMemo(() => {
+    return lineItems.reduce((sum, line) => {
+      if (line.taxRate && line.taxRate > 0) {
+        const lineSubtotal = line.qtyOrdered * line.unitCost;
+        return sum + (lineSubtotal * line.taxRate / 100);
+      }
+      return sum;
+    }, 0);
+  }, [lineItems]);
+
+  // Use calculated tax from lines if available, otherwise use manual input
+  const effectiveTaxes = useMemo(() => {
+    if (calculatedTaxFromLines > 0) {
+      return calculatedTaxFromLines;
+    }
+    return parseFloat(taxes) || 0;
+  }, [calculatedTaxFromLines, taxes]);
+
   const total = useMemo(() => {
     const shipping = parseFloat(shippingCost) || 0;
-    const tax = parseFloat(taxes) || 0;
-    return subtotal + shipping + tax;
-  }, [subtotal, shippingCost, taxes]);
+    return subtotal + shipping + effectiveTaxes;
+  }, [subtotal, shippingCost, effectiveTaxes]);
 
   const isValid = useMemo(() => {
     if (!supplierId) return false;
@@ -152,12 +177,22 @@ export function CreatePODialog({
         throw new Error("Please fix the form errors before submitting");
       }
       
+      // Calculate effectiveTaxes: use line-level QB taxes if available, else manual input
+      const lineTaxTotal = lineItems.reduce((sum, line) => {
+        if (line.taxRate && line.taxRate > 0) {
+          const lineSubtotal = line.qtyOrdered * line.unitCost;
+          return sum + (lineSubtotal * line.taxRate / 100);
+        }
+        return sum;
+      }, 0);
+      const effectiveTaxAmount = lineTaxTotal > 0 ? lineTaxTotal : (parseFloat(taxes) || 0);
+
       const payload = {
         supplierId,
         orderDate: orderDate.toISOString(),
         expectedDate: expectedDate ? expectedDate.toISOString() : undefined,
         shippingCost: parseFloat(shippingCost) || 0,
-        taxes: parseFloat(taxes) || 0,
+        taxes: effectiveTaxAmount,
         lines: lineItems.map(line => ({
           itemId: line.itemId,
           qtyOrdered: line.qtyOrdered,
@@ -221,70 +256,98 @@ export function CreatePODialog({
     setLineItems([]);
     setProductSearchQuery("");
     setErrors({});
+    setPendingItem(null);
+    setQbModalOpen(false);
     onOpenChange(false);
   }, [onOpenChange]);
 
-  const handleAddItem = useCallback(async (item: Item) => {
+  // Stage item for QB confirmation - opens the modal instead of adding directly
+  const handleAddItem = useCallback((item: Item) => {
     const existingLine = lineItems.find(l => l.itemId === item.id);
     if (existingLine) {
+      // If item already exists, just increment quantity
       setLineItems(prev => prev.map(l => 
         l.itemId === item.id 
           ? { ...l, qtyOrdered: l.qtyOrdered + 1 }
           : l
       ));
+      setProductSearchOpen(false);
+      setProductSearchQuery("");
     } else {
-      const itemWithAny = item as any;
-      let defaultCost = itemWithAny.defaultPurchaseCost || 
+      // Stage the item and open QB confirmation modal
+      setPendingItem(item);
+      setQbModalOpen(true);
+      setProductSearchOpen(false);
+      setProductSearchQuery("");
+    }
+  }, [lineItems]);
+
+  // Handle QB modal "Apply" - use QuickBooks data
+  const handleQBApply = useCallback((data: {
+    unitCost: number;
+    taxRate: number | null;
+    vendorName: string | null;
+    vendorId: string | null;
+    quickbooksItemId: string | null;
+  }) => {
+    if (!pendingItem) return;
+    
+    const lineId = `temp-${Date.now()}`;
+    const newLine: DraftLineItem = {
+      id: lineId,
+      itemId: pendingItem.id,
+      sku: pendingItem.sku,
+      name: pendingItem.name,
+      qtyOrdered: 1,
+      unitCost: data.unitCost,
+      taxRate: data.taxRate,
+      quickbooksItemId: data.quickbooksItemId,
+    };
+    setLineItems(prev => [...prev, newLine]);
+    
+    // If vendor info provided and no supplier selected, try to match
+    if (data.vendorName && !supplierId) {
+      const matchingSupplier = suppliers.find(s => 
+        s.name.toLowerCase() === data.vendorName!.toLowerCase()
+      );
+      if (matchingSupplier) {
+        setSupplierId(matchingSupplier.id);
+        toast({
+          title: "Supplier set from QuickBooks",
+          description: `${matchingSupplier.name} is the preferred vendor`,
+        });
+      }
+    }
+    
+    toast({
+      title: "QuickBooks data applied",
+      description: `Unit cost: $${data.unitCost.toFixed(2)}${data.taxRate ? `, Tax: ${data.taxRate}%` : ''}`,
+    });
+    
+    setPendingItem(null);
+  }, [pendingItem, supplierId, suppliers, toast]);
+
+  // Handle QB modal "Manual" - add item with default values
+  const handleQBManual = useCallback(() => {
+    if (!pendingItem) return;
+    
+    const itemWithAny = pendingItem as any;
+    const defaultCost = itemWithAny.defaultPurchaseCost || 
                         itemWithAny.primarySupplier?.unitCost || 
                         itemWithAny.primarySupplier?.price || 
                         0;
-      
-      // Try to fetch purchase cost from QuickBooks
-      try {
-        const qbResponse = await fetch(`/api/quickbooks/items/lookup/${encodeURIComponent(item.sku)}`);
-        if (qbResponse.ok) {
-          const qbData = await qbResponse.json();
-          if (qbData.success && qbData.item?.purchaseCost) {
-            defaultCost = qbData.item.purchaseCost;
-            toast({
-              title: "Price loaded from QuickBooks",
-              description: `Unit cost for ${item.sku}: $${defaultCost.toFixed(2)}`,
-            });
-            
-            // If we have vendor info and no supplier selected, suggest the vendor
-            if (qbData.vendor && !supplierId) {
-              // Find matching supplier by name
-              const matchingSupplier = suppliers.find(s => 
-                s.name.toLowerCase() === qbData.vendor.name.toLowerCase()
-              );
-              if (matchingSupplier) {
-                setSupplierId(matchingSupplier.id);
-                toast({
-                  title: "Supplier suggested",
-                  description: `${matchingSupplier.name} is the preferred vendor for this item in QuickBooks`,
-                });
-              }
-            }
-          }
-        }
-      } catch (err) {
-        // QuickBooks lookup failed - use default cost
-        console.log('QuickBooks lookup failed, using default cost');
-      }
-      
-      const newLine: DraftLineItem = {
-        id: `temp-${Date.now()}`,
-        itemId: item.id,
-        sku: item.sku,
-        name: item.name,
-        qtyOrdered: 1,
-        unitCost: defaultCost,
-      };
-      setLineItems(prev => [...prev, newLine]);
-    }
-    setProductSearchOpen(false);
-    setProductSearchQuery("");
-  }, [lineItems, supplierId, suppliers, toast]);
+    
+    const newLine: DraftLineItem = {
+      id: `temp-${Date.now()}`,
+      itemId: pendingItem.id,
+      sku: pendingItem.sku,
+      name: pendingItem.name,
+      qtyOrdered: 1,
+      unitCost: defaultCost,
+    };
+    setLineItems(prev => [...prev, newLine]);
+    setPendingItem(null);
+  }, [pendingItem]);
 
   const handleUpdateLineQty = useCallback((lineId: string, qty: number) => {
     if (qty < 1) return;
@@ -591,8 +654,10 @@ export function CreatePODialog({
                   <span>{formatCurrency(parseFloat(shippingCost) || 0)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Taxes</span>
-                  <span>{formatCurrency(parseFloat(taxes) || 0)}</span>
+                  <span className="text-muted-foreground">
+                    Taxes{calculatedTaxFromLines > 0 ? " (from QuickBooks)" : ""}
+                  </span>
+                  <span>{formatCurrency(effectiveTaxes)}</span>
                 </div>
                 <div className="border-t pt-2 flex justify-between font-medium">
                   <span>Total</span>
@@ -647,6 +712,19 @@ export function CreatePODialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* QuickBooks Confirmation Modal */}
+      <QBConfirmModal
+        isOpen={qbModalOpen}
+        onClose={() => {
+          setQbModalOpen(false);
+          setPendingItem(null);
+        }}
+        itemSku={pendingItem?.sku || ""}
+        itemName={pendingItem?.name || ""}
+        onApply={handleQBApply}
+        onManual={handleQBManual}
+      />
     </Dialog>
   );
 }

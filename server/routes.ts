@@ -13244,6 +13244,28 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/quickbooks/items/search - Search QuickBooks items by name for fallback matching
+  app.get("/api/quickbooks/items/search", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { q, limit } = req.query;
+      const searchTerm = typeof q === 'string' ? q : '';
+      const searchLimit = typeof limit === 'string' ? parseInt(limit, 10) : 10;
+
+      if (!searchTerm || searchTerm.length < 2) {
+        return res.status(400).json({ success: false, error: 'Search term must be at least 2 characters' });
+      }
+
+      const userId = req.user?.id || 'system';
+      const qbClient = new QuickBooksClient(storage, userId);
+      const result = await qbClient.searchItemsByName(searchTerm, searchLimit);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('[QuickBooks] Item search error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to search items' });
+    }
+  });
+
   // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================

@@ -1245,17 +1245,24 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
 
   const logs = data?.logs ?? [];
   
-  const inProgressLogs = logs.filter((log: any) => log.status === 'CREATED');
-  const historyLogs = logs.filter((log: any) => log.status !== 'CREATED');
+  const inProgressLogs = logs.filter((log: any) => ['CREATED', 'IN_TRANSIT'].includes(log.status));
+  const historyLogs = logs.filter((log: any) => !['CREATED', 'IN_TRANSIT'].includes(log.status));
 
   function getStatusBadge(status: string) {
     switch (status) {
       case 'CREATED':
-        return <Badge variant="secondary" className="text-xs">In Transit</Badge>;
+        return <Badge variant="secondary" className="text-xs">Created</Badge>;
+      case 'IN_TRANSIT':
+        return <Badge className="text-xs bg-blue-600 text-white">In Transit</Badge>;
       case 'SCANNED_RECEIVED':
         return <Badge className="text-xs bg-green-600 text-white">Received</Badge>;
+      case 'DELIVERED':
+        return <Badge className="text-xs bg-green-600 text-white">Delivered</Badge>;
+      case 'CANCELLED':
       case 'VOIDED':
         return <Badge variant="destructive" className="text-xs">Voided</Badge>;
+      case 'LOST':
+        return <Badge variant="destructive" className="text-xs">Lost</Badge>;
       default:
         return <Badge variant="outline" className="text-xs">{status}</Badge>;
     }

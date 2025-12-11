@@ -35,7 +35,7 @@ interface IntegrationConfig {
   config: any;
 }
 
-type IntegrationType = "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER";
+type IntegrationType = "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "PHANTOMBUSTER" | "SHIPPO";
 
 interface IntegrationSettingsProps {
   integrationType: IntegrationType;
@@ -44,20 +44,22 @@ interface IntegrationSettingsProps {
   onOpenSkuWizard?: (source?: "shopify" | "amazon" | "extensiv" | "quickbooks") => void;
 }
 
-const INTEGRATION_LABELS = {
+const INTEGRATION_LABELS: Record<IntegrationType, string> = {
   EXTENSIV: "Extensiv (Pivot Warehouse)",
   SHOPIFY: "Shopify",
   AMAZON: "Amazon Seller Central",
   GOHIGHLEVEL: "GoHighLevel",
   PHANTOMBUSTER: "PhantomBuster",
+  SHIPPO: "Shippo",
 };
 
-const INTEGRATION_DESCRIPTIONS = {
+const INTEGRATION_DESCRIPTIONS: Record<IntegrationType, string> = {
   EXTENSIV: "Sync inventory from your Extensiv 3PL warehouse",
   SHOPIFY: "Connect your Shopify store to import orders and sync inventory",
   AMAZON: "Integrate with Amazon Seller Central for order management",
   GOHIGHLEVEL: "Connect your CRM for return notifications and task management",
   PHANTOMBUSTER: "Enrich supplier and product data through automated scraping",
+  SHIPPO: "Generate return shipping labels and track deliveries",
 };
 
 export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuWizard }: IntegrationSettingsProps) {
@@ -97,6 +99,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   // PhantomBuster fields
   const [phantomApiKey, setPhantomApiKey] = useState("");
   const [phantomAgentIds, setPhantomAgentIds] = useState("");
+  
+  // Shippo fields
+  const [shippoApiKey, setShippoApiKey] = useState("");
+  const [shippoReturnLabelMinFee, setShippoReturnLabelMinFee] = useState("30");
+  const [shippoHildaleAddress, setShippoHildaleAddress] = useState("");
 
   // Fetch integration config
   const { data: config, isLoading } = useQuery<IntegrationConfig | null>({
@@ -241,6 +248,10 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       } else if (integrationType === "PHANTOMBUSTER") {
         setPhantomApiKey("");
         setPhantomAgentIds(config.config?.agentIds?.join(", ") || "");
+      } else if (integrationType === "SHIPPO") {
+        setShippoApiKey("");
+        setShippoReturnLabelMinFee(config.config?.returnLabelMinFeeUsd?.toString() || "30");
+        setShippoHildaleAddress(config.config?.hildaleAddress || "");
       }
     }
   }, [config, integrationType]);
@@ -332,11 +343,16 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         configData = {
           agentIds: phantomAgentIds.split(",").map((id) => id.trim()).filter(Boolean),
         };
+      } else if (integrationType === "SHIPPO") {
+        configData = {
+          returnLabelMinFeeUsd: parseFloat(shippoReturnLabelMinFee) || 30,
+          hildaleAddress: shippoHildaleAddress,
+        };
       }
 
       const payload: any = {
         provider: integrationType,
-        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : integrationType === "GOHIGHLEVEL" ? "GoHighLevel" : integrationType === "PHANTOMBUSTER" ? "PhantomBuster" : "Pivot Warehouse",
+        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : integrationType === "GOHIGHLEVEL" ? "GoHighLevel" : integrationType === "PHANTOMBUSTER" ? "PhantomBuster" : integrationType === "SHIPPO" ? "Shippo" : "Pivot Warehouse",
         config: configData,
       };
 
@@ -356,6 +372,9 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "PHANTOMBUSTER") {
         if (phantomApiKey) payload.apiKey = phantomApiKey;
+        else if (config?.apiKey) payload.apiKey = config.apiKey;
+      } else if (integrationType === "SHIPPO") {
+        if (shippoApiKey) payload.apiKey = shippoApiKey;
         else if (config?.apiKey) payload.apiKey = config.apiKey;
       }
 
@@ -390,6 +409,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     setClientSecret("");
     setGhlApiKey("");
     setPhantomApiKey("");
+    setShippoApiKey("");
     setShowLegacyLocationNote(false);
   };
 
@@ -410,6 +430,8 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       return ghlLocationId && (config?.apiKey || ghlApiKey);
     } else if (integrationType === "PHANTOMBUSTER") {
       return config?.apiKey || phantomApiKey;
+    } else if (integrationType === "SHIPPO") {
+      return config?.apiKey || shippoApiKey;
     }
     return false;
   };
@@ -1109,6 +1131,58 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     />
                     <p className="text-xs text-muted-foreground">
                       Optional: Specify default phantom agent IDs to use for enrichment
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {integrationType === "SHIPPO" && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="shippo-api-key" data-testid="label-shippo-api-key">
+                      API Key
+                    </Label>
+                    <Input
+                      id="shippo-api-key"
+                      type="password"
+                      placeholder="Enter your Shippo API key"
+                      value={shippoApiKey}
+                      onChange={(e) => setShippoApiKey(e.target.value)}
+                      data-testid="input-shippo-api-key"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Get your API key from Shippo Dashboard → API → API Tokens
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="shippo-min-fee" data-testid="label-shippo-min-fee">
+                      Return Label Minimum Fee (USD)
+                    </Label>
+                    <Input
+                      id="shippo-min-fee"
+                      type="number"
+                      placeholder="30"
+                      value={shippoReturnLabelMinFee}
+                      onChange={(e) => setShippoReturnLabelMinFee(e.target.value)}
+                      data-testid="input-shippo-min-fee"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Minimum fee to deduct from refunds for return labels. If actual label cost is higher, actual cost is used.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="shippo-hildale-address" data-testid="label-shippo-hildale-address">
+                      Hildale Warehouse Address
+                    </Label>
+                    <Input
+                      id="shippo-hildale-address"
+                      placeholder="123 Main St, Hildale, UT 84784"
+                      value={shippoHildaleAddress}
+                      onChange={(e) => setShippoHildaleAddress(e.target.value)}
+                      data-testid="input-shippo-hildale-address"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Destination address for return shipments. Used when creating return labels.
                     </p>
                   </div>
                 </>

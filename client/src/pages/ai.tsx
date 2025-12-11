@@ -4246,7 +4246,7 @@ function LogsTab() {
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
-  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | null>(null);
+  const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "SHIPPO" | null>(null);
   const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
   const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
   const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
@@ -4327,6 +4327,11 @@ export default function AIAgent() {
 
   const { data: ghlConfig } = useQuery<any>({
     queryKey: ["/api/integration-configs/GOHIGHLEVEL"],
+    retry: false,
+  });
+
+  const { data: shippoConfig } = useQuery<any>({
+    queryKey: ["/api/integration-configs/SHIPPO"],
     retry: false,
   });
 
@@ -4966,6 +4971,16 @@ export default function AIAgent() {
       lastRotatedAt: googleAdsConfig?.tokenLastRotatedAt,
       nextRotationAt: googleAdsConfig?.tokenNextRotationAt,
     },
+    {
+      id: "shippo",
+      integrationType: "SHIPPO" as const,
+      name: "Shippo",
+      description: "Return labels & shipping",
+      icon: Package,
+      configured: !!(shippoConfig?.apiKey),
+      status: getConfigStatus(shippoConfig),
+      hasConfigDialog: true,
+    },
   ];
 
   return (
@@ -5135,7 +5150,7 @@ export default function AIAgent() {
                                         handleGoogleAdsDisconnect();
                                       }
                                     } else {
-                                      setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL");
+                                      setOpenIntegration(source.integrationType as "EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "SHIPPO");
                                     }
                                   }}
                                   data-testid={`button-configure-${source.id}`}

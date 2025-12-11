@@ -602,15 +602,15 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[450px] p-0" align="end">
-                    <Command className="max-h-[450px]">
+                  <PopoverContent className="w-[450px] p-0 h-[400px]" align="end">
+                    <Command className="h-full w-full flex flex-col overflow-hidden">
                       <CommandInput 
                         placeholder="Search by SKU or name..." 
                         value={productSearchQuery}
                         onValueChange={setProductSearchQuery}
                         data-testid="input-product-search"
                       />
-                      <CommandList className="max-h-[380px] overflow-y-auto">
+                      <CommandList className="flex-1 overflow-y-auto">
                         <CommandEmpty>No items found in Stock Inventory.</CommandEmpty>
                         <CommandGroup heading={`Stock Inventory (${filteredItems.length} items)`}>
                           {filteredItems.map((item) => (

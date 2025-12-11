@@ -594,9 +594,12 @@ export function CreatePODialog({
                       Add Item
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[450px] p-0" align="end">
+                  <PopoverContent 
+                    className="flex w-[450px] max-h-[400px] flex-col p-0 overflow-hidden" 
+                    align="end"
+                  >
                     {/* Search header - fixed at top */}
-                    <div className="flex items-center border-b px-3 py-2">
+                    <div className="flex items-center border-b px-3 py-2 shrink-0">
                       <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
                       <Input
                         placeholder="Search by SKU or name..."
@@ -607,7 +610,7 @@ export function CreatePODialog({
                       />
                     </div>
                     {/* Count header - fixed */}
-                    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground border-b">
+                    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground border-b shrink-0">
                       Stock Inventory ({filteredItems.length} items)
                     </div>
                     {/* 
@@ -616,10 +619,7 @@ export function CreatePODialog({
                       (items where type === "component") and is constrained with a scrollable 
                       container so all items are visible.
                     */}
-                    <div 
-                      className="p-1"
-                      style={{ maxHeight: '320px', overflowY: 'auto', overflowX: 'hidden' }}
-                    >
+                    <div className="flex-1 overflow-y-auto p-1">
                       {filteredItems.length === 0 ? (
                         <div className="py-6 text-center text-sm text-muted-foreground">
                           No items found in Stock Inventory.

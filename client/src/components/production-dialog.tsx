@@ -141,12 +141,12 @@ export function ProductionDialog({ isOpen, onClose, item }: ProductionDialogProp
           </div>
 
           <div className="space-y-2">
-            <Label>Bill of Materials</Label>
+            <Label>Required Components</Label>
             {bomLoading ? (
-              <div className="text-sm text-muted-foreground">Loading BOM...</div>
+              <div className="text-sm text-muted-foreground">Loading components...</div>
             ) : components.length === 0 ? (
               <div className="text-sm text-destructive">
-                No Bill of Materials defined. Cannot produce without BOM.
+                No components defined. Cannot produce without a recipe.
               </div>
             ) : (
               <div className="space-y-2">

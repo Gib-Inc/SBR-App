@@ -2088,7 +2088,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: "carryingCost", label: "Carrying Cost", group: "financial", visible: false },
   
   // Production
-  { id: "bomComponents", label: "BOM Components", group: "production", visible: false },
+  { id: "bomComponents", label: "Product Components", group: "production", visible: false },
   { id: "productionCapacity", label: "Capacity", group: "production", visible: false },
   { id: "criticality", label: "Criticality", group: "production", visible: false },
 ];

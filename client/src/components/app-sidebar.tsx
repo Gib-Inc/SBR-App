@@ -20,7 +20,7 @@ const mainMenuItems = [
     icon: BarChart3,
   },
   {
-    title: "BOM",
+    title: "Products",
     url: "/products",
     icon: Package,
   },

@@ -698,7 +698,7 @@ function BOMDialog({
       setHasChanges(false);
       toast({
         title: "Success",
-        description: "BOM updated successfully",
+        description: "Components updated successfully",
       });
       onClose();
     },
@@ -761,7 +761,7 @@ function BOMDialog({
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Edit Bill of Materials - {item?.name}</DialogTitle>
+          <DialogTitle>Edit Components - {item?.name}</DialogTitle>
         </DialogHeader>
         
         {isLoading || !isInitialized ? (
@@ -865,7 +865,7 @@ function BOMDialog({
                 disabled={updateBOMMutation.isPending}
                 data-testid="button-save-bom"
               >
-                {updateBOMMutation.isPending ? "Saving..." : "Save BOM"}
+                {updateBOMMutation.isPending ? "Saving..." : "Save Components"}
               </Button>
             </div>
           </div>
@@ -2024,7 +2024,7 @@ export default function BOM() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `bom-inventory-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `products-inventory-${new Date().toISOString().split('T')[0]}.csv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -2048,7 +2048,7 @@ export default function BOM() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">BOM</h1>
+          <h1 className="text-2xl font-semibold">Products</h1>
           <p className="text-sm text-muted-foreground">Manage finished products and stock inventory</p>
         </div>
         <div className="flex gap-2">
@@ -2109,7 +2109,7 @@ export default function BOM() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Finished Products</h2>
-            <p className="text-sm text-muted-foreground">Products with bill of materials</p>
+            <p className="text-sm text-muted-foreground">Products with component recipes</p>
           </div>
           <div className="flex gap-2">
             {/* Edit Columns Popover (only affects Finished Products table) */}

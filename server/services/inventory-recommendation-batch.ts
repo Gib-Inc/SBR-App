@@ -677,14 +677,47 @@ Respond with a JSON array of recommendations in this exact format:
     supplierItems: any[],
     suppliers: any[]
   ): Promise<any | null> {
-    // Find designated supplier for this item
-    const designatedSupplierItem = supplierItems.find(
+    // Find designated supplier for this item first (preferred)
+    let designatedSupplierItem = supplierItems.find(
       si => si.itemId === itemId && si.isDesignatedSupplier
     );
     
+    // If no designated supplier, use AI to select best supplier based on history
     if (!designatedSupplierItem) {
-      console.log(`[AI Batch] No designated supplier for ${sku}, skipping auto-draft PO`);
-      return null;
+      // Get all supplier items for this item
+      const itemSupplierItems = supplierItems.filter(si => si.itemId === itemId);
+      
+      if (itemSupplierItems.length === 0) {
+        console.log(`[AI Batch] No supplier items for ${sku}, skipping auto-draft PO`);
+        return null;
+      }
+      
+      // Select supplier with best PO history (highest received/sent ratio, then most received)
+      const supplierScores = itemSupplierItems.map(si => {
+        const supplier = suppliers.find(s => s.id === si.supplierId);
+        if (!supplier) return { si, score: -1, received: 0 };
+        
+        const sent = supplier.poSentCount || 0;
+        const received = supplier.poReceivedCount || 0;
+        
+        // Score: reliability (received/sent ratio) * 100 + received count
+        // New suppliers with no history get score 0
+        const reliability = sent > 0 ? received / sent : 0;
+        const score = (reliability * 100) + received;
+        
+        return { si, score, received, supplier };
+      }).filter(s => s.score >= 0);
+      
+      if (supplierScores.length === 0) {
+        console.log(`[AI Batch] No valid suppliers found for ${sku}, skipping auto-draft PO`);
+        return null;
+      }
+      
+      // Sort by score descending, pick best one
+      supplierScores.sort((a, b) => b.score - a.score);
+      designatedSupplierItem = supplierScores[0].si;
+      
+      console.log(`[AI Batch] AI selected supplier ${supplierScores[0].supplier?.name} for ${sku} based on history (score: ${supplierScores[0].score.toFixed(1)})`);
     }
     
     const supplier = suppliers.find(s => s.id === designatedSupplierItem.supplierId);

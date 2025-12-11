@@ -8924,6 +8924,7 @@ Notes: ${po.notes || 'None'}
 
       // Update PO status and persist GHL send results for audit/tracking
       const sendTimestamp = new Date();
+      const wasNotSent = purchaseOrder.status !== 'SENT';
       if (ghlResult.success) {
         await storage.updatePurchaseOrder(purchaseOrder.id, {
           status: 'SENT',
@@ -8936,8 +8937,10 @@ Notes: ${po.notes || 'None'}
           lastSendError: null, // Clear any previous error
         });
         
-        // Increment supplier PO sent count for tracking/AI selection
-        await storage.incrementSupplierPOSentCount(finalSupplierId);
+        // Increment supplier PO sent count only on actual status transition (prevent double counting)
+        if (wasNotSent) {
+          await storage.incrementSupplierPOSentCount(finalSupplierId);
+        }
 
         // Write audit log for successful send
         await storage.createAuditLog({
@@ -9241,6 +9244,8 @@ Notes: ${po.notes || 'None'}
         return res.status(404).json({ error: "Purchase order not found" });
       }
       
+      const wasNotSent = po.status !== 'SENT';
+      
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'SENT',
         sentAt: new Date(),
@@ -9250,8 +9255,10 @@ Notes: ${po.notes || 'None'}
         return res.status(404).json({ error: "Purchase order not found" });
       }
       
-      // Increment supplier PO sent count for tracking/AI selection
-      await storage.incrementSupplierPOSentCount(po.supplierId);
+      // Increment supplier PO sent count only on actual status transition (prevent double counting)
+      if (wasNotSent) {
+        await storage.incrementSupplierPOSentCount(po.supplierId);
+      }
 
       res.json(updated);
     } catch (error: any) {
@@ -9268,6 +9275,8 @@ Notes: ${po.notes || 'None'}
         return res.status(404).json({ error: "Purchase order not found" });
       }
       
+      const wasNotReceived = po.status !== 'RECEIVED';
+      
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'RECEIVED',
         receivedAt: new Date(),
@@ -9277,8 +9286,10 @@ Notes: ${po.notes || 'None'}
         return res.status(404).json({ error: "Purchase order not found" });
       }
       
-      // Increment supplier PO received count for tracking/AI selection
-      await storage.incrementSupplierPOReceivedCount(po.supplierId);
+      // Increment supplier PO received count only on actual status transition (prevent double counting)
+      if (wasNotReceived) {
+        await storage.incrementSupplierPOReceivedCount(po.supplierId);
+      }
 
       // Sync to GHL (non-blocking)
       const { triggerPOSync } = await import("./services/ghl-sync-triggers");
@@ -9533,10 +9544,13 @@ Notes: ${po.notes || 'None'}
         lastEmailError: null,
       };
 
+      const wasNotSent = po.status !== 'SENT';
       const updated = await storage.updatePurchaseOrder(id, updateData);
       
-      // Increment supplier PO sent count for tracking/AI selection
-      await storage.incrementSupplierPOSentCount(po.supplierId);
+      // Increment supplier PO sent count only on actual status transition (prevent double counting)
+      if (wasNotSent) {
+        await storage.incrementSupplierPOSentCount(po.supplierId);
+      }
       
       console.log(`[PurchaseOrder] PO ${po.poNumber} sent via email to ${emailResult.recipientEmail}`);
 
@@ -10461,13 +10475,16 @@ Notes: ${po.notes || 'None'}
       }
 
       // Step 3: Only update PO status if ALL lines succeeded
+      const wasNotReceived = po.status !== 'RECEIVED';
       await storage.updatePurchaseOrder(id, {
         status: 'RECEIVED',
         receivedAt: new Date(),
       });
       
-      // Increment supplier PO received count for tracking/AI selection
-      await storage.incrementSupplierPOReceivedCount(po.supplierId);
+      // Increment supplier PO received count only on actual status transition (prevent double counting)
+      if (wasNotReceived) {
+        await storage.incrementSupplierPOReceivedCount(po.supplierId);
+      }
 
       // Auto-fulfill backorders for all items that received stock
       const receivedItemIds = [...new Set(linesToProcess.map(l => l.line.itemId))];

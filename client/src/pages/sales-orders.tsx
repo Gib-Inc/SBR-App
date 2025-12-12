@@ -882,9 +882,13 @@ export default function SalesOrders() {
                     if (order.status === 'FULFILLED' || order.status === 'PARTIALLY_FULFILLED') {
                       return 'SHIPPED';
                     }
-                    // OPEN or DRAFT = PURCHASED (order placed)
+                    // OPEN = PURCHASED (order placed)
                     if (order.status === 'OPEN') {
                       return 'PURCHASED';
+                    }
+                    // DRAFT stays as DRAFT
+                    if (order.status === 'DRAFT') {
+                      return 'DRAFT';
                     }
                     // CANCELLED stays as is
                     if (order.status === 'CANCELLED') {

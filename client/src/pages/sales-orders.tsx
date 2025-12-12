@@ -884,7 +884,7 @@ export default function SalesOrders() {
                     ? new Date(deliveredAt) 
                     : new Date(order.orderDate); // Fallback to order date
                   const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
-                  const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
+                  const canStartReturn = isDelivered && isWithinReturnWindow && (!order.returnStatus || order.returnStatus === 'NONE');
                   
                   // Cancel eligibility: pre-ship states only (PURCHASED, PENDING)
                   const canCancel = ['PURCHASED', 'PENDING'].includes(order.status) && activeTab === 'live';

@@ -8,11 +8,76 @@ import { storage } from '../storage';
 import { logService } from '../services/log-service';
 import { InventoryMovement } from '../services/inventory-movement';
 import { triggerShortageAlertsForOrder } from '../services/ghl-stock-alert-service';
+import { ShopifyInventorySyncService } from '../services/shopify-inventory-sync-service';
 
 export interface WebhookHandlerResult {
   success: boolean;
   message: string;
   data?: any;
+}
+
+/**
+ * Sync Shopify inventory levels to availableForSaleQty for order line items
+ * This is a temporary solution until Extensiv is connected.
+ * Checks sunset date - skips sync if today >= sunset date.
+ */
+async function syncShopifyInventoryAfterOrder(
+  lineItemsWithProducts: Array<{ sku: string; productId: string | null }>,
+  userId: string,
+  orderName: string
+): Promise<void> {
+  try {
+    const settings = await storage.getAiAgentSettingsByUserId(userId);
+    
+    if (settings?.shopifyInventorySunsetDate) {
+      const sunsetDate = new Date(settings.shopifyInventorySunsetDate);
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const sunsetStr = sunsetDate.toISOString().split('T')[0];
+      
+      if (todayStr >= sunsetStr) {
+        console.log(`[Shopify Webhook] Skipping inventory sync - sunset date reached (today: ${todayStr}, sunset: ${sunsetStr})`);
+        return;
+      }
+    }
+    
+    const syncService = new ShopifyInventorySyncService();
+    const initialized = await syncService.initialize(userId);
+    
+    if (!initialized) {
+      console.log(`[Shopify Webhook] Shopify sync service not configured, skipping inventory sync`);
+      return;
+    }
+    
+    const pivotLocationId = syncService.getPivotLocationId();
+    if (!pivotLocationId) {
+      console.log(`[Shopify Webhook] No Pivot location ID configured, skipping inventory sync`);
+      return;
+    }
+    
+    let syncedCount = 0;
+    
+    for (const lineItem of lineItemsWithProducts) {
+      if (!lineItem.productId) continue;
+      
+      const item = await storage.getItem(lineItem.productId);
+      if (!item || !item.shopifyInventoryItemId) continue;
+      
+      const shopifyLevel = await syncService.getInventoryLevel(item.shopifyInventoryItemId, pivotLocationId);
+      
+      if (shopifyLevel !== null && shopifyLevel !== item.availableForSaleQty) {
+        await storage.updateItem(item.id, { availableForSaleQty: shopifyLevel });
+        console.log(`[Shopify Webhook] Synced ${item.sku} availableForSaleQty: ${item.availableForSaleQty} -> ${shopifyLevel}`);
+        syncedCount++;
+      }
+    }
+    
+    if (syncedCount > 0) {
+      console.log(`[Shopify Webhook] Inventory sync complete for order ${orderName}: ${syncedCount} items updated`);
+    }
+  } catch (error: any) {
+    console.warn(`[Shopify Webhook] Inventory sync failed (non-blocking):`, error.message);
+  }
 }
 
 // ============= ORDER HANDLERS =============
@@ -208,6 +273,10 @@ export async function handleOrderCreated(
     triggerSalesOrderSync(userId, salesOrder.id, false)
       .then(() => console.log(`[Shopify Webhook] GHL sync triggered for order ${salesOrder.id}`))
       .catch((err: any) => console.warn(`[Shopify Webhook] GHL sync failed (non-blocking):`, err.message));
+
+    syncShopifyInventoryAfterOrder(lineItemsWithProducts, userId, orderName)
+      .then(() => {})
+      .catch((err: any) => console.warn(`[Shopify Webhook] Shopify inventory sync failed (non-blocking):`, err.message));
 
     return {
       success: true,

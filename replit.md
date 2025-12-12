@@ -33,14 +33,19 @@ Preferred communication style: Simple, everyday language.
 
 ### Features & Design Decisions
 
-*   **Inventory Tracking**: Dual-warehouse model with strict inventory rules:
+*   **Inventory Tracking**: Dual-warehouse model with strict data source ownership:
     *   `hildaleQty`: Buffer stock at Hildale production warehouse (NOT sellable)
-    *   `pivotQty`: Sellable stock at Pivot 3PL (canonical for marketplace sync)
-    *   `availableForSaleQty`: Derived cache from pivotQty minus allocations
-    *   **ABSOLUTE RULE**: Sales orders ONLY impact `pivotQty`, NEVER `hildaleQty`
-    *   `hildaleQty` changes only from: PO receipts, production builds, Hildale→Pivot transfers, returns, manual adjustments
+    *   `pivotQty`: Sellable stock at Pivot 3PL (AUTHORITATIVE from Extensiv)
+    *   `availableForSaleQty`: Working sellable field (from Shopify sync temporarily, cascades from pivotQty when Extensiv is primary)
+    *   **DATA SOURCE OWNERSHIP** (strict separation):
+        *   **Extensiv** → ONLY updates `pivotQty`, cascades delta to `availableForSaleQty`
+        *   **Shopify Sync** → ONLY updates `availableForSaleQty` (temporary until Extensiv connected)
+        *   **Production Builds** → ONLY updates `hildaleQty`
+    *   **ABSOLUTE RULE**: Sales orders ONLY impact `availableForSaleQty`, NEVER `pivotQty` or `hildaleQty`
+    *   `hildaleQty` changes only from: production builds, Hildale→Pivot transfers, manual adjustments
     *   `TRANSFER` event type moves stock from Hildale → Pivot (makes it sellable)
     *   Robust `InventoryMovement` system tracking all changes via `InventoryTransaction`
+    *   **Shopify Inventory Sync Sunset**: Configurable sunset date (`shopifyInventorySunsetDate` in AI Agent Rules) - Shopify sync stops on this date
 *   **Forecasting & Planning**: Constraint-based planning for stockout prediction and production capacity, LLM-powered multi-period forecasting for reorder recommendations.
 *   **AI Batch Recommendation System**: Centralized batch processing for all LLM-powered inventory recommendations:
     *   Scheduled batch runs at 10:00 AM and 3:00 PM Mountain time (America/Denver)

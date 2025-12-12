@@ -214,10 +214,10 @@ export class AmazonClient {
     }
 
     if (status === 'PENDING' || status === 'UNSHIPPED') {
-      return 'OPEN';
+      return 'PURCHASED';
     }
 
-    return 'OPEN';
+    return 'PURCHASED';
   }
 
   /**

@@ -330,10 +330,10 @@ export async function handleOrderPaid(
     
     if (existingOrder && existingOrder.status === 'DRAFT') {
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'OPEN',
+        status: 'PURCHASED',
         rawPayload: payload,
       });
-      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as OPEN after payment`);
+      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as PURCHASED after payment`);
     }
     
     return { success: true, message: `Order ${orderId} payment recorded` };
@@ -763,9 +763,9 @@ function mapShopifyOrderStatus(financialStatus: string | null, fulfillmentStatus
     return 'DRAFT';
   }
   if (financialStatus === 'paid') {
-    return 'OPEN';
+    return 'PURCHASED';
   }
-  return 'OPEN';
+  return 'PURCHASED';
 }
 
 // ============= TOPIC ROUTER =============

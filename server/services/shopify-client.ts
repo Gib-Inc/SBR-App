@@ -50,6 +50,7 @@ export interface ShopifyNormalizedOrder {
   status: string;
   orderDate: Date;
   expectedDeliveryDate?: Date;
+  deliveredAt?: Date; // Actual delivery date from fulfillment tracking
   sourceUrl?: string;
   totalAmount?: number;
   currency?: string;
@@ -182,6 +183,21 @@ export class ShopifyClient {
     const expectedDeliveryDate = new Date(orderDate);
     expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + 7);
 
+    // Extract actual delivery date from fulfillment data
+    // Look for fulfillments with shipment_status = "delivered" and use their updated_at timestamp
+    let deliveredAt: Date | undefined;
+    if (order.fulfillments && Array.isArray(order.fulfillments)) {
+      for (const fulfillment of order.fulfillments) {
+        if (fulfillment.shipment_status === 'delivered' && fulfillment.updated_at) {
+          const fulfillmentDate = new Date(fulfillment.updated_at);
+          // Use the latest delivery date if multiple fulfillments
+          if (!deliveredAt || fulfillmentDate > deliveredAt) {
+            deliveredAt = fulfillmentDate;
+          }
+        }
+      }
+    }
+
     // Extract shipping address from Shopify order
     const shippingAddress = order.shipping_address;
     const shipToStreet = shippingAddress?.address1 
@@ -200,6 +216,7 @@ export class ShopifyClient {
       status,
       orderDate,
       expectedDeliveryDate,
+      deliveredAt,
       sourceUrl,
       totalAmount,
       currency,

@@ -4091,6 +4091,7 @@ TOTAL: $${subtotal.toFixed(2)}
               customerPhone: orderData.customerPhone,
               externalCustomerId: orderData.externalCustomerId,
               expectedDeliveryDate: orderData.expectedDeliveryDate,
+              deliveredAt: orderData.deliveredAt, // Actual delivery date from fulfillment tracking
               sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
@@ -4158,6 +4159,7 @@ TOTAL: $${subtotal.toFixed(2)}
               status: orderData.status,
               orderDate: orderData.orderDate,
               expectedDeliveryDate: orderData.expectedDeliveryDate,
+              deliveredAt: orderData.deliveredAt, // Actual delivery date from fulfillment tracking
               sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
@@ -4757,6 +4759,7 @@ TOTAL: $${subtotal.toFixed(2)}
               customerPhone: orderData.customerPhone,
               externalCustomerId: orderData.externalCustomerId,
               expectedDeliveryDate: orderData.expectedDeliveryDate,
+              deliveredAt: orderData.deliveredAt, // Actual delivery date from fulfillment tracking
               sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
@@ -4824,6 +4827,7 @@ TOTAL: $${subtotal.toFixed(2)}
               status: orderData.status,
               orderDate: orderData.orderDate,
               expectedDeliveryDate: orderData.expectedDeliveryDate,
+              deliveredAt: orderData.deliveredAt, // Actual delivery date from fulfillment tracking
               sourceUrl: orderData.sourceUrl,
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,

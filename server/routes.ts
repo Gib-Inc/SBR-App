@@ -12411,24 +12411,37 @@ Generate only the email body text, no subject line.`;
     console.log("[GHL Custom Action] Create return label request received");
     
     try {
-      // Authenticate using shared secret
-      const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
+      // Authenticate using shared secret (check env var first, then user config)
       const providedSecret = req.headers['x-ghl-secret'] as string;
-      
-      if (!ghlSecret) {
-        console.error("[GHL Custom Action] GHL_WEBHOOK_SECRET not configured");
-        return res.status(401).json({ 
-          success: false, 
-          error: "Webhook authentication not configured",
-          agentMessage: "I'm sorry, there's a configuration issue. Please contact support."
-        });
-      }
       
       if (!providedSecret) {
         return res.status(401).json({ 
           success: false, 
           error: "Unauthorized: Missing GHL secret",
           agentMessage: "I'm sorry, I couldn't verify this request. Please try again."
+        });
+      }
+      
+      // Get the expected secret from env var or user's GHL config
+      let ghlSecret = process.env.GHL_WEBHOOK_SECRET;
+      
+      // If env var not set, try to get from user's GHL integration config
+      if (!ghlSecret) {
+        const users = await storage.getAllUsers();
+        if (users.length > 0) {
+          const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
+          const configSecret = (ghlConfig?.config as any)?.webhookSecret;
+          // Treat empty string as no secret configured
+          ghlSecret = configSecret && configSecret.trim() ? configSecret : undefined;
+        }
+      }
+      
+      if (!ghlSecret) {
+        console.error("[GHL Custom Action] No webhook secret configured (env or user config)");
+        return res.status(401).json({ 
+          success: false, 
+          error: "Webhook authentication not configured",
+          agentMessage: "I'm sorry, there's a configuration issue. Please contact support."
         });
       }
 
@@ -12446,13 +12459,13 @@ Generate only the email body text, no subject line.`;
       }
 
       // Parse request body
-      const { orderNumber, contactId } = req.body;
+      const { orderNumber, customerName, contactId } = req.body;
       
-      if (!orderNumber) {
+      if (!orderNumber && !customerName) {
         return res.status(400).json({
           success: false,
-          error: "Order number is required",
-          agentMessage: "I need your order number to create a return label. Could you please provide it?"
+          error: "Order number or customer name is required",
+          agentMessage: "I need either your order number or your name to look up your order. Could you please provide one?"
         });
       }
 
@@ -12464,23 +12477,43 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      console.log(`[GHL Custom Action] Looking up order: ${orderNumber} for contact: ${contactId}`);
+      console.log(`[GHL Custom Action] Looking up order: orderNumber=${orderNumber}, customerName=${customerName}, contactId=${contactId}`);
 
-      // Look up the sales order by order number (check both orderNumber and externalOrderId)
+      // Look up the sales order by order number or customer name
       const allOrders = await storage.getAllSalesOrders();
-      const salesOrder = allOrders.find(
-        order => order.orderNumber === orderNumber || 
-                 order.externalOrderId === orderNumber ||
-                 order.orderNumber?.includes(orderNumber) ||
-                 order.externalOrderId?.includes(orderNumber)
-      );
+      let salesOrder = null;
+      
+      // First try to find by order number if provided
+      if (orderNumber) {
+        salesOrder = allOrders.find(
+          order => order.orderNumber === orderNumber || 
+                   order.externalOrderId === orderNumber ||
+                   order.orderNumber?.includes(orderNumber) ||
+                   order.externalOrderId?.includes(orderNumber)
+        );
+      }
+      
+      // If not found by order number, try customer name
+      if (!salesOrder && customerName) {
+        const normalizedName = customerName.toLowerCase().trim();
+        // Find most recent order for this customer
+        const matchingOrders = allOrders
+          .filter(order => order.customerName?.toLowerCase().includes(normalizedName))
+          .sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
+        
+        if (matchingOrders.length > 0) {
+          salesOrder = matchingOrders[0]; // Most recent order
+          console.log(`[GHL Custom Action] Found ${matchingOrders.length} orders for customer "${customerName}", using most recent`);
+        }
+      }
 
       if (!salesOrder) {
-        console.log(`[GHL Custom Action] Order not found: ${orderNumber}`);
+        const searchTerms = [orderNumber, customerName].filter(Boolean).join(' or ');
+        console.log(`[GHL Custom Action] Order not found: ${searchTerms}`);
         return res.status(404).json({
           success: false,
           error: "Order not found",
-          agentMessage: `I couldn't find an order with number ${orderNumber}. Could you please double-check the order number and try again?`
+          agentMessage: `I couldn't find an order matching ${searchTerms}. Could you please double-check and try again?`
         });
       }
 

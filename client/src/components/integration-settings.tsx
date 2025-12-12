@@ -62,6 +62,14 @@ const INTEGRATION_DESCRIPTIONS: Record<IntegrationType, string> = {
   SHIPPO: "Generate return shipping labels and track deliveries",
 };
 
+// Helper function to mask API keys (show first 2 + **** + last 4 characters)
+function maskApiKey(key: string | undefined | null): string {
+  if (!key || key.length < 8) return "";
+  const first = key.slice(0, 2);
+  const last = key.slice(-4);
+  return `${first}****${last}`;
+}
+
 export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuWizard }: IntegrationSettingsProps) {
   const { toast } = useToast();
   const [isConfigMode, setIsConfigMode] = useState(false);
@@ -95,6 +103,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   // GoHighLevel fields
   const [ghlApiKey, setGhlApiKey] = useState("");
   const [ghlLocationId, setGhlLocationId] = useState("");
+  const [ghlWebhookSecret, setGhlWebhookSecret] = useState("");
   
   // PhantomBuster fields
   const [phantomApiKey, setPhantomApiKey] = useState("");
@@ -247,6 +256,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       } else if (integrationType === "GOHIGHLEVEL") {
         setGhlApiKey("");
         setGhlLocationId(config.config?.locationId || "");
+        setGhlWebhookSecret(config.config?.webhookSecret || "");
       } else if (integrationType === "PHANTOMBUSTER") {
         setPhantomApiKey("");
         setPhantomAgentIds(config.config?.agentIds?.join(", ") || "");
@@ -345,6 +355,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       } else if (integrationType === "GOHIGHLEVEL") {
         configData = {
           locationId: ghlLocationId,
+          webhookSecret: ghlWebhookSecret, // Empty string clears the secret
         };
       } else if (integrationType === "PHANTOMBUSTER") {
         configData = {
@@ -416,6 +427,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     setRefreshToken("");
     setClientSecret("");
     setGhlApiKey("");
+    setGhlWebhookSecret("");
     setPhantomApiKey("");
     setShippoApiKey("");
     setShowLegacyLocationNote(false);
@@ -1079,18 +1091,20 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                 <>
                   <div className="space-y-2">
                     <Label htmlFor="ghl-api-key" data-testid="label-ghl-api-key">
-                      API Key
+                      API Key {config?.apiKey && <span className="text-muted-foreground font-normal">(Connected)</span>}
                     </Label>
                     <Input
                       id="ghl-api-key"
                       type="password"
-                      placeholder="Enter your GoHighLevel API key"
+                      placeholder={config?.apiKey ? maskApiKey(config.apiKey) : "Enter your GoHighLevel API key"}
                       value={ghlApiKey}
                       onChange={(e) => setGhlApiKey(e.target.value)}
                       data-testid="input-ghl-api-key"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Get your API key from GoHighLevel Settings → API Keys
+                      {config?.apiKey 
+                        ? "Leave blank to keep existing key, or enter a new key to replace it"
+                        : "Get your API key from GoHighLevel Settings → API Keys"}
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -1106,6 +1120,22 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     />
                     <p className="text-xs text-muted-foreground">
                       Find your Location ID in Settings → Business Profile → Location ID
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="ghl-webhook-secret" data-testid="label-ghl-webhook-secret">
+                      AI Agent Webhook Secret (Optional)
+                    </Label>
+                    <Input
+                      id="ghl-webhook-secret"
+                      type="password"
+                      placeholder="Enter a secret for AI Agent custom actions"
+                      value={ghlWebhookSecret}
+                      onChange={(e) => setGhlWebhookSecret(e.target.value)}
+                      data-testid="input-ghl-webhook-secret"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Used to authenticate AI Agent custom actions (e.g., return labels). Use this same secret as the X-GHL-Secret header in your GHL Custom Actions.
                     </p>
                   </div>
                 </>

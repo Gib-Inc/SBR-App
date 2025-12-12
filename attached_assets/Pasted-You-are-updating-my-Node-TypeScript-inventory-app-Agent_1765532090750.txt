@@ -1,0 +1,106 @@
+You are updating my Node/TypeScript inventory app “AgentSeniorStack” (repo already loaded). I need a new API endpoint that my GoHighLevel (GHL) AI Agent can call to create a return shipping label via Shippo and drive my refund flow.
+
+HIGH-LEVEL BEHAVIOR
+- Endpoint URL for GHL to call:
+  POST /api/ghl/custom-actions/create-return-label
+- Called ONLY by a GHL Custom Action when a customer asks for a return and is eligible under our policy.
+- The request will contain:
+  - Header: X-GHL-Secret = shared secret string (value in env var GHL_WEBHOOK_SECRET)
+  - JSON body:
+      {
+        "customerName": "<name the agent collected>",
+        "orderNumber": "<Sales Order number the customer gave>"
+      }
+- The endpoint must:
+  1) Verify the secret header:
+     - If missing or not equal to process.env.GHL_WEBHOOK_SECRET → return 401 { success: false, messageForAgent: "I couldn't verify this request. Please contact support." }
+  2) Look up the Sales Order in my database:
+     - orderNumber is the human-visible Sales Order number (same as shown on the Sales Orders page).
+     - If not found → return 404 with JSON:
+         {
+           success: false,
+           messageForAgent: "I couldn't find an order with that number. Please double-check the order number with the customer."
+         }
+  3) Validate that the order is eligible for return:
+     - Use whatever fields already exist for statuses / delivery dates (see current Sales Orders schema and status model).
+     - Only allow returns when:
+       - order is delivered AND
+       - return window is still valid according to our rules in the codebase (or at least not clearly “too old”).
+     - If not eligible → return with:
+         {
+           success: false,
+           messageForAgent: "According to our policy, this order is not eligible for a return. Let the customer know and offer to connect them with support if they have questions."
+         }
+  4) Create or reuse a “Return” record in our DB:
+     - If there is already a pending return for this order, reuse it instead of creating a duplicate.
+     - Otherwise create a return record with fields like:
+       - id
+       - orderId (FK to Sales Order)
+       - status: "label_created" | "awaiting_arrival" | "inspection" | "approved_100" | "approved_80" | "refunded" | "rejected"
+       - shippingCarrier, serviceLevel, labelUrl, trackingNumber
+       - createdAt, updatedAt
+     - We will use this later when the warehouse scans the incoming item and decides 100% vs 80% refund.
+  5) Call Shippo to create a RETURN label:
+     - Read Shippo credentials and default settings from environment variables:
+       - SHIPPO_API_KEY
+       - SHIPPO_DEFAULT_FROM_NAME
+       - SHIPPO_DEFAULT_FROM_COMPANY
+       - SHIPPO_DEFAULT_FROM_ADDRESS_LINE1
+       - SHIPPO_DEFAULT_FROM_CITY
+       - SHIPPO_DEFAULT_FROM_STATE
+       - SHIPPO_DEFAULT_FROM_ZIP
+       - SHIPPO_DEFAULT_FROM_COUNTRY
+       - SHIPPO_DEFAULT_SERVICE_LEVEL (e.g. "ups_ground")
+     - Use the Sales Order’s shipping address as the “to” address, and our warehouse address as “from”.
+     - Use 4x6 PDF labels (no need to override size if the account default in Shippo is already set to 4x6; just don’t hard-code conflicting values).
+     - Store in the Return record at least:
+       - labelUrl (link to PDF)
+       - trackingNumber
+       - carrier + service level
+  6) Update Sales Order state and GHL pipeline:
+     - For this first version, ensure that:
+       - The Sales Order state changes to something like "Return_In_Progress".
+       - A GHL Opportunity is created or updated in the “Processing Refund” stage using the existing GHL integration patterns in the app (see how we already create / sync opportunities).
+       - The opportunity name should clearly reference the order number and customer name, e.g. "Refund – PO {orderNumber} – {customerName}".
+  7) Return a response tailored for the GHL AI Agent:
+     - On success, respond with:
+       {
+         success: true,
+         messageForAgent: "I’ve created the return label for order {{orderNumber}}. Tell the customer they’ll receive a link to print their label and instructions by SMS shortly.",
+         labelUrl: "<Shippo label URL>",
+         trackingNumber: "<tracking number>",
+         carrier: "<carrier code>",
+         serviceLevel: "<service level code>"
+       }
+     - The agent will read messageForAgent and then send / say something nice to the customer.
+  8) NEVER log secrets:
+     - Do not log SHIPPO_API_KEY, GHL_API_KEY, or GHL_WEBHOOK_SECRET.
+     - You can log orderNumber, trackingNumber, and non-sensitive metadata for debugging.
+
+SALES ORDERS + REFUND LOGIC (ALIGN WITH EXISTING CODE)
+- Use the existing Sales Orders model, columns, and type definitions from the codebase.
+- Make sure any new fields or enums you introduce are consistent with how we already represent order status and returns.
+- We already have detailed refund logic elsewhere for:
+  - full refund vs 80% refund, based on warehouse inspection
+  - final Sales Order state must end as either "Delivered" or "Refunded"
+- Do NOT re-implement that final refund math here. This endpoint’s job is only:
+  - verify request
+  - validate order eligibility
+  - create the return record
+  - generate the Shippo label
+  - transition the order to a “Return_In_Progress” state
+  - create / update the GHL opportunity in “Processing Refund”.
+
+IMPLEMENTATION DETAILS
+- Follow the existing API routing pattern in the project (look at other /api/ routes for style).
+- Use TypeScript types and validation where we already use them (e.g. zod / schema validation if the repo uses it).
+- Add basic error handling:
+  - timeouts / errors from Shippo
+  - missing shipping address
+  - DB issues
+- For each error case, return a friendly messageForAgent string explaining what the AI agent should tell the customer.
+- After implementing, add at least one basic test or debug route so I can confirm:
+  - valid request → label is created
+  - invalid secret → 401
+  - missing / bad orderNumber → helpful messageForAgent
+Keep everything cohesive with the current AgentSeniorStack structure.

@@ -820,6 +820,59 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Add a note to a contact (and optionally link to an opportunity)
+   * V2 API: POST /contacts/{contactId}/notes
+   */
+  async addNote(
+    contactId: string,
+    body: string,
+    opportunityId?: string
+  ): Promise<{ success: boolean; noteId?: string; error?: string }> {
+    try {
+      const noteData: any = {
+        body,
+      };
+      
+      if (opportunityId) {
+        noteData.opportunityId = opportunityId;
+      }
+
+      console.log(`[GoHighLevelClient] Adding note to contact ${contactId}${opportunityId ? ` (opp: ${opportunityId})` : ''}`);
+
+      const response = await fetch(`${this.baseUrl}/contacts/${contactId}/notes`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(noteData),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[GoHighLevelClient] Add note failed:', errorText);
+        return {
+          success: false,
+          error: `Add note failed: ${response.status}`,
+        };
+      }
+
+      const data = await response.json();
+      const noteId = data.note?.id || data.id;
+      
+      console.log(`[GoHighLevelClient] Added note: ${noteId}`);
+      
+      return {
+        success: true,
+        noteId,
+      };
+    } catch (error: any) {
+      console.error('[GoHighLevelClient] Error adding note:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to add note',
+      };
+    }
+  }
+
+  /**
    * Get all opportunities in a pipeline (for cleanup)
    */
   async getAllOpportunitiesInPipeline(

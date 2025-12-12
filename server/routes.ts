@@ -12397,51 +12397,152 @@ Generate only the email body text, no subject line.`;
   //    - Endpoint: https://your-domain.com/api/ghl/custom-actions/create-return-label
   //    - Method: POST
   //    - Headers: { "X-GHL-Secret": "<your-secret>" }
-  //    - Body: { "orderNumber": "{{order_number}}", "contactId": "{{contact.id}}" }
+  //    - Body: { "orderNumber": "{{order_number}}", "contactId": "{{contact.id}}", "channel": "{{agentSession.channel}}" }
   // 3. In AI Agent prompt, instruct it to collect order number and call this action
   // ============================================================================
 
   // GHL AI Agent Custom Action: Create Return Label
   // POST /api/ghl/custom-actions/create-return-label
   // Called by GHL AI Agent when customer requests a return label
-  // Request: { orderNumber: string, contactId: string }
-  // Response: { success: true, agentMessage: "...", trackingNumber: "...", labelUrl: "..." }
-  // Side effects: Creates Shippo label, sends SMS with label details to customer
+  // Request: { orderNumber: string, contactId: string, channel?: string, customerName?: string }
+  // Response: { success: true, messageForAgent: "...", trackingNumber: "...", labelUrl: "...", carrier: "...", serviceLevel: "..." }
+  // Side effects: Creates Shippo label, sends SMS with label details, updates sales order status, creates GHL opportunity
   app.post("/api/ghl/custom-actions/create-return-label", async (req: Request, res: Response) => {
     console.log("[GHL Custom Action] Create return label request received");
+    
+    // Helper to get GHL client for creating opportunities and sending SMS
+    const getGhlClient = async (): Promise<GoHighLevelClient | null> => {
+      const users = await storage.getAllUsers();
+      if (users.length === 0) return null;
+      const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
+      if (!ghlConfig?.apiKey || !ghlConfig?.config) return null;
+      const locationId = (ghlConfig.config as any).locationId;
+      if (!locationId) return null;
+      return new GoHighLevelClient('https://services.leadconnectorhq.com', ghlConfig.apiKey, locationId);
+    };
+    
+    // Helper to create "Needs Attention" opportunity with note
+    const createNeedsAttentionOpportunity = async (
+      ghlClient: GoHighLevelClient | null,
+      name: string,
+      noteBody: string,
+      contactId: string
+    ) => {
+      if (!ghlClient) {
+        console.warn("[GHL Custom Action] Cannot create Needs Attention opportunity - no GHL client");
+        return;
+      }
+      
+      try {
+        // Import GHL config for stage IDs
+        const { GHL_CONFIG } = await import("./config/ghl-config");
+        
+        // Use replit admin contact for system alerts
+        const systemContactResult = await ghlClient.createOrFindContact(
+          'Replit Admin',
+          'replit-admin@inventory.internal',
+          undefined
+        );
+        const adminContactId = systemContactResult.success ? systemContactResult.contactId : contactId;
+        
+        const oppResult = await ghlClient.createOpportunity(
+          GHL_CONFIG.pipelineId,
+          GHL_CONFIG.stages.STALE_SYNC_ALERT, // "Needs Attention" stage
+          name,
+          0,
+          noteBody,
+          undefined,
+          adminContactId
+        );
+        
+        if (oppResult.success && oppResult.opportunityId && adminContactId) {
+          // Add detailed note to the opportunity
+          await ghlClient.addNote(adminContactId, noteBody, oppResult.opportunityId);
+          console.log(`[GHL Custom Action] Created Needs Attention opportunity: ${oppResult.opportunityId}`);
+        }
+      } catch (error: any) {
+        console.error("[GHL Custom Action] Failed to create Needs Attention opportunity:", error.message);
+      }
+    };
+    
+    // Helper to create "Processing Refund" opportunity
+    const createProcessingRefundOpportunity = async (
+      ghlClient: GoHighLevelClient | null,
+      salesOrder: any,
+      returnRequest: any,
+      contactId: string
+    ) => {
+      if (!ghlClient) {
+        console.warn("[GHL Custom Action] Cannot create Processing Refund opportunity - no GHL client");
+        return;
+      }
+      
+      try {
+        const { GHL_CONFIG } = await import("./config/ghl-config");
+        
+        const oppName = `Refund - ${salesOrder.orderNumber} - ${salesOrder.customerName}`;
+        const oppResult = await ghlClient.createOpportunity(
+          GHL_CONFIG.pipelineId,
+          GHL_CONFIG.stages.REFUND_PROCESSING,
+          oppName,
+          Number(salesOrder.total) || 0,
+          `Return initiated for order ${salesOrder.orderNumber}. RMA: ${returnRequest.rmaNumber || 'Pending'}`,
+          { orderId: salesOrder.id, returnId: returnRequest.id, orderNumber: salesOrder.orderNumber },
+          contactId
+        );
+        
+        if (oppResult.success) {
+          console.log(`[GHL Custom Action] Created Processing Refund opportunity: ${oppResult.opportunityId}`);
+        }
+      } catch (error: any) {
+        console.error("[GHL Custom Action] Failed to create Processing Refund opportunity:", error.message);
+      }
+    };
     
     try {
       // Authenticate using shared secret (check env var first, then user config)
       const providedSecret = req.headers['x-ghl-secret'] as string;
+      const ghlClient = await getGhlClient();
       
       if (!providedSecret) {
+        // Auth failure - create Needs Attention opportunity
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          "Return Label Auth Failure - Missing Secret",
+          `A return label request failed authentication due to missing X-GHL-Secret header.\n\nRequest body: ${JSON.stringify(req.body, null, 2)}`,
+          req.body.contactId || 'system'
+        );
         return res.status(401).json({ 
           success: false, 
           error: "Unauthorized: Missing GHL secret",
-          agentMessage: "I'm sorry, I couldn't verify this request. Please try again."
+          messageForAgent: "I'm sorry, I'm having some technical difficulties. I'm going to assign this to one of our team members who can help you further. We'll be in touch soon."
         });
       }
       
       // Get the expected secret from env var or user's GHL config
       let ghlSecret = process.env.GHL_WEBHOOK_SECRET;
       
-      // If env var not set, try to get from user's GHL integration config
       if (!ghlSecret) {
         const users = await storage.getAllUsers();
         if (users.length > 0) {
           const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
           const configSecret = (ghlConfig?.config as any)?.webhookSecret;
-          // Treat empty string as no secret configured
           ghlSecret = configSecret && configSecret.trim() ? configSecret : undefined;
         }
       }
       
       if (!ghlSecret) {
         console.error("[GHL Custom Action] No webhook secret configured (env or user config)");
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          "Return Label Config Error - No Webhook Secret",
+          `A return label request failed because no webhook secret is configured.\n\nRequest body: ${JSON.stringify(req.body, null, 2)}\n\nAction required: Configure GHL_WEBHOOK_SECRET env var or set webhook secret in GHL integration settings.`,
+          req.body.contactId || 'system'
+        );
         return res.status(401).json({ 
           success: false, 
           error: "Webhook authentication not configured",
-          agentMessage: "I'm sorry, there's a configuration issue. Please contact support."
+          messageForAgent: "I'm sorry, there's a configuration issue on our end. I'm going to assign this to one of our team members who can investigate. We'll be in touch soon."
         });
       }
 
@@ -12451,21 +12552,28 @@ Generate only the email body text, no subject line.`;
       
       if (expectedBuffer.length !== providedBuffer.length || 
           !crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          "Return Label Auth Failure - Invalid Secret",
+          `A return label request failed authentication due to invalid X-GHL-Secret header.\n\nRequest body: ${JSON.stringify(req.body, null, 2)}`,
+          req.body.contactId || 'system'
+        );
         return res.status(401).json({ 
           success: false, 
           error: "Unauthorized: Invalid GHL secret",
-          agentMessage: "I'm sorry, I couldn't verify this request. Please try again."
+          messageForAgent: "I'm sorry, I'm having some technical difficulties. I'm going to assign this to one of our team members who can help you further. We'll be in touch soon."
         });
       }
 
-      // Parse request body
-      const { orderNumber, customerName, contactId } = req.body;
+      // Parse request body - channel indicates voice vs SMS/conversations
+      const { orderNumber, customerName, contactId, channel } = req.body;
+      const isVoiceChannel = channel === 'CALL';
       
       if (!orderNumber && !customerName) {
         return res.status(400).json({
           success: false,
           error: "Order number or customer name is required",
-          agentMessage: "I need either your order number or your name to look up your order. Could you please provide one?"
+          messageForAgent: "I need either your order number or your name to look up your order. Could you please provide one?"
         });
       }
 
@@ -12473,17 +12581,16 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({
           success: false,
           error: "Contact ID is required",
-          agentMessage: "I'm sorry, I couldn't identify your account. Please try again."
+          messageForAgent: "I'm sorry, I couldn't identify your account. Please try again."
         });
       }
 
-      console.log(`[GHL Custom Action] Looking up order: orderNumber=${orderNumber}, customerName=${customerName}, contactId=${contactId}`);
+      console.log(`[GHL Custom Action] Looking up order: orderNumber=${orderNumber}, customerName=${customerName}, contactId=${contactId}, channel=${channel}`);
 
       // Look up the sales order by order number or customer name
       const allOrders = await storage.getAllSalesOrders();
       let salesOrder = null;
       
-      // First try to find by order number if provided
       if (orderNumber) {
         salesOrder = allOrders.find(
           order => order.orderNumber === orderNumber || 
@@ -12493,59 +12600,163 @@ Generate only the email body text, no subject line.`;
         );
       }
       
-      // If not found by order number, try customer name
       if (!salesOrder && customerName) {
         const normalizedName = customerName.toLowerCase().trim();
-        // Find most recent order for this customer
         const matchingOrders = allOrders
           .filter(order => order.customerName?.toLowerCase().includes(normalizedName))
           .sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
         
         if (matchingOrders.length > 0) {
-          salesOrder = matchingOrders[0]; // Most recent order
+          salesOrder = matchingOrders[0];
           console.log(`[GHL Custom Action] Found ${matchingOrders.length} orders for customer "${customerName}", using most recent`);
         }
       }
 
+      // ORDER NOT FOUND - Escalate to Needs Attention
       if (!salesOrder) {
         const searchTerms = [orderNumber, customerName].filter(Boolean).join(' or ');
         console.log(`[GHL Custom Action] Order not found: ${searchTerms}`);
+        
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          `Return Request - Order Not Found - ${searchTerms}`,
+          `Customer requested a return but we couldn't find their order.\n\nSearch terms: ${searchTerms}\nContact ID: ${contactId}\nChannel: ${channel || 'unknown'}\n\nAction required: Investigate and follow up with customer.`,
+          contactId
+        );
+        
         return res.status(404).json({
           success: false,
           error: "Order not found",
-          agentMessage: `I couldn't find an order matching ${searchTerms}. Could you please double-check and try again?`
+          messageForAgent: "I'm sorry, I'm having a hard time finding your order. I'm going to assign this to one of our team members who can investigate further. We'll be in touch soon."
         });
       }
 
-      console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderNumber})`);
+      console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderNumber}), status: ${salesOrder.status}`);
 
-      // Get order lines to include in return
+      // ELIGIBILITY CHECK 1: Order must be DELIVERED (or PENDING_REFUND if already returning)
+      const eligibleStatuses = ['DELIVERED', 'PENDING_REFUND'];
+      if (!eligibleStatuses.includes(salesOrder.status)) {
+        console.log(`[GHL Custom Action] Order not delivered yet: ${salesOrder.status}`);
+        
+        // Escalate for edge cases that might need manual investigation
+        if (salesOrder.status === 'CANCELLED' || salesOrder.status === 'REFUNDED') {
+          await createNeedsAttentionOpportunity(
+            ghlClient,
+            `Return Request - Invalid Status - ${salesOrder.orderNumber}`,
+            `Customer requested a return for an order with status "${salesOrder.status}".\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Verify order status and follow up with customer.`,
+            contactId
+          );
+          return res.status(400).json({
+            success: false,
+            error: "Order not eligible",
+            messageForAgent: "I'm sorry, this order isn't eligible for a return. I'm going to assign this to one of our team members who can investigate further. We'll be in touch soon."
+          });
+        }
+        
+        return res.status(400).json({
+          success: false,
+          error: "Order not delivered",
+          messageForAgent: `I'm sorry, I can't issue a refund until your order has been delivered. Your order is currently showing as "${salesOrder.status}". Please call back once your order has arrived.`
+        });
+      }
+
+      // ELIGIBILITY CHECK 2: 30-day return window
+      const orderDate = new Date(salesOrder.orderDate);
+      const now = new Date();
+      const daysSinceOrder = Math.floor((now.getTime() - orderDate.getTime()) / (1000 * 60 * 60 * 24));
+      const RETURN_WINDOW_DAYS = 30;
+      
+      if (daysSinceOrder > RETURN_WINDOW_DAYS) {
+        console.log(`[GHL Custom Action] Order outside return window: ${daysSinceOrder} days`);
+        
+        // Escalate to allow for manual exception handling
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          `Return Request - Outside Window - ${salesOrder.orderNumber}`,
+          `Customer requested a return outside the ${RETURN_WINDOW_DAYS}-day return window.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nDays since order: ${daysSinceOrder}\nContact ID: ${contactId}\n\nAction required: Review for possible exception.`,
+          contactId
+        );
+        
+        return res.status(400).json({
+          success: false,
+          error: "Outside return window",
+          messageForAgent: `Our refund policy allows returns within ${RETURN_WINDOW_DAYS} days of purchase. Today is day ${daysSinceOrder} since your order, so we're unable to process a refund. I apologize for any inconvenience. I've passed this to our team in case there's an exception we can make for you.`
+        });
+      }
+
+      // Get order lines
       const orderLines = await storage.getSalesOrderLines(salesOrder.id);
       if (orderLines.length === 0) {
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          `Return Request - No Items - ${salesOrder.orderNumber}`,
+          `Customer requested a return but no items found on order.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\n\nAction required: Investigate order data.`,
+          contactId
+        );
         return res.status(400).json({
           success: false,
           error: "No items in order",
-          agentMessage: "I couldn't find any items on this order. Please contact support for assistance."
+          messageForAgent: "I'm having trouble finding the items on your order. I'm going to assign this to one of our team members who can investigate. We'll be in touch soon."
         });
       }
 
-      // Build customer address from sales order
+      // MISSING SHIPPING ADDRESS - Ask customer to provide
       const shippingAddress = salesOrder.shippingAddress as any;
       if (!shippingAddress || !shippingAddress.street1) {
         return res.status(400).json({
           success: false,
           error: "No shipping address on order",
-          agentMessage: "I don't have a shipping address on file for this order. Please contact support for assistance."
+          messageForAgent: "Can you please provide me a good return address? I don't see one on file for this order."
         });
       }
 
-      // Check if a return already exists for this order
+      // Check for existing pending return - REUSE if exists (skip new label creation)
       const existingReturns = await storage.getReturnRequestsBySalesOrderId(salesOrder.id);
       let returnRequest = existingReturns.find(r => 
         r.status !== 'CANCELLED' && r.status !== 'CLOSED' && r.status !== 'REFUNDED'
       );
 
-      // Create return request if one doesn't exist
+      // ALREADY HAS PENDING RETURN WITH LABEL - provide existing label info and carrier estimate
+      if (returnRequest && returnRequest.status !== 'APPROVED') {
+        console.log(`[GHL Custom Action] Found existing return ${returnRequest.id} with status ${returnRequest.status}`);
+        
+        // Retrieve existing shipment/label info
+        const existingShipments = await storage.getReturnShipmentsByRequestId(returnRequest.id);
+        const existingShipment = existingShipments.length > 0 ? existingShipments[0] : null;
+        
+        const returnCreatedDate = new Date(returnRequest.createdAt);
+        const daysSinceReturn = Math.floor((now.getTime() - returnCreatedDate.getTime()) / (1000 * 60 * 60 * 24));
+        
+        // Estimate based on carrier (UPS Ground typically 4-6 business days)
+        const carrierName = existingShipment?.carrier || 'UPS';
+        const estimatedDaysTotal = carrierName.toLowerCase().includes('express') ? 3 : 6;
+        const daysRemaining = Math.max(0, estimatedDaysTotal - daysSinceReturn);
+        
+        const createdDateStr = returnCreatedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        
+        // Build message with carrier info
+        let agentMsg = `I see we already have a return in progress for this order. `;
+        if (existingShipment) {
+          agentMsg += `Your ${carrierName} return label was created on ${createdDateStr}. `;
+          agentMsg += `Based on ${carrierName} delivery times, you should expect your refund within ${daysRemaining} business days if you've already shipped the item. `;
+          agentMsg += `If you need the tracking number or label again, I can text that to you.`;
+        } else {
+          agentMsg += `This return was created on ${createdDateStr}. You should check back in about ${daysRemaining} business days if you haven't received your refund yet.`;
+        }
+        
+        return res.status(200).json({
+          success: true,
+          messageForAgent: agentMsg,
+          returnId: returnRequest.id,
+          rmaNumber: returnRequest.rmaNumber,
+          status: returnRequest.status,
+          trackingNumber: existingShipment?.trackingNumber,
+          labelUrl: existingShipment?.labelUrl,
+          carrier: existingShipment?.carrier,
+        });
+      }
+
+      // Create return request if one doesn't exist or is in APPROVED state (ready for label)
       if (!returnRequest) {
         console.log(`[GHL Custom Action] Creating new return request for order ${salesOrder.id}`);
         
@@ -12566,7 +12777,6 @@ Generate only the email body text, no subject line.`;
           status: 'APPROVED',
         });
 
-        // Create return items for all order lines
         for (const line of orderLines) {
           await storage.createReturnItem({
             returnRequestId: returnRequest.id,
@@ -12580,13 +12790,13 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Log the return creation event
         await storage.createReturnEvent({
           returnRequestId: returnRequest.id,
           eventType: 'CREATED',
           eventData: { 
             source: 'GHL_AI_AGENT',
             contactId,
+            channel: channel || 'unknown',
             orderNumber: salesOrder.orderNumber 
           },
         });
@@ -12596,12 +12806,21 @@ Generate only the email body text, no subject line.`;
       console.log(`[GHL Custom Action] Generating Shippo label for return ${returnRequest.id}`);
       const labelResult = await shippoReturnsService.createReturnLabel(returnRequest);
 
+      // SHIPPO LABEL CREATION FAILED - Escalate
       if (!labelResult.success) {
         console.error(`[GHL Custom Action] Shippo label creation failed:`, labelResult.error);
+        
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          `Return Label Failed - ${salesOrder.orderNumber}`,
+          `Failed to create Shippo return label.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nError: ${labelResult.error}\n\nAction required: Manually create label and contact customer.`,
+          contactId
+        );
+        
         return res.status(500).json({
           success: false,
           error: labelResult.error || "Failed to create shipping label",
-          agentMessage: "I'm sorry, I couldn't create your return label right now. Please try again in a few minutes or contact support."
+          messageForAgent: "I'm hitting a snag generating the return label. I'm going to pass this to our returns team so they can finish it up for you. We'll be in touch soon."
         });
       }
 
@@ -12624,63 +12843,88 @@ Generate only the email body text, no subject line.`;
         status: 'LABEL_CREATED',
       });
 
+      // Update Sales Order status to PENDING_REFUND
+      await storage.updateSalesOrder(salesOrder.id, {
+        status: 'PENDING_REFUND',
+      });
+      console.log(`[GHL Custom Action] Updated sales order ${salesOrder.id} to PENDING_REFUND`);
+
       // Log the label creation event
       await storage.createReturnEvent({
         returnRequestId: returnRequest.id,
         eventType: 'LABEL_CREATED',
         eventData: {
           carrier: labelResult.carrier,
+          serviceLevel: labelResult.serviceLevel,
           trackingNumber: labelResult.trackingNumber,
           labelUrl: labelResult.labelUrl,
           labelCost: labelResult.labelCost,
         },
       });
 
-      // Send SMS with label details via GHL
-      const smsMessage = `Your return label is ready!\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${labelResult.carrier || 'UPS'} location.`;
+      // Create GHL Opportunity in "Processing Refund" stage
+      await createProcessingRefundOpportunity(ghlClient, salesOrder, returnRequest, contactId);
+
+      // Send SMS with label details - channel-aware messaging
+      const carrierName = labelResult.carrier || 'UPS';
+      let smsMessage: string;
+      
+      if (isVoiceChannel) {
+        smsMessage = `Thanks for calling! Here's your return label:\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${carrierName} location.`;
+      } else {
+        smsMessage = `Your return label is ready!\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${carrierName} location.`;
+      }
 
       console.log(`[GHL Custom Action] Sending SMS to contact ${contactId}`);
       
-      // Get GHL config for first user (system-level integration)
-      const users = await storage.getAllUsers();
-      if (users.length > 0) {
-        const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
-        if (ghlConfig?.apiKey && ghlConfig?.config) {
-          const locationId = (ghlConfig.config as any).locationId;
-          if (locationId) {
-            const ghlClient = new GoHighLevelClient(
-              'https://services.leadconnectorhq.com',
-              ghlConfig.apiKey,
-              locationId
-            );
-            
-            const smsResult = await ghlClient.sendSMS(contactId, smsMessage);
-            if (smsResult.success) {
-              console.log(`[GHL Custom Action] SMS sent successfully: ${smsResult.messageId}`);
-            } else {
-              console.warn(`[GHL Custom Action] SMS sending failed: ${smsResult.error}`);
-            }
-          }
+      if (ghlClient) {
+        const smsResult = await ghlClient.sendSMS(contactId, smsMessage);
+        if (smsResult.success) {
+          console.log(`[GHL Custom Action] SMS sent successfully: ${smsResult.messageId}`);
+        } else {
+          console.warn(`[GHL Custom Action] SMS sending failed: ${smsResult.error}`);
+          // SMS failure - escalate but don't fail the whole request
+          await createNeedsAttentionOpportunity(
+            ghlClient,
+            `Return SMS Failed - ${salesOrder.orderNumber}`,
+            `Failed to send return label SMS to customer.\n\nOrder: ${salesOrder.orderNumber}\nCustomer: ${salesOrder.customerName}\nContact ID: ${contactId}\nTracking: ${labelResult.trackingNumber}\nLabel URL: ${labelResult.labelUrl}\nError: ${smsResult.error}\n\nAction required: Manually send label link to customer.`,
+            contactId
+          );
         }
       }
 
       // Return response for AI Agent to speak
       res.json({
         success: true,
-        agentMessage: "I've created your return label and I'm sending you the details via text right now. You'll receive the tracking number and a link to print your label. Just drop off your package at any UPS location.",
+        messageForAgent: `I've created your return label and I'm sending you the details via text right now. You'll receive the tracking number and a link to print your label. Just drop off your package at any ${carrierName} location.`,
         trackingNumber: labelResult.trackingNumber,
         labelUrl: labelResult.labelUrl,
         carrier: labelResult.carrier,
+        serviceLevel: labelResult.serviceLevel || 'ground',
         returnId: returnRequest.id,
         rmaNumber: returnRequest.rmaNumber,
       });
 
     } catch (error: any) {
       console.error("[GHL Custom Action] Error creating return label:", error);
+      
+      // Try to create Needs Attention opportunity for unexpected errors
+      try {
+        const ghlClient = await getGhlClient();
+        await createNeedsAttentionOpportunity(
+          ghlClient,
+          `Return Label Error - Unexpected`,
+          `An unexpected error occurred while processing a return label request.\n\nError: ${error.message}\nStack: ${error.stack}\nRequest body: ${JSON.stringify(req.body, null, 2)}\n\nAction required: Investigate and follow up with customer.`,
+          req.body.contactId || 'system'
+        );
+      } catch (escalationError) {
+        console.error("[GHL Custom Action] Failed to escalate error:", escalationError);
+      }
+      
       res.status(500).json({
         success: false,
         error: error.message || "Internal server error",
-        agentMessage: "I'm sorry, something went wrong. Please try again or contact support for assistance."
+        messageForAgent: "I'm sorry, something went wrong on our end. I'm going to assign this to one of our team members who can help you further. We'll be in touch soon."
       });
     }
   });

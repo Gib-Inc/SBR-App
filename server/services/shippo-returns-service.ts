@@ -18,6 +18,7 @@ interface ShippoShipmentResult {
   shipmentId?: string;
   transactionId?: string;
   carrier?: string;
+  serviceLevel?: string;
   trackingNumber?: string;
   labelUrl?: string;
   labelCost?: number;
@@ -33,15 +34,17 @@ interface ShippoTrackingStatus {
   location?: string;
 }
 
+// Warehouse address for return labels - supports multiple env var naming conventions
+// Priority: SHIPPO_DEFAULT_FROM_* (spec) > RETURN_TO_* > SHIPPO_WAREHOUSE_* > defaults
 const WAREHOUSE_ADDRESS: ShippoAddress = {
-  name: process.env.RETURN_TO_NAME || process.env.SHIPPO_WAREHOUSE_NAME || "Sticker Burr Roller",
-  street1: process.env.RETURN_TO_STREET1 || process.env.SHIPPO_WAREHOUSE_STREET1 || "123 Warehouse St",
-  street2: process.env.RETURN_TO_STREET2 || process.env.SHIPPO_WAREHOUSE_STREET2 || undefined,
-  city: process.env.RETURN_TO_CITY || process.env.SHIPPO_WAREHOUSE_CITY || "Salt Lake City",
-  state: process.env.RETURN_TO_STATE || process.env.SHIPPO_WAREHOUSE_STATE || "UT",
-  zip: process.env.RETURN_TO_ZIP || process.env.SHIPPO_WAREHOUSE_ZIP || "84101",
-  country: process.env.RETURN_TO_COUNTRY || process.env.SHIPPO_WAREHOUSE_COUNTRY || "US",
-  phone: process.env.RETURN_TO_PHONE || process.env.SHIPPO_WAREHOUSE_PHONE,
+  name: process.env.SHIPPO_DEFAULT_FROM_NAME || process.env.RETURN_TO_NAME || process.env.SHIPPO_WAREHOUSE_NAME || "Sticker Burr Roller",
+  street1: process.env.SHIPPO_DEFAULT_FROM_ADDRESS_LINE1 || process.env.RETURN_TO_STREET1 || process.env.SHIPPO_WAREHOUSE_STREET1 || "123 Warehouse St",
+  street2: process.env.SHIPPO_DEFAULT_FROM_ADDRESS_LINE2 || process.env.RETURN_TO_STREET2 || process.env.SHIPPO_WAREHOUSE_STREET2 || undefined,
+  city: process.env.SHIPPO_DEFAULT_FROM_CITY || process.env.RETURN_TO_CITY || process.env.SHIPPO_WAREHOUSE_CITY || "Salt Lake City",
+  state: process.env.SHIPPO_DEFAULT_FROM_STATE || process.env.RETURN_TO_STATE || process.env.SHIPPO_WAREHOUSE_STATE || "UT",
+  zip: process.env.SHIPPO_DEFAULT_FROM_ZIP || process.env.RETURN_TO_ZIP || process.env.SHIPPO_WAREHOUSE_ZIP || "84101",
+  country: process.env.SHIPPO_DEFAULT_FROM_COUNTRY || process.env.RETURN_TO_COUNTRY || process.env.SHIPPO_WAREHOUSE_COUNTRY || "US",
+  phone: process.env.SHIPPO_DEFAULT_FROM_PHONE || process.env.RETURN_TO_PHONE || process.env.SHIPPO_WAREHOUSE_PHONE,
 };
 
 export class ShippoReturnsService {
@@ -165,6 +168,7 @@ export class ShippoReturnsService {
         shipmentId: shipment.object_id,
         transactionId: transaction.object_id,
         carrier: preferredRate.provider,
+        serviceLevel: preferredRate.servicelevel?.token || preferredRate.servicelevel?.name || this.defaultService,
         trackingNumber: transaction.tracking_number,
         labelUrl: transaction.label_url,
         labelCost: parseFloat(preferredRate.amount),
@@ -268,7 +272,8 @@ export class ShippoReturnsService {
       success: true,
       shipmentId: `stub_shipment_${returnRequest.id}`,
       transactionId: `stub_transaction_${returnRequest.id}`,
-      carrier: "USPS",
+      carrier: "UPS",
+      serviceLevel: "ups_ground",
       trackingNumber: stubTrackingNumber,
       labelUrl: `https://example.com/stub-label/${returnRequest.id}.pdf`,
       labelCost: 8.50,

@@ -62,6 +62,18 @@ Preferred communication style: Simple, everyday language.
     *   Shippo integration for return label generation.
     *   GoHighLevel integration for refund opportunity sync.
     *   QuickBooks Credit Memo creation for accounting via `/api/returns/:id/post-to-quickbooks`.
+*   **GHL AI Agent Custom Actions**:
+    *   Endpoint: `POST /api/ghl/custom-actions/create-return-label`
+    *   Request format: `{ orderNumber, contactId, channel?, customerName? }`
+    *   Response format: `{ success, messageForAgent, trackingNumber, labelUrl, carrier, serviceLevel }`
+    *   `channel` field: "CALL" for voice, SMS for messaging - determines SMS template formatting
+    *   **Eligibility rules**: Order must be DELIVERED status and within 30-day return window
+    *   **Return reuse**: Existing pending returns are reused with carrier estimate in response
+    *   **Sales Order transition**: Automatically updates to PENDING_REFUND status on success
+    *   **GHL Opportunities**: Creates "Processing Refund" opportunity on success
+    *   **Safety rails**: 10 error scenarios create "Needs Attention" opportunities with detailed notes
+    *   **Shippo env vars**: Primary `SHIPPO_DEFAULT_FROM_*`, fallback to `RETURN_TO_*` and `SHIPPO_WAREHOUSE_*`
+    *   **Authentication**: X-GHL-Secret header validated against GHL_WEBHOOK_SECRET env var or integration config
 *   **Daily Sales Snapshots** (for LLM trend analysis):
     *   Aggregated daily totals stored in `daily_sales_snapshots` table.
     *   Metrics: totalRevenue, totalOrders, totalUnits, totalRefunds, netRevenue.

@@ -1,0 +1,201 @@
+You are updating the Sticker Burr Roller “AgentSeniorStack” app. I need you to CHANGE the refund calculation logic everywhere returns are handled (return creation, warehouse damage check, QuickBooks posting, GHL messaging) to the NEW business rules below.
+
+DO NOT keep the old “refundPercent 80% / 100%” logic. Replace it with explicit dollar-amount math based on shipping cost and per-item damage. Keep existing endpoints and UI flows, but update their internals and any DB fields as needed.
+
+====================================
+1. OVERVIEW OF NEW REFUND RULES
+====================================
+
+Business rules for refunds:
+
+1) When a customer requests a refund:
+   - GHL → calls our Replit refund endpoint (you already created this: POST /api/ghl/custom-actions/create-return-label).
+   - Replit → calls Shippo to create a RETURN label and gets the final UPS rate we will pay.
+   - Replit → calculates the AVAILABLE REFUND AMOUNT like this:
+
+      - totalReceived = total amount our company actually received for that order (order total AFTER tax; use the field you already store for “total paid by customer”).
+      - shippingCost = the UPS rate for the return label (the amount Shippo tells us).
+      - labelFee = flat $1 fee we charge for the label.
+      - totalReturnCost = shippingCost + labelFee.
+      - baseRefundAmount = totalReceived - totalReturnCost.
+      - If baseRefundAmount < 0, clamp it to 0.
+
+2) Damage rules when the product comes back to the warehouse:
+   - When warehouse scans the returned items, we no longer use a flat 80% vs 100%.
+   - Instead, we calculate damage PER DAMAGED STOCK ITEM:
+     - For each damaged line item in the return:
+       - damageAmountForItem = 10% of that item’s line total (unit price * quantity for that line).
+     - damageDeductionTotal = sum of all damageAmountForItem for all damaged items on this return.
+   - finalRefundAmount = baseRefundAmount - damageDeductionTotal.
+   - If finalRefundAmount < 0, clamp it to 0.
+
+Example:
+- totalReceived = $60
+- shippingCost (UPS) = $9
+- labelFee = $1
+- baseRefundAmount = 60 - (9 + 1) = $50
+- If one damaged part has line total $60:
+  - damageDeductionTotal = 10% of 60 = $6
+  - finalRefundAmount = 50 - 6 = $44
+
+We must store and surface both the baseRefundAmount (what we tell the customer they are “eligible for”) AND the finalRefundAmount (after damage is assessed), plus a breakdown of why.
+
+====================================
+2. DATA MODEL / DB CHANGES
+====================================
+
+Find the existing “Return” / “Returns” model (or whichever model you currently use to store return + refund info) and UPDATE IT as follows:
+
+1) Remove or stop using any “refundPercent” or 80%/100% fields.
+2) Ensure the Return record stores at least:
+
+   - orderId / orderNumber (existing)
+   - labelUrl (existing)
+   - trackingNumber (existing)
+   - shippingCarrier (UPS) (existing or add)
+   - shippingCost (Number)  // what Shippo says the UPS rate will cost us
+   - labelFee (Number)      // always 1.00 for now; keep as a configurable field
+   - totalReceived (Number) // total actually received from customer for that order
+   - baseRefundAmount (Number)  // totalReceived - (shippingCost + labelFee)
+   - damageDeductionTotal (Number) // sum of all 10% deductions for damaged items
+   - finalRefundAmount (Number)    // baseRefundAmount - damageDeductionTotal
+   - damageItems (optional JSON/array) with:
+       - stockItemId or sku
+       - lineTotal
+       - damagePercent (always 0.10 for now)
+       - damageAmountForItem
+   - status field for the return, with at least:
+       - "label_created" or "in_transit" (after label created)
+       - "awaiting_inspection" (when item arrives)
+       - "damage_assessed" (after warehouse marks damaged items)
+       - "refund_posted" (after QuickBooks refund created)
+
+Make sure all new numeric fields are persisted and exposed wherever we show return details in the admin UI.
+
+====================================
+3. FLOW: WHEN GHL STARTS A REFUND
+====================================
+
+Update the handler for POST /api/ghl/custom-actions/create-return-label (or the equivalent endpoint GHL is calling) so that it:
+
+1) Accepts payload from GHL that includes:
+   - customerName (String)
+   - orderNumber (String)
+   - (plus any other fields you already use)
+
+2) Looks up the Sales Order in our DB by orderNumber and retrieves:
+   - totalReceived (total order amount after tax)
+   - shipping address (for Shippo)
+   - items / stock inventory lines (for later damage calculations)
+
+3) Calls Shippo to create a RETURN shipment and label:
+   - Uses the customer’s “ship from” address as the FROM address.
+   - Uses the warehouse address as the TO address.
+   - Uses UPS as the carrier, rate selection as you already implemented.
+   - Gets the actual shippingCost from Shippo’s chosen rate.
+   - Gets labelUrl and trackingNumber.
+
+4) Calculates refund numbers:
+
+   - shippingCost = UPS rate from Shippo
+   - labelFee = 1
+   - totalReturnCost = shippingCost + labelFee
+   - baseRefundAmount = totalReceived - totalReturnCost
+   - if baseRefundAmount < 0, set baseRefundAmount = 0
+
+5) Creates or updates the Return record with:
+   - orderId / orderNumber
+   - totalReceived
+   - shippingCost
+   - labelFee
+   - baseRefundAmount
+   - damageDeductionTotal = 0 initially
+   - finalRefundAmount = baseRefundAmount initially
+   - labelUrl, trackingNumber, shippingCarrier
+   - status = "label_created" (or similar)
+
+6) Returns a JSON payload to GHL that includes at least:
+   - labelUrl
+   - trackingNumber
+   - baseRefundAmount
+   - totalReceived
+   - shippingCost
+   - labelFee
+   - a field like messageForAgent that GHL can read and say to the customer.
+
+The messageForAgent content should be something like:
+
+   "I see you’re eligible for a refund of ${baseRefundAmount}. We received ${totalReceived} for your order, minus ${shippingCost} for UPS return shipping and a $${labelFee} label fee, which leaves ${baseRefundAmount}. Once your product makes it back to the warehouse you will receive up to ${baseRefundAmount}. If there is any damage to any parts, there will be a 10% deduction per damaged part based on its price."
+
+Make sure all dollar amounts are formatted to 2 decimal places in the text and JSON.
+
+====================================
+4. FLOW: WHEN WAREHOUSE SCANS A RETURN AND MARKS DAMAGE
+====================================
+
+We already have a warehouse / returns UI where staff scan returned items. UPDATE that part of the app so that:
+
+1) When a returned order is scanned:
+   - The app pulls the Return record for that order.
+   - The UI lets warehouse staff mark individual stock items as "damaged" or "not damaged" (per line item in the original order or in the return).
+
+2) When they submit their damage assessment:
+   - Recalculate damageDeductionTotal:
+
+      damageDeductionTotal = SUM over each damaged line:
+          damageAmountForItem = 0.10 * lineTotalForThatItem
+
+   - finalRefundAmount = baseRefundAmount - damageDeductionTotal
+   - If finalRefundAmount < 0, clamp to 0.
+
+3) Save back to the Return record:
+   - damageDeductionTotal
+   - finalRefundAmount
+   - damageItems array with details (item, lineTotal, damageAmount)
+   - status = "damage_assessed" or "ready_for_refund"
+
+4) Trigger the existing QuickBooks integration (or create the call if not present yet) so that:
+   - A refund / credit is created in QuickBooks for finalRefundAmount.
+   - Use the appropriate QuickBooks account and customer mapping you already set up.
+   - Do NOT post any refund until after damage has been assessed (only when status changes to "damage_assessed").
+
+5) Update the GHL Opportunity stages as you had previously designed:
+   - When the refund is started (label created): put/create the contact in pipeline stage "Processing refund".
+   - When the refund is fully posted in QuickBooks: move the opportunity to "Refunded".
+   - After 30 days of being in "Refunded", either:
+       - Automatically delete the opportunity, OR
+       - Move it out of the board (whichever logic you already chose). Keep the logic consistent with what you’ve already built.
+
+====================================
+5. GHL / CUSTOMER MESSAGING HOOKS
+====================================
+
+Wherever we currently send messages back to GHL or to the customer, update the wording to match the new refund rules:
+
+1) At refund start (right after label creation, before damage is known):
+   - GHL should say something like:
+     "I see you’re eligible for a refund of ${baseRefundAmount}. That’s the total you paid (${totalReceived}) minus UPS return shipping (${shippingCost}) and a $${labelFee} label fee. Once your product makes it back to the warehouse you’ll receive up to ${baseRefundAmount}. If there’s any damage to any parts, there will be a 10% deduction per damaged part."
+
+2) After damage is assessed (optional for now, but support via API):
+   - If you already have a place where the app can tell GHL the finalRefundAmount, update that text to:
+     - "Your return has been inspected. Your final refund amount is ${finalRefundAmount}, after a total damage deduction of ${damageDeductionTotal}."
+
+Make sure the API responses used by GHL always include:
+   - baseRefundAmount
+   - finalRefundAmount
+   - damageDeductionTotal
+   - a human-readable explanation string.
+
+====================================
+6. CLEANUP
+====================================
+
+1) Remove or deprecate any old code that assumes a binary refundPercent (80% or 100%).
+2) Update any tests to validate:
+   - correct baseRefundAmount with different shipping costs,
+   - correct damageDeductionTotal with 0, 1, or multiple damaged items,
+   - finalRefundAmount is never negative,
+   - the messages returned to GHL match the new math.
+3) Keep the rest of the app behavior and UI structure intact. Only change what’s necessary to implement this new refund math and data model.
+
+When you’re done, ensure everything compiles and the main refund flows still work end-to-end.

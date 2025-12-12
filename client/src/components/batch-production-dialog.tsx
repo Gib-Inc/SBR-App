@@ -299,28 +299,6 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
             </ScrollArea>
           )}
 
-          {selectedArray.length > 0 && (
-            <div className="rounded-lg border bg-muted/30 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-sm font-medium">
-                  Production Summary
-                </p>
-                <Badge variant="default">
-                  {selectedArray.length} products, {totalUnits} total units
-                </Badge>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                {selectedArray.map((item) => (
-                  <div key={item.id} className="flex justify-between items-center gap-2 p-2 rounded bg-background/50">
-                    <span className="text-muted-foreground truncate flex-1 min-w-0" title={item.name}>
-                      {item.name}
-                    </span>
-                    <Badge variant="outline" className="shrink-0">{item.qty} units</Badge>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         <DialogFooter className="mt-4 gap-2">

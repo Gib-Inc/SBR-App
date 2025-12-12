@@ -2189,13 +2189,13 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.json({ status: "UNKNOWN_CODE", message: "Return request not found" });
       }
       
-      // Check if already received
-      const receivedStatuses = ['RETURNED', 'RECEIVED_AT_WAREHOUSE', 'REFUND_ISSUE_PENDING', 'REFUNDED', 'CLOSED', 'COMPLETED'];
+      // Check if already received/assessed
+      const receivedStatuses = ['RETURNED', 'RECEIVED_AT_WAREHOUSE', 'DAMAGE_ASSESSED', 'REFUND_ISSUE_PENDING', 'REFUNDED', 'CLOSED', 'COMPLETED'];
       if (receivedStatuses.includes(returnRequest.status)) {
-        // Already received - don't double-adjust inventory
+        // Already received - don't double-assess
         try {
           await logService.log({
-            type: 'SKU_MISMATCH', // Could use a dedicated DUPLICATE_LABEL_SCAN type
+            type: 'SKU_MISMATCH',
             severity: 'WARNING',
             message: `Duplicate scan: Return ${returnRequest.id} already received`,
             details: { code, returnRequestId: returnRequest.id, currentStatus: returnRequest.status },
@@ -2213,103 +2213,62 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
       
-      // Process the return - update status, inventory, and label log
+      // Get return items for damage assessment popup
       const now = new Date();
       const returnItems = await storage.getReturnItemsByRequestId(returnRequest.id);
-      const affectedSkus: string[] = [];
-      const inventoryUpdates: { sku: string; qty: number }[] = [];
       
-      // Update return request status to RETURNED
-      await storage.updateReturnRequest(returnRequest.id, {
-        status: 'RETURNED',
-        receivedAt: now,
-      });
-      
-      // Update each return item and inventory
-      for (const returnItem of returnItems) {
-        // Mark item as received
-        await storage.updateReturnItem(returnItem.id, {
-          qtyReceived: returnItem.qtyApproved, // All approved qty is received
-          condition: 'GOOD', // Default assumption; can be updated later
-        });
-        
-        // Update inventory - returns go to Hildale warehouse
-        if (returnItem.inventoryItemId) {
-          const item = await storage.getItem(returnItem.inventoryItemId);
-          if (item) {
-            const newHildaleQty = (item.hildaleQty ?? 0) + returnItem.qtyApproved;
-            await storage.updateItem(returnItem.inventoryItemId, {
-              hildaleQty: newHildaleQty,
-            });
-            
-            affectedSkus.push(item.sku);
-            inventoryUpdates.push({ sku: item.sku, qty: returnItem.qtyApproved });
-          }
-        } else if (returnItem.sku) {
-          // Try to find item by SKU
-          const item = await storage.getItemBySku(returnItem.sku);
-          if (item) {
-            const newHildaleQty = (item.hildaleQty ?? 0) + returnItem.qtyApproved;
-            await storage.updateItem(item.id, {
-              hildaleQty: newHildaleQty,
-            });
-            
-            affectedSkus.push(item.sku);
-            inventoryUpdates.push({ sku: item.sku, qty: returnItem.qtyApproved });
-          }
-        }
-        
-        affectedSkus.push(returnItem.sku);
-      }
-      
-      // Update the Shippo label log
+      // Update the Shippo label log to mark as scanned (pending assessment)
       await storage.updateShippoLabelLog(labelLog.id, {
-        status: 'SCANNED_RECEIVED',
+        status: 'SCANNED_PENDING_ASSESSMENT',
         scannedAt: now,
         scannedBy: req.session.userId || undefined,
+      });
+      
+      // Update return request status to indicate awaiting inspection
+      await storage.updateReturnRequest(returnRequest.id, {
+        status: 'AWAITING_INSPECTION',
+        receivedAt: now,
       });
       
       // Create return event for audit trail
       try {
         await storage.createReturnEvent({
           returnRequestId: returnRequest.id,
-          type: 'WAREHOUSE_SCAN',
-          fromStatus: returnRequest.status,
-          toStatus: 'RETURNED',
-          actor: `user:${req.session.userId || 'unknown'}`,
-          message: `Return received via label scan (tracking: ${labelLog.trackingNumber})`,
-          payload: { scanCode: code, source: scanSource, affectedSkus },
+          eventType: 'WAREHOUSE_SCAN',
+          eventData: { 
+            scanCode: code, 
+            source: scanSource,
+            trackingNumber: labelLog.trackingNumber,
+            scannedBy: req.session.userId || 'unknown',
+          },
         });
       } catch (evtErr) {
         console.warn('[Scan] Failed to create return event:', evtErr);
       }
       
-      // Log the success
-      try {
-        await logService.log({
-          type: 'RETURN_EVENT' as any, // System log for return scanning
-          severity: 'INFO',
-          message: `Return ${returnRequest.rmaNumber || returnRequest.id} received via label scan`,
-          details: { 
-            code, 
-            returnRequestId: returnRequest.id, 
-            salesOrderId: returnRequest.salesOrderId,
-            affectedSkus,
-            inventoryUpdates,
-          },
-        });
-      } catch (logErr) {
-        console.warn('[Scan] Failed to log return receipt:', logErr);
-      }
-      
+      // Return PENDING_DAMAGE_ASSESSMENT status with items for the popup
       return res.json({
-        status: "RETURN_RECEIVED",
+        status: "PENDING_DAMAGE_ASSESSMENT",
         returnRequestId: returnRequest.id,
         salesOrderId: returnRequest.salesOrderId,
         rmaNumber: returnRequest.rmaNumber,
-        skus: affectedSkus,
-        inventoryUpdates,
-        message: `Return received and inventory updated for ${affectedSkus.length} item(s)`,
+        orderNumber: returnRequest.orderNumber,
+        customerName: returnRequest.customerName,
+        baseRefundAmount: returnRequest.baseRefundAmount,
+        totalReceived: returnRequest.totalReceived,
+        shippingCost: returnRequest.shippingCost,
+        labelFee: returnRequest.labelFee,
+        items: returnItems.map(item => ({
+          id: item.id,
+          sku: item.sku,
+          productName: item.productName || item.sku,
+          unitPrice: item.unitPrice,
+          qtyApproved: item.qtyApproved,
+          lineTotal: item.lineTotal,
+          isDamaged: item.isDamaged || false,
+          damagePhotoUrl: item.damagePhotoUrl,
+        })),
+        message: `Return scanned - please assess damage for ${returnItems.length} item(s)`,
       });
       
     } catch (error: any) {
@@ -12855,6 +12814,28 @@ Generate only the email body text, no subject line.`;
         labelCost: labelResult.labelCost?.toString(),
         labelCurrency: labelResult.labelCurrency,
       });
+      
+      // Save to Shippo Label Logs for barcode scanning recognition
+      await storage.createShippoLabelLog({
+        type: 'RETURN',
+        shippoShipmentId: labelResult.shipmentId,
+        shippoTransactionId: labelResult.transactionId,
+        labelUrl: labelResult.labelUrl,
+        trackingNumber: labelResult.trackingNumber,
+        carrier: labelResult.carrier || 'UPS',
+        serviceLevel: labelResult.serviceLevel,
+        labelCost: labelResult.labelCost,
+        labelCurrency: labelResult.labelCurrency,
+        status: 'CREATED',
+        scanCode: labelResult.trackingNumber, // Use tracking number as scan code
+        salesOrderId: salesOrder.id,
+        returnRequestId: returnRequest.id,
+        channel: salesOrder.channel,
+        customerName: salesOrder.customerName,
+        customerEmail: salesOrder.customerEmail,
+        orderDate: salesOrder.orderDate,
+      });
+      console.log(`[GHL Custom Action] Saved label to shippo_label_logs for scan recognition`);
 
       // Update return with status and refund amounts
       await storage.updateReturnRequest(returnRequest.id, {

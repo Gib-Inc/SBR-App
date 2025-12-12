@@ -12303,7 +12303,7 @@ Generate only the email body text, no subject line.`;
         orders = await storage.getAllSalesOrders();
       }
       
-      // Enhance with line counts, total units, and totalBackorderQty
+      // Enhance with line counts, total units, totalBackorderQty, and productionSource
       const ordersWithSummary = await Promise.all(
         orders.map(async (order) => {
           const lines = await storage.getSalesOrderLines(order.id);
@@ -12311,11 +12311,54 @@ Generate only the email body text, no subject line.`;
           const totalUnits = lines.reduce((sum: number, line: SalesOrderLine) => sum + line.qtyOrdered, 0);
           const totalBackorderQty = lines.reduce((sum: number, line: SalesOrderLine) => sum + (line.backorderQty || 0), 0);
           
+          // Compute productionSource based on inventory availability
+          // Pivot = Pivot has enough stock for all items
+          // Hildale = Pivot is short but Hildale can cover
+          // Backordered = Neither warehouse has enough stock
+          let productionSource: 'Pivot' | 'Hildale' | 'Backordered' = 'Pivot';
+          
+          // Aggregate demand per SKU across all lines (handles duplicate SKUs)
+          const skuDemand: Map<string, number> = new Map();
+          for (const line of lines) {
+            const qtyNeeded = line.qtyOrdered - (line.qtyShipped || 0);
+            if (qtyNeeded > 0) {
+              skuDemand.set(line.sku, (skuDemand.get(line.sku) || 0) + qtyNeeded);
+            }
+          }
+          
+          // Check each unique SKU's aggregated demand against inventory
+          for (const [sku, totalNeeded] of skuDemand.entries()) {
+            const item = await storage.getItemBySku(sku);
+            if (!item) {
+              // Unknown item - mark as backordered
+              productionSource = 'Backordered';
+              break;
+            }
+            
+            const pivotAvailable = item.pivotQty || 0;
+            const hildaleAvailable = item.hildaleQty || 0;
+            
+            if (pivotAvailable >= totalNeeded) {
+              // Pivot can handle this SKU - continue checking others
+              continue;
+            } else if (pivotAvailable + hildaleAvailable >= totalNeeded) {
+              // Need Hildale to fulfill - only upgrade if currently Pivot
+              if (productionSource === 'Pivot') {
+                productionSource = 'Hildale';
+              }
+            } else {
+              // Neither warehouse has enough - immediate backordered
+              productionSource = 'Backordered';
+              break;
+            }
+          }
+          
           return {
             ...order,
             linesCount,
             totalUnits,
             totalBackorderQty,
+            productionSource,
           };
         })
       );

@@ -143,20 +143,11 @@ const STATUS_COLORS = {
   CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
 };
 
-const PRODUCTION_STATUS_COLORS: Record<string, string> = {
-  ready: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
-  alerted: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
-  pending: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
-  in_transit: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
-  fulfilled: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
-};
-
-const PRODUCTION_STATUS_LABELS: Record<string, string> = {
-  ready: "Ready",
-  alerted: "Alerted",
-  pending: "Pending",
-  in_transit: "In Transit",
-  fulfilled: "Fulfilled",
+// Production source indicates which warehouse will fulfill the order
+const PRODUCTION_SOURCE_COLORS: Record<string, string> = {
+  Pivot: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
+  Hildale: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
+  Backordered: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
 };
 
 // Shared date format helper for MM/DD/YYYY
@@ -542,7 +533,7 @@ export default function SalesOrders() {
       order.customerEmail || "",
       order.customerPhone || "",
       order.status,
-      (order as any).productionStatus || "ready",
+      (order as any).productionSource || "Pivot",
       format(new Date(order.orderDate), 'yyyy-MM-dd'),
       (order as any).expectedDeliveryDate ? format(new Date((order as any).expectedDeliveryDate), 'MM/dd/yyyy') : "",
       order.totalAmount || 0,
@@ -841,7 +832,7 @@ export default function SalesOrders() {
               <tbody>
                 {filteredOrders.map((order) => {
                   const totalUnits = order.totalUnits || 0;
-                  const productionStatus = (order as any).productionStatus || 'ready';
+                  const productionSource = (order as any).productionSource || 'Pivot';
                   
                   // Build Ship To address as single line
                   const shipToAddress = [
@@ -922,10 +913,10 @@ export default function SalesOrders() {
                       </td>
                       <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
-                          className={PRODUCTION_STATUS_COLORS[productionStatus] || PRODUCTION_STATUS_COLORS.ready}
+                          className={PRODUCTION_SOURCE_COLORS[productionSource] || PRODUCTION_SOURCE_COLORS.Pivot}
                           data-testid={`badge-production-${order.id}`}
                         >
-                          {PRODUCTION_STATUS_LABELS[productionStatus] || productionStatus}
+                          {productionSource}
                         </Badge>
                       </td>
                       <td className="px-2 align-middle whitespace-nowrap" data-testid={`text-order-date-${order.id}`}>

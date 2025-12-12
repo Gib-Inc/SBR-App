@@ -4309,6 +4309,256 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // ============================================================================
+  // EXTENSIV WEBHOOK - Receives real-time inventory updates from Extensiv
+  // ============================================================================
+  app.post("/api/webhooks/extensiv", async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    
+    try {
+      // Optional: Verify webhook signature if EXTENSIV_WEBHOOK_SECRET is configured
+      const webhookSecret = process.env.EXTENSIV_WEBHOOK_SECRET;
+      if (webhookSecret) {
+        const signatureHeader = req.headers['x-extensiv-signature'] as string;
+        if (!signatureHeader) {
+          console.error("[Extensiv Webhook] Missing signature header");
+          return res.status(401).json({ error: "Missing webhook signature" });
+        }
+        
+        const crypto = await import('crypto');
+        const rawBody = (req as any).rawBody;
+        if (!rawBody) {
+          console.error("[Extensiv Webhook] Raw body not available for signature verification");
+          return res.status(500).json({ error: "Server configuration error" });
+        }
+        
+        const calculatedSignature = crypto
+          .createHmac('sha256', webhookSecret)
+          .update(rawBody)
+          .digest('hex');
+        
+        if (calculatedSignature !== signatureHeader) {
+          console.error("[Extensiv Webhook] Invalid signature");
+          return res.status(401).json({ error: "Invalid webhook signature" });
+        }
+        
+        console.log("[Extensiv Webhook] Signature verified successfully");
+      } else {
+        console.log("[Extensiv Webhook] EXTENSIV_WEBHOOK_SECRET not configured - skipping signature verification");
+      }
+
+      const payload = req.body;
+      const eventType = payload.event_type || payload.eventType || 'inventory_update';
+      
+      console.log(`[Extensiv Webhook] Received ${eventType} event`);
+
+      // Find admin user for context (webhooks don't have session)
+      const adminUsers = await storage.getAllUsers();
+      const adminUser = adminUsers[0];
+      if (!adminUser) {
+        console.error("[Extensiv Webhook] No admin user found for webhook context");
+        await logService.logSystemEvent({
+          type: 'EXTENSIV_SYNC_ERROR',
+          severity: 'ERROR',
+          message: 'Webhook received but no admin user found',
+          details: { payload },
+        });
+        return res.status(200).json({ error: "No user context available" });
+      }
+
+      const userId = adminUser.id;
+
+      // Handle different Extensiv event types
+      // Common payload formats: inventory_update, stock_adjustment, order_shipped
+      // Payload typically contains: sku, quantity, warehouseId, or items array
+      
+      let itemsToProcess: Array<{ sku: string; quantity: number; warehouseId?: string }> = [];
+      
+      // Handle array of items or single item
+      if (payload.items && Array.isArray(payload.items)) {
+        itemsToProcess = payload.items.map((item: any) => ({
+          sku: item.sku || item.product_sku || item.productSku,
+          quantity: item.quantity || item.on_hand || item.onHand || 0,
+          warehouseId: item.warehouse_id || item.warehouseId,
+        }));
+      } else if (payload.sku) {
+        itemsToProcess = [{
+          sku: payload.sku || payload.product_sku || payload.productSku,
+          quantity: payload.quantity || payload.on_hand || payload.onHand || 0,
+          warehouseId: payload.warehouse_id || payload.warehouseId,
+        }];
+      } else if (payload.data && Array.isArray(payload.data)) {
+        // Alternative payload structure
+        itemsToProcess = payload.data.map((item: any) => ({
+          sku: item.sku || item.product_sku,
+          quantity: item.quantity || item.on_hand || 0,
+          warehouseId: item.warehouse_id,
+        }));
+      }
+
+      if (itemsToProcess.length === 0) {
+        console.log("[Extensiv Webhook] No items to process in payload");
+        await logService.logSystemEvent({
+          type: 'EXTENSIV_SYNC_INFO',
+          severity: 'INFO',
+          message: `Webhook received (${eventType}) but no items found in payload`,
+          details: { payload, eventType },
+        });
+        return res.status(200).json({ message: "No items to process" });
+      }
+
+      console.log(`[Extensiv Webhook] Processing ${itemsToProcess.length} items`);
+
+      const inventoryMovement = new InventoryMovement(storage);
+      const user = await storage.getUser(userId);
+      
+      let successCount = 0;
+      let skipCount = 0;
+      let errorCount = 0;
+      const unmatchedSkus: string[] = [];
+      const results: Array<{ sku: string; success: boolean; previousQty?: number; newQty?: number; error?: string }> = [];
+
+      for (const webhookItem of itemsToProcess) {
+        if (!webhookItem.sku) {
+          errorCount++;
+          results.push({ sku: 'unknown', success: false, error: 'Missing SKU in payload' });
+          continue;
+        }
+
+        try {
+          // Try to find product by internal SKU first, then by extensivSku mapping
+          let item = await storage.getItemBySku(webhookItem.sku);
+          
+          if (!item) {
+            item = await storage.findProductByExtensivSku(webhookItem.sku);
+          }
+          
+          if (!item) {
+            unmatchedSkus.push(webhookItem.sku);
+            
+            // Log SKU mismatch for visibility
+            await logService.logSkuMismatch({
+              source: 'EXTENSIV',
+              externalSku: webhookItem.sku,
+              orderId: `WEBHOOK_${eventType}`,
+              lineItemData: { 
+                sku: webhookItem.sku, 
+                quantity: webhookItem.quantity,
+                warehouseId: webhookItem.warehouseId,
+                tip: 'Configure via Products > SKU Mapping Wizard'
+              }
+            });
+            
+            errorCount++;
+            results.push({ sku: webhookItem.sku, success: false, error: 'SKU not found' });
+            continue;
+          }
+
+          const previousQty = item.pivotQty ?? 0;
+          const newQty = webhookItem.quantity;
+          const variance = newQty - previousQty;
+
+          // Skip if no change
+          if (variance === 0) {
+            skipCount++;
+            results.push({ sku: webhookItem.sku, success: true, previousQty, newQty });
+            continue;
+          }
+
+          // Update extensiv snapshot fields
+          await storage.updateItem(item.id, {
+            extensivOnHandSnapshot: newQty,
+            extensivLastSyncAt: new Date(),
+          });
+
+          // Apply inventory movement to update pivotQty
+          const moveResult = await inventoryMovement.apply({
+            eventType: "EXTENSIV_SYNC",
+            itemId: item.id,
+            quantity: newQty,
+            location: "PIVOT",
+            source: "SYSTEM",
+            userId: userId,
+            userName: user?.email || 'EXTENSIV_WEBHOOK',
+            notes: `Extensiv webhook: ${previousQty} → ${newQty} (${variance > 0 ? '+' : ''}${variance})`,
+          });
+
+          if (moveResult.success) {
+            successCount++;
+            results.push({ sku: webhookItem.sku, success: true, previousQty, newQty });
+          } else {
+            errorCount++;
+            results.push({ sku: webhookItem.sku, success: false, previousQty, newQty, error: moveResult.error });
+          }
+        } catch (itemError: any) {
+          errorCount++;
+          results.push({ sku: webhookItem.sku, success: false, error: itemError.message });
+        }
+      }
+
+      // Log the webhook processing result
+      const processingTime = Date.now() - startTime;
+      await logService.logSystemEvent({
+        type: 'EXTENSIV_INVENTORY_IMPORT',
+        severity: errorCount > 0 ? 'WARNING' : 'INFO',
+        message: `Webhook processed: ${successCount} updated, ${skipCount} unchanged, ${errorCount} errors`,
+        details: {
+          eventType,
+          itemCount: itemsToProcess.length,
+          successCount,
+          skipCount,
+          errorCount,
+          unmatchedSkus: unmatchedSkus.length > 0 ? unmatchedSkus.slice(0, 10) : undefined,
+          processingTimeMs: processingTime,
+        },
+      });
+
+      // Update integration health
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: 'extensiv',
+        lastSuccessAt: new Date(),
+        lastStatus: errorCount === 0 ? 'success' : 'partial',
+        lastErrorMessage: errorCount > 0 ? `${errorCount} items failed to sync` : null,
+        consecutiveFailures: 0,
+      });
+
+      console.log(`[Extensiv Webhook] Completed: ${successCount} updated, ${skipCount} unchanged, ${errorCount} errors (${processingTime}ms)`);
+
+      res.status(200).json({
+        success: true,
+        message: `Processed ${itemsToProcess.length} items`,
+        updated: successCount,
+        unchanged: skipCount,
+        errors: errorCount,
+        unmatchedSkus: unmatchedSkus.length > 0 ? unmatchedSkus : undefined,
+      });
+    } catch (error: any) {
+      console.error("[Extensiv Webhook] Error processing webhook:", error);
+      
+      await logService.logSystemEvent({
+        type: 'EXTENSIV_SYNC_ERROR',
+        severity: 'ERROR',
+        message: `Webhook error: ${error.message}`,
+        details: { 
+          error: error.message,
+          stack: error.stack,
+          payload: req.body,
+        },
+      });
+
+      // Update integration health with failure
+      await storage.createOrUpdateIntegrationHealth({
+        integrationName: 'extensiv',
+        lastStatus: 'failed',
+        lastErrorMessage: error.message,
+        consecutiveFailures: 1,
+      });
+
+      // Return 200 to prevent Extensiv from retrying indefinitely
+      res.status(200).json({ error: "Error logged", message: error.message });
+    }
+  });
+
   // Shopify - Test Connection
   app.post("/api/integrations/shopify/test", requireAuth, async (req: Request, res: Response) => {
     try {

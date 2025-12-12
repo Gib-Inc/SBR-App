@@ -1483,6 +1483,18 @@ export const salesOrders = pgTable("sales_orders", {
   returnStatus: text("return_status").notNull().default('NONE'), // See SalesOrderReturnStatus
   totalReturnQty: integer("total_return_qty").notNull().default(0), // Sum of all return item quantities
   totalRefundAmount: real("total_refund_amount").notNull().default(0), // Sum of refunded amounts
+  isDamaged: boolean("is_damaged").notNull().default(false), // Whether returned product had damage (20% fee applies)
+  
+  // Shipping address fields (for Ship To column and return labels)
+  shipToStreet: text("ship_to_street"),
+  shipToCity: text("ship_to_city"),
+  shipToState: text("ship_to_state"),
+  shipToZip: text("ship_to_zip"),
+  shipToCountry: text("ship_to_country"),
+  
+  // Lifecycle timestamps
+  deliveredAt: timestamp("delivered_at"), // When order was delivered/fulfilled
+  cancelledAt: timestamp("cancelled_at"), // When order was cancelled
   
   // Live vs History tracking
   isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab

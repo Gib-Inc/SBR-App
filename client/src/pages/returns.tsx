@@ -34,7 +34,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload } from "lucide-react";
+import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload, AlertTriangle } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { format, subDays } from "date-fns";
 
 interface ReturnRequest {
@@ -916,13 +917,27 @@ function ConfirmReturnReceiptModal({
   const [condition, setCondition] = useState<'GOOD' | 'DAMAGED' | 'UNKNOWN'>('GOOD');
   const [disposition, setDisposition] = useState<'RESTOCK' | 'SCRAP' | 'INSPECT'>('RESTOCK');
   const [notes, setNotes] = useState('');
+  const [applyDamageFee, setApplyDamageFee] = useState(false);
+  
+  // V1 Damage Fee Logic: 20% fee for damaged returns
+  const DAMAGE_FEE_PERCENT = 0.20;
+  const orderTotal = returnDetails.returnRequest.orderTotal || 0;
+  const refundAmount = applyDamageFee 
+    ? orderTotal * (1 - DAMAGE_FEE_PERCENT) 
+    : orderTotal;
 
   const receiveMutation = useMutation({
     mutationFn: async () => {
+      // V1: Properly separate physical condition from fee decision
+      // isDamaged = physical inspection result (true if condition is DAMAGED)
+      // applyDamageFee = whether to charge 20% restocking fee (user decision)
       const res = await apiRequest("POST", `/api/returns/${returnDetails.returnRequest.id}/receive`, {
         condition,
         disposition,
         notes,
+        isDamaged: condition === 'DAMAGED', // Physical condition from inspection
+        applyDamageFee, // Fee decision (can be overridden by user)
+        refundAmount,
       });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
@@ -941,15 +956,18 @@ function ConfirmReturnReceiptModal({
     },
   });
 
-  // Update disposition based on condition
+  // Update disposition and damage fee based on condition
   const handleConditionChange = (newCondition: 'GOOD' | 'DAMAGED' | 'UNKNOWN') => {
     setCondition(newCondition);
     if (newCondition === 'GOOD') {
       setDisposition('RESTOCK');
+      setApplyDamageFee(false); // No fee for items in good condition
     } else if (newCondition === 'DAMAGED') {
       setDisposition('SCRAP');
+      setApplyDamageFee(true); // Default to applying damage fee for damaged items
     } else {
       setDisposition('INSPECT');
+      setApplyDamageFee(false); // No fee until inspected
     }
   };
 
@@ -1051,6 +1069,57 @@ function ConfirmReturnReceiptModal({
             </Select>
           </div>
 
+          {/* V1: Damage Fee Decision Section */}
+          {condition === 'DAMAGED' && (
+            <div className="p-4 border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 rounded-lg">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5" />
+                <div className="flex-1">
+                  <Label className="text-sm font-semibold">Damage Restocking Fee</Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Apply a 20% restocking fee for damaged merchandise? This fee helps cover inspection and processing costs.
+                  </p>
+                  <div className="flex items-center gap-3 mt-3">
+                    <Switch
+                      checked={applyDamageFee}
+                      onCheckedChange={setApplyDamageFee}
+                      data-testid="switch-damage-fee"
+                    />
+                    <span className="text-sm font-medium">
+                      {applyDamageFee ? 'Apply 20% restocking fee' : 'No fee (full refund)'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Refund Summary */}
+          <div className="p-4 bg-muted/50 rounded-lg">
+            <h3 className="font-semibold mb-2 flex items-center gap-2">
+              <Receipt className="h-4 w-4" />
+              Refund Summary
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Original Order Total</span>
+                <span>${orderTotal.toFixed(2)}</span>
+              </div>
+              {applyDamageFee && (
+                <div className="flex justify-between text-amber-600">
+                  <span>Damage Fee (20%)</span>
+                  <span>-${(orderTotal * DAMAGE_FEE_PERCENT).toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-semibold border-t pt-2 mt-2">
+                <span>Refund Amount</span>
+                <span className={applyDamageFee ? 'text-amber-600' : 'text-green-600'}>
+                  ${refundAmount.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+
           {/* Notes */}
           <div>
             <Label>Notes (optional)</Label>
@@ -1072,7 +1141,7 @@ function ConfirmReturnReceiptModal({
               disabled={receiveMutation.isPending}
               data-testid="button-mark-received"
             >
-              Mark Received
+              {receiveMutation.isPending ? 'Processing...' : 'Mark Received & Process Refund'}
             </Button>
           </div>
         </div>

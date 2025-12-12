@@ -1,0 +1,208 @@
+You’re editing my Sticker Burr Roller inventory / PO app in this Replit project. I want you to UPDATE AND HARDEN the Sales Orders page and its flows for V1, including: table columns, layout, GHL actions, returns, Shippo, QuickBooks refunds, and SMS behavior.
+
+Inspect the existing code and then implement EVERYTHING below, following the current stack, routing, and UI patterns. Do not refactor unrelated modules.
+
+==================================================
+A. SALES ORDERS TABLE – COLUMNS & LAYOUT
+==================================================
+
+1. Clean up columns on the Sales Orders page (both Live and History tabs):
+
+   - REMOVE these columns:
+     - “Returns”
+     - “Components”
+
+   - KEEP / ADD these columns (order can be adjusted for UX, but they must all be present):
+     - Order # / Sales Order ID
+     - Customer
+     - Status (with badges)
+     - Production (or Production Status)
+     - Order Date
+     - Delivery Date
+     - Ship To (NEW)
+     - Total
+     - Units
+     - Actions (GHL icon + Cancel/Return icon, etc.)
+
+2. Delivery Date behavior:
+
+   - Add a `deliveredAt` field to the Sales Order model if it does not exist.
+   - When an order transitions to a delivered/fulfilled terminal state (see Section C state machine), set `deliveredAt` to the current timestamp.
+   - In the table:
+     - Live tab:
+       - Delivery Date column shows something like “Pending” or a placeholder (e.g., `-`) if `deliveredAt` is null.
+     - History tab:
+       - Delivery Date column always renders from `deliveredAt` (formatted date).
+
+3. “Ship To” column:
+
+   - The Customer name will remain in the existing “Customer” column.
+   - “Ship To” should show the FULL delivery address as a SINGLE LINE string.
+   - For each sales order row, render a single-line address like:
+     - `1020 W Utah Ave, Hildale, UT 84784, USA`
+   - Build this from the order’s delivery/shipping address fields (street, city, state, ZIP/postal code, country).
+   - If the address is missing, show a clear placeholder (e.g., “No address on file”).
+
+4. Column spacing and layout:
+
+   - Reduce horizontal whitespace between the Status and Production columns so the table looks tighter and adapts to the data.
+   - Do NOT freeze any columns; the table should scroll normally without locking the first columns.
+   - Ensure numeric columns (`Total`, `Units`) are right-aligned and sized appropriately.
+
+==================================================
+B. GHL ACTION BUTTON – CONTACT + CONVERSATIONS
+==================================================
+
+5. Ensure every order is linked to a GHL contact:
+
+   - Sales orders should store enough customer info to identify a GHL contact:
+     - E.g., `customerId`, `customerName`, `customerPhone`, `customerEmail`.
+   - On order creation/import (e.g., from Shopify or any other source), ensure we:
+     - Upsert a contact in GHL using the GHL API:
+       - Match by a stable external identifier (e.g., our internal customer ID) and/or phone/email.
+       - If contact doesn’t exist, create it.
+       - If it exists, update key fields (name, phone, email).
+   - Implement this in the integration layer so that by the time an order appears in Sales Orders, the contact is already in GHL.
+
+6. GHL icon behavior in Actions column:
+
+   - For each sales order row, the “GHL” action button should:
+     - Ensure the contact exists (upsert again as a safety check if needed).
+     - Then open the GHL Conversations page for that contact in a new browser tab/window.
+   - Implement the URL/opening behavior according to how you already integrate with GHL; do not hard-code IDs. Use env vars/config for location ID, pipeline IDs, etc.
+
+==================================================
+C. ORDER STATE MODEL (VISIBLE FINAL STATES)
+==================================================
+
+7. For V1, the FINAL VISIBLE STATES must be:
+
+   - `DELIVERED`
+   - `REFUNDED`
+
+8. You may use internal/transient states to drive logic (not necessarily shown as distinct badges on the main table), such as:
+
+   - `OPEN`
+   - `READY`
+   - `SHIPPED`
+   - `DELIVERED`
+   - `CANCEL_REQUESTED`
+   - `RETURN_IN_PROGRESS`
+   - `RETURN_RECEIVED`
+   - `REFUND_POSTED`
+
+9. In the UI, once the flow completes:
+
+   - Orders that were completed and not refunded → show as `DELIVERED`.
+   - Orders that were canceled or returned and refunded → show as `REFUNDED`.
+
+   If you need to show more nuance (e.g., “Return in progress”), you can use secondary tags or subtle text, but the primary status badge should ultimately be `DELIVERED` or `REFUNDED` once done.
+
+==================================================
+D. CANCEL FLOW (LIVE TAB) – GHL SMS + QUICKBOOKS
+==================================================
+
+10. Cancel behavior for orders in Live tab:
+
+   - When an order is still in a pre-ship state (e.g., `OPEN` or `READY`), the Actions column should show a Cancel icon/button (this is the same icon you previously used for return, but in Live it behaves as “Cancel”).
+   - On click:
+     - Show a confirmation modal:
+       - “Are you sure you want to cancel this order?”
+       - Buttons: [Yes, cancel order] [No, keep order].
+
+11. If user confirms cancel:
+
+   - Set internal state `CANCEL_REQUESTED`.
+   - Trigger the QuickBooks refund logic immediately (since nothing has shipped):
+     - Compute `refundAmount` according to your cancel policy (for pre-ship cancels, you can usually refund the full order total; follow whatever rule you already use).
+     - Call the existing QuickBooks integration to create the refund/credit for `refundAmount`.
+     - Store the QuickBooks refund IDs on the order.
+     - When the QuickBooks call succeeds, set internal state to `REFUND_POSTED` and visible order status to `REFUNDED`.
+
+   - Trigger a GHL SMS to the customer contact with a template like:
+     - “Your order with {company_name} has been canceled. A refund of {refundAmount} will be issued to your original payment method. You’ll see it within {refund_timeframe}.”
+
+   - Log the event (who canceled, when, QuickBooks IDs).
+
+==================================================
+E. RETURN FLOW (HISTORY TAB) – SHIPPO + CONVERSATION
+==================================================
+
+12. Return button behavior in History tab:
+
+   - Orders in the History tab are delivered/fulfilled (status `DELIVERED`).
+   - The Return icon in the Actions column should be ACTIVE (not grey with “no items available for return”) if:
+     - The order is `DELIVERED`, and
+     - It is within your allowed return window (e.g., 30 days from `deliveredAt`).
+   - If the order is not eligible (outside the window, or otherwise non-returnable), the button may be disabled with a tooltip explaining why.
+
+13. Starting a return:
+
+   - When the Return icon is clicked on a `DELIVERED` order:
+     - Show a confirmation modal:
+       - “Start a return for this order?”
+       - Buttons: [Yes, start return] [No].
+
+   - If user confirms:
+     1. Set internal state to `RETURN_IN_PROGRESS`.
+     2. Ensure a GHL opportunity exists in your Refunds pipeline (see Section G).
+     3. Check if you have all the shipping data needed to create a Shippo return label:
+        - From-address: your warehouse address.
+        - To-address: the customer’s delivery address on the order.
+        - Package details (dimensions/weight) based on items in the order.
+
+14. If you HAVE all necessary shipping info:
+
+   - Call Shippo to create a return label:
+     - Store the label URL, tracking number, and cost on the order.
+   - Do NOT refund yet; refund only happens after the warehouse receives the returned product (see Section F).
+   - Send an SMS via GHL to the customer contact, for example:
+     - “Your order with {company_name} is being returned. Here is your return label: {label_link}. Please follow the instructions and ship the item back to us.”
+
+15. If you are MISSING required shipping info:
+
+   - Send a conversational SMS via GHL (ideally from your AI agent) to gather the missing details, e.g.:
+     - “Hi {first_name}, to process your return for order {order_number} with {company_name}, we need a couple details. Please reply with [describe the missing info].”
+   - Your GHL setup should call back into this app via a webhook when the needed info is collected.
+   - Add or update an endpoint in this app (if not already existing) to receive that data, update the Sales Order, and then:
+     - Call Shippo to create the return label.
+     - Save label info to the order.
+     - Send a follow-up SMS via GHL with the label link and any instructions.
+
+==================================================
+F. WAREHOUSE SCAN + DAMAGE DECISION + REFUND LOGIC
+==================================================
+
+16. When the returned product arrives at the warehouse and is scanned/marked as “received”:
+
+   - Provide a UI in the app (e.g., a “Process Return” screen or popup when scanning) that:
+     - Identifies the order (order number).
+     - Shows basic order info and return details.
+     - Asks the key question:
+
+       “Is this order qualified for a 20% damage fee?”
+
+       Buttons:
+       - “No, no damage” → `isDamaged = false`
+       - “Yes, apply 20% damage fee” → `isDamaged = true`
+
+17. Final refund rule (as decided with SBR executive):
+
+   - Let `orderTotal` be the total the customer paid that you base your refund on (include/exclude tax/shipping according to your accounting decision; your accountant should verify the correct treatment).
+   - `damageFeePercent = 0.20`
+   - If `isDamaged == false`:
+     - `refundAmount = orderTotal`    // 100%
+   - If `isDamaged == true`:
+     - `refundAmount = orderTotal * 0.8`    // 80%
+
+   Example code:
+
+   ```js
+   const damageFeePercent = 0.2;
+   let refundAmount = orderTotal;
+
+   if (isDamaged) {
+     refundAmount = orderTotal * (1 - damageFeePercent); // 80%
+   }
+
+   if (refundAmount < 0) refundAmount = 0;

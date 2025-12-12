@@ -1,0 +1,151 @@
+After the damage decision:
+
+Call the QuickBooks integration to create the refund for refundAmount.
+
+Store QuickBooks refund IDs and the isDamaged flag on the order.
+
+Set internal state to REFUND_POSTED and visible status to REFUNDED.
+
+Send a GHL SMS based on the damage result:
+
+If no damage (full refund):
+
+“We’ve received your return for order {order_number} with {company_name}. A full refund of {refundAmount} has been processed to your original payment method. You’ll see it within {refund_timeframe}.”
+
+If damage fee applied:
+
+“We’ve received your return for order {order_number} with {company_name}. Because the product was returned with damage, a 20% damage fee has been applied. Your refund of {refundAmount} has been processed to your original payment method and should appear within {refund_timeframe}.”
+
+==================================================
+G. GHL OPPORTUNITIES – PROCESSING REFUND → REFUNDED
+
+When a return is started (Section E):
+
+Upsert ONE opportunity per order in your chosen GHL Refunds pipeline:
+
+Pipeline: your Returns/Refunds pipeline.
+
+Stage: Processing refund.
+
+Attach:
+
+Order number
+
+Customer contact
+
+Expected refund info (if known)
+
+Link back to this app’s order detail page.
+
+If an opportunity for that order already exists, update it and set stage = Processing refund (do not create duplicates).
+
+When the refund is completed (Section F – after QuickBooks refund and status set to REFUNDED):
+
+Move that same opportunity to stage Refunded (do not create a new opportunity).
+
+This satisfies: “if we add an opportunity to Processing refund, it needs deleted from Processing refund and added to Refunded upon the status change” by MOVING the opportunity between stages.
+
+Auto-delete after 30 days (via GHL workflow; document in comments):
+
+In code comments, explain that:
+
+A GHL workflow should be configured:
+
+Trigger: Opportunity enters stage = Refunded.
+
+Action: Wait 30 days → Delete the opportunity (or move it to an archive pipeline if you prefer keeping historical data).
+
+The app does not need to manage these timers; rely on GHL automation for the 30-day cleanup.
+
+==================================================
+H. RETURN / CANCEL BUTTON STATES & UI
+
+Return/Cancel icon states:
+
+Live tab:
+
+For pre-ship orders (OPEN/READY), the icon should clearly represent “Cancel” (active).
+
+Clicking it triggers the cancel flow described in Section D.
+
+History tab:
+
+For delivered orders within the return window, the icon should represent “Return” (active).
+
+Clicking it triggers the return flow described in Sections E and F.
+
+For orders where a return is not allowed (e.g., already refunded, outside window, or incomplete data):
+
+The icon can be disabled with a tooltip explaining why.
+
+Add clear confirmation modals before irreversible actions:
+
+Cancel modal (Live tab).
+
+Return-start modal (History tab).
+
+Damage-fee decision modal (or part of the warehouse processing popup).
+
+Fix the current bug where the Return button shows “no items available for return” despite fulfilled history orders:
+
+Remove any logic that incorrectly ties return availability to line items being “available” in a BOM sense.
+
+Base eligibility on order status + return window, not on a buggy “no items available for return” condition.
+
+==================================================
+I. LOGGING, SAFETY, AND COMPLIANCE
+
+For each key event (cancel, start return, create label, receive return, post refund), log:
+
+Order ID
+
+User ID (if available)
+
+Timestamp
+
+Any external IDs (Shippo label ID, QuickBooks refund ID, GHL opportunity ID)
+
+Add comments noting:
+
+Refund and tax handling must be validated by an accountant/tax advisor for compliance.
+
+SMS flows must comply with telecom regulations (opt-in, STOP to opt-out, etc.).
+
+==================================================
+FINAL NOTES
+
+After implementing, verify:
+
+Sales Orders table:
+
+No “Returns” or “Components” columns.
+
+New “Ship To” column shows the full single-line address (e.g., “1020 W Utah Ave, Hildale, UT 84784, USA”).
+
+Delivery Date is correctly populated when order moves to delivered and shown in History.
+
+Status and Production columns have reduced space and no frozen columns.
+
+GHL icon:
+
+Opens Conversations for the correct contact, and the contact exists/updates correctly in GHL.
+
+Cancel flow:
+
+From Live tab, cancellation updates QuickBooks, sets status to REFUNDED, and sends the cancel SMS with {refundAmount}.
+
+Return flow:
+
+From History tab, the Return icon starts the return flow only for eligible delivered orders.
+
+Shippo label is created when data is sufficient and stored on the order.
+
+AI/agent SMS flow runs when data is missing and then creates the label once data returns via webhook.
+
+Warehouse scan triggers the damage/no-damage popup.
+
+QuickBooks refund = 100% or 80% of orderTotal per the damage choice.
+
+SMS content reflects full or partial refund correctly.
+
+GHL opportunity moves from Processing refund → Refunded, and GHL handles auto-delete of Refunded opportunities after 30 days via workflow.

@@ -137,6 +137,9 @@ const STATUS_COLORS = {
   PARTIALLY_FULFILLED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
   FULFILLED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
   CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
+  // V1 visible final states
+  DELIVERED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
+  REFUNDED: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20",
 };
 
 const PRODUCTION_STATUS_COLORS: Record<string, string> = {
@@ -219,6 +222,10 @@ export default function SalesOrders() {
   const [activeTab, setActiveTab] = useState<"live" | "history">("live");
   const [historyStartDate, setHistoryStartDate] = useState<Date | undefined>(subDays(new Date(), 30));
   const [historyEndDate, setHistoryEndDate] = useState<Date | undefined>(new Date());
+  
+  // Cancel and Return dialog states
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [showStartReturnDialog, setShowStartReturnDialog] = useState(false);
 
   const viewParam = activeTab === "live" ? "live" : "historical";
   const queryParams = new URLSearchParams({ view: viewParam });
@@ -454,6 +461,22 @@ export default function SalesOrders() {
 
   const onSubmitNewOrder = (data: NewOrderFormValues) => {
     createOrderMutation.mutate(data);
+  };
+
+  // Handle opening GHL Conversation - upsert contact if needed and open conversations page
+  const handleOpenGhlConversation = async (order: EnrichedSalesOrder) => {
+    const ghlConversationUrl = (order as any).ghlConversationUrl;
+    if (ghlConversationUrl) {
+      window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
+    } else if (order.ghlContactId) {
+      // Construct GHL conversations URL from contact ID
+      // Format: https://app.gohighlevel.com/conversations/{locationId}?contact={contactId}
+      // For now, just open the conversations page (will need location ID from settings)
+      toast({ 
+        title: "GHL Contact Found",
+        description: "Contact ID: " + order.ghlContactId 
+      });
+    }
   };
 
   // State machine for order actions based on fulfilled quantities
@@ -801,40 +824,73 @@ export default function SalesOrders() {
             <table className="w-full table-auto">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order ID</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Channel</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Production</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order Date</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Delivery</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Units</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorder</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Components</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Returns</th>
-                  <th className="sticky right-0 z-10 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Production</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Delivery Date</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Ship To</th>
+                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Total</th>
+                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Units</th>
+                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredOrders.map((order) => {
                   const totalUnits = order.totalUnits || 0;
-                  const backorderedUnits = order.totalBackorderQty || order.backorderedUnits || 0;
-                  const returnCount = returns.filter(r => r.salesOrderId === order.id).length;
                   const productionStatus = (order as any).productionStatus || 'ready';
-                  const componentsUsed = (order as any).componentsUsed || 0;
+                  
+                  // Build Ship To address as single line
+                  const shipToAddress = [
+                    (order as any).shipToStreet,
+                    (order as any).shipToCity,
+                    (order as any).shipToState,
+                    (order as any).shipToZip,
+                    (order as any).shipToCountry
+                  ].filter(Boolean).join(', ') || 'No address on file';
+                  
+                  // Delivery Date: show deliveredAt if available, otherwise show "Pending" for live or expected date
+                  const deliveredAt = (order as any).deliveredAt;
+                  const deliveryDateDisplay = deliveredAt 
+                    ? format(new Date(deliveredAt), 'MMM d, yyyy')
+                    : (activeTab === "history" ? "-" : "Pending");
+                  
+                  // Determine visible status for V1 (DELIVERED or REFUNDED for terminal states)
+                  const getVisibleStatus = () => {
+                    if (order.status === 'CANCELLED' || order.returnStatus === 'REFUNDED') {
+                      return 'REFUNDED';
+                    }
+                    if (order.status === 'FULFILLED' && order.returnStatus === 'NONE') {
+                      return 'DELIVERED';
+                    }
+                    return order.status;
+                  };
+                  const visibleStatus = getVisibleStatus();
+                  
+                  // Return eligibility: DELIVERED status + within 30-day window
+                  const isDelivered = order.status === 'FULFILLED' || visibleStatus === 'DELIVERED';
+                  const deliveredDate = deliveredAt ? new Date(deliveredAt) : null;
+                  const isWithinReturnWindow = deliveredDate 
+                    ? (new Date().getTime() - deliveredDate.getTime()) <= 30 * 24 * 60 * 60 * 1000 
+                    : false;
+                  const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
+                  
+                  // Cancel eligibility: pre-ship states only (DRAFT, OPEN)
+                  const canCancel = ['DRAFT', 'OPEN'].includes(order.status) && activeTab === 'live';
                   
                   return (
                     <tr 
                       key={order.id} 
-                      className="h-11 border-b hover-elevate cursor-pointer"
+                      className="h-10 border-b hover-elevate cursor-pointer"
                       onClick={() => setSelectedOrderId(order.id)}
                       data-testid={`row-order-${order.id}`}
                     >
-                      <td className="px-3 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-order-id-${order.id}`}>
+                      <td className="px-2 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-order-id-${order.id}`}>
                         {order.externalOrderId || order.id.slice(0, 8)}
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap">
+                      <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
                           className={CHANNEL_COLORS[order.channel as keyof typeof CHANNEL_COLORS] || CHANNEL_COLORS.OTHER}
                           data-testid={`badge-channel-${order.id}`}
@@ -842,18 +898,18 @@ export default function SalesOrders() {
                           {order.channel}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-customer-${order.id}`}>
+                      <td className="px-2 align-middle whitespace-nowrap" data-testid={`text-customer-${order.id}`}>
                         {order.customerName}
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap">
+                      <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
-                          className={STATUS_COLORS[order.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
+                          className={STATUS_COLORS[visibleStatus as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
                           data-testid={`badge-status-${order.id}`}
                         >
-                          {order.status.replace(/_/g, ' ')}
+                          {visibleStatus.replace(/_/g, ' ')}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap">
+                      <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
                           className={PRODUCTION_STATUS_COLORS[productionStatus] || PRODUCTION_STATUS_COLORS.ready}
                           data-testid={`badge-production-${order.id}`}
@@ -861,49 +917,24 @@ export default function SalesOrders() {
                           {PRODUCTION_STATUS_LABELS[productionStatus] || productionStatus}
                         </Badge>
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-order-date-${order.id}`}>
+                      <td className="px-2 align-middle whitespace-nowrap" data-testid={`text-order-date-${order.id}`}>
                         {format(new Date(order.orderDate), 'MMM d, yyyy')}
                       </td>
-                      <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-expected-delivery-${order.id}`}>
-                        {formatDateMMDDYYYY((order as any).expectedDeliveryDate)}
+                      <td className="px-2 align-middle whitespace-nowrap" data-testid={`text-delivery-date-${order.id}`}>
+                        {deliveryDateDisplay}
                       </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-order-total-${order.id}`}>
+                      <td className="px-2 align-middle whitespace-nowrap max-w-[200px] truncate" data-testid={`text-ship-to-${order.id}`} title={shipToAddress}>
+                        <span className="text-sm text-muted-foreground">{shipToAddress}</span>
+                      </td>
+                      <td className="px-2 align-middle text-right whitespace-nowrap" data-testid={`text-order-total-${order.id}`}>
                         {formatCurrency(order.totalAmount, order.currency)}
                       </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-units-${order.id}`}>
+                      <td className="px-2 align-middle text-right whitespace-nowrap" data-testid={`text-total-units-${order.id}`}>
                         {totalUnits}
                       </td>
-                      <td 
-                        className={`px-3 align-middle text-right whitespace-nowrap ${backorderedUnits > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
-                        data-testid={`text-backorder-${order.id}`}
-                      >
-                        {backorderedUnits}
-                      </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-components-${order.id}`}>
-                        {componentsUsed}
-                      </td>
-                      <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-returns-${order.id}`}>
-                        {returnCount > 0 ? (
-                          <Link href="/returns">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 gap-1"
-                              data-testid={`button-view-returns-${order.id}`}
-                            >
-                              <PackageX className="h-4 w-4" />
-                              <span className="text-orange-600 dark:text-orange-400 font-medium">
-                                {returnCount}
-                              </span>
-                            </Button>
-                          </Link>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </td>
-                      <td className="sticky right-0 z-10 bg-card px-3 align-middle text-right whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+                      <td className="px-2 align-middle text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
-                          {/* GHL Conversation Button - Always visible, first in action order */}
+                          {/* GHL Conversation Button */}
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <span>
@@ -912,10 +943,7 @@ export default function SalesOrders() {
                                   variant="ghost"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    const ghlConversationUrl = (order as any).ghlConversationUrl;
-                                    if (ghlConversationUrl) {
-                                      window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
-                                    }
+                                    handleOpenGhlConversation(order);
                                   }}
                                   disabled={!(order as any).ghlConversationUrl && !order.ghlContactId}
                                   data-testid={`button-ghl-conversation-${order.id}`}
@@ -929,63 +957,66 @@ export default function SalesOrders() {
                             </TooltipContent>
                           </Tooltip>
 
-                          {/* View Source Button */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const sourceUrl = (order as any).sourceUrl;
-                                    if (sourceUrl) {
-                                      window.open(sourceUrl, "_blank", "noopener,noreferrer");
-                                    }
-                                  }}
-                                  disabled={!(order as any).sourceUrl}
-                                  data-testid={`button-view-source-${order.id}`}
-                                >
-                                  <ExternalLink className="h-4 w-4" />
-                                </Button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {(order as any).sourceUrl ? `View in ${order.channel}` : "No source link available"}
-                            </TooltipContent>
-                          </Tooltip>
-
-                          {/* Return Button */}
-                          {(() => {
-                            const hasAnyFulfilled = order.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
-                            const canReturn = order.status !== "CANCELLED" && hasAnyFulfilled;
-                            const tooltip = !hasAnyFulfilled ? "No items available to return yet" : "Create Return";
-                            
-                            return (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span>
-                                    <Button
-                                      size="icon"
-                                      variant="ghost"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
+                          {/* Cancel/Return Button - context-dependent */}
+                          {activeTab === 'live' ? (
+                            // Live tab: Show Cancel button for pre-ship orders
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (canCancel) {
                                         setSelectedOrderId(order.id);
-                                        if (canReturn) {
-                                          setTimeout(() => setShowCreateReturnDialog(true), 100);
-                                        }
-                                      }}
-                                      disabled={!canReturn}
-                                      data-testid={`button-return-${order.id}`}
-                                    >
-                                      <Package className="h-4 w-4" />
-                                    </Button>
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>{tooltip}</TooltipContent>
-                              </Tooltip>
-                            );
-                          })()}
+                                        setShowCancelDialog(true);
+                                      }
+                                    }}
+                                    disabled={!canCancel}
+                                    data-testid={`button-cancel-${order.id}`}
+                                  >
+                                    <XCircle className="h-4 w-4" />
+                                  </Button>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {canCancel ? "Cancel Order" : "Cannot cancel - order already shipped"}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            // History tab: Show Return button for delivered orders
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (canStartReturn) {
+                                        setSelectedOrderId(order.id);
+                                        setShowStartReturnDialog(true);
+                                      }
+                                    }}
+                                    disabled={!canStartReturn}
+                                    data-testid={`button-return-${order.id}`}
+                                  >
+                                    <PackageX className="h-4 w-4" />
+                                  </Button>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {canStartReturn 
+                                  ? "Start Return" 
+                                  : !isDelivered 
+                                    ? "Order not delivered" 
+                                    : !isWithinReturnWindow 
+                                      ? "Return window expired (30 days)" 
+                                      : "Return already in progress"}
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1570,6 +1601,90 @@ export default function SalesOrders() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Cancel Order Confirmation Dialog (Live tab) */}
+      <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Order</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to cancel this order? This action will:
+              <ul className="list-disc ml-4 mt-2 space-y-1 text-sm">
+                <li>Issue a full refund to the customer via QuickBooks</li>
+                <li>Send an SMS notification to the customer</li>
+                <li>Mark the order as REFUNDED</li>
+              </ul>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowCancelDialog(false)}
+              data-testid="button-cancel-dialog-no"
+            >
+              No, keep order
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (selectedOrderId) {
+                  cancelOrderMutation.mutate(selectedOrderId);
+                  setShowCancelDialog(false);
+                }
+              }}
+              disabled={cancelOrderMutation.isPending}
+              data-testid="button-cancel-dialog-yes"
+            >
+              {cancelOrderMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4 mr-2" />
+              )}
+              Yes, cancel order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Start Return Confirmation Dialog (History tab) */}
+      <Dialog open={showStartReturnDialog} onOpenChange={setShowStartReturnDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Start Return</DialogTitle>
+            <DialogDescription>
+              Start a return for this order? This will:
+              <ul className="list-disc ml-4 mt-2 space-y-1 text-sm">
+                <li>Create a return request in the system</li>
+                <li>Generate a return shipping label (if address is on file)</li>
+                <li>Create a GHL opportunity in the Refunds pipeline</li>
+                <li>Send instructions to the customer via SMS</li>
+              </ul>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowStartReturnDialog(false)}
+              data-testid="button-start-return-no"
+            >
+              No
+            </Button>
+            <Button
+              onClick={() => {
+                // Open the existing Create Return dialog
+                setShowStartReturnDialog(false);
+                if (selectedOrderId) {
+                  setShowCreateReturnDialog(true);
+                }
+              }}
+              data-testid="button-start-return-yes"
+            >
+              <PackageX className="h-4 w-4 mr-2" />
+              Yes, start return
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

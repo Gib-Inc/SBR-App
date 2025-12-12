@@ -12694,9 +12694,10 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Update order status to FULFILLED
+      // Update order status to FULFILLED with deliveredAt timestamp
       const updatedOrder = await storage.updateSalesOrder(id, { 
-        status: 'FULFILLED' 
+        status: 'FULFILLED',
+        deliveredAt: new Date(), // V1: Set delivery date when order is fulfilled
       });
 
       // Return updated order with lines
@@ -12762,14 +12763,44 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Update order status
-      await storage.updateSalesOrder(id, { status: 'CANCELLED' });
+      // Update order status to CANCELLED with cancelledAt timestamp
+      // V1: Set returnStatus to REFUNDED to show as visible final state
+      await storage.updateSalesOrder(id, { 
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+        returnStatus: 'REFUNDED', // V1 visible final state
+        totalRefundAmount: order.totalAmount, // Full refund for cancellation
+      });
 
       // Refresh backorder snapshots and forecast context for all products
       for (const productId of Array.from(affectedProductIds)) {
         await storage.refreshBackorderSnapshot(productId);
         await storage.refreshProductForecastContext(productId);
       }
+
+      // Log the cancellation event
+      await storage.createAuditLog({
+        source: 'USER',
+        eventType: 'ORDER_CANCELLED',
+        entityType: 'SALES_ORDER',
+        entityId: id,
+        entityLabel: order.externalOrderId || order.id.slice(0, 8),
+        performedByUserId: req.session.userId,
+        performedByName: user?.email || 'Unknown',
+        status: 'INFO',
+        description: `Order cancelled - full refund of ${order.totalAmount} ${order.currency}`,
+        details: {
+          orderId: id,
+          refundAmount: order.totalAmount,
+          currency: order.currency,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+          customerPhone: order.customerPhone,
+        },
+      });
+
+      // TODO: Integrate GHL SMS notification for cancellation
+      // TODO: Integrate QuickBooks refund posting
 
       // Return updated order
       const updatedOrder = await storage.getSalesOrder(id);

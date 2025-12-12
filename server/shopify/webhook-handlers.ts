@@ -71,6 +71,9 @@ export async function handleOrderCreated(
       ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() || 'Unknown Customer'
       : 'Unknown Customer';
 
+    // Extract shipping address from payload
+    const shippingAddr = payload.shipping_address || {};
+    
     const salesOrder = await storage.createSalesOrder({
       externalOrderId: String(orderId),
       channel: 'SHOPIFY',
@@ -85,6 +88,11 @@ export async function handleOrderCreated(
       currency: payload.currency || 'USD',
       fulfillmentSource,
       rawPayload: payload,
+      shipToStreet: shippingAddr.address1 || null,
+      shipToCity: shippingAddr.city || null,
+      shipToState: shippingAddr.province_code || shippingAddr.province || null,
+      shipToZip: shippingAddr.zip || null,
+      shipToCountry: shippingAddr.country_code || shippingAddr.country || null,
     });
 
     console.log(`[Shopify Webhook] Created sales order ${salesOrder.id} for Shopify order ${orderName}`);

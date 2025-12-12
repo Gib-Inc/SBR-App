@@ -2127,6 +2127,7 @@ export const aiAgentSettings = pgTable("ai_agent_settings", {
   // Shopify sync settings
   shopifyTwoWaySync: boolean("shopify_two_way_sync").notNull().default(false),
   shopifySafetyBuffer: integer("shopify_safety_buffer").notNull().default(0), // Safety buffer for availability calculation
+  shopifyInventorySunsetDate: timestamp("shopify_inventory_sunset_date"), // Date when Shopify inventory sync stops (temporary until Extensiv connected)
   // Amazon sync settings
   amazonTwoWaySync: boolean("amazon_two_way_sync").notNull().default(false), // Master toggle for Amazon inventory push
   amazonSafetyBuffer: integer("amazon_safety_buffer").notNull().default(0), // Safety buffer for Amazon availability

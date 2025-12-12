@@ -709,6 +709,7 @@ interface AiAgentSettings {
   mediumThresholdDays: number;
   shopifyTwoWaySync: boolean;
   shopifySafetyBuffer: number;
+  shopifyInventorySunsetDate: string | null;
   amazonTwoWaySync: boolean;
   amazonSafetyBuffer: number;
   extensivTwoWaySync: boolean;
@@ -760,6 +761,7 @@ function RulesTab() {
   const [criticalRescueDays, setCriticalRescueDays] = useState(7);
   const [shopifyTwoWaySync, setShopifyTwoWaySync] = useState(false);
   const [shopifySafetyBuffer, setShopifySafetyBuffer] = useState(0);
+  const [shopifyInventorySunsetDate, setShopifyInventorySunsetDate] = useState<string | null>(null);
   const [amazonTwoWaySync, setAmazonTwoWaySync] = useState(false);
   const [amazonSafetyBuffer, setAmazonSafetyBuffer] = useState(0);
   const [extensivTwoWaySync, setExtensivTwoWaySync] = useState(false);
@@ -793,6 +795,7 @@ function RulesTab() {
       setCriticalRescueDays(aiAgentSettings.criticalRescueDays || 7);
       setShopifyTwoWaySync(aiAgentSettings.shopifyTwoWaySync || false);
       setShopifySafetyBuffer(aiAgentSettings.shopifySafetyBuffer || 0);
+      setShopifyInventorySunsetDate(aiAgentSettings.shopifyInventorySunsetDate || null);
       setAmazonTwoWaySync(aiAgentSettings.amazonTwoWaySync || false);
       setAmazonSafetyBuffer(aiAgentSettings.amazonSafetyBuffer || 0);
       setExtensivTwoWaySync(aiAgentSettings.extensivTwoWaySync || false);
@@ -809,7 +812,7 @@ function RulesTab() {
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
       features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
-      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number; ordersToFetch: number };
+      agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; shopifyInventorySunsetDate: string | null; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number; ordersToFetch: number };
     }) => {
       // Save rules, features, and agent settings in parallel
       await Promise.all([
@@ -852,6 +855,7 @@ function RulesTab() {
         criticalRescueDays,
         shopifyTwoWaySync,
         shopifySafetyBuffer,
+        shopifyInventorySunsetDate,
         amazonTwoWaySync,
         amazonSafetyBuffer,
         extensivTwoWaySync,
@@ -1403,6 +1407,46 @@ function RulesTab() {
                     </div>
                   </div>
                 )}
+                
+                {/* Shopify Inventory Sunset Date */}
+                <div className="space-y-2 pt-2 border-t">
+                  <div className="flex items-center gap-1.5">
+                    <Label htmlFor="shopify-sunset-date">Shopify Inventory Sync Until</Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-shopify-sunset-info" />
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs">
+                        <p>Temporary: Sync Available For Sale quantities from Shopify until this date. After this date, Extensiv becomes the sole source for inventory levels.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="shopify-sunset-date"
+                      type="date"
+                      value={shopifyInventorySunsetDate ? new Date(shopifyInventorySunsetDate).toISOString().split('T')[0] : ''}
+                      onChange={(e) => setShopifyInventorySunsetDate(e.target.value ? new Date(e.target.value).toISOString() : null)}
+                      data-testid="input-shopify-sunset-date"
+                    />
+                    {shopifyInventorySunsetDate && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShopifyInventorySunsetDate(null)}
+                        data-testid="button-clear-sunset-date"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  {shopifyInventorySunsetDate && (
+                    <p className="text-xs text-muted-foreground">
+                      Shopify inventory sync active until: {new Date(shopifyInventorySunsetDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
+                    </p>
+                  )}
+                </div>
               </div>
               
               {/* Amazon Two-Way Sync */}

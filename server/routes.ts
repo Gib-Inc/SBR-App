@@ -13000,6 +13000,77 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Backfill line items from rawPayload for existing sales orders
+  // POST /api/sales-orders/backfill-line-items
+  app.post("/api/sales-orders/backfill-line-items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      console.log("[Sales Orders] Starting line items backfill...");
+      
+      // Get all orders with rawPayload
+      const allOrders = await storage.getAllSalesOrders();
+      
+      let backfilledCount = 0;
+      let alreadyHadLinesCount = 0;
+      let noLineItemsCount = 0;
+      let errorCount = 0;
+      
+      for (const order of allOrders) {
+        try {
+          // Check if order already has line items
+          const existingLines = await storage.getSalesOrderLines(order.id);
+          if (existingLines.length > 0) {
+            alreadyHadLinesCount++;
+            continue;
+          }
+          
+          // Extract line items from rawPayload
+          const rawPayload = order.rawPayload as any;
+          if (!rawPayload?.line_items || rawPayload.line_items.length === 0) {
+            noLineItemsCount++;
+            continue;
+          }
+          
+          // Create line items from rawPayload
+          for (const lineItem of rawPayload.line_items) {
+            const sku = lineItem.sku || `SHOPIFY-${lineItem.id}`;
+            const productName = lineItem.title || lineItem.name || sku;
+            const item = await storage.getItemBySku(sku);
+            
+            await storage.createSalesOrderLine({
+              salesOrderId: order.id,
+              productId: item?.id || null,
+              sku,
+              productName,
+              qtyOrdered: lineItem.quantity || 1,
+              qtyAllocated: 0, // Historical orders - allocation already happened
+              backorderQty: 0,
+              unitPrice: parseFloat(lineItem.price) || 0,
+            });
+          }
+          
+          backfilledCount++;
+        } catch (orderErr: any) {
+          console.warn(`[Sales Orders] Failed to backfill line items for order ${order.id}:`, orderErr.message);
+          errorCount++;
+        }
+      }
+      
+      console.log(`[Sales Orders] Line items backfill complete: ${backfilledCount} orders backfilled, ${alreadyHadLinesCount} already had lines, ${noLineItemsCount} had no line items in payload, ${errorCount} errors`);
+      res.json({ 
+        success: true, 
+        message: `Line items backfill complete`,
+        backfilledCount,
+        alreadyHadLinesCount,
+        noLineItemsCount,
+        errorCount,
+        totalProcessed: allOrders.length,
+      });
+    } catch (error: any) {
+      console.error("[Sales Orders] Error backfilling line items:", error);
+      res.status(500).json({ error: error.message || "Failed to backfill line items" });
+    }
+  });
+
   // Get all backorder snapshots
   // GET /api/backorder-snapshots
   app.get("/api/backorder-snapshots", requireAuth, async (req: Request, res: Response) => {

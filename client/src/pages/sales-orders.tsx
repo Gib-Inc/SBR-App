@@ -1152,34 +1152,43 @@ export default function SalesOrders() {
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedOrder.lines?.map((line) => {
-                          const product = items.find(i => i.id === line.productId);
-                          return (
-                            <tr key={line.id} className="border-b last:border-0" data-testid={`row-line-${line.id}`}>
-                              <td className="px-3 py-2 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-line-sku-${line.id}`}>
-                                {line.sku}
-                              </td>
-                              <td className="px-3 py-2 align-middle whitespace-nowrap" data-testid={`text-line-product-${line.id}`}>
-                                {product?.name || "Unknown"}
-                              </td>
-                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-ordered-${line.id}`}>
-                                {line.qtyOrdered}
-                              </td>
-                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-fulfilled-${line.id}`}>
-                                {line.qtyFulfilled ?? 0}
-                              </td>
-                              <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-returned-${line.id}`}>
-                                {line.returnedQty ?? 0}
-                              </td>
-                              <td 
-                                className={`px-3 py-2 align-middle text-right whitespace-nowrap ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
-                                data-testid={`text-line-backorder-${line.id}`}
-                              >
-                                {line.backorderQty}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {(!selectedOrder.lines || selectedOrder.lines.length === 0) ? (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-4 text-center text-muted-foreground text-sm">
+                              No line items found. Click "Sync Shopify" to refresh order data.
+                            </td>
+                          </tr>
+                        ) : (
+                          selectedOrder.lines.map((line) => {
+                            const product = items.find(i => i.id === line.productId);
+                            const displayName = product?.name || line.productName || line.sku || "Unknown";
+                            return (
+                              <tr key={line.id} className="border-b last:border-0" data-testid={`row-line-${line.id}`}>
+                                <td className="px-3 py-2 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-line-sku-${line.id}`}>
+                                  {line.sku}
+                                </td>
+                                <td className="px-3 py-2 align-middle whitespace-nowrap max-w-[200px] truncate" title={displayName} data-testid={`text-line-product-${line.id}`}>
+                                  {displayName}
+                                </td>
+                                <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-ordered-${line.id}`}>
+                                  {line.qtyOrdered}
+                                </td>
+                                <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-fulfilled-${line.id}`}>
+                                  {line.qtyFulfilled ?? 0}
+                                </td>
+                                <td className="px-3 py-2 align-middle text-right whitespace-nowrap" data-testid={`text-line-returned-${line.id}`}>
+                                  {line.returnedQty ?? 0}
+                                </td>
+                                <td 
+                                  className={`px-3 py-2 align-middle text-right whitespace-nowrap ${line.backorderQty > 0 ? 'text-red-600 dark:text-red-400 font-medium' : ''}`}
+                                  data-testid={`text-line-backorder-${line.id}`}
+                                >
+                                  {line.backorderQty}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>

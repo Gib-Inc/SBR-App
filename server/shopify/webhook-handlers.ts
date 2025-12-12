@@ -36,6 +36,7 @@ export async function handleOrderCreated(
     const lineItemsWithProducts: Array<{
       sku: string;
       productId: string | null;
+      productName: string;
       qtyOrdered: number;
       unitPrice: number;
     }> = [];
@@ -47,10 +48,12 @@ export async function handleOrderCreated(
         for (const lineItem of payload.line_items) {
           const sku = lineItem.sku || `SHOPIFY-${lineItem.id}`;
           const item = await storage.getItemBySku(sku);
+          const productName = lineItem.title || lineItem.name || sku;
           
           lineItemsWithProducts.push({
             sku,
             productId: item?.id || null,
+            productName,
             qtyOrdered: lineItem.quantity,
             unitPrice: parseFloat(lineItem.price) || 0,
           });
@@ -111,70 +114,71 @@ export async function handleOrderCreated(
     }> = [];
     
     for (const lineItem of lineItemsWithProducts) {
-      if (lineItem.productId) {
-        const item = await storage.getItem(lineItem.productId);
-        
-        // Use availableForSaleQty for allocation (NOT pivotQty - pivotQty is read-only from Extensiv)
-        const availableStock = item?.availableForSaleQty ?? 0;
-        const qtyToAllocate = Math.min(lineItem.qtyOrdered, availableStock);
-        const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
-        
-        // Create sales order line with allocation info
-        await storage.createSalesOrderLine({
-          salesOrderId: salesOrder.id,
-          productId: lineItem.productId,
-          sku: lineItem.sku,
-          qtyOrdered: lineItem.qtyOrdered,
-          qtyAllocated: qtyToAllocate,
-          backorderQty: qtyBackordered,
-          unitPrice: lineItem.unitPrice,
-        });
-        
-        if (item && item.type === 'finished_product') {
-          // Apply inventory movement for the allocated quantity
-          // INVARIANT: Sales only decrement availableForSaleQty, NOT pivotQty
-          if (qtyToAllocate > 0) {
-            await inventoryMovement.apply({
-              eventType: 'SALES_ORDER_CREATED',
-              itemId: lineItem.productId,
-              quantity: qtyToAllocate, // Positive quantity - the service handles the decrement
-              location: 'PIVOT',
-              source: 'SHOPIFY',
-              orderId: salesOrder.id,
-              notes: `Shopify order ${orderName}`,
-              userId,
-            });
-            
-            console.log(`[Shopify Webhook] Allocated ${qtyToAllocate} of ${lineItem.sku} (availableForSaleQty decremented) for order ${orderName}`);
-          }
+      // Get product info if it exists
+      const item = lineItem.productId ? await storage.getItem(lineItem.productId) : null;
+      
+      // Calculate allocation based on available stock (only if product exists)
+      const availableStock = item?.availableForSaleQty ?? 0;
+      const qtyToAllocate = lineItem.productId ? Math.min(lineItem.qtyOrdered, availableStock) : 0;
+      const qtyBackordered = lineItem.qtyOrdered - qtyToAllocate;
+      
+      // ALWAYS create sales order line (even for unmapped SKUs)
+      await storage.createSalesOrderLine({
+        salesOrderId: salesOrder.id,
+        productId: lineItem.productId || null,
+        sku: lineItem.sku,
+        productName: lineItem.productName,
+        qtyOrdered: lineItem.qtyOrdered,
+        qtyAllocated: qtyToAllocate,
+        backorderQty: qtyBackordered,
+        unitPrice: lineItem.unitPrice,
+      });
+      
+      if (lineItem.productId && item && item.type === 'finished_product') {
+        // Apply inventory movement for the allocated quantity
+        // INVARIANT: Sales only decrement availableForSaleQty, NOT pivotQty
+        if (qtyToAllocate > 0) {
+          await inventoryMovement.apply({
+            eventType: 'SALES_ORDER_CREATED',
+            itemId: lineItem.productId,
+            quantity: qtyToAllocate, // Positive quantity - the service handles the decrement
+            location: 'PIVOT',
+            source: 'SHOPIFY',
+            orderId: salesOrder.id,
+            notes: `Shopify order ${orderName}`,
+            userId,
+          });
           
-          if (qtyBackordered > 0) {
-            console.warn(`[Shopify Webhook] BACKORDER: ${qtyBackordered} of ${lineItem.sku} for order ${orderName}`);
-            
-            await logService.logShopifyBackorder({
-              orderId: salesOrder.id,
-              orderNumber: orderName,
-              itemId: lineItem.productId,
-              sku: lineItem.sku,
-              qtyOrdered: lineItem.qtyOrdered,
-              qtyAllocated: qtyToAllocate,
-              qtyBackordered,
-              availableStock,
-            });
-            
-            // Track for GHL shortage alert
-            lineItemsForAlerts.push({
-              itemId: lineItem.productId,
-              sku: lineItem.sku,
-              itemName: item.name,
-              requestedQty: lineItem.qtyOrdered,
-              allocatedQty: qtyToAllocate,
-              backorderQty: qtyBackordered,
-            });
-          }
+          console.log(`[Shopify Webhook] Allocated ${qtyToAllocate} of ${lineItem.sku} (availableForSaleQty decremented) for order ${orderName}`);
         }
-      } else {
-        console.warn(`[Shopify Webhook] Skipping line item - no product found for SKU: ${lineItem.sku}`);
+        
+        if (qtyBackordered > 0) {
+          console.warn(`[Shopify Webhook] BACKORDER: ${qtyBackordered} of ${lineItem.sku} for order ${orderName}`);
+          
+          await logService.logShopifyBackorder({
+            orderId: salesOrder.id,
+            orderNumber: orderName,
+            itemId: lineItem.productId,
+            sku: lineItem.sku,
+            qtyOrdered: lineItem.qtyOrdered,
+            qtyAllocated: qtyToAllocate,
+            qtyBackordered,
+            availableStock,
+          });
+          
+          // Track for GHL shortage alert
+          lineItemsForAlerts.push({
+            itemId: lineItem.productId,
+            sku: lineItem.sku,
+            itemName: item.name,
+            requestedQty: lineItem.qtyOrdered,
+            allocatedQty: qtyToAllocate,
+            backorderQty: qtyBackordered,
+          });
+        }
+      } else if (!lineItem.productId) {
+        // Log SKU mismatch for unmapped products (but still create the line)
+        console.warn(`[Shopify Webhook] Unmapped SKU: ${lineItem.sku} - line item created without inventory allocation`);
         
         await logService.logSkuMismatch({
           source: 'SHOPIFY',

@@ -1528,8 +1528,9 @@ export type SalesOrder = typeof salesOrders.$inferSelect;
 export const salesOrderLines = pgTable("sales_order_lines", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   salesOrderId: varchar("sales_order_id").notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
-  productId: varchar("product_id").notNull().references(() => items.id), // Finished product
+  productId: varchar("product_id").references(() => items.id), // Finished product (nullable for unmapped SKUs)
   sku: text("sku").notNull(), // Denormalized for quick reference
+  productName: text("product_name"), // Product name from order source (e.g., Shopify title)
   qtyOrdered: integer("qty_ordered").notNull(),
   qtyAllocated: integer("qty_allocated").notNull().default(0), // Reserved from available stock
   qtyShipped: integer("qty_shipped").notNull().default(0),

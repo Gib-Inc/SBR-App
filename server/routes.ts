@@ -12785,97 +12785,38 @@ Generate only the email body text, no subject line.`;
 
   // Cancel sales order
   // POST /api/sales-orders/:id/cancel
+  // Orchestrates cancellation across Shopify, GHL, and local database
   app.post("/api/sales-orders/:id/cancel", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      const { reason, notifyCustomer } = req.body;
 
-      const order = await storage.getSalesOrder(id);
-      if (!order) {
-        return res.status(404).json({ error: "Sales order not found" });
-      }
+      // Use the OrderCancellationService to handle the full cancellation workflow
+      const { createOrderCancellationService } = await import("./services/order-cancellation-service");
+      const cancellationService = createOrderCancellationService(req.session.userId!);
 
-      // Get all lines
-      const lines = await storage.getSalesOrderLines(id);
-
-      // Check if any items have been fulfilled - if so, cannot cancel
-      const anyFulfilled = lines.some((line: SalesOrderLine) => (line.qtyFulfilled ?? 0) > 0);
-      if (anyFulfilled) {
-        return res.status(400).json({ 
-          error: "Cannot cancel order with fulfilled items. Use returns instead." 
-        });
-      }
-
-      const affectedProductIds = new Set<string>();
-      const inventoryMovement = new InventoryMovement(storage);
-      const user = await storage.getUser(req.session.userId!);
-      const isPivotOrder = order.channel === 'SHOPIFY' || order.channel === 'AMAZON';
-
-      // Update each line: set qtyAllocated = 0, backorderQty = 0
-      for (const line of lines) {
-        await storage.updateSalesOrderLine(line.id, {
-          qtyAllocated: 0,
-          backorderQty: 0,
-        });
-        affectedProductIds.add(line.productId);
-
-        // Log SALES_ORDER_CANCELLED event and restore availableForSaleQty for Pivot orders
-        await inventoryMovement.apply({
-          eventType: "SALES_ORDER_CANCELLED",
-          itemId: line.productId,
-          quantity: line.qtyOrdered,
-          location: isPivotOrder ? "PIVOT" : "HILDALE",
-          source: "USER",
-          orderId: id,
-          salesOrderLineId: line.id,
-          channel: order.channel,
-          userId: req.session.userId,
-          userName: user?.email,
-          notes: `Order ${order.externalOrderId || order.id} cancelled: released ${line.qtyAllocated} allocated, ${line.backorderQty} backordered`,
-        });
-      }
-
-      // Update order status to CANCELLED with cancelledAt timestamp
-      // V1: Set returnStatus to REFUNDED to show as visible final state
-      await storage.updateSalesOrder(id, { 
-        status: 'CANCELLED',
-        cancelledAt: new Date(),
-        returnStatus: 'REFUNDED', // V1 visible final state
-        totalRefundAmount: order.totalAmount, // Full refund for cancellation
+      const result = await cancellationService.cancelOrder(id, {
+        reason: reason || "Customer requested cancellation",
+        notifyCustomer: notifyCustomer ?? true,
       });
 
-      // Refresh backorder snapshots and forecast context for all products
-      for (const productId of Array.from(affectedProductIds)) {
-        await storage.refreshBackorderSnapshot(productId);
-        await storage.refreshProductForecastContext(productId);
+      if (!result.success) {
+        return res.status(400).json({ 
+          error: result.error || "Failed to cancel order",
+          details: result.details,
+        });
       }
 
-      // Log the cancellation event
-      await storage.createAuditLog({
-        source: 'USER',
-        eventType: 'ORDER_CANCELLED',
-        entityType: 'SALES_ORDER',
-        entityId: id,
-        entityLabel: order.externalOrderId || order.id.slice(0, 8),
-        performedByUserId: req.session.userId,
-        performedByName: user?.email || 'Unknown',
-        status: 'INFO',
-        description: `Order cancelled - full refund of ${order.totalAmount} ${order.currency}`,
-        details: {
-          orderId: id,
-          refundAmount: order.totalAmount,
-          currency: order.currency,
-          customerName: order.customerName,
-          customerEmail: order.customerEmail,
-          customerPhone: order.customerPhone,
+      // Return updated order with cancellation details
+      const updatedOrder = await storage.getSalesOrder(id);
+      res.json({
+        ...updatedOrder,
+        cancellationResult: {
+          shopifyCancelled: result.shopifyCancelled,
+          ghlUpdated: result.ghlUpdated,
+          localUpdated: result.localUpdated,
         },
       });
-
-      // TODO: Integrate GHL SMS notification for cancellation
-      // TODO: Integrate QuickBooks refund posting
-
-      // Return updated order
-      const updatedOrder = await storage.getSalesOrder(id);
-      res.json(updatedOrder);
     } catch (error: any) {
       console.error("[Sales Orders] Error cancelling sales order:", error);
       res.status(500).json({ error: error.message || "Failed to cancel sales order" });

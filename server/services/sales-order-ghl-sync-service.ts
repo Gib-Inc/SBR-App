@@ -63,11 +63,22 @@ export class SalesOrderGHLSyncService {
         existingOpportunityId: order.ghlProductionOpportunityId,
       });
 
-      if (result.success && result.opportunityId && result.opportunityId !== order.ghlProductionOpportunityId) {
-        await storage.updateSalesOrder(salesOrderId, {
-          ghlProductionOpportunityId: result.opportunityId,
-        });
-        console.log(`[SalesOrder GHL] Updated order with GHL opportunity ID: ${result.opportunityId}`);
+      if (result.success && result.opportunityId) {
+        const updates: Record<string, any> = {};
+        
+        if (result.opportunityId !== order.ghlProductionOpportunityId) {
+          updates.ghlProductionOpportunityId = result.opportunityId;
+        }
+        
+        // Store the contactId if we got one from the sync
+        if (result.contactId && result.contactId !== order.ghlContactId) {
+          updates.ghlContactId = result.contactId;
+        }
+        
+        if (Object.keys(updates).length > 0) {
+          await storage.updateSalesOrder(salesOrderId, updates);
+          console.log(`[SalesOrder GHL] Updated order with GHL: opportunityId=${result.opportunityId}, contactId=${result.contactId || 'unchanged'}`);
+        }
       }
 
       return result;

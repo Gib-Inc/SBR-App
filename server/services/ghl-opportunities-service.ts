@@ -22,6 +22,7 @@ interface GHLOpportunityResult {
   success: boolean;
   opportunityId?: string;
   opportunityUrl?: string;
+  contactId?: string;
   error?: string;
   created?: boolean;
   updated?: boolean;
@@ -155,11 +156,30 @@ export class GHLOpportunitiesService {
       body.monetaryValue = params.amount;
     }
 
-    // GHL API requires contactId - cannot use contactName/contactEmail directly
+    // GHL API requires contactId - look up or create contact from contact info
     if (params.contactId) {
       body.contactId = params.contactId;
+    } else if (params.contact && (params.contact.email || params.contact.phone || params.contact.name)) {
+      // Try to find or create a contact using the provided contact info
+      const resolvedContactId = await this.findOrCreateContact(
+        params.contact.name,
+        params.contact.email,
+        params.contact.phone
+      );
+      if (resolvedContactId) {
+        body.contactId = resolvedContactId;
+      } else {
+        // Fall back to system contact if contact lookup/creation failed
+        console.warn(`[GHL Opps] Could not find/create contact for ${params.contact.email || params.contact.phone}, using system contact`);
+        const systemContactId = await this.getOrCreateSystemContact();
+        if (systemContactId) {
+          body.contactId = systemContactId;
+        } else {
+          return { success: false, error: "No contactId available" };
+        }
+      }
     } else {
-      // Fall back to system contact if no contactId provided
+      // Fall back to system contact if no contact info provided
       const systemContactId = await this.getOrCreateSystemContact();
       if (systemContactId) {
         body.contactId = systemContactId;
@@ -194,12 +214,13 @@ export class GHLOpportunitiesService {
     const opportunityId = data.opportunity?.id || data.id;
     const opportunityUrl = `https://app.gohighlevel.com/v2/location/${GHL_CONFIG.locationId}/opportunities/${opportunityId}`;
 
-    console.log(`[GHL Opps] Created opportunity: ${opportunityId}`);
+    console.log(`[GHL Opps] Created opportunity: ${opportunityId} with contact: ${body.contactId}`);
 
     return {
       success: true,
       opportunityId,
       opportunityUrl,
+      contactId: body.contactId,
       created: true,
     };
   }
@@ -280,6 +301,123 @@ export class GHLOpportunitiesService {
       return GHL_CONFIG.stages.STOCK_21_30;
     }
     return null;
+  }
+
+  /**
+   * Normalize phone number to E.164 format for consistent matching
+   * GHL expects +1XXXXXXXXXX for US numbers
+   */
+  private normalizePhone(phone?: string): string | null {
+    if (!phone) return null;
+    
+    // Remove all non-numeric characters
+    const digits = phone.replace(/\D/g, '');
+    
+    if (digits.length === 0) return null;
+    
+    // If it starts with 1 and is 11 digits, it's a US number with country code
+    if (digits.length === 11 && digits.startsWith('1')) {
+      return `+${digits}`;
+    }
+    
+    // If it's 10 digits, assume US and add +1
+    if (digits.length === 10) {
+      return `+1${digits}`;
+    }
+    
+    // Otherwise, return with + prefix if not already
+    return digits.length > 6 ? `+${digits}` : null;
+  }
+
+  /**
+   * Find or create a contact by name, email, and/or phone
+   * Returns the contactId if found/created, null otherwise
+   */
+  private async findOrCreateContact(
+    name?: string,
+    email?: string,
+    phone?: string
+  ): Promise<string | null> {
+    if (!this.apiKey) {
+      return null;
+    }
+
+    // Normalize inputs
+    const normalizedEmail = email?.toLowerCase().trim();
+    const normalizedPhone = this.normalizePhone(phone);
+    const normalizedName = name?.trim();
+
+    try {
+      // Search by email first, then phone, then name
+      const searchQueries = [normalizedEmail, normalizedPhone, normalizedName].filter(Boolean);
+      
+      for (const query of searchQueries) {
+        if (!query) continue;
+        
+        const searchUrl = `${GHL_CONFIG.baseUrl}/contacts/?locationId=${GHL_CONFIG.locationId}&query=${encodeURIComponent(query)}&limit=1`;
+        const searchResponse = await fetch(searchUrl, {
+          method: "GET",
+          headers: this.getHeaders(),
+        });
+
+        if (searchResponse.ok) {
+          const searchData = await searchResponse.json();
+          const contacts = searchData.contacts || [];
+          if (contacts.length > 0) {
+            const contactId = contacts[0].id;
+            console.log(`[GHL Opps] Found existing contact ${contactId} for query: ${query}`);
+            return contactId;
+          }
+        }
+      }
+
+      // No existing contact found - create a new one
+      if (!normalizedName) {
+        console.warn("[GHL Opps] Cannot create contact without name");
+        return null;
+      }
+
+      const nameParts = normalizedName.split(' ');
+      const firstName = nameParts[0] || normalizedName;
+      const lastName = nameParts.slice(1).join(' ') || '';
+
+      const contactData: Record<string, any> = {
+        firstName,
+        lastName,
+        locationId: GHL_CONFIG.locationId,
+        source: 'Inventory Management System',
+      };
+
+      // Only add email/phone if valid (use normalized versions)
+      if (normalizedEmail && !normalizedEmail.endsWith('.local')) {
+        contactData.email = normalizedEmail;
+      }
+      if (normalizedPhone) {
+        contactData.phone = normalizedPhone;
+      }
+
+      console.log(`[GHL Opps] Creating new contact: ${firstName} ${lastName}`);
+
+      const createResponse = await fetch(`${GHL_CONFIG.baseUrl}/contacts/`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify(contactData),
+      });
+
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        console.error(`[GHL Opps] Failed to create contact: ${createResponse.status} - ${errorText}`);
+        return null;
+      }
+
+      const createData = await createResponse.json();
+      const contactId = createData.contact?.id || createData.id;
+      console.log(`[GHL Opps] Created new contact: ${contactId}`);
+      return contactId;
+    } catch (error: any) {
+      console.error("[GHL Opps] Error finding/creating contact:", error.message);
+      return null;
+    }
   }
 
   /**

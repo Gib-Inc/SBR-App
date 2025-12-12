@@ -351,17 +351,24 @@ export default function SalesOrders() {
   });
 
   const cancelOrderMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/sales-orders/${id}/cancel`, {});
+    mutationFn: async ({ id, reason }: { id: string; reason?: string }) => {
+      const res = await apiRequest("POST", `/api/sales-orders/${id}/cancel`, { 
+        reason: reason || "Customer requested cancellation",
+        notifyCustomer: true,
+      });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sales-orders", selectedOrderId] });
       queryClient.invalidateQueries({ queryKey: ["/api/backorder-snapshots"] });
       queryClient.invalidateQueries({ queryKey: ["/api/product-forecast-context"] });
-      toast({ title: "Order cancelled" });
+      const details: string[] = [];
+      if (data.cancellationResult?.shopifyCancelled) details.push("Shopify");
+      if (data.cancellationResult?.ghlUpdated) details.push("GHL");
+      const detailText = details.length > 0 ? ` (synced to ${details.join(", ")})` : "";
+      toast({ title: `Order cancelled${detailText}` });
       setSelectedOrderId(null);
     },
     onError: (error: Error) => {
@@ -1208,7 +1215,7 @@ export default function SalesOrders() {
                 {canCancel ? (
                   <Button
                     variant="destructive"
-                    onClick={() => cancelOrderMutation.mutate(selectedOrder.id)}
+                    onClick={() => cancelOrderMutation.mutate({ id: selectedOrder.id, reason: "Customer requested cancellation" })}
                     disabled={cancelOrderMutation.isPending}
                     data-testid="button-cancel-order"
                   >
@@ -1632,9 +1639,10 @@ export default function SalesOrders() {
             <DialogDescription>
               Are you sure you want to cancel this order? This action will:
               <ul className="list-disc ml-4 mt-2 space-y-1 text-sm">
-                <li>Issue a full refund to the customer via QuickBooks</li>
-                <li>Send an SMS notification to the customer</li>
-                <li>Mark the order as REFUNDED</li>
+                <li>Cancel the order in Shopify (if applicable)</li>
+                <li>Update the GHL opportunity to "Lost" status</li>
+                <li>Release allocated inventory back to available stock</li>
+                <li>Mark the order as CANCELLED</li>
               </ul>
             </DialogDescription>
           </DialogHeader>
@@ -1650,7 +1658,7 @@ export default function SalesOrders() {
               variant="destructive"
               onClick={() => {
                 if (selectedOrderId) {
-                  cancelOrderMutation.mutate(selectedOrderId);
+                  cancelOrderMutation.mutate({ id: selectedOrderId, reason: "Customer requested cancellation" });
                   setShowCancelDialog(false);
                 }
               }}

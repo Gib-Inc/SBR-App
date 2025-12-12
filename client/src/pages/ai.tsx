@@ -19,7 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2, Building, History } from "lucide-react";
+import { Brain, Database, Settings2, TrendingUp, CheckCircle, CheckCircle2, XCircle, Clock, RefreshCw, ShoppingBag, Package, AlertTriangle, Info, Filter, Zap, HelpCircle, Search, FileText, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, Receipt, Send, Sparkles, Scale, DollarSign, Link2, Building, History, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
@@ -5228,14 +5228,41 @@ export default function AIAgent() {
               </div>
             </RadioGroup>
           </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowGhlSyncModal(false)} data-testid="button-cancel-ghl-sync">
-              Cancel
+          <div className="flex justify-between gap-2">
+            <Button 
+              variant="ghost" 
+              size="sm"
+              onClick={async () => {
+                try {
+                  toast({ title: "Linking GHL contacts...", description: "This may take a few minutes" });
+                  const response = await apiRequest("POST", "/api/integrations/gohighlevel/backfill-contacts");
+                  const data = await response.json();
+                  if (data.success) {
+                    toast({ 
+                      title: "Contact linking complete", 
+                      description: `Linked ${data.linked} orders to GHL contacts${data.failed > 0 ? `, ${data.failed} failed` : ''}` 
+                    });
+                  } else {
+                    toast({ title: "Contact linking failed", description: data.message, variant: "destructive" });
+                  }
+                } catch (err: any) {
+                  toast({ title: "Error", description: err.message, variant: "destructive" });
+                }
+              }}
+              data-testid="button-ghl-backfill-contacts"
+            >
+              <Users className="mr-2 h-4 w-4" />
+              Link Missing Contacts
             </Button>
-            <Button onClick={handleGhlSync} data-testid="button-start-ghl-sync">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Start Sync
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setShowGhlSyncModal(false)} data-testid="button-cancel-ghl-sync">
+                Cancel
+              </Button>
+              <Button onClick={handleGhlSync} data-testid="button-start-ghl-sync">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Start Sync
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

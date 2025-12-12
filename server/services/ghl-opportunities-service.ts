@@ -333,7 +333,7 @@ export class GHLOpportunitiesService {
    * Find or create a contact by name, email, and/or phone
    * Returns the contactId if found/created, null otherwise
    */
-  private async findOrCreateContact(
+  async findOrCreateContact(
     name?: string,
     email?: string,
     phone?: string

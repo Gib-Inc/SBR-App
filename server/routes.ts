@@ -63,6 +63,7 @@ import { returnsService } from "./services/returns-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
 import { logService } from "./services/log-service";
+import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 
 const SALT_ROUNDS = 10;
 
@@ -5475,6 +5476,80 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GoHighLevel - Backfill contact IDs for existing orders
+  app.post("/api/integrations/gohighlevel/backfill-contacts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      console.log(`[GHL Backfill] Starting contact backfill...`);
+      
+      // Initialize the GHL service with user credentials
+      const initialized = await ghlOpportunitiesService.initialize(userId);
+      if (!initialized) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "GoHighLevel integration not configured. Please set up GHL in Settings first." 
+        });
+      }
+      
+      // Get all orders without ghlContactId
+      const allOrders = await storage.getAllSalesOrders();
+      const ordersToBackfill = allOrders.filter(o => 
+        !o.ghlContactId && 
+        (o.customerEmail || o.customerPhone || o.customerName)
+      );
+      
+      console.log(`[GHL Backfill] Found ${ordersToBackfill.length} orders without GHL contact`);
+      
+      if (ordersToBackfill.length === 0) {
+        return res.json({ 
+          success: true, 
+          message: "No orders need backfilling",
+          linked: 0,
+          failed: 0
+        });
+      }
+      
+      let linked = 0;
+      let failed = 0;
+      const errors: string[] = [];
+      
+      for (const order of ordersToBackfill) {
+        try {
+          const contactId = await ghlOpportunitiesService.findOrCreateContact(
+            order.customerName || undefined,
+            order.customerEmail || undefined,
+            order.customerPhone || undefined
+          );
+          
+          if (contactId) {
+            await storage.updateSalesOrder(order.id, { ghlContactId: contactId });
+            linked++;
+            console.log(`[GHL Backfill] Linked order ${order.orderNumber || order.id} to contact ${contactId}`);
+          } else {
+            failed++;
+            errors.push(`Order ${order.orderNumber || order.id}: Could not find/create contact`);
+          }
+        } catch (err: any) {
+          failed++;
+          errors.push(`Order ${order.orderNumber || order.id}: ${err.message}`);
+        }
+      }
+      
+      console.log(`[GHL Backfill] Complete: ${linked} linked, ${failed} failed`);
+      
+      res.json({
+        success: true,
+        message: `Backfilled ${linked} orders with GHL contacts`,
+        linked,
+        failed,
+        errors: errors.slice(0, 10) // Return first 10 errors
+      });
+    } catch (error: any) {
+      console.error("[GHL Backfill] Error:", error.message);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   // GoHighLevel - Comprehensive Sync (pushes all data to GHL)
   // Mode: "update" (push new/changed, skip orphan removal) or "align" (push + cleanup orphans)
   app.post("/api/integrations/gohighlevel/sync", requireAuth, async (req: Request, res: Response) => {
@@ -5582,6 +5657,10 @@ TOTAL: $${subtotal.toFixed(2)}
           if (contactResult.success && contactResult.contactId) {
             contactId = contactResult.contactId;
             console.log(`[GHL Sync] Contact for ${customerName}: ${contactId}`);
+            // Save the contact ID to the order for future reference
+            if (!order.ghlContactId || order.ghlContactId !== contactId) {
+              await storage.updateSalesOrder(order.id, { ghlContactId: contactId });
+            }
           } else {
             // Use system contact as fallback
             contactId = systemContactId;

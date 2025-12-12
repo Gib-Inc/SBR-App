@@ -1110,6 +1110,7 @@ export const returnItems = pgTable("return_items", {
   isDamaged: boolean("is_damaged").default(false), // Set by warehouse during damage assessment
   damagePercent: real("damage_percent").default(0.10), // Default 10% deduction per damaged item
   damageAmount: real("damage_amount"), // lineTotal * damagePercent if isDamaged
+  damagePhotoUrl: text("damage_photo_url"), // URL to photo of damage taken by warehouse
 }, (table) => ({
   returnRequestIdIdx: index("return_items_return_request_id_idx").on(table.returnRequestId),
   inventoryItemIdIdx: index("return_items_inventory_item_id_idx").on(table.inventoryItemId),

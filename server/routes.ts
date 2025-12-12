@@ -12756,6 +12756,10 @@ Generate only the email body text, no subject line.`;
         });
       }
 
+      // Get totalReceived from sales order (total amount paid by customer)
+      const totalReceived = salesOrder.totalAmount || 0;
+      const LABEL_FEE = 1.00; // Flat fee we charge for label
+      
       // Create return request if one doesn't exist or is in APPROVED state (ready for label)
       if (!returnRequest) {
         console.log(`[GHL Custom Action] Creating new return request for order ${salesOrder.id}`);
@@ -12775,18 +12779,25 @@ Generate only the email body text, no subject line.`;
           resolutionRequested: 'RETURN_FULL_REFUND',
           reason: 'Customer requested return via AI Agent',
           status: 'APPROVED',
+          totalReceived: totalReceived,
+          labelFee: LABEL_FEE,
         });
 
+        // Create return items with lineTotal for each order line
         for (const line of orderLines) {
+          const lineTotal = (line.unitPrice || 0) * line.qtyOrdered;
           await storage.createReturnItem({
             returnRequestId: returnRequest.id,
             salesOrderLineId: line.id,
             inventoryItemId: line.productId || undefined,
             sku: line.sku,
+            productName: line.productName || undefined,
+            unitPrice: line.unitPrice || undefined,
             qtyOrdered: line.qtyOrdered,
             qtyRequested: line.qtyOrdered,
             qtyApproved: line.qtyOrdered,
             itemReason: 'Customer return via AI Agent',
+            lineTotal: lineTotal,
           });
         }
 
@@ -12826,6 +12837,13 @@ Generate only the email body text, no subject line.`;
 
       console.log(`[GHL Custom Action] Label created: ${labelResult.trackingNumber}`);
 
+      // Calculate refund amounts
+      const shippingCost = labelResult.labelCost || 0;
+      const baseRefundAmount = Math.max(0, totalReceived - (shippingCost + LABEL_FEE));
+      const finalRefundAmount = baseRefundAmount; // Initially same as base (no damage assessed yet)
+      
+      console.log(`[GHL Custom Action] Refund calculation: totalReceived=$${totalReceived.toFixed(2)}, shippingCost=$${shippingCost.toFixed(2)}, labelFee=$${LABEL_FEE.toFixed(2)}, baseRefundAmount=$${baseRefundAmount.toFixed(2)}`);
+
       // Create shipment record
       await storage.createReturnShipment({
         returnRequestId: returnRequest.id,
@@ -12838,9 +12856,13 @@ Generate only the email body text, no subject line.`;
         labelCurrency: labelResult.labelCurrency,
       });
 
-      // Update return status to LABEL_CREATED
+      // Update return with status and refund amounts
       await storage.updateReturnRequest(returnRequest.id, {
         status: 'LABEL_CREATED',
+        shippingCost: shippingCost,
+        baseRefundAmount: baseRefundAmount,
+        finalRefundAmount: finalRefundAmount,
+        damageDeductionTotal: 0,
       });
 
       // Update Sales Order status to PENDING_REFUND
@@ -12869,10 +12891,16 @@ Generate only the email body text, no subject line.`;
       const carrierName = labelResult.carrier || 'UPS';
       let smsMessage: string;
       
+      // Format dollar amounts to 2 decimal places
+      const fmtTotal = totalReceived.toFixed(2);
+      const fmtShipping = shippingCost.toFixed(2);
+      const fmtLabelFee = LABEL_FEE.toFixed(2);
+      const fmtBase = baseRefundAmount.toFixed(2);
+      
       if (isVoiceChannel) {
-        smsMessage = `Thanks for calling! Here's your return label:\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${carrierName} location.`;
+        smsMessage = `Thanks for calling! Here's your return label:\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nYour eligible refund is $${fmtBase} ($${fmtTotal} order total - $${fmtShipping} return shipping - $${fmtLabelFee} label fee).\n\nPrint the label and drop off your package at any ${carrierName} location.`;
       } else {
-        smsMessage = `Your return label is ready!\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${carrierName} location.`;
+        smsMessage = `Your return label is ready!\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nYour eligible refund is $${fmtBase} ($${fmtTotal} order total - $${fmtShipping} return shipping - $${fmtLabelFee} label fee).\n\nPrint the label and drop off your package at any ${carrierName} location.`;
       }
 
       console.log(`[GHL Custom Action] Sending SMS to contact ${contactId}`);
@@ -12893,16 +12921,26 @@ Generate only the email body text, no subject line.`;
         }
       }
 
+      // Build messageForAgent with refund breakdown
+      const agentMessage = `I see you're eligible for a refund of $${fmtBase}. We received $${fmtTotal} for your order, minus $${fmtShipping} for ${carrierName} return shipping and a $${fmtLabelFee} label fee, which leaves $${fmtBase}. Once your product makes it back to the warehouse you will receive up to $${fmtBase}. If there is any damage to any parts, there will be a 10% deduction per damaged part based on its price. I'm sending your return label via text right now.`;
+
       // Return response for AI Agent to speak
       res.json({
         success: true,
-        messageForAgent: `I've created your return label and I'm sending you the details via text right now. You'll receive the tracking number and a link to print your label. Just drop off your package at any ${carrierName} location.`,
+        messageForAgent: agentMessage,
         trackingNumber: labelResult.trackingNumber,
         labelUrl: labelResult.labelUrl,
         carrier: labelResult.carrier,
         serviceLevel: labelResult.serviceLevel || 'ground',
         returnId: returnRequest.id,
         rmaNumber: returnRequest.rmaNumber,
+        // New refund fields
+        totalReceived: parseFloat(fmtTotal),
+        shippingCost: parseFloat(fmtShipping),
+        labelFee: parseFloat(fmtLabelFee),
+        baseRefundAmount: parseFloat(fmtBase),
+        finalRefundAmount: parseFloat(fmtBase),
+        damageDeductionTotal: 0,
       });
 
     } catch (error: any) {

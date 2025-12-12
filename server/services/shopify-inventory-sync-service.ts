@@ -501,8 +501,13 @@ export class ShopifyInventorySyncService {
   }
 
   /**
-   * Pull inventory from Shopify for a single item and update app's hildaleQty/pivotQty
+   * Pull inventory from Shopify for a single item and update app's availableForSaleQty ONLY
    * This is a PULL operation (Shopify → App)
+   * 
+   * DATA SOURCE OWNERSHIP:
+   * - pivotQty: ONLY from Extensiv (never from Shopify)
+   * - hildaleQty: ONLY from production builds (never from Shopify)
+   * - availableForSaleQty: From Shopify sync (temporary until Extensiv is connected)
    * 
    * @param item - The item to sync
    * @returns Updated quantities and any errors
@@ -510,20 +515,26 @@ export class ShopifyInventorySyncService {
   async pullItemInventoryFromShopify(item: Item): Promise<{
     success: boolean;
     sku: string;
+    previousAvailableForSaleQty: number;
+    newAvailableForSaleQty: number | null;
+    errors: string[];
+    // Keep legacy fields for backward compatibility in response
     previousHildaleQty: number;
     previousPivotQty: number;
     newHildaleQty: number | null;
     newPivotQty: number | null;
-    errors: string[];
   }> {
     const result = {
       success: false,
       sku: item.sku || 'unknown',
+      previousAvailableForSaleQty: item.availableForSaleQty ?? 0,
+      newAvailableForSaleQty: null as number | null,
+      errors: [] as string[],
+      // Legacy fields (never modified from Shopify, kept for API compatibility)
       previousHildaleQty: item.hildaleQty ?? 0,
       previousPivotQty: item.pivotQty ?? 0,
       newHildaleQty: null as number | null,
       newPivotQty: null as number | null,
-      errors: [] as string[],
     };
 
     if (!item.shopifyVariantId) {
@@ -548,38 +559,35 @@ export class ShopifyInventorySyncService {
       }
     }
 
-    // Get inventory levels from both locations
-    const levels = await this.getMultiLocationInventoryLevels(inventoryItemId);
-    result.errors.push(...levels.errors);
-
-    // Update item with new quantities (only if we got valid data)
-    const updates: { pivotQty?: number; hildaleQty?: number } = {};
-    let hasUpdates = false;
-
-    if (levels.pivotQty !== null) {
-      result.newPivotQty = levels.pivotQty;
-      updates.pivotQty = levels.pivotQty;
-      hasUpdates = true;
+    // Get inventory level from Shopify's Pivot location (what's actually for sale on Shopify)
+    const pivotLocationId = this.getPivotLocationId();
+    if (!pivotLocationId) {
+      result.errors.push('Pivot location ID not configured');
+      return result;
     }
 
-    if (levels.hildaleQty !== null) {
-      result.newHildaleQty = levels.hildaleQty;
-      updates.hildaleQty = levels.hildaleQty;
-      hasUpdates = true;
-    }
-
-    if (hasUpdates) {
-      try {
-        await storage.updateItem(item.id, updates as any);
+    try {
+      const shopifyQty = await this.getInventoryLevel(inventoryItemId, pivotLocationId);
+      
+      if (shopifyQty !== null) {
+        result.newAvailableForSaleQty = shopifyQty;
+        
+        // ONLY update availableForSaleQty - pivotQty and hildaleQty are NOT touched
+        // pivotQty is owned by Extensiv, hildaleQty by production
+        await storage.updateItem(item.id, { 
+          availableForSaleQty: shopifyQty 
+        });
+        
         result.success = true;
         console.log(
           `[ShopifyInventorySync] Pulled inventory for ${item.sku}: ` +
-          `Hildale: ${result.previousHildaleQty} → ${result.newHildaleQty ?? 'unchanged'}, ` +
-          `Pivot: ${result.previousPivotQty} → ${result.newPivotQty ?? 'unchanged'}`
+          `availableForSaleQty: ${result.previousAvailableForSaleQty} → ${shopifyQty}`
         );
-      } catch (error: any) {
-        result.errors.push(`Failed to update item: ${error.message}`);
+      } else {
+        result.errors.push('Could not get inventory level from Shopify');
       }
+    } catch (error: any) {
+      result.errors.push(`Failed to get/update inventory: ${error.message}`);
     }
 
     return result;
@@ -681,7 +689,12 @@ export class ShopifyInventorySyncService {
 
   /**
    * Pull inventory from Shopify for all items with Shopify mapping
-   * Updates hildaleQty and pivotQty for each item
+   * Updates ONLY availableForSaleQty for each item
+   * 
+   * DATA SOURCE OWNERSHIP:
+   * - pivotQty: ONLY from Extensiv (never from Shopify)
+   * - hildaleQty: ONLY from production builds (never from Shopify)
+   * - availableForSaleQty: From Shopify sync (temporary until Extensiv is connected)
    */
   async pullAllInventoryFromShopify(userId: string): Promise<{
     totalItems: number;
@@ -693,6 +706,8 @@ export class ShopifyInventorySyncService {
     results: Array<{
       sku: string;
       success: boolean;
+      availableForSaleQty: number | null;
+      // Legacy fields kept for backward compatibility
       hildaleQty: number | null;
       pivotQty: number | null;
       errors: string[];
@@ -708,6 +723,7 @@ export class ShopifyInventorySyncService {
       results: [] as Array<{
         sku: string;
         success: boolean;
+        availableForSaleQty: number | null;
         hildaleQty: number | null;
         pivotQty: number | null;
         errors: string[];
@@ -746,6 +762,8 @@ export class ShopifyInventorySyncService {
       result.results.push({
         sku: pullResult.sku,
         success: pullResult.success,
+        availableForSaleQty: pullResult.newAvailableForSaleQty,
+        // Legacy fields for backward compatibility
         hildaleQty: pullResult.newHildaleQty,
         pivotQty: pullResult.newPivotQty,
         errors: pullResult.errors,

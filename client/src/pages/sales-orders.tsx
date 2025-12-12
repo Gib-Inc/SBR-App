@@ -125,21 +125,22 @@ const CHANNEL_COLORS = {
 
 const STATUS_VARIANTS: Record<string, "secondary" | "default" | "destructive"> = {
   DRAFT: "secondary",
-  OPEN: "default",
-  PARTIALLY_FULFILLED: "default",
-  FULFILLED: "default",
+  PURCHASED: "default",
+  SHIPPED: "default",
+  DELIVERED: "default",
+  PENDING_REFUND: "default",
+  REFUNDED: "default",
   CANCELLED: "destructive",
 };
 
 const STATUS_COLORS = {
   DRAFT: "bg-secondary text-secondary-foreground",
-  OPEN: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
-  PARTIALLY_FULFILLED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
-  FULFILLED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
-  CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
-  // V1 visible final states
+  PURCHASED: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
+  SHIPPED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
   DELIVERED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
+  PENDING_REFUND: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20",
   REFUNDED: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20",
+  CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
 };
 
 const PRODUCTION_STATUS_COLORS: Record<string, string> = {
@@ -830,7 +831,7 @@ export default function SalesOrders() {
                   <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Status</th>
                   <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Production</th>
                   <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Delivery Date</th>
+                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">{activeTab === "live" ? "Expected Delivery" : "Delivery Date"}</th>
                   <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Ship To</th>
                   <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Total</th>
                   <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Units</th>
@@ -860,13 +861,34 @@ export default function SalesOrders() {
                       ? format(new Date(expectedDeliveryDate), 'MMM d, yyyy')
                       : (activeTab === "history" ? "-" : "Pending");
                   
-                  // Determine visible status for V1 (DELIVERED or REFUNDED for terminal states)
+                  // Determine visible status for V1:
+                  // PURCHASED (was OPEN), SHIPPED (fulfilled but not delivered), DELIVERED, PENDING REFUND, REFUNDED
                   const getVisibleStatus = () => {
-                    if (order.status === 'CANCELLED' || order.returnStatus === 'REFUNDED') {
+                    // Check refund states first
+                    if (order.returnStatus === 'REFUNDED') {
                       return 'REFUNDED';
                     }
-                    if (order.status === 'FULFILLED' && order.returnStatus === 'NONE') {
+                    // Check if return is in progress (pending refund)
+                    const returnInProgress = order.returnStatus && 
+                      !['NONE', 'REFUNDED', 'CLOSED', 'CANCELLED', 'REJECTED'].includes(order.returnStatus);
+                    if (returnInProgress) {
+                      return 'PENDING_REFUND';
+                    }
+                    // Check if delivered (has deliveredAt timestamp)
+                    if (deliveredAt) {
                       return 'DELIVERED';
+                    }
+                    // Fulfilled but not yet delivered = SHIPPED
+                    if (order.status === 'FULFILLED' || order.status === 'PARTIALLY_FULFILLED') {
+                      return 'SHIPPED';
+                    }
+                    // OPEN or DRAFT = PURCHASED (order placed)
+                    if (order.status === 'OPEN') {
+                      return 'PURCHASED';
+                    }
+                    // CANCELLED stays as is
+                    if (order.status === 'CANCELLED') {
+                      return 'CANCELLED';
                     }
                     return order.status;
                   };
@@ -881,8 +903,8 @@ export default function SalesOrders() {
                   const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
                   const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
                   
-                  // Cancel eligibility: pre-ship states only (DRAFT, OPEN)
-                  const canCancel = ['DRAFT', 'OPEN'].includes(order.status) && activeTab === 'live';
+                  // Cancel eligibility: pre-ship states only (DRAFT, OPEN/PURCHASED)
+                  const canCancel = ['DRAFT', 'OPEN'].includes(order.status) && activeTab === 'live' && visibleStatus !== 'SHIPPED';
                   
                   return (
                     <tr 

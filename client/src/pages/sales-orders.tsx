@@ -1212,7 +1212,7 @@ export default function SalesOrders() {
                     <TooltipContent>{createReturnTooltip}</TooltipContent>
                   )}
                 </Tooltip>
-                {canCancel ? (
+                {canCancelFromDrawer ? (
                   <Button
                     variant="destructive"
                     onClick={() => cancelOrderMutation.mutate({ id: selectedOrder.id, reason: "Customer requested cancellation" })}

@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { storage } from "./storage";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
@@ -2274,6 +2276,355 @@ TOTAL: $${subtotal.toFixed(2)}
     } catch (error: any) {
       console.error("[Scan] Error processing scan:", error);
       res.status(500).json({ error: error.message || "Failed to process scan" });
+    }
+  });
+
+  // ============================================================================
+  // DAMAGE ASSESSMENT API
+  // ============================================================================
+  // Called when warehouse submits damage assessment after scanning a return
+  
+  // POST /api/returns/:id/assess-damage
+  // Submit damage assessment for a return
+  // Body: { items: [{ id: string, isDamaged: boolean, damagePhotoUrl?: string }] }
+  app.post("/api/returns/:id/assess-damage", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { items } = req.body as { items: { id: string; isDamaged: boolean; damagePhotoUrl?: string }[] };
+      
+      if (!items || !Array.isArray(items)) {
+        return res.status(400).json({ error: "items array is required" });
+      }
+      
+      // Get return request
+      const returnRequest = await storage.getReturnRequest(id);
+      if (!returnRequest) {
+        return res.status(404).json({ error: "Return request not found" });
+      }
+      
+      // Verify return is in correct status
+      if (returnRequest.status !== 'AWAITING_INSPECTION') {
+        return res.status(400).json({ 
+          error: "Return is not awaiting inspection",
+          currentStatus: returnRequest.status 
+        });
+      }
+      
+      const now = new Date();
+      let damageDeductionTotal = 0;
+      const damagedItems: { sku: string; productName: string; lineTotal: number; damageAmount: number; photoUrl?: string }[] = [];
+      const stockDeductions: { itemId: string; sku: string; qty: number }[] = [];
+      const stockAdditions: { itemId: string; sku: string; qty: number }[] = [];
+      const DAMAGE_PERCENT = 0.10; // 10% per damaged item
+      
+      // Process each item's damage assessment
+      for (const itemAssessment of items) {
+        const returnItem = await storage.getReturnItem(itemAssessment.id);
+        if (!returnItem || returnItem.returnRequestId !== id) {
+          console.warn(`[DamageAssessment] Item ${itemAssessment.id} not found or doesn't belong to return ${id}`);
+          continue;
+        }
+        
+        const lineTotal = returnItem.lineTotal || (returnItem.unitPrice || 0) * returnItem.qtyApproved;
+        let damageAmount = 0;
+        
+        // Find the inventory item
+        let inventoryItem = null;
+        if (returnItem.inventoryItemId) {
+          inventoryItem = await storage.getItem(returnItem.inventoryItemId);
+        } else if (returnItem.sku) {
+          inventoryItem = await storage.getItemBySku(returnItem.sku);
+        }
+        
+        if (itemAssessment.isDamaged) {
+          // Calculate 10% damage deduction for this item (round to 2 decimals for currency)
+          damageAmount = Math.round(lineTotal * DAMAGE_PERCENT * 100) / 100;
+          damageDeductionTotal += damageAmount;
+          
+          damagedItems.push({
+            sku: returnItem.sku,
+            productName: returnItem.productName || returnItem.sku,
+            lineTotal,
+            damageAmount,
+            photoUrl: itemAssessment.damagePhotoUrl,
+          });
+          
+          // Track stock to deduct for damaged items (loss - can't be restocked)
+          if (inventoryItem) {
+            stockDeductions.push({ 
+              itemId: inventoryItem.id, 
+              sku: returnItem.sku, 
+              qty: returnItem.qtyApproved 
+            });
+            
+            // Actually deduct from hildaleQty for damaged items (write-off)
+            const currentHildaleQty = inventoryItem.hildaleQty ?? 0;
+            const newHildaleQty = Math.max(0, currentHildaleQty - returnItem.qtyApproved);
+            await storage.updateItem(inventoryItem.id, {
+              hildaleQty: newHildaleQty,
+            });
+            
+            // Create inventory transaction for the write-off
+            try {
+              await storage.createInventoryTransaction({
+                itemId: inventoryItem.id,
+                type: 'DAMAGED_WRITE_OFF',
+                quantity: -returnItem.qtyApproved,
+                itemType: inventoryItem.type === 'finished_product' ? 'FINISHED' : 'RAW',
+                location: 'HILDALE',
+                notes: `Damaged return write-off: RMA ${returnRequest.rmaNumber || id}`,
+                createdBy: `user:${req.session.userId || 'unknown'}`,
+              });
+            } catch (txErr) {
+              console.warn('[DamageAssessment] Failed to create write-off transaction:', txErr);
+            }
+          }
+        } else {
+          // For non-damaged items, add back to Hildale inventory
+          if (inventoryItem) {
+            stockAdditions.push({
+              itemId: inventoryItem.id,
+              sku: returnItem.sku,
+              qty: returnItem.qtyApproved,
+            });
+            
+            const newHildaleQty = (inventoryItem.hildaleQty ?? 0) + returnItem.qtyApproved;
+            await storage.updateItem(inventoryItem.id, {
+              hildaleQty: newHildaleQty,
+            });
+            
+            // Create inventory transaction for the return receipt
+            try {
+              await storage.createInventoryTransaction({
+                itemId: inventoryItem.id,
+                type: 'RECEIVE',
+                quantity: returnItem.qtyApproved,
+                itemType: inventoryItem.type === 'finished_product' ? 'FINISHED' : 'RAW',
+                location: 'HILDALE',
+                notes: `Return received: RMA ${returnRequest.rmaNumber || id}`,
+                createdBy: `user:${req.session.userId || 'unknown'}`,
+              });
+            } catch (txErr) {
+              console.warn('[DamageAssessment] Failed to create receive transaction:', txErr);
+            }
+          }
+        }
+        
+        // Update return item with damage info
+        await storage.updateReturnItem(itemAssessment.id, {
+          isDamaged: itemAssessment.isDamaged,
+          damagePercent: itemAssessment.isDamaged ? DAMAGE_PERCENT : 0,
+          damageAmount: damageAmount,
+          damagePhotoUrl: itemAssessment.damagePhotoUrl,
+          condition: itemAssessment.isDamaged ? 'DAMAGED' : 'GOOD',
+          qtyReceived: returnItem.qtyApproved,
+        });
+      }
+      
+      // Round and clamp damage deduction to not exceed base refund amount
+      const baseRefundAmount = returnRequest.baseRefundAmount || 0;
+      damageDeductionTotal = Math.round(Math.min(damageDeductionTotal, baseRefundAmount) * 100) / 100;
+      const finalRefundAmount = Math.round(Math.max(0, baseRefundAmount - damageDeductionTotal) * 100) / 100;
+      
+      // Update return request with damage assessment results
+      await storage.updateReturnRequest(id, {
+        status: 'DAMAGE_ASSESSED',
+        damageDeductionTotal,
+        finalRefundAmount,
+        damageAssessedAt: now,
+      });
+      
+      // Log stock deductions for damaged items
+      for (const deduction of stockDeductions) {
+        try {
+          await logService.log({
+            type: 'INVENTORY_ADJUSTMENT' as any,
+            severity: 'INFO',
+            message: `Stock deducted - damaged returned goods`,
+            details: {
+              itemId: deduction.itemId,
+              sku: deduction.sku,
+              qtyDeducted: deduction.qty,
+              reason: 'DAMAGED_RETURN',
+              returnRequestId: id,
+              rmaNumber: returnRequest.rmaNumber,
+            },
+          });
+        } catch (logErr) {
+          console.warn('[DamageAssessment] Failed to log stock deduction:', logErr);
+        }
+      }
+      
+      // Log stock additions for good items
+      for (const addition of stockAdditions) {
+        try {
+          await logService.log({
+            type: 'INVENTORY_ADJUSTMENT' as any,
+            severity: 'INFO',
+            message: `Stock added - returned goods received`,
+            details: {
+              itemId: addition.itemId,
+              sku: addition.sku,
+              qtyAdded: addition.qty,
+              reason: 'RETURN_RECEIVED',
+              returnRequestId: id,
+              rmaNumber: returnRequest.rmaNumber,
+            },
+          });
+        } catch (logErr) {
+          console.warn('[DamageAssessment] Failed to log stock addition:', logErr);
+        }
+      }
+      
+      // Create return event
+      try {
+        await storage.createReturnEvent({
+          returnRequestId: id,
+          eventType: 'DAMAGE_ASSESSED',
+          eventData: {
+            damageDeductionTotal,
+            finalRefundAmount,
+            damagedItems,
+            stockDeductions,
+            assessedBy: req.session.userId || 'unknown',
+          },
+        });
+      } catch (evtErr) {
+        console.warn('[DamageAssessment] Failed to create return event:', evtErr);
+      }
+      
+      // Update Shippo label log status
+      const labelLogs = await storage.getShippoLabelLogsByReturnId(id);
+      if (labelLogs.length > 0) {
+        await storage.updateShippoLabelLog(labelLogs[0].id, {
+          status: 'DAMAGE_ASSESSED',
+        });
+      }
+      
+      // Send customer message with final refund breakdown
+      const refundPolicyUrl = returnRequest.refundPolicyUrl || 'https://stickerburr.com/policies/refund-policy';
+      const totalReceived = returnRequest.totalReceived || 0;
+      const shippingCost = returnRequest.shippingCost || 0;
+      const labelFee = returnRequest.labelFee || 1.00;
+      
+      // Format amounts
+      const fmtTotal = totalReceived.toFixed(2);
+      const fmtShipping = shippingCost.toFixed(2);
+      const fmtLabelFee = labelFee.toFixed(2);
+      const fmtDamage = damageDeductionTotal.toFixed(2);
+      const fmtFinal = finalRefundAmount.toFixed(2);
+      
+      let customerMessage = `Hello ${returnRequest.customerName?.split(' ')[0] || 'there'}, we have received your return today and have issued a refund of $${fmtFinal}`;
+      
+      if (damageDeductionTotal > 0) {
+        customerMessage += ` ($${fmtTotal} order total - $${fmtShipping} return shipping - $${fmtLabelFee} label fee - $${fmtDamage} damaged item deduction)`;
+      } else {
+        customerMessage += ` ($${fmtTotal} order total - $${fmtShipping} return shipping - $${fmtLabelFee} label fee)`;
+      }
+      
+      // Add damage photo links if any
+      const photoLinks = damagedItems.filter(d => d.photoUrl).map(d => d.photoUrl);
+      if (photoLinks.length > 0) {
+        customerMessage += `\n\nDamage documentation: ${photoLinks.join('\n')}`;
+      }
+      
+      customerMessage += `\n\nIf you have any questions about your refund please review our refund policy here: ${refundPolicyUrl}`;
+      
+      // Try to send via GHL if we have a contact ID
+      if (returnRequest.ghlContactId) {
+        try {
+          const users = await storage.getAllUsers();
+          if (users.length > 0) {
+            const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
+            if (ghlConfig?.apiKey && ghlConfig?.config) {
+              const locationId = (ghlConfig.config as any).locationId;
+              if (locationId) {
+                const ghlClient = new GoHighLevelClient('https://services.leadconnectorhq.com', ghlConfig.apiKey, locationId);
+                const smsResult = await ghlClient.sendSMS(returnRequest.ghlContactId, customerMessage);
+                if (smsResult.success) {
+                  console.log(`[DamageAssessment] Customer message sent via SMS`);
+                } else {
+                  console.warn(`[DamageAssessment] SMS failed: ${smsResult.error}`);
+                }
+              }
+            }
+          }
+        } catch (ghlErr) {
+          console.warn('[DamageAssessment] Failed to send customer message:', ghlErr);
+        }
+      }
+      
+      res.json({
+        success: true,
+        returnRequestId: id,
+        rmaNumber: returnRequest.rmaNumber,
+        totalReceived,
+        shippingCost,
+        labelFee,
+        baseRefundAmount,
+        damageDeductionTotal,
+        finalRefundAmount,
+        damagedItems,
+        stockDeductions,
+        stockAdditions,
+        customerMessageSent: !!returnRequest.ghlContactId,
+        message: `Damage assessment complete. Final refund: $${fmtFinal}`,
+      });
+      
+    } catch (error: any) {
+      console.error("[DamageAssessment] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to process damage assessment" });
+    }
+  });
+  
+  // POST /api/returns/upload-damage-photo
+  // Upload a damage photo and return the URL
+  app.post("/api/returns/upload-damage-photo", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // Use multer for file upload if available, otherwise handle base64
+      const { base64Image, returnItemId, filename } = req.body;
+      
+      if (!base64Image) {
+        return res.status(400).json({ error: "base64Image is required" });
+      }
+      
+      // Generate unique filename
+      const timestamp = Date.now();
+      const randomSuffix = Math.random().toString(36).substring(7);
+      const safeFilename = filename?.replace(/[^a-zA-Z0-9.-]/g, '_') || 'damage';
+      const finalFilename = `damage_${timestamp}_${randomSuffix}_${safeFilename}.jpg`;
+      
+      // Save to uploads directory
+      const uploadsDir = path.join(process.cwd(), 'uploads', 'damage-photos');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      const filePath = path.join(uploadsDir, finalFilename);
+      
+      // Remove data URL prefix if present
+      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+      
+      // Generate URL (relative path that can be served statically)
+      const photoUrl = `/uploads/damage-photos/${finalFilename}`;
+      
+      // If returnItemId provided, update the return item
+      if (returnItemId) {
+        await storage.updateReturnItem(returnItemId, {
+          damagePhotoUrl: photoUrl,
+        });
+      }
+      
+      res.json({
+        success: true,
+        photoUrl,
+        filename: finalFilename,
+      });
+      
+    } catch (error: any) {
+      console.error("[DamagePhoto] Error uploading photo:", error);
+      res.status(500).json({ error: error.message || "Failed to upload photo" });
     }
   });
 

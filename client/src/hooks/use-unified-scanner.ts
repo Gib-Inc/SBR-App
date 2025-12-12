@@ -7,10 +7,22 @@ export type ScanStatus =
   | "PRODUCT_MATCH" 
   | "BIN_MATCH" 
   | "RETURN_RECEIVED" 
+  | "PENDING_DAMAGE_ASSESSMENT"
   | "ALREADY_RECEIVED" 
   | "LABEL_NOT_RETURN" 
   | "UNKNOWN_CODE"
   | "ERROR";
+
+export interface ReturnItemForAssessment {
+  id: string;
+  sku: string;
+  productName: string;
+  unitPrice: number;
+  qtyApproved: number;
+  lineTotal: number;
+  isDamaged: boolean;
+  damagePhotoUrl?: string;
+}
 
 export interface ScanResult {
   status: ScanStatus;
@@ -21,6 +33,13 @@ export interface ScanResult {
   returnRequestId?: string;
   salesOrderId?: string;
   rmaNumber?: string;
+  orderNumber?: string;
+  customerName?: string;
+  baseRefundAmount?: number;
+  totalReceived?: number;
+  shippingCost?: number;
+  labelFee?: number;
+  items?: ReturnItemForAssessment[];
   skus?: string[];
   inventoryUpdates?: { sku: string; qty: number }[];
   labelLog?: { id: string; type: string; trackingNumber: string };
@@ -92,6 +111,12 @@ export function useUnifiedScanner(options: UseUnifiedScannerOptions = {}) {
               description: `${rmaDisplay} - ${itemCount} item(s) added to inventory`,
               className: "bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800",
             });
+            break;
+            
+          case "PENDING_DAMAGE_ASSESSMENT":
+            // Don't show toast - the popup will handle this
+            // Just invalidate relevant queries
+            queryClient.invalidateQueries({ queryKey: ["/api/shippo-label-logs"] });
             break;
             
           case "ALREADY_RECEIVED":

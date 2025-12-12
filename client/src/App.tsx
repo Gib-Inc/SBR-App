@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { User, LogOut } from "lucide-react";
 import { NotificationsBell } from "@/components/notifications-bell";
+import { ScanProvider } from "@/contexts/scan-context";
+import { ScanButton } from "@/components/scan-button";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
@@ -98,6 +100,7 @@ function AuthenticatedApp() {
                 <header className="flex h-14 items-center justify-between gap-4 border-b px-4">
                   <SidebarTrigger data-testid="button-sidebar-toggle" />
                   <div className="flex items-center gap-2">
+                    <ScanButton />
                     <ThemeToggle />
                     <NotificationsBell />
                     <UserMenu />
@@ -134,7 +137,9 @@ export default function App() {
           <Route path="/po/acknowledge/:token" component={POAcknowledge} />
           <Route>
             <AuthProvider>
-              <AuthenticatedApp />
+              <ScanProvider>
+                <AuthenticatedApp />
+              </ScanProvider>
             </AuthProvider>
           </Route>
         </Switch>

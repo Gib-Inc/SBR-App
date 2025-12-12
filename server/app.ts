@@ -52,6 +52,9 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false }));
 
+// Serve uploaded damage photos statically
+app.use('/uploads', express.static('uploads'));
+
 // Session configuration
 app.use(
   session({

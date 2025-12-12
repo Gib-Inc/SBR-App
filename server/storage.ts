@@ -326,6 +326,7 @@ export interface IStorage {
   receiveReturn(returnId: string, itemUpdates: { itemId: string; qtyReceived: number }[]): Promise<ReturnRequest>;
 
   // Return Items
+  getReturnItem(id: string): Promise<ReturnItem | undefined>;
   getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]>;
   createReturnItem(item: InsertReturnItem): Promise<ReturnItem>;
   updateReturnItem(id: string, item: Partial<InsertReturnItem>): Promise<ReturnItem | undefined>;
@@ -2347,6 +2348,10 @@ export class MemStorage implements IStorage {
   }
 
   // Return Items
+  async getReturnItem(id: string): Promise<ReturnItem | undefined> {
+    return this.returnItems.get(id);
+  }
+
   async getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]> {
     return Array.from(this.returnItems.values())
       .filter(item => item.returnRequestId === returnRequestId);
@@ -5075,6 +5080,11 @@ export class PostgresStorage implements IStorage {
   }
 
   // Return Items
+  async getReturnItem(id: string): Promise<ReturnItem | undefined> {
+    const results = await this.db.select().from(schema.returnItems).where(eq(schema.returnItems.id, id));
+    return results[0];
+  }
+
   async getReturnItemsByRequestId(returnRequestId: string): Promise<ReturnItem[]> {
     return await this.db.select().from(schema.returnItems).where(eq(schema.returnItems.returnRequestId, returnRequestId));
   }

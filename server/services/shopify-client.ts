@@ -121,21 +121,27 @@ export class ShopifyClient {
 
   /**
    * Map Shopify order status to our internal status
+   * Flow: DRAFT → PURCHASED → PENDING → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
    */
-  private mapStatus(financial_status: string, fulfillment_status: string | null): string {
+  private mapStatus(financial_status: string, fulfillment_status: string | null, hasDeliveredAt: boolean = false): string {
     // If cancelled or refunded, mark as CANCELLED
     if (financial_status === 'refunded' || financial_status === 'voided') {
       return 'CANCELLED';
     }
 
-    // If fully fulfilled, mark as FULFILLED
-    if (fulfillment_status === 'fulfilled') {
-      return 'FULFILLED';
+    // If delivered (has deliveredAt timestamp), mark as DELIVERED
+    if (hasDeliveredAt) {
+      return 'DELIVERED';
     }
 
-    // If partially fulfilled
+    // If fully fulfilled but not delivered yet, mark as SHIPPED
+    if (fulfillment_status === 'fulfilled') {
+      return 'SHIPPED';
+    }
+
+    // If partially fulfilled, mark as PENDING (in-progress)
     if (fulfillment_status === 'partial') {
-      return 'PARTIALLY_FULFILLED';
+      return 'PENDING';
     }
 
     // If pending payment, mark as DRAFT
@@ -143,13 +149,13 @@ export class ShopifyClient {
       return 'DRAFT';
     }
 
-    // If paid but not fulfilled, mark as OPEN
+    // If paid but not fulfilled, mark as PURCHASED
     if (financial_status === 'paid') {
-      return 'OPEN';
+      return 'PURCHASED';
     }
 
-    // Default to OPEN for all other cases
-    return 'OPEN';
+    // Default to PURCHASED for all other cases
+    return 'PURCHASED';
   }
 
   /**
@@ -164,7 +170,22 @@ export class ShopifyClient {
     const customerPhone = order.customer?.phone || order.phone;
     const externalCustomerId = order.customer?.id ? String(order.customer.id) : undefined;
 
-    const status = this.mapStatus(order.financial_status, order.fulfillment_status);
+    // Extract actual delivery date from fulfillment data first (needed for mapStatus)
+    // Look for fulfillments with shipment_status = "delivered" and use their updated_at timestamp
+    let deliveredAt: Date | undefined;
+    if (order.fulfillments && Array.isArray(order.fulfillments)) {
+      for (const fulfillment of order.fulfillments) {
+        if (fulfillment.shipment_status === 'delivered' && fulfillment.updated_at) {
+          const fulfillmentDate = new Date(fulfillment.updated_at);
+          // Use the latest delivery date if multiple fulfillments
+          if (!deliveredAt || fulfillmentDate > deliveredAt) {
+            deliveredAt = fulfillmentDate;
+          }
+        }
+      }
+    }
+
+    const status = this.mapStatus(order.financial_status, order.fulfillment_status, !!deliveredAt);
 
     const lineItems = order.line_items.map(item => ({
       sku: item.sku || `SHOPIFY-${item.id}`,
@@ -182,21 +203,6 @@ export class ShopifyClient {
     const orderDate = new Date(order.created_at);
     const expectedDeliveryDate = new Date(orderDate);
     expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + 7);
-
-    // Extract actual delivery date from fulfillment data
-    // Look for fulfillments with shipment_status = "delivered" and use their updated_at timestamp
-    let deliveredAt: Date | undefined;
-    if (order.fulfillments && Array.isArray(order.fulfillments)) {
-      for (const fulfillment of order.fulfillments) {
-        if (fulfillment.shipment_status === 'delivered' && fulfillment.updated_at) {
-          const fulfillmentDate = new Date(fulfillment.updated_at);
-          // Use the latest delivery date if multiple fulfillments
-          if (!deliveredAt || fulfillmentDate > deliveredAt) {
-            deliveredAt = fulfillmentDate;
-          }
-        }
-      }
-    }
 
     // Extract shipping address from Shopify order
     const shippingAddress = order.shipping_address;

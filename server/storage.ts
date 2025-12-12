@@ -2811,7 +2811,7 @@ export class MemStorage implements IStorage {
     const openLines: SalesOrderLine[] = [];
     for (const line of allLines) {
       const order = await this.getSalesOrder(line.salesOrderId);
-      if (order && order.status !== 'CANCELLED' && order.status !== 'FULFILLED') {
+      if (order && order.status !== 'CANCELLED' && order.status !== 'DELIVERED' && order.status !== 'REFUNDED') {
         openLines.push(line);
       }
     }
@@ -5645,7 +5645,7 @@ export class PostgresStorage implements IStorage {
         and(
           eq(schema.salesOrderLines.productId, productId),
           gt(schema.salesOrderLines.backorderQty, 0),
-          drizzleSql`${schema.salesOrders.status} NOT IN ('CANCELLED', 'FULFILLED')`
+          drizzleSql`${schema.salesOrders.status} NOT IN ('CANCELLED', 'DELIVERED', 'REFUNDED')`
         )
       )
       .orderBy(schema.salesOrders.orderDate);

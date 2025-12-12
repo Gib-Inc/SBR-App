@@ -483,18 +483,18 @@ export default function SalesOrders() {
   // State machine for order actions based on fulfilled quantities
   const hasAnyFulfilledQty = selectedOrder?.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
 
-  // Ship / Mark Fulfilled: allowed only for OPEN orders with no fulfilled items
+  // Ship / Mark Fulfilled: allowed only for PURCHASED/PENDING orders with no fulfilled items
   const canShip = selectedOrder && 
-    selectedOrder.status === "OPEN" && 
+    ['PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
   const canFulfill = selectedOrder && 
-    selectedOrder.status === "OPEN" && 
+    ['PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
-  // Cancel: allowed only for OPEN orders with no fulfilled items
-  const canCancel = selectedOrder && 
-    selectedOrder.status === "OPEN" && 
+  // Cancel: allowed only for pre-ship orders (DRAFT, PURCHASED, PENDING)
+  const canCancelFromDrawer = selectedOrder && 
+    ['DRAFT', 'PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
   // Create Return: allowed only if there are fulfilled items
@@ -861,10 +861,10 @@ export default function SalesOrders() {
                       ? format(new Date(expectedDeliveryDate), 'MMM d, yyyy')
                       : (activeTab === "history" ? "-" : "Pending");
                   
-                  // Determine visible status for V1:
-                  // PURCHASED (was OPEN), SHIPPED (fulfilled but not delivered), DELIVERED, PENDING REFUND, REFUNDED
+                  // Determine visible status - now matches database directly
+                  // Flow: DRAFT → PURCHASED → PENDING → SHIPPED → DELIVERED (+ PENDING_REFUND, REFUNDED, CANCELLED)
                   const getVisibleStatus = () => {
-                    // Check refund states first
+                    // Check refund states first (override status if return in progress)
                     if (order.returnStatus === 'REFUNDED') {
                       return 'REFUNDED';
                     }
@@ -874,41 +874,22 @@ export default function SalesOrders() {
                     if (returnInProgress) {
                       return 'PENDING_REFUND';
                     }
-                    // Check if delivered (has deliveredAt timestamp)
-                    if (deliveredAt) {
-                      return 'DELIVERED';
-                    }
-                    // Fulfilled but not yet delivered = SHIPPED
-                    if (order.status === 'FULFILLED' || order.status === 'PARTIALLY_FULFILLED') {
-                      return 'SHIPPED';
-                    }
-                    // OPEN = PURCHASED (order placed)
-                    if (order.status === 'OPEN') {
-                      return 'PURCHASED';
-                    }
-                    // DRAFT stays as DRAFT
-                    if (order.status === 'DRAFT') {
-                      return 'DRAFT';
-                    }
-                    // CANCELLED stays as is
-                    if (order.status === 'CANCELLED') {
-                      return 'CANCELLED';
-                    }
+                    // Otherwise use the database status directly
                     return order.status;
                   };
                   const visibleStatus = getVisibleStatus();
                   
                   // Return eligibility: DELIVERED status + within 30-day window
                   // Fall back to orderDate if deliveredAt is not set (for historical orders)
-                  const isDelivered = order.status === 'FULFILLED' || visibleStatus === 'DELIVERED';
+                  const isDelivered = order.status === 'DELIVERED' || visibleStatus === 'DELIVERED';
                   const returnWindowStartDate = deliveredAt 
                     ? new Date(deliveredAt) 
                     : new Date(order.orderDate); // Fallback to order date
                   const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
                   const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
                   
-                  // Cancel eligibility: pre-ship states only (DRAFT, OPEN/PURCHASED)
-                  const canCancel = ['DRAFT', 'OPEN'].includes(order.status) && activeTab === 'live' && visibleStatus !== 'SHIPPED';
+                  // Cancel eligibility: pre-ship states only (DRAFT, PURCHASED, PENDING)
+                  const canCancel = ['DRAFT', 'PURCHASED', 'PENDING'].includes(order.status) && activeTab === 'live';
                   
                   return (
                     <tr 

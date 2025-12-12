@@ -975,8 +975,8 @@ export const TERMINAL_STATUSES = {
   // Purchase Orders: RECEIVED, CLOSED, CANCELLED are terminal
   purchaseOrder: ['RECEIVED', 'CLOSED', 'CANCELLED'] as const,
   
-  // Sales Orders: FULFILLED, CANCELLED are terminal
-  salesOrder: ['FULFILLED', 'CANCELLED'] as const,
+  // Sales Orders: DELIVERED, REFUNDED, CANCELLED are terminal
+  salesOrder: ['DELIVERED', 'REFUNDED', 'CANCELLED'] as const,
   
   // Returns: RECEIVED, RECEIVED_AT_WAREHOUSE, REFUNDED, REPLACEMENT_SENT, CLOSED, REJECTED, CANCELLED, COMPLETED are terminal
   returnRequest: ['RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'REFUNDED', 'REPLACEMENT_SENT', 'CLOSED', 'REJECTED', 'CANCELLED', 'COMPLETED'] as const,
@@ -1462,7 +1462,7 @@ export const salesOrders = pgTable("sales_orders", {
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone"),
   ghlContactId: text("ghl_contact_id"), // GoHighLevel contact ID
-  status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'OPEN' | 'PARTIALLY_FULFILLED' | 'FULFILLED' | 'CANCELLED'
+  status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'PURCHASED' | 'PENDING' | 'SHIPPED' | 'DELIVERED' | 'PENDING_REFUND' | 'REFUNDED' | 'CANCELLED'
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
   expectedDeliveryDate: timestamp("expected_delivery_date"), // Promised delivery date from Amazon/Shopify or computed

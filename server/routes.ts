@@ -12679,9 +12679,9 @@ Generate only the email body text, no subject line.`;
 
       let newStatus = order.status;
       if (allFulfilled) {
-        newStatus = 'FULFILLED';
+        newStatus = 'SHIPPED'; // All items shipped
       } else if (anyShipped) {
-        newStatus = 'PARTIALLY_FULFILLED';
+        newStatus = 'PENDING'; // Some items shipped, waiting for rest
       }
 
       // Update order status if needed
@@ -12722,10 +12722,10 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Update order status to FULFILLED with deliveredAt timestamp
+      // Update order status to DELIVERED with deliveredAt timestamp
       const updatedOrder = await storage.updateSalesOrder(id, { 
-        status: 'FULFILLED',
-        deliveredAt: new Date(), // V1: Set delivery date when order is fulfilled
+        status: 'DELIVERED',
+        deliveredAt: new Date(), // Set delivery date when order is marked delivered
       });
 
       // Return updated order with lines

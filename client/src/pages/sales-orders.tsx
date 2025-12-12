@@ -124,8 +124,8 @@ const CHANNEL_COLORS = {
 };
 
 const STATUS_VARIANTS: Record<string, "secondary" | "default" | "destructive"> = {
-  DRAFT: "secondary",
   PURCHASED: "default",
+  PENDING: "secondary",
   SHIPPED: "default",
   DELIVERED: "default",
   PENDING_REFUND: "default",
@@ -134,8 +134,8 @@ const STATUS_VARIANTS: Record<string, "secondary" | "default" | "destructive"> =
 };
 
 const STATUS_COLORS = {
-  DRAFT: "bg-secondary text-secondary-foreground",
   PURCHASED: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
+  PENDING: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20",
   SHIPPED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
   DELIVERED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
   PENDING_REFUND: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20",
@@ -888,8 +888,8 @@ export default function SalesOrders() {
                   const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
                   const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
                   
-                  // Cancel eligibility: pre-ship states only (DRAFT, PURCHASED, PENDING)
-                  const canCancel = ['DRAFT', 'PURCHASED', 'PENDING'].includes(order.status) && activeTab === 'live';
+                  // Cancel eligibility: pre-ship states only (PURCHASED, PENDING)
+                  const canCancel = ['PURCHASED', 'PENDING'].includes(order.status) && activeTab === 'live';
                   
                   return (
                     <tr 
@@ -914,7 +914,7 @@ export default function SalesOrders() {
                       </td>
                       <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
-                          className={STATUS_COLORS[visibleStatus as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
+                          className={STATUS_COLORS[visibleStatus as keyof typeof STATUS_COLORS] || STATUS_COLORS.PURCHASED}
                           data-testid={`badge-status-${order.id}`}
                         >
                           {visibleStatus.replace(/_/g, ' ')}
@@ -1096,7 +1096,7 @@ export default function SalesOrders() {
                     <Label className="text-xs text-muted-foreground">Status</Label>
                     <div className="mt-1">
                       <Badge 
-                        className={STATUS_COLORS[selectedOrder.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.DRAFT}
+                        className={STATUS_COLORS[selectedOrder.status as keyof typeof STATUS_COLORS] || STATUS_COLORS.PURCHASED}
                         data-testid="badge-detail-status"
                       >
                         {selectedOrder.status.replace(/_/g, ' ')}

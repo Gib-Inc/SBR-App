@@ -121,15 +121,28 @@ export class ShopifyClient {
 
   /**
    * Map Shopify order status to our internal status
-   * Flow: DRAFT → PURCHASED → PENDING → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
+   * Flow: PURCHASED → PENDING → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
+   * 
+   * Status meanings:
+   * - PURCHASED: Payment confirmed from Shopify
+   * - PENDING: Waiting at warehouse to be shipped (partial fulfillment or pending payment)
+   * - SHIPPED: Scanned into carrier system (fulfillment started)
+   * - DELIVERED: Carrier confirmed delivery
+   * - REFUNDED: Full refund completed
+   * - CANCELLED: Order voided/cancelled
    */
   private mapStatus(financial_status: string, fulfillment_status: string | null, hasDeliveredAt: boolean = false): string {
-    // If cancelled or refunded, mark as CANCELLED
-    if (financial_status === 'refunded' || financial_status === 'voided') {
+    // If refunded, mark as REFUNDED (not CANCELLED)
+    if (financial_status === 'refunded') {
+      return 'REFUNDED';
+    }
+
+    // If voided/cancelled, mark as CANCELLED
+    if (financial_status === 'voided') {
       return 'CANCELLED';
     }
 
-    // If delivered (has deliveredAt timestamp), mark as DELIVERED
+    // If delivered (has deliveredAt timestamp from carrier), mark as DELIVERED
     if (hasDeliveredAt) {
       return 'DELIVERED';
     }
@@ -139,14 +152,14 @@ export class ShopifyClient {
       return 'SHIPPED';
     }
 
-    // If partially fulfilled, mark as PENDING (in-progress)
+    // If partially fulfilled, mark as PENDING (warehouse processing)
     if (fulfillment_status === 'partial') {
       return 'PENDING';
     }
 
-    // If pending payment, mark as DRAFT
+    // If pending payment or authorized, mark as PENDING (awaiting confirmation)
     if (financial_status === 'pending' || financial_status === 'authorized') {
-      return 'DRAFT';
+      return 'PENDING';
     }
 
     // If paid but not fulfilled, mark as PURCHASED

@@ -12722,10 +12722,10 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Update order status to DELIVERED with deliveredAt timestamp
+      // Update order status to SHIPPED (manual fulfill = shipped, not delivered)
+      // DELIVERED should only be set when carrier confirms delivery
       const updatedOrder = await storage.updateSalesOrder(id, { 
-        status: 'DELIVERED',
-        deliveredAt: new Date(), // Set delivery date when order is marked delivered
+        status: 'SHIPPED',
       });
 
       // Return updated order with lines

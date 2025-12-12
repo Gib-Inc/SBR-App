@@ -1037,6 +1037,17 @@ export const returnRequests = pgTable("return_requests", {
   quickbooksRefundId: text("quickbooks_refund_id"), // QB Credit Memo or Refund Receipt ID
   quickbooksRefundType: text("quickbooks_refund_type"), // 'CREDIT_MEMO' | 'REFUND_RECEIPT' | null
   quickbooksRefundCreatedAt: timestamp("quickbooks_refund_created_at"), // When QB refund was created
+  
+  // New refund calculation fields (replaces old refundPercent logic)
+  totalReceived: real("total_received"), // Total amount customer paid for order (after tax)
+  shippingCost: real("shipping_cost"), // UPS return label cost from Shippo
+  labelFee: real("label_fee").default(1.00), // Flat fee we charge for label ($1.00 default)
+  baseRefundAmount: real("base_refund_amount"), // totalReceived - (shippingCost + labelFee)
+  damageDeductionTotal: real("damage_deduction_total").default(0), // Sum of 10% deductions for damaged items
+  finalRefundAmount: real("final_refund_amount"), // baseRefundAmount - damageDeductionTotal
+  damageAssessedAt: timestamp("damage_assessed_at"), // When warehouse assessed damage
+  refundPolicyUrl: text("refund_policy_url"), // Link to refund policy for customer messaging
+  
   // Lifecycle timestamps
   requestedAt: timestamp("requested_at").default(sql`now()`),
   approvedAt: timestamp("approved_at"),
@@ -1093,6 +1104,12 @@ export const returnItems = pgTable("return_items", {
   disposition: text("disposition"), // 'RETURN_TO_STOCK', 'SCRAP', 'REPLACE_ONLY', 'INSPECT' (null until received)
   itemReason: text("item_reason"), // Specific reason for this item
   notes: text("notes"),
+  
+  // Damage deduction tracking (new refund calculation)
+  lineTotal: real("line_total"), // unitPrice * qtyRequested at time of return
+  isDamaged: boolean("is_damaged").default(false), // Set by warehouse during damage assessment
+  damagePercent: real("damage_percent").default(0.10), // Default 10% deduction per damaged item
+  damageAmount: real("damage_amount"), // lineTotal * damagePercent if isDamaged
 }, (table) => ({
   returnRequestIdIdx: index("return_items_return_request_id_idx").on(table.returnRequestId),
   inventoryItemIdIdx: index("return_items_inventory_item_id_idx").on(table.inventoryItemId),

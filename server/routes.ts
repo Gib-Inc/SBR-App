@@ -5485,6 +5485,12 @@ TOTAL: $${subtotal.toFixed(2)}
       // Initialize the GHL service with user credentials
       const initialized = await ghlOpportunitiesService.initialize(userId);
       if (!initialized) {
+        await logService.log({
+          type: 'GHL_SYNC_INFO',
+          status: 'FAILED',
+          message: 'GHL Contact Backfill: Integration not configured',
+          metadata: {}
+        });
         return res.status(400).json({ 
           success: false, 
           message: "GoHighLevel integration not configured. Please set up GHL in Settings first." 
@@ -5501,6 +5507,12 @@ TOTAL: $${subtotal.toFixed(2)}
       console.log(`[GHL Backfill] Found ${ordersToBackfill.length} orders without GHL contact`);
       
       if (ordersToBackfill.length === 0) {
+        await logService.log({
+          type: 'GHL_SYNC_INFO',
+          status: 'SUCCESS',
+          message: 'GHL Contact Backfill: No orders need backfilling - all orders already have GHL contacts',
+          metadata: { totalOrders: allOrders.length }
+        });
         return res.json({ 
           success: true, 
           message: "No orders need backfilling",
@@ -5512,6 +5524,7 @@ TOTAL: $${subtotal.toFixed(2)}
       let linked = 0;
       let failed = 0;
       const errors: string[] = [];
+      const linkedDetails: string[] = [];
       
       for (const order of ordersToBackfill) {
         try {
@@ -5524,6 +5537,7 @@ TOTAL: $${subtotal.toFixed(2)}
           if (contactId) {
             await storage.updateSalesOrder(order.id, { ghlContactId: contactId });
             linked++;
+            linkedDetails.push(`${order.orderNumber || order.id}: ${order.customerName} → ${contactId}`);
             console.log(`[GHL Backfill] Linked order ${order.orderNumber || order.id} to contact ${contactId}`);
           } else {
             failed++;
@@ -5537,15 +5551,35 @@ TOTAL: $${subtotal.toFixed(2)}
       
       console.log(`[GHL Backfill] Complete: ${linked} linked, ${failed} failed`);
       
+      // Log the sync result
+      await logService.log({
+        type: 'GHL_SYNC_INFO',
+        status: failed === 0 ? 'SUCCESS' : 'PARTIAL',
+        message: `GHL Contact Backfill: Linked ${linked} orders to GHL contacts${failed > 0 ? `, ${failed} failed` : ''}`,
+        metadata: {
+          linked,
+          failed,
+          totalProcessed: ordersToBackfill.length,
+          linkedDetails: linkedDetails.slice(0, 20),
+          errors: errors.slice(0, 10)
+        }
+      });
+      
       res.json({
         success: true,
         message: `Backfilled ${linked} orders with GHL contacts`,
         linked,
         failed,
-        errors: errors.slice(0, 10) // Return first 10 errors
+        errors: errors.slice(0, 10)
       });
     } catch (error: any) {
       console.error("[GHL Backfill] Error:", error.message);
+      await logService.log({
+        type: 'GHL_SYNC_ERROR',
+        status: 'FAILED',
+        message: `GHL Contact Backfill failed: ${error.message}`,
+        metadata: { error: error.message }
+      });
       res.status(500).json({ success: false, message: error.message });
     }
   });

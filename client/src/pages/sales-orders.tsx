@@ -870,11 +870,12 @@ export default function SalesOrders() {
                   const visibleStatus = getVisibleStatus();
                   
                   // Return eligibility: DELIVERED status + within 30-day window
+                  // Fall back to orderDate if deliveredAt is not set (for historical orders)
                   const isDelivered = order.status === 'FULFILLED' || visibleStatus === 'DELIVERED';
-                  const deliveredDate = deliveredAt ? new Date(deliveredAt) : null;
-                  const isWithinReturnWindow = deliveredDate 
-                    ? (new Date().getTime() - deliveredDate.getTime()) <= 30 * 24 * 60 * 60 * 1000 
-                    : false;
+                  const returnWindowStartDate = deliveredAt 
+                    ? new Date(deliveredAt) 
+                    : new Date(order.orderDate); // Fallback to order date
+                  const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
                   const canStartReturn = isDelivered && isWithinReturnWindow && order.returnStatus === 'NONE';
                   
                   // Cancel eligibility: pre-ship states only (DRAFT, OPEN)
@@ -934,6 +935,26 @@ export default function SalesOrders() {
                       </td>
                       <td className="px-2 align-middle text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
+                          {/* Open in Shopify Button */}
+                          {order.channel === 'SHOPIFY' && order.sourceUrl && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    window.open(order.sourceUrl!, "_blank", "noopener,noreferrer");
+                                  }}
+                                  data-testid={`button-open-shopify-${order.id}`}
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Open in Shopify</TooltipContent>
+                            </Tooltip>
+                          )}
+
                           {/* GHL Conversation Button */}
                           <Tooltip>
                             <TooltipTrigger asChild>

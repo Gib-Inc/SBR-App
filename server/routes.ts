@@ -4083,7 +4083,7 @@ TOTAL: $${subtotal.toFixed(2)}
           const existingOrder = existingOrders[0];
 
           if (existingOrder) {
-            // Update existing order with new fields
+            // Update existing order with new fields including shipping address
             await storage.updateSalesOrder(existingOrder.id, {
               status: orderData.status,
               customerName: orderData.customerName,
@@ -4095,6 +4095,12 @@ TOTAL: $${subtotal.toFixed(2)}
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
+              // Shipping address fields (from Shopify or Amazon)
+              shipToStreet: orderData.shipToStreet,
+              shipToCity: orderData.shipToCity,
+              shipToState: orderData.shipToState,
+              shipToZip: orderData.shipToZip,
+              shipToCountry: orderData.shipToCountry,
             });
             updatedCount++;
             
@@ -4141,7 +4147,7 @@ TOTAL: $${subtotal.toFixed(2)}
               console.warn('[Shopify] Fulfillment decision failed, defaulting to HILDALE:', fulfillmentError);
             }
 
-            // Create new sales order with fulfillment source
+            // Create new sales order with fulfillment source and shipping address
             const salesOrder = await storage.createSalesOrder({
               externalOrderId: orderData.externalOrderId,
               externalCustomerId: orderData.externalCustomerId,
@@ -4157,6 +4163,12 @@ TOTAL: $${subtotal.toFixed(2)}
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
               fulfillmentSource,
+              // Shipping address fields
+              shipToStreet: orderData.shipToStreet,
+              shipToCity: orderData.shipToCity,
+              shipToState: orderData.shipToState,
+              shipToZip: orderData.shipToZip,
+              shipToCountry: orderData.shipToCountry,
             });
 
             // Create order lines
@@ -4737,7 +4749,7 @@ TOTAL: $${subtotal.toFixed(2)}
           const existingOrder = existingOrders[0];
 
           if (existingOrder) {
-            // Update existing order with new fields
+            // Update existing order with new fields including shipping address
             await storage.updateSalesOrder(existingOrder.id, {
               status: orderData.status,
               customerName: orderData.customerName,
@@ -4749,6 +4761,12 @@ TOTAL: $${subtotal.toFixed(2)}
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
+              // Shipping address fields (from Shopify or Amazon)
+              shipToStreet: orderData.shipToStreet,
+              shipToCity: orderData.shipToCity,
+              shipToState: orderData.shipToState,
+              shipToZip: orderData.shipToZip,
+              shipToCountry: orderData.shipToCountry,
             });
             updatedCount++;
             
@@ -4795,7 +4813,7 @@ TOTAL: $${subtotal.toFixed(2)}
               console.warn('[Amazon] Fulfillment decision failed, defaulting to HILDALE:', fulfillmentError);
             }
 
-            // Create new sales order with fulfillment source
+            // Create new sales order with fulfillment source and shipping address
             const salesOrder = await storage.createSalesOrder({
               externalOrderId: orderData.externalOrderId,
               externalCustomerId: orderData.externalCustomerId,
@@ -4811,6 +4829,12 @@ TOTAL: $${subtotal.toFixed(2)}
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
               fulfillmentSource,
+              // Shipping address fields
+              shipToStreet: orderData.shipToStreet,
+              shipToCity: orderData.shipToCity,
+              shipToState: orderData.shipToState,
+              shipToZip: orderData.shipToZip,
+              shipToCountry: orderData.shipToCountry,
             });
 
             // Create order lines
@@ -12808,6 +12832,70 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Sales Orders] Error cancelling sales order:", error);
       res.status(500).json({ error: error.message || "Failed to cancel sales order" });
+    }
+  });
+
+  // Backfill shipping addresses from rawPayload for existing sales orders
+  // POST /api/sales-orders/backfill-addresses
+  app.post("/api/sales-orders/backfill-addresses", requireAuth, async (req: Request, res: Response) => {
+    try {
+      console.log("[Sales Orders] Starting shipping address backfill...");
+      
+      // Get all Shopify orders that might have addresses in rawPayload
+      const allOrders = await storage.getAllSalesOrders();
+      const shopifyOrders = allOrders.filter(order => 
+        order.channel === 'SHOPIFY' && 
+        !order.shipToStreet && 
+        order.rawPayload
+      );
+      
+      let updatedCount = 0;
+      let skippedCount = 0;
+      
+      for (const order of shopifyOrders) {
+        try {
+          const rawPayload = order.rawPayload as any;
+          const shippingAddress = rawPayload?.shipping_address;
+          
+          if (shippingAddress) {
+            const shipToStreet = shippingAddress.address1 
+              ? (shippingAddress.address2 
+                ? `${shippingAddress.address1}, ${shippingAddress.address2}` 
+                : shippingAddress.address1)
+              : undefined;
+            
+            if (shipToStreet || shippingAddress.city || shippingAddress.zip) {
+              await storage.updateSalesOrder(order.id, {
+                shipToStreet,
+                shipToCity: shippingAddress.city,
+                shipToState: shippingAddress.province || shippingAddress.province_code,
+                shipToZip: shippingAddress.zip,
+                shipToCountry: shippingAddress.country || shippingAddress.country_code,
+              });
+              updatedCount++;
+            } else {
+              skippedCount++;
+            }
+          } else {
+            skippedCount++;
+          }
+        } catch (orderErr) {
+          console.warn(`[Sales Orders] Failed to backfill order ${order.id}:`, orderErr);
+          skippedCount++;
+        }
+      }
+      
+      console.log(`[Sales Orders] Backfill complete: ${updatedCount} updated, ${skippedCount} skipped`);
+      res.json({ 
+        success: true, 
+        message: `Backfill complete: ${updatedCount} orders updated, ${skippedCount} skipped`,
+        updatedCount,
+        skippedCount,
+        totalProcessed: shopifyOrders.length,
+      });
+    } catch (error: any) {
+      console.error("[Sales Orders] Error backfilling shipping addresses:", error);
+      res.status(500).json({ error: error.message || "Failed to backfill shipping addresses" });
     }
   });
 

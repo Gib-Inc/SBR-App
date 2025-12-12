@@ -21,6 +21,16 @@ export interface ShopifyOrder {
     email?: string;
     phone?: string;
   };
+  shipping_address?: {
+    address1?: string;
+    address2?: string;
+    city?: string;
+    province?: string;
+    province_code?: string;
+    zip?: string;
+    country?: string;
+    country_code?: string;
+  };
   line_items: Array<{
     id: string | number;
     sku?: string;
@@ -44,6 +54,12 @@ export interface ShopifyNormalizedOrder {
   totalAmount?: number;
   currency?: string;
   rawPayload: any;
+  // Shipping address fields
+  shipToStreet?: string;
+  shipToCity?: string;
+  shipToState?: string;
+  shipToZip?: string;
+  shipToCountry?: string;
   lineItems: Array<{
     sku: string;
     qtyOrdered: number;
@@ -166,6 +182,14 @@ export class ShopifyClient {
     const expectedDeliveryDate = new Date(orderDate);
     expectedDeliveryDate.setDate(expectedDeliveryDate.getDate() + 7);
 
+    // Extract shipping address from Shopify order
+    const shippingAddress = order.shipping_address;
+    const shipToStreet = shippingAddress?.address1 
+      ? (shippingAddress.address2 
+        ? `${shippingAddress.address1}, ${shippingAddress.address2}` 
+        : shippingAddress.address1)
+      : undefined;
+
     return {
       externalOrderId: String(order.id),
       externalCustomerId,
@@ -180,6 +204,12 @@ export class ShopifyClient {
       totalAmount,
       currency,
       rawPayload: order,
+      // Shipping address fields
+      shipToStreet,
+      shipToCity: shippingAddress?.city,
+      shipToState: shippingAddress?.province || shippingAddress?.province_code,
+      shipToZip: shippingAddress?.zip,
+      shipToCountry: shippingAddress?.country || shippingAddress?.country_code,
       lineItems,
     };
   }

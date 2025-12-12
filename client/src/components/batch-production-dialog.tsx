@@ -1,11 +1,11 @@
 import { useState, useMemo } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Factory, Package, Loader2, Search, X } from "lucide-react";
+import { Factory, Package, Loader2, Search, X, Minus, Plus } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -22,7 +22,6 @@ interface ProductionItem {
   hildaleQty: number;
   componentsCount: number;
   qty: number;
-  selected: boolean;
 }
 
 export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialogProps) {
@@ -46,7 +45,6 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
         hildaleQty: p.hildaleQty ?? 0,
         componentsCount: p.componentsCount ?? 0,
         qty: 1,
-        selected: false,
       }));
   }, [finishedProducts]);
 
@@ -110,7 +108,7 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
       if (newMap.has(product.id)) {
         newMap.delete(product.id);
       } else {
-        newMap.set(product.id, { ...product, selected: true, qty: 1 });
+        newMap.set(product.id, { ...product, qty: 1 });
       }
       return newMap;
     });
@@ -127,10 +125,24 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
     });
   };
 
-  const handleRemove = (productId: string) => {
+  const handleIncrementQty = (productId: string) => {
     setSelectedItems((prev) => {
       const newMap = new Map(prev);
-      newMap.delete(productId);
+      const item = newMap.get(productId);
+      if (item) {
+        newMap.set(productId, { ...item, qty: item.qty + 1 });
+      }
+      return newMap;
+    });
+  };
+
+  const handleDecrementQty = (productId: string) => {
+    setSelectedItems((prev) => {
+      const newMap = new Map(prev);
+      const item = newMap.get(productId);
+      if (item && item.qty > 1) {
+        newMap.set(productId, { ...item, qty: item.qty - 1 });
+      }
       return newMap;
     });
   };
@@ -154,15 +166,19 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
   };
 
   const selectedArray = Array.from(selectedItems.values());
+  const totalUnits = selectedArray.reduce((sum, item) => sum + item.qty, 0);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Factory className="h-5 w-5" />
             Produce Products
           </DialogTitle>
+          <DialogDescription>
+            Select products to manufacture and specify quantities. Components will be deducted from Hildale inventory.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 min-h-0 space-y-4">
@@ -188,8 +204,8 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
               <p className="text-xs">Add components to products first</p>
             </div>
           ) : (
-            <ScrollArea className="h-64">
-              <div className="space-y-1 pr-4">
+            <ScrollArea className="h-80">
+              <div className="space-y-2 pr-4">
                 {filteredProducts.map((product) => {
                   const isSelected = selectedItems.has(product.id);
                   const selectedItem = selectedItems.get(product.id);
@@ -197,55 +213,85 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
                   return (
                     <div
                       key={product.id}
-                      className={`flex items-center gap-3 rounded-md border p-3 transition-colors ${
-                        isSelected ? "border-primary bg-primary/5" : "hover-elevate cursor-pointer"
+                      className={`rounded-lg border p-4 transition-colors ${
+                        isSelected 
+                          ? "border-primary bg-primary/5" 
+                          : "hover-elevate cursor-pointer"
                       }`}
-                      onClick={() => !isSelected && handleToggleSelect(product)}
                       data-testid={`row-batch-production-${product.id}`}
                     >
-                      {!isSelected && (
+                      <div className="flex items-start gap-3">
                         <Checkbox
-                          checked={false}
+                          checked={isSelected}
                           onCheckedChange={() => handleToggleSelect(product)}
-                          onClick={(e) => e.stopPropagation()}
+                          className="mt-1 shrink-0"
                           data-testid={`checkbox-select-${product.id}`}
                         />
-                      )}
-                      
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{product.name}</p>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{product.sku}</span>
-                          <Badge variant="secondary" className="text-xs">
-                            {product.componentsCount} components
-                          </Badge>
+                        
+                        <div 
+                          className="flex-1 min-w-0 cursor-pointer"
+                          onClick={() => handleToggleSelect(product)}
+                        >
+                          <p className="font-medium text-sm leading-tight break-words">
+                            {product.name}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <span className="text-xs text-muted-foreground font-mono">
+                              {product.sku}
+                            </span>
+                            <Badge variant="secondary" className="text-xs shrink-0">
+                              {product.componentsCount} components
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              Stock: {product.hildaleQty}
+                            </span>
+                          </div>
                         </div>
-                      </div>
 
-                      {isSelected ? (
-                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                          <Input
-                            type="number"
-                            min={1}
-                            value={selectedItem?.qty || 1}
-                            onChange={(e) => handleQtyChange(product.id, parseInt(e.target.value) || 1)}
-                            className="w-20 text-center"
-                            data-testid={`input-qty-${product.id}`}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleRemove(product.id)}
-                            data-testid={`button-remove-${product.id}`}
+                        {isSelected && (
+                          <div 
+                            className="flex items-center gap-1 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-muted-foreground whitespace-nowrap">
-                          In stock: {product.hildaleQty}
-                        </span>
-                      )}
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => handleDecrementQty(product.id)}
+                              disabled={selectedItem?.qty === 1}
+                              data-testid={`button-decrement-${product.id}`}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </Button>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={selectedItem?.qty || 1}
+                              onChange={(e) => handleQtyChange(product.id, parseInt(e.target.value) || 1)}
+                              className="w-16 text-center h-8"
+                              data-testid={`input-qty-${product.id}`}
+                            />
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => handleIncrementQty(product.id)}
+                              data-testid={`button-increment-${product.id}`}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleToggleSelect(product)}
+                              data-testid={`button-remove-${product.id}`}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -254,13 +300,22 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
           )}
 
           {selectedArray.length > 0 && (
-            <div className="rounded-md border bg-muted/30 p-3">
-              <p className="text-sm font-medium mb-2">Production Summary ({selectedArray.length} products)</p>
-              <div className="grid grid-cols-2 gap-2 text-sm">
+            <div className="rounded-lg border bg-muted/30 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-medium">
+                  Production Summary
+                </p>
+                <Badge variant="default">
+                  {selectedArray.length} products, {totalUnits} total units
+                </Badge>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
                 {selectedArray.map((item) => (
-                  <div key={item.id} className="flex justify-between items-center">
-                    <span className="text-muted-foreground truncate">{item.name}</span>
-                    <Badge variant="outline">{item.qty} units</Badge>
+                  <div key={item.id} className="flex justify-between items-center gap-2 p-2 rounded bg-background/50">
+                    <span className="text-muted-foreground truncate flex-1 min-w-0" title={item.name}>
+                      {item.name}
+                    </span>
+                    <Badge variant="outline" className="shrink-0">{item.qty} units</Badge>
                   </div>
                 ))}
               </div>
@@ -268,7 +323,7 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
           )}
         </div>
 
-        <DialogFooter className="mt-4">
+        <DialogFooter className="mt-4 gap-2">
           <Button variant="outline" onClick={handleClose} data-testid="button-cancel-batch-production">
             Cancel
           </Button>
@@ -282,7 +337,7 @@ export function BatchProductionDialog({ isOpen, onClose }: BatchProductionDialog
             ) : (
               <Factory className="mr-2 h-4 w-4" />
             )}
-            Produce {selectedItems.size > 0 ? `(${selectedItems.size})` : ""}
+            Produce {selectedItems.size > 0 ? `(${totalUnits} units)` : ""}
           </Button>
         </DialogFooter>
       </DialogContent>

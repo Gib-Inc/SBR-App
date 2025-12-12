@@ -851,11 +851,14 @@ export default function SalesOrders() {
                     (order as any).shipToCountry
                   ].filter(Boolean).join(', ') || 'No address on file';
                   
-                  // Delivery Date: show deliveredAt if available, otherwise show "Pending" for live or expected date
+                  // Delivery Date: show deliveredAt if available, otherwise expectedDeliveryDate, otherwise "Pending"
                   const deliveredAt = (order as any).deliveredAt;
+                  const expectedDeliveryDate = (order as any).expectedDeliveryDate;
                   const deliveryDateDisplay = deliveredAt 
                     ? format(new Date(deliveredAt), 'MMM d, yyyy')
-                    : (activeTab === "history" ? "-" : "Pending");
+                    : expectedDeliveryDate 
+                      ? format(new Date(expectedDeliveryDate), 'MMM d, yyyy')
+                      : (activeTab === "history" ? "-" : "Pending");
                   
                   // Determine visible status for V1 (DELIVERED or REFUNDED for terminal states)
                   const getVisibleStatus = () => {

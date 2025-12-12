@@ -5485,7 +5485,7 @@ TOTAL: $${subtotal.toFixed(2)}
       // Initialize the GHL service with user credentials
       const initialized = await ghlOpportunitiesService.initialize(userId);
       if (!initialized) {
-        await logService.log({
+        await logService.logSystemEvent({
           type: 'GHL_SYNC_INFO',
           status: 'FAILED',
           message: 'GHL Contact Backfill: Integration not configured',
@@ -5507,7 +5507,7 @@ TOTAL: $${subtotal.toFixed(2)}
       console.log(`[GHL Backfill] Found ${ordersToBackfill.length} orders without GHL contact`);
       
       if (ordersToBackfill.length === 0) {
-        await logService.log({
+        await logService.logSystemEvent({
           type: 'GHL_SYNC_INFO',
           status: 'SUCCESS',
           message: 'GHL Contact Backfill: No orders need backfilling - all orders already have GHL contacts',
@@ -5552,7 +5552,7 @@ TOTAL: $${subtotal.toFixed(2)}
       console.log(`[GHL Backfill] Complete: ${linked} linked, ${failed} failed`);
       
       // Log the sync result
-      await logService.log({
+      await logService.logSystemEvent({
         type: 'GHL_SYNC_INFO',
         status: failed === 0 ? 'SUCCESS' : 'PARTIAL',
         message: `GHL Contact Backfill: Linked ${linked} orders to GHL contacts${failed > 0 ? `, ${failed} failed` : ''}`,
@@ -5574,7 +5574,7 @@ TOTAL: $${subtotal.toFixed(2)}
       });
     } catch (error: any) {
       console.error("[GHL Backfill] Error:", error.message);
-      await logService.log({
+      await logService.logSystemEvent({
         type: 'GHL_SYNC_ERROR',
         status: 'FAILED',
         message: `GHL Contact Backfill failed: ${error.message}`,

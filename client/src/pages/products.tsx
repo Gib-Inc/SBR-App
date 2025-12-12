@@ -19,6 +19,9 @@ import { ScanInventoryModal } from "@/components/scan-inventory-modal";
 import { ItemCostSettingsDialog } from "@/components/item-cost-settings-dialog";
 import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
 import { Textarea } from "@/components/ui/textarea";
+import { BatchProductionDialog } from "@/components/batch-production-dialog";
+import { TransferDialog } from "@/components/transfer-dialog";
+import { Factory, ArrowRightLeft } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const WAREHOUSE_LOCATIONS = [
@@ -593,6 +596,26 @@ function ItemTableRow({
                 </TooltipTrigger>
                 <TooltipContent>
                   <p>{item.componentsCount || 0} components</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {item.type === "finished_product" && onTransfer && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onTransfer(item)}
+                    data-testid={`button-transfer-${item.id}`}
+                    className="h-8 w-8"
+                  >
+                    <PackageMinus className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Transfer between warehouses</p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -1795,6 +1818,8 @@ export default function BOM() {
   const [selectedSupplierForOrder, setSelectedSupplierForOrder] = useState<string>("");
   const [quickOrderItems, setQuickOrderItems] = useState<Array<{itemId: string; sku: string; name: string; qty: number}>>([]);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
+  const [isBatchProductionOpen, setIsBatchProductionOpen] = useState(false);
+  const [transferItem, setTransferItem] = useState<any>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -2202,6 +2227,15 @@ export default function BOM() {
               Scan Finished Products
             </Button>
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsBatchProductionOpen(true)}
+              data-testid="button-batch-production"
+            >
+              <Factory className="mr-2 h-4 w-4" />
+              Produce Product
+            </Button>
+            <Button
               size="sm"
               onClick={() => setIsCreateFinishedDialogOpen(true)}
               data-testid="button-create-finished-product"
@@ -2280,6 +2314,7 @@ export default function BOM() {
                     onUpdate={handleUpdate}
                     onDelete={handleDelete}
                     onEditBOM={setEditingBOMItem}
+                    onTransfer={setTransferItem}
                     backorderSnapshots={backorderSnapshots}
                     columnVisibility={columnVisibility}
                   />
@@ -2401,6 +2436,21 @@ export default function BOM() {
         isOpen={isImportDialogOpen}
         onClose={() => setIsImportDialogOpen(false)}
       />
+      
+      {/* Batch Production Dialog */}
+      <BatchProductionDialog
+        isOpen={isBatchProductionOpen}
+        onClose={() => setIsBatchProductionOpen(false)}
+      />
+      
+      {/* Transfer Dialog */}
+      {transferItem && (
+        <TransferDialog
+          isOpen={!!transferItem}
+          onClose={() => setTransferItem(null)}
+          item={transferItem}
+        />
+      )}
       
       {/* Inventory Change Reason Dialog */}
       {pendingQuantityChange && (

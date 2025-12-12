@@ -107,6 +107,8 @@ const DATA_SOURCES = [
   { id: "INVENTORY_TRANSACTIONS", label: "Inventory Transactions" },
   { id: "AI_RECOMMENDATIONS", label: "AI Recommendations" },
   { id: "SYSTEM_LOGS", label: "System Logs" },
+  { id: "REFURB_INVENTORY", label: "Refurbished Inventory" },
+  { id: "COMPONENT_CONSUMPTION", label: "Component Consumption (Damage Write-offs)" },
 ];
 
 type SystemStats = {

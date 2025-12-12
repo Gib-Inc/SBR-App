@@ -8663,6 +8663,77 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Batch production - produce multiple products at once
+  app.post("/api/production/batch-build", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { builds } = req.body;
+
+      if (!Array.isArray(builds) || builds.length === 0) {
+        return res.status(400).json({ 
+          error: "builds array is required with at least one item" 
+        });
+      }
+
+      const results: Array<{ productId: string; success: boolean; error?: string; transaction?: any }> = [];
+
+      for (const build of builds) {
+        const { finishedProductId, quantity } = build;
+
+        if (!finishedProductId || quantity === undefined || quantity <= 0) {
+          results.push({
+            productId: finishedProductId || "unknown",
+            success: false,
+            error: "Invalid finishedProductId or quantity",
+          });
+          continue;
+        }
+
+        try {
+          const result = await transactionService.applyProduction({
+            finishedProductId,
+            quantity,
+            notes: `Batch production run`,
+            createdBy: req.session.userId || "system",
+          });
+
+          if (!result.success) {
+            results.push({
+              productId: finishedProductId,
+              success: false,
+              error: result.error,
+            });
+          } else {
+            results.push({
+              productId: finishedProductId,
+              success: true,
+              transaction: result.transaction,
+            });
+          }
+        } catch (prodErr: any) {
+          results.push({
+            productId: finishedProductId,
+            success: false,
+            error: prodErr.message || "Production failed",
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      const failCount = results.filter((r) => !r.success).length;
+
+      res.status(successCount > 0 ? 201 : 400).json({
+        success: successCount > 0,
+        produced: results.filter((r) => r.success),
+        failed: results.filter((r) => !r.success),
+        results,
+        summary: { successCount, failCount, totalRequested: builds.length },
+      });
+    } catch (error: any) {
+      console.error("[Transaction] Error processing batch production:", error);
+      res.status(500).json({ error: error.message || "Failed to process batch production" });
+    }
+  });
+
   // ============================================================================
   // AI RECOMMENDATIONS
   // ============================================================================
@@ -15931,6 +16002,53 @@ Generate only the email body text, no subject line.`;
         case "SYSTEM_LOGS":
           const logs = await storage.getAllSystemLogs();
           data = processWidgetData(logs.slice(0, 100), config, widget.type);
+          break;
+        case "REFURB_INVENTORY":
+          // Get all items with REFURB- prefix
+          const allItemsForRefurb = await storage.getAllItems();
+          const refurbItems = allItemsForRefurb
+            .filter((item: any) => item.sku?.startsWith("REFURB-"))
+            .map((item: any) => ({
+              id: item.id,
+              name: item.name,
+              sku: item.sku,
+              originalSku: item.sku.replace("REFURB-", ""),
+              hildaleQty: item.hildaleQty ?? 0,
+              pivotQty: item.pivotQty ?? 0,
+              totalQty: (item.hildaleQty ?? 0) + (item.pivotQty ?? 0),
+            }));
+          data = processWidgetData(refurbItems, config, widget.type);
+          break;
+        case "COMPONENT_CONSUMPTION":
+          // Get DAMAGED_WRITE_OFF transactions and aggregate by component
+          const allTransactionsForConsumption = await storage.getAllInventoryTransactions();
+          const writeOffTxs = allTransactionsForConsumption.filter((tx: any) => tx.type === "DAMAGED_WRITE_OFF");
+          const allItemsForConsumption = await storage.getAllItems();
+          const componentConsumption: Record<string, { itemId: string; sku: string; name: string; totalConsumed: number; lastDate: Date | null }> = {};
+          
+          for (const tx of writeOffTxs) {
+            const itemId = tx.itemId;
+            if (!componentConsumption[itemId]) {
+              const txItem = allItemsForConsumption.find((i: any) => i.id === itemId) || 
+                            (await storage.getItem(itemId));
+              componentConsumption[itemId] = {
+                itemId,
+                sku: txItem?.sku || "Unknown",
+                name: txItem?.name || "Unknown",
+                totalConsumed: 0,
+                lastDate: null,
+              };
+            }
+            componentConsumption[itemId].totalConsumed += Math.abs(tx.quantity || 0);
+            const txDate = tx.createdAt ? new Date(tx.createdAt) : null;
+            if (txDate && (!componentConsumption[itemId].lastDate || txDate > componentConsumption[itemId].lastDate)) {
+              componentConsumption[itemId].lastDate = txDate;
+            }
+          }
+          
+          const consumptionArray = Object.values(componentConsumption)
+            .sort((a, b) => b.totalConsumed - a.totalConsumed);
+          data = processWidgetData(consumptionArray, config, widget.type);
           break;
         default:
           data = [];

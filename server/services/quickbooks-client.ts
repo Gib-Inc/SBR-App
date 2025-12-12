@@ -1458,6 +1458,128 @@ export class QuickBooksClient {
   }
 
   /**
+   * Create a QuickBooks Credit Memo with a specific dollar amount (after damage assessment)
+   * This is the preferred method for returns that have gone through damage assessment
+   */
+  async createRefundFromReturnWithAmount(
+    returnRequest: {
+      id: string;
+      rmaNumber: string | null;
+      customerName: string;
+      customerEmail?: string | null;
+      externalOrderId: string;
+      salesChannel: string;
+    },
+    refundAmount: number,
+    description: string
+  ): Promise<{ 
+    success: boolean; 
+    refundId?: string; 
+    refundNumber?: string; 
+    refundType?: 'CREDIT_MEMO' | 'REFUND_RECEIPT';
+    totalAmount?: number;
+    error?: string 
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, error: 'QuickBooks not connected' };
+      }
+
+      if (refundAmount <= 0) {
+        await AuditLogger.logEvent({
+          source: 'QUICKBOOKS',
+          eventType: 'REFUND_CREATE_ERROR',
+          entityType: 'RETURN_REQUEST',
+          entityId: returnRequest.id,
+          entityLabel: returnRequest.rmaNumber || returnRequest.id,
+          status: 'ERROR',
+          description: `Cannot create refund: amount is zero or negative`,
+          details: { refundAmount },
+        });
+        return { success: false, error: 'Cannot create refund: amount must be greater than zero.' };
+      }
+
+      // Find or create customer in QuickBooks
+      const customerId = await this.findOrCreateCustomer(
+        returnRequest.customerName,
+        returnRequest.customerEmail || undefined
+      );
+
+      // Create single-line Credit Memo with the exact refund amount
+      const creditMemoData = {
+        CustomerRef: { value: customerId },
+        TxnDate: new Date().toISOString().split('T')[0],
+        Line: [
+          {
+            Amount: refundAmount,
+            Description: description,
+            DetailType: 'SalesItemLineDetail',
+            SalesItemLineDetail: {
+              ItemRef: { value: '1' }, // Default services item
+              Qty: 1,
+              UnitPrice: refundAmount,
+            },
+          }
+        ],
+        PrivateNote: `RMA: ${returnRequest.rmaNumber || 'N/A'} | Order: ${returnRequest.externalOrderId} | Channel: ${returnRequest.salesChannel}`,
+      };
+
+      const createResult = await this.apiRequest<{ CreditMemo: QBCreditMemo }>('/creditmemo', {
+        method: 'POST',
+        body: JSON.stringify(creditMemoData),
+      });
+
+      const newCreditMemo = createResult.CreditMemo;
+
+      // Log success
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'REFUND_CREATED',
+        entityType: 'RETURN_REQUEST',
+        entityId: returnRequest.id,
+        entityLabel: returnRequest.rmaNumber || returnRequest.id,
+        status: 'INFO',
+        description: `Created QuickBooks Credit Memo ${newCreditMemo.DocNumber || newCreditMemo.Id} for RMA ${returnRequest.rmaNumber || 'N/A'} with amount $${refundAmount.toFixed(2)}`,
+        details: {
+          quickbooksRefundId: newCreditMemo.Id,
+          refundNumber: newCreditMemo.DocNumber,
+          refundType: 'CREDIT_MEMO',
+          totalAmount: refundAmount,
+          customerId,
+          externalOrderId: returnRequest.externalOrderId,
+          salesChannel: returnRequest.salesChannel,
+        },
+      });
+
+      return {
+        success: true,
+        refundId: newCreditMemo.Id,
+        refundNumber: newCreditMemo.DocNumber,
+        refundType: 'CREDIT_MEMO',
+        totalAmount: refundAmount,
+      };
+    } catch (error: any) {
+      // Log error
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'REFUND_CREATE_ERROR',
+        entityType: 'RETURN_REQUEST',
+        entityId: returnRequest.id,
+        entityLabel: returnRequest.rmaNumber || returnRequest.id,
+        status: 'ERROR',
+        description: `Failed to create QuickBooks refund for RMA ${returnRequest.rmaNumber || 'N/A'}: ${error.message}`,
+        details: { error: error.message, refundAmount },
+      });
+
+      return {
+        success: false,
+        error: error.message || 'Failed to create refund',
+      };
+    }
+  }
+
+  /**
    * Find or create a customer in QuickBooks
    */
   private async findOrCreateCustomer(displayName: string, email?: string): Promise<string> {

@@ -2349,63 +2349,142 @@ TOTAL: $${subtotal.toFixed(2)}
             photoUrl: itemAssessment.damagePhotoUrl,
           });
           
-          // Track stock to deduct for damaged items (loss - can't be restocked)
-          if (inventoryItem) {
-            stockDeductions.push({ 
-              itemId: inventoryItem.id, 
-              sku: returnItem.sku, 
-              qty: returnItem.qtyApproved 
-            });
+          // For DAMAGED items: Deduct raw materials from stock using BOM
+          // The finished product materials are consumed/lost
+          if (inventoryItem && inventoryItem.type === 'finished_product') {
+            // Get BOM components for this finished product
+            const bomEntries = await storage.getBillOfMaterialsByProductId(inventoryItem.id);
             
-            // Actually deduct from hildaleQty for damaged items (write-off)
-            const currentHildaleQty = inventoryItem.hildaleQty ?? 0;
-            const newHildaleQty = Math.max(0, currentHildaleQty - returnItem.qtyApproved);
-            await storage.updateItem(inventoryItem.id, {
-              hildaleQty: newHildaleQty,
-            });
-            
-            // Create inventory transaction for the write-off
-            try {
-              await storage.createInventoryTransaction({
-                itemId: inventoryItem.id,
-                type: 'DAMAGED_WRITE_OFF',
-                quantity: -returnItem.qtyApproved,
-                itemType: inventoryItem.type === 'finished_product' ? 'FINISHED' : 'RAW',
-                location: 'HILDALE',
-                notes: `Damaged return write-off: RMA ${returnRequest.rmaNumber || id}`,
-                createdBy: `user:${req.session.userId || 'unknown'}`,
+            // Require BOM for damaged finished products
+            if (bomEntries.length === 0) {
+              return res.status(400).json({
+                error: `Cannot process damaged return: No Bill of Materials found for product ${inventoryItem.sku}`,
+                hint: "Please add BOM components for this product before processing damaged returns",
+                sku: inventoryItem.sku,
+                productName: inventoryItem.name,
               });
-            } catch (txErr) {
-              console.warn('[DamageAssessment] Failed to create write-off transaction:', txErr);
+            }
+            
+            for (const bomEntry of bomEntries) {
+              const componentItem = await storage.getItem(bomEntry.componentId);
+              if (!componentItem) {
+                // Hard error - component not found
+                return res.status(400).json({
+                  error: `BOM component not found: ${bomEntry.componentId}`,
+                  hint: "The Bill of Materials references a component that no longer exists",
+                  parentSku: inventoryItem.sku,
+                  missingComponentId: bomEntry.componentId,
+                });
+              }
+              
+              const qtyToDeduct = bomEntry.quantityRequired * returnItem.qtyApproved;
+              
+              // Update each field independently - only modify if field has a value
+              const updateData: { hildaleQty?: number; currentStock?: number } = {};
+              
+              if (componentItem.hildaleQty !== null && componentItem.hildaleQty !== undefined) {
+                updateData.hildaleQty = Math.max(0, componentItem.hildaleQty - qtyToDeduct);
+              }
+              if (componentItem.currentStock !== null && componentItem.currentStock !== undefined) {
+                updateData.currentStock = Math.max(0, componentItem.currentStock - qtyToDeduct);
+              }
+              
+              // Track deduction for logging
+              stockDeductions.push({ 
+                itemId: componentItem.id, 
+                sku: componentItem.sku, 
+                qty: qtyToDeduct 
+              });
+              
+              // Deduct raw material stock - only update fields that have values
+              if (Object.keys(updateData).length > 0) {
+                await storage.updateItem(componentItem.id, updateData);
+              }
+              
+              // Create inventory transaction for the component write-off
+              try {
+                await storage.createInventoryTransaction({
+                  itemId: componentItem.id,
+                  type: 'DAMAGED_WRITE_OFF',
+                  quantity: -qtyToDeduct,
+                  itemType: 'RAW',
+                  location: 'HILDALE',
+                  notes: `Damaged return component write-off: RMA ${returnRequest.rmaNumber || id} - Parent: ${inventoryItem.sku}`,
+                  createdBy: `user:${req.session.userId || 'unknown'}`,
+                });
+              } catch (txErr) {
+                console.warn('[DamageAssessment] Failed to create component write-off transaction:', txErr);
+              }
             }
           }
         } else {
-          // For non-damaged items, add back to Hildale inventory
+          // For GOOD (non-damaged) items: Create/add to REFURB finished product
+          // These are tracked separately for discounted resale
           if (inventoryItem) {
+            const refurbSku = `REFURB-${inventoryItem.sku}`;
+            const refurbName = `REFURB ${inventoryItem.name}`;
+            
+            // Check if REFURB item already exists
+            let refurbItem = await storage.getItemBySku(refurbSku);
+            
+            if (!refurbItem) {
+              // Create new REFURB finished product with try/catch for race conditions
+              try {
+                refurbItem = await storage.createItem({
+                  name: refurbName,
+                  sku: refurbSku,
+                  type: 'finished_product',
+                  productKind: 'FINISHED',
+                  unit: inventoryItem.unit || 'units',
+                  currentStock: 0,
+                  minStock: 0,
+                  dailyUsage: 0,
+                  hildaleQty: returnItem.qtyApproved,
+                  pivotQty: 0,
+                  availableForSaleQty: 0,
+                });
+                console.log(`[DamageAssessment] Created REFURB item: ${refurbSku} with qty ${returnItem.qtyApproved}`);
+              } catch (createErr: any) {
+                // Handle race condition - another request may have created the item
+                if (createErr.message?.includes('duplicate') || createErr.code === '23505') {
+                  refurbItem = await storage.getItemBySku(refurbSku);
+                  if (refurbItem) {
+                    const newHildaleQty = (refurbItem.hildaleQty ?? 0) + returnItem.qtyApproved;
+                    await storage.updateItem(refurbItem.id, { hildaleQty: newHildaleQty });
+                    console.log(`[DamageAssessment] Race condition handled - updated REFURB item: ${refurbSku}`);
+                  }
+                } else {
+                  throw createErr;
+                }
+              }
+            } else {
+              // Add to existing REFURB item's hildaleQty
+              const newHildaleQty = (refurbItem.hildaleQty ?? 0) + returnItem.qtyApproved;
+              await storage.updateItem(refurbItem.id, {
+                hildaleQty: newHildaleQty,
+              });
+              console.log(`[DamageAssessment] Updated REFURB item: ${refurbSku} to qty ${newHildaleQty}`);
+            }
+            
             stockAdditions.push({
-              itemId: inventoryItem.id,
-              sku: returnItem.sku,
+              itemId: refurbItem.id,
+              sku: refurbSku,
               qty: returnItem.qtyApproved,
             });
             
-            const newHildaleQty = (inventoryItem.hildaleQty ?? 0) + returnItem.qtyApproved;
-            await storage.updateItem(inventoryItem.id, {
-              hildaleQty: newHildaleQty,
-            });
-            
-            // Create inventory transaction for the return receipt
+            // Create inventory transaction for the refurb receipt
             try {
               await storage.createInventoryTransaction({
-                itemId: inventoryItem.id,
+                itemId: refurbItem.id,
                 type: 'RECEIVE',
                 quantity: returnItem.qtyApproved,
-                itemType: inventoryItem.type === 'finished_product' ? 'FINISHED' : 'RAW',
+                itemType: 'FINISHED',
                 location: 'HILDALE',
-                notes: `Return received: RMA ${returnRequest.rmaNumber || id}`,
+                notes: `Refurb return received: RMA ${returnRequest.rmaNumber || id} - Original: ${inventoryItem.sku}`,
                 createdBy: `user:${req.session.userId || 'unknown'}`,
               });
             } catch (txErr) {
-              console.warn('[DamageAssessment] Failed to create receive transaction:', txErr);
+              console.warn('[DamageAssessment] Failed to create refurb receive transaction:', txErr);
             }
           }
         }
@@ -2434,18 +2513,18 @@ TOTAL: $${subtotal.toFixed(2)}
         damageAssessedAt: now,
       });
       
-      // Log stock deductions for damaged items
+      // Log stock deductions for damaged items (raw materials consumed)
       for (const deduction of stockDeductions) {
         try {
           await logService.log({
             type: 'INVENTORY_ADJUSTMENT' as any,
             severity: 'INFO',
-            message: `Stock deducted - damaged returned goods`,
+            message: `Raw material deducted - damaged return (materials consumed)`,
             details: {
               itemId: deduction.itemId,
               sku: deduction.sku,
               qtyDeducted: deduction.qty,
-              reason: 'DAMAGED_RETURN',
+              reason: 'DAMAGED_RETURN_MATERIALS',
               returnRequestId: id,
               rmaNumber: returnRequest.rmaNumber,
             },
@@ -2455,18 +2534,18 @@ TOTAL: $${subtotal.toFixed(2)}
         }
       }
       
-      // Log stock additions for good items
+      // Log stock additions for good items (added to REFURB inventory)
       for (const addition of stockAdditions) {
         try {
           await logService.log({
             type: 'INVENTORY_ADJUSTMENT' as any,
             severity: 'INFO',
-            message: `Stock added - returned goods received`,
+            message: `REFURB item added - good return received`,
             details: {
               itemId: addition.itemId,
               sku: addition.sku,
               qtyAdded: addition.qty,
-              reason: 'RETURN_RECEIVED',
+              reason: 'REFURB_RETURN_RECEIVED',
               returnRequestId: id,
               rmaNumber: returnRequest.rmaNumber,
             },
@@ -12592,31 +12671,59 @@ Generate only the email body text, no subject line.`;
         });
       }
       
-      // Get return items
+      // Verify return has been damage assessed with valid refund amount
+      if (!returnRequest.damageAssessedAt) {
+        return res.status(400).json({ 
+          error: "Return has not been assessed for damage. Please complete damage assessment first.",
+          hint: "Use POST /api/returns/:id/assess-damage to submit damage assessment",
+          status: returnRequest.status
+        });
+      }
+      
+      const rawFinalRefund = returnRequest.finalRefundAmount;
+      if (rawFinalRefund === null || rawFinalRefund === undefined) {
+        return res.status(400).json({ 
+          error: "Damage assessment incomplete - finalRefundAmount not set",
+          hint: "Please re-submit damage assessment"
+        });
+      }
+      
+      // Use finalRefundAmount (after damage deductions) for the credit memo
+      const refundAmount = Number(rawFinalRefund);
+      
+      // Validate refund amount is a valid number
+      if (isNaN(refundAmount) || !isFinite(refundAmount)) {
+        return res.status(400).json({ 
+          error: "Invalid refund amount calculated. Please check return data.",
+          details: { finalRefundAmount: rawFinalRefund, baseRefundAmount: rawBaseRefund }
+        });
+      }
+      
+      // Get return items for description
       const returnItems = await storage.getReturnItemsByRequestId(id);
-      if (returnItems.length === 0) {
-        return res.status(400).json({ error: "No items found for this return" });
+      
+      // Build description with breakdown, handling null/undefined safely
+      const totalReceived = Number(returnRequest.totalReceived) || 0;
+      const shippingCost = Number(returnRequest.shippingCost) || 0;
+      const labelFee = Number(returnRequest.labelFee) || 1.00;
+      const damageDeduction = Number(returnRequest.damageDeductionTotal) || 0;
+      
+      let refundDescription = `Return refund: RMA ${returnRequest.rmaNumber || returnRequest.id}`;
+      refundDescription += `\nOrder: ${returnRequest.orderNumber || returnRequest.externalOrderId || 'N/A'}`;
+      refundDescription += `\nCustomer: ${returnRequest.customerName || 'Unknown'}`;
+      refundDescription += `\nBreakdown: $${totalReceived.toFixed(2)} total - $${shippingCost.toFixed(2)} shipping - $${labelFee.toFixed(2)} label fee`;
+      if (damageDeduction > 0) {
+        refundDescription += ` - $${damageDeduction.toFixed(2)} damage deduction`;
+      }
+      refundDescription += ` = $${refundAmount.toFixed(2)} refund`;
+      
+      if (returnItems.length > 0) {
+        refundDescription += `\nItems: ${returnItems.map(ri => `${ri.sku} x${ri.qtyReturned || ri.qtyApproved}`).join(', ')}`;
       }
       
-      // Build item map for price lookup
-      const itemSkus = returnItems.map(ri => ri.sku);
-      const allItems = await storage.getAllItems();
-      const itemMap = new Map<string, { id: string; sku: string; name: string; price?: number | null }>();
-      
-      for (const item of allItems) {
-        if (itemSkus.includes(item.sku)) {
-          itemMap.set(item.sku, {
-            id: item.id,
-            sku: item.sku,
-            name: item.name,
-            price: item.price,
-          });
-        }
-      }
-      
-      // Create QuickBooks client and post refund
+      // Create QuickBooks client and post refund with explicit amount
       const qbClient = new QuickBooksClient(storage, userId);
-      const result = await qbClient.createRefundFromReturn(
+      const result = await qbClient.createRefundFromReturnWithAmount(
         {
           id: returnRequest.id,
           rmaNumber: returnRequest.rmaNumber,
@@ -12625,12 +12732,8 @@ Generate only the email body text, no subject line.`;
           externalOrderId: returnRequest.externalOrderId,
           salesChannel: returnRequest.salesChannel,
         },
-        returnItems.map(ri => ({
-          sku: ri.sku,
-          quantityReturned: ri.qtyReturned || 0,
-          reason: ri.reason,
-        })),
-        itemMap
+        refundAmount,
+        refundDescription
       );
       
       if (!result.success) {

@@ -1,0 +1,163 @@
+For messageForCustomer, build something like:
+“Hi {first_name}, we’ve created your UPS Ground return label for order {order_number}. Please print and attach this label: {labelUrl}. Tracking: {trackingNumber}.”
+
+=========================================
+4. GHL INTEGRATION – CUSTOM ACTION WEBHOOK
+
+Now wire this into GoHighLevel’s AI Agent “Custom action” (the screenshot where you choose ‘Custom action’ under Voice AI / Conversation AI). GHL will POST to an HTTPS endpoint in this app, and we respond with structured data the agent can use.
+
+Create an HTTP route, for example:
+
+POST /api/ghl/custom-actions/create-return-label
+
+Behaviors:
+
+Accept JSON input from GHL. Expect at least:
+
+contact info: id, name, phone, email (whatever GHL sends; keep it flexible).
+
+order identifier (could be “order_number” or passed in the custom payload).
+
+any free-text “reason” or notes from the agent.
+
+Log the raw payload somewhere safe for debugging (without storing sensitive tokens).
+
+Resolve which order to use:
+
+Try to match the order based on the orderNumber OR based on contact + most recent order.
+
+If the order cannot be determined, respond with success: false and a messageForAgent telling the AI exactly what to ask next, e.g.:
+“I couldn’t find an order for this customer. Please ask them for their order number and call this tool again.”
+
+If an order is found:
+
+Call createReturnLabelForOrder.
+
+Return JSON fields tailored for the GHL AI Agent:
+
+{
+  "success": true,
+  "orderId": "PO-2025-0007",
+  "labelUrl": "https://...",
+  "trackingNumber": "1Z...",
+  "serviceName": "UPS Ground",
+  "cost": 7.23,
+  "messageForAgent": "I’ve created a UPS Ground return label for order PO-2025-0007. The tracking number is 1Z..., and I’ve texted the customer a link to the label. Let them know they just need to print it, attach it to the package, and drop it off with UPS.",
+  "messageForCustomer": "Hi {first_name}, we’ve created your UPS Ground return label for order {order_number}. Print and attach this label: {labelUrl}. Tracking: {trackingNumber}."
+}
+
+
+HTTP status:
+
+200 with success: true/false and messageForAgent whenever possible.
+
+Only use a 4xx/5xx error if something is seriously wrong.
+
+This endpoint is what I will plug into GHL’s “Custom action” URL field. It must:
+
+Be HTTPS accessible from outside Replit.
+
+Accept and send JSON (Content-Type: application/json).
+
+============================================
+5. OPTIONAL: CONVERSATION WEBHOOK (SECTION 4)
+
+To align with the “section 4” architecture where GHL conversations can drive a return, also expose a generic webhook that can be triggered from a GHL Workflow (e.g. “when contact replies and tag = Return In Progress”).
+
+Create:
+POST /api/ghl/webhooks/returns
+
+Basic behavior:
+
+Accept body with:
+
+contact_id, conversation_id, message_text, optional order_number.
+
+Maintain a lightweight “ReturnSession” state in the DB keyed by conversation or contact:
+
+steps like WAITING_FOR_ORDER, WAITING_FOR_CONFIRM, WAITING_FOR_MISSING_DATA, READY_TO_CREATE_LABEL, DONE.
+
+Based on the current state and message_text, decide whether:
+
+we need to ask for the order number,
+
+we need missing address details,
+
+or we are ready to call createReturnLabelForOrder.
+
+For each step, call a GHL helper (see next section) to send the next SMS / chat message back to the customer from GHL.
+
+If this feels too large, focus first on getting the Custom Action endpoint working, but structure the code so that the state machine logic can reuse createReturnLabelForOrder and the Shippo service later.
+
+========================================
+6. GHL HELPER (SENDING SMS / UPDATING CRM)
+
+If not already present, create a small GHL client helper, e.g. src/integrations/gohighlevel.ts, using env vars:
+
+GHL_API_KEY
+
+GHL_LOCATION_ID
+
+GHL_RETURN_TAG (optional)
+
+GHL_RETURN_PIPELINE_ID, GHL_STAGE_PROCESSING_REFUND, GHL_STAGE_REFUNDED (if already configured)
+
+Capabilities:
+
+Send an SMS / conversation message to a contact.
+
+Create or update a contact with phone, email, and name.
+
+Create / move an opportunity into:
+
+“Processing refund” when we start a return.
+
+“Refunded” when the physical return is received and processed (this part may already exist; just make sure you can call it from the Return logic).
+
+Integrate this with createReturnLabelForOrder so that when a label is created:
+
+The contact is ensured to exist in GHL.
+
+An opportunity is created / moved to “Processing refund”.
+
+A message is ready (even if you don’t automatically send it yet).
+
+========================================
+7. WIREFRAME HOW I CONNECT IT IN GHL
+
+In comments (NOT as runtime code), add a brief note explaining:
+
+For the AI Agent “Custom action”:
+
+The URL to use (e.g. https://<my-app-domain>/api/ghl/custom-actions/create-return-label).
+
+That the method is POST with JSON.
+
+That the agent should pass order number and any reason if available.
+
+That the agent should read messageForAgent from the response and speak / send that to the customer.
+
+For the Workflow-based webhook (if implemented):
+
+“When conversation updated AND tag = Return In Progress → HTTP POST to /api/ghl/webhooks/returns with contact id, conversation id, and latest message text.”
+
+========================================
+8. TESTS / VERIFICATION
+
+Add at least basic tests or a debug route to verify:
+
+Given a test order ID with a real shipping address, createReturnLabelForOrder successfully:
+
+calls Shippo
+
+creates a label
+
+stores a Return record
+
+returns labelUrl and trackingNumber
+
+The GHL Custom Action endpoint:
+
+returns a helpful messageForAgent when the order cannot be found.
+
+returns success + label data when it can.

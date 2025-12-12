@@ -34,14 +34,14 @@ interface ShippoTrackingStatus {
 }
 
 const WAREHOUSE_ADDRESS: ShippoAddress = {
-  name: process.env.SHIPPO_WAREHOUSE_NAME || "Sticker Burr Roller Warehouse",
-  street1: process.env.SHIPPO_WAREHOUSE_STREET1 || "123 Warehouse St",
-  street2: process.env.SHIPPO_WAREHOUSE_STREET2 || undefined,
-  city: process.env.SHIPPO_WAREHOUSE_CITY || "Salt Lake City",
-  state: process.env.SHIPPO_WAREHOUSE_STATE || "UT",
-  zip: process.env.SHIPPO_WAREHOUSE_ZIP || "84101",
-  country: process.env.SHIPPO_WAREHOUSE_COUNTRY || "US",
-  phone: process.env.SHIPPO_WAREHOUSE_PHONE,
+  name: process.env.RETURN_TO_NAME || process.env.SHIPPO_WAREHOUSE_NAME || "Sticker Burr Roller",
+  street1: process.env.RETURN_TO_STREET1 || process.env.SHIPPO_WAREHOUSE_STREET1 || "123 Warehouse St",
+  street2: process.env.RETURN_TO_STREET2 || process.env.SHIPPO_WAREHOUSE_STREET2 || undefined,
+  city: process.env.RETURN_TO_CITY || process.env.SHIPPO_WAREHOUSE_CITY || "Salt Lake City",
+  state: process.env.RETURN_TO_STATE || process.env.SHIPPO_WAREHOUSE_STATE || "UT",
+  zip: process.env.RETURN_TO_ZIP || process.env.SHIPPO_WAREHOUSE_ZIP || "84101",
+  country: process.env.RETURN_TO_COUNTRY || process.env.SHIPPO_WAREHOUSE_COUNTRY || "US",
+  phone: process.env.RETURN_TO_PHONE || process.env.SHIPPO_WAREHOUSE_PHONE,
 };
 
 export class ShippoReturnsService {
@@ -51,8 +51,8 @@ export class ShippoReturnsService {
 
   constructor() {
     this.apiToken = process.env.SHIPPO_API_KEY || null;
-    this.defaultCarrier = process.env.SHIPPO_DEFAULT_CARRIER || "usps";
-    this.defaultService = process.env.SHIPPO_DEFAULT_SERVICE || "usps_priority";
+    this.defaultCarrier = process.env.SHIPPO_DEFAULT_CARRIER || "ups";
+    this.defaultService = process.env.SHIPPO_DEFAULT_SERVICE || "ups_ground";
   }
 
   isConfigured(): boolean {

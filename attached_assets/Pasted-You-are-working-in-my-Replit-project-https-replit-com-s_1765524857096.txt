@@ -1,0 +1,124 @@
+You are working in my Replit project:
+https://replit.com/@saasbooster/AgentSeniorStack
+
+This app is our Sticker Burr Roller inventory / sales / PO / returns tool. I need you to FULLY wire Shippo for return labels and connect it to GoHighLevel (GHL) via a custom webhook / “Custom action” from the AI Agent screen (Voice AI / Conversation AI). Shippo is only for labels and tracking; all business rules live in this app.
+
+GENERAL RULES
+- Follow the existing tech stack and patterns in this repo (TypeScript/Node/Express or whatever you detect). Do NOT introduce a new framework.
+- Re-use any existing models / services for Orders, Returns, Customers, or GHL instead of duplicating logic. Search the codebase for “return”, “refund”, “GHL”, “Shippo”, etc, and extend what’s already there.
+- Keep configuration (keys, service names, base URLs) in environment variables, never hard-coded.
+- Add clear comments in any new module so I can see what’s going on.
+
+====================================
+1. ENVIRONMENT VARIABLES FOR SHIPPO
+====================================
+
+Add support for these env vars (and use them everywhere you integrate Shippo):
+
+- SHIPPO_API_KEY            -> my live Shippo API key
+- SHIPPO_DEFAULT_CARRIER    -> "ups"
+- SHIPPO_DEFAULT_SERVICE    -> "ups_ground" (or whatever code Shippo uses for UPS Ground)
+- RETURN_TO_NAME            -> Sticker Burr Roller (warehouse)
+- RETURN_TO_PHONE           -> warehouse phone
+- RETURN_TO_ADDRESS_LINE1   -> 1020 W Utah Ave
+- RETURN_TO_ADDRESS_LINE2   -> optional
+- RETURN_TO_CITY            -> Hildale
+- RETURN_TO_STATE           -> UT
+- RETURN_TO_ZIP             -> 84784
+- RETURN_TO_COUNTRY         -> US
+- RETURN_DEFAULT_WEIGHT_LB  -> default package weight if an order doesn’t have detailed weights
+- RETURN_DEFAULT_BOX_IN     -> default LxWxH if not specified (comma-separated, e.g. "12,8,6")
+
+Note:
+- DO NOT override the label size in code. Shippo account settings already use 4x6 PDF labels. Just request the default label file type (PDF) and let Shippo use my portal defaults.
+
+Create a small config helper so other modules can import `shippoConfig` instead of reading process.env directly.
+
+================================
+2. SHIPPO CLIENT & CORE SERVICE
+================================
+
+Create (or extend, if it already exists) a Shippo integration module, for example:
+`src/integrations/shippo.ts`
+
+Responsibilities:
+- Wrap HTTP calls to the Shippo API using the SHIPPO_API_KEY.
+- Provide a clean TypeScript interface for higher-level services.
+
+Implement at least these functions:
+
+1) `createReturnShipment(order: Order, options?: { weightLb?: number; boxIn?: { length: number; width: number; height: number } })`
+
+- `address_from` = CUSTOMER shipping address from the order (they are sending the product back).
+- `address_to`   = warehouse address from the RETURN_TO_* env vars.
+- `parcels`:
+    - Use order line items to determine weight, if available.
+    - Otherwise fall back to RETURN_DEFAULT_WEIGHT_LB and RETURN_DEFAULT_BOX_IN.
+- Request rates only for:
+    - carrier: ups (or SHIPPO_DEFAULT_CARRIER)
+- Return both:
+    - the raw Shippo shipment object
+    - the list of UPS rates
+
+2) `purchaseBestReturnLabel(order: Order, opts?)`
+
+- Uses `createReturnShipment`.
+- From the returned rates, choose UPS Ground (or SHIPPO_DEFAULT_SERVICE).
+    - If UPS Ground is missing, choose the cheapest UPS rate.
+- Purchase the label via Shippo’s API.
+- Return a normalized object:
+    ```ts
+    {
+      labelUrl: string;
+      trackingNumber: string;
+      trackingUrl?: string;
+      serviceName: string;   // e.g. "UPS Ground"
+      provider: string;      // "UPS"
+      cost: number;          // shipper cost
+      currency: string;      // e.g. "USD"
+      raw: any;              // full Shippo transaction/label payload for debugging
+    }
+    ```
+
+3) Add robust error handling:
+- Throw typed errors (or use an error class) that upper layers can catch and turn into user-facing messages.
+- Log Shippo request/response (at least in debug logs) but NEVER log API keys.
+
+====================================
+3. RETURN LABEL DOMAIN LOGIC (APP)
+====================================
+
+Create or extend a “Returns” service layer, e.g.:
+`src/services/returns/ReturnService.ts`
+
+Add a main function:
+
+`createReturnLabelForOrder(orderId: string, options?: { reason?: string; requestedBy?: string; source?: "GHL_AGENT" | "APP_UI" })`
+
+Flow:
+1) Look up the Sales Order by orderId (or internal ID), including:
+   - customer/contact
+   - shipping address
+   - line items (for weight/box, if stored)
+2) Validate that this order is eligible for a return / cancel according to existing business rules (you may already have this logic; reuse it).
+3) Call `purchaseBestReturnLabel` from the Shippo integration.
+4) Persist a Return record:
+   - order reference
+   - status = "LABEL_CREATED" (or equivalent)
+   - Shippo transaction id
+   - labelUrl, trackingNumber, serviceName, cost, currency
+   - origin = "GHL_AGENT" or "APP_UI"
+   - timestamps
+5) Return a clean DTO for external callers:
+   ```ts
+   {
+     orderId: string;
+     customerName: string;
+     customerPhone?: string;
+     customerEmail?: string;
+     labelUrl: string;
+     trackingNumber: string;
+     serviceName: string;
+     cost: number;
+     messageForCustomer: string;  // human-readable string to send via SMS
+   }

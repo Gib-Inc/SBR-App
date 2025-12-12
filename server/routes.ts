@@ -64,6 +64,7 @@ import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
 import { logService } from "./services/log-service";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
+import { shippoReturnsService } from "./services/shippo-returns-service";
 
 const SALT_ROUNDS = 10;
 
@@ -12380,6 +12381,274 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Returns] Error fetching return details:", error);
       res.status(500).json({ error: error.message || "Failed to fetch return details" });
+    }
+  });
+
+  // ============================================================================
+  // GHL AI AGENT CUSTOM ACTIONS
+  // ============================================================================
+  // These endpoints are called by GHL AI Agent during conversations.
+  // Flow: Customer talks to AI Agent -> Agent calls Custom Action -> App processes -> Agent speaks response
+  //
+  // To configure in GHL:
+  // 1. Go to Automation > AI Agent > Custom Actions
+  // 2. Add new action with:
+  //    - Name: "Create Return Label"
+  //    - Endpoint: https://your-domain.com/api/ghl/custom-actions/create-return-label
+  //    - Method: POST
+  //    - Headers: { "X-GHL-Secret": "<your-secret>" }
+  //    - Body: { "orderNumber": "{{order_number}}", "contactId": "{{contact.id}}" }
+  // 3. In AI Agent prompt, instruct it to collect order number and call this action
+  // ============================================================================
+
+  // GHL AI Agent Custom Action: Create Return Label
+  // POST /api/ghl/custom-actions/create-return-label
+  // Called by GHL AI Agent when customer requests a return label
+  // Request: { orderNumber: string, contactId: string }
+  // Response: { success: true, agentMessage: "...", trackingNumber: "...", labelUrl: "..." }
+  // Side effects: Creates Shippo label, sends SMS with label details to customer
+  app.post("/api/ghl/custom-actions/create-return-label", async (req: Request, res: Response) => {
+    console.log("[GHL Custom Action] Create return label request received");
+    
+    try {
+      // Authenticate using shared secret
+      const ghlSecret = process.env.GHL_WEBHOOK_SECRET;
+      const providedSecret = req.headers['x-ghl-secret'] as string;
+      
+      if (!ghlSecret) {
+        console.error("[GHL Custom Action] GHL_WEBHOOK_SECRET not configured");
+        return res.status(401).json({ 
+          success: false, 
+          error: "Webhook authentication not configured",
+          agentMessage: "I'm sorry, there's a configuration issue. Please contact support."
+        });
+      }
+      
+      if (!providedSecret) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Unauthorized: Missing GHL secret",
+          agentMessage: "I'm sorry, I couldn't verify this request. Please try again."
+        });
+      }
+
+      // Timing-safe comparison
+      const expectedBuffer = Buffer.from(ghlSecret, 'utf-8');
+      const providedBuffer = Buffer.from(providedSecret, 'utf-8');
+      
+      if (expectedBuffer.length !== providedBuffer.length || 
+          !crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+        return res.status(401).json({ 
+          success: false, 
+          error: "Unauthorized: Invalid GHL secret",
+          agentMessage: "I'm sorry, I couldn't verify this request. Please try again."
+        });
+      }
+
+      // Parse request body
+      const { orderNumber, contactId } = req.body;
+      
+      if (!orderNumber) {
+        return res.status(400).json({
+          success: false,
+          error: "Order number is required",
+          agentMessage: "I need your order number to create a return label. Could you please provide it?"
+        });
+      }
+
+      if (!contactId) {
+        return res.status(400).json({
+          success: false,
+          error: "Contact ID is required",
+          agentMessage: "I'm sorry, I couldn't identify your account. Please try again."
+        });
+      }
+
+      console.log(`[GHL Custom Action] Looking up order: ${orderNumber} for contact: ${contactId}`);
+
+      // Look up the sales order by order number (check both orderNumber and externalOrderId)
+      const allOrders = await storage.getAllSalesOrders();
+      const salesOrder = allOrders.find(
+        order => order.orderNumber === orderNumber || 
+                 order.externalOrderId === orderNumber ||
+                 order.orderNumber?.includes(orderNumber) ||
+                 order.externalOrderId?.includes(orderNumber)
+      );
+
+      if (!salesOrder) {
+        console.log(`[GHL Custom Action] Order not found: ${orderNumber}`);
+        return res.status(404).json({
+          success: false,
+          error: "Order not found",
+          agentMessage: `I couldn't find an order with number ${orderNumber}. Could you please double-check the order number and try again?`
+        });
+      }
+
+      console.log(`[GHL Custom Action] Found order: ${salesOrder.id} (${salesOrder.orderNumber})`);
+
+      // Get order lines to include in return
+      const orderLines = await storage.getSalesOrderLines(salesOrder.id);
+      if (orderLines.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "No items in order",
+          agentMessage: "I couldn't find any items on this order. Please contact support for assistance."
+        });
+      }
+
+      // Build customer address from sales order
+      const shippingAddress = salesOrder.shippingAddress as any;
+      if (!shippingAddress || !shippingAddress.street1) {
+        return res.status(400).json({
+          success: false,
+          error: "No shipping address on order",
+          agentMessage: "I don't have a shipping address on file for this order. Please contact support for assistance."
+        });
+      }
+
+      // Check if a return already exists for this order
+      const existingReturns = await storage.getReturnRequestsBySalesOrderId(salesOrder.id);
+      let returnRequest = existingReturns.find(r => 
+        r.status !== 'CANCELLED' && r.status !== 'CLOSED' && r.status !== 'REFUNDED'
+      );
+
+      // Create return request if one doesn't exist
+      if (!returnRequest) {
+        console.log(`[GHL Custom Action] Creating new return request for order ${salesOrder.id}`);
+        
+        returnRequest = await storage.createReturnRequest({
+          salesOrderId: salesOrder.id,
+          externalOrderId: salesOrder.externalOrderId,
+          orderNumber: salesOrder.orderNumber,
+          salesChannel: salesOrder.channel,
+          customerName: salesOrder.customerName,
+          customerEmail: salesOrder.customerEmail || undefined,
+          customerPhone: salesOrder.customerPhone || undefined,
+          ghlContactId: contactId,
+          shippingAddress: shippingAddress,
+          source: 'GHL',
+          initiatedVia: 'GHL_AI_AGENT',
+          resolutionRequested: 'RETURN_FULL_REFUND',
+          reason: 'Customer requested return via AI Agent',
+          status: 'APPROVED',
+        });
+
+        // Create return items for all order lines
+        for (const line of orderLines) {
+          await storage.createReturnItem({
+            returnRequestId: returnRequest.id,
+            salesOrderLineId: line.id,
+            inventoryItemId: line.productId || undefined,
+            sku: line.sku,
+            qtyOrdered: line.qtyOrdered,
+            qtyRequested: line.qtyOrdered,
+            qtyApproved: line.qtyOrdered,
+            itemReason: 'Customer return via AI Agent',
+          });
+        }
+
+        // Log the return creation event
+        await storage.createReturnEvent({
+          returnRequestId: returnRequest.id,
+          eventType: 'CREATED',
+          eventData: { 
+            source: 'GHL_AI_AGENT',
+            contactId,
+            orderNumber: salesOrder.orderNumber 
+          },
+        });
+      }
+
+      // Generate Shippo label
+      console.log(`[GHL Custom Action] Generating Shippo label for return ${returnRequest.id}`);
+      const labelResult = await shippoReturnsService.createReturnLabel(returnRequest);
+
+      if (!labelResult.success) {
+        console.error(`[GHL Custom Action] Shippo label creation failed:`, labelResult.error);
+        return res.status(500).json({
+          success: false,
+          error: labelResult.error || "Failed to create shipping label",
+          agentMessage: "I'm sorry, I couldn't create your return label right now. Please try again in a few minutes or contact support."
+        });
+      }
+
+      console.log(`[GHL Custom Action] Label created: ${labelResult.trackingNumber}`);
+
+      // Create shipment record
+      await storage.createReturnShipment({
+        returnRequestId: returnRequest.id,
+        carrier: labelResult.carrier || 'UPS',
+        trackingNumber: labelResult.trackingNumber!,
+        labelUrl: labelResult.labelUrl!,
+        shippoShipmentId: labelResult.shipmentId,
+        shippoTransactionId: labelResult.transactionId,
+        labelCost: labelResult.labelCost?.toString(),
+        labelCurrency: labelResult.labelCurrency,
+      });
+
+      // Update return status to LABEL_CREATED
+      await storage.updateReturnRequest(returnRequest.id, {
+        status: 'LABEL_CREATED',
+      });
+
+      // Log the label creation event
+      await storage.createReturnEvent({
+        returnRequestId: returnRequest.id,
+        eventType: 'LABEL_CREATED',
+        eventData: {
+          carrier: labelResult.carrier,
+          trackingNumber: labelResult.trackingNumber,
+          labelUrl: labelResult.labelUrl,
+          labelCost: labelResult.labelCost,
+        },
+      });
+
+      // Send SMS with label details via GHL
+      const smsMessage = `Your return label is ready!\n\nTracking #: ${labelResult.trackingNumber}\nLabel: ${labelResult.labelUrl}\n\nPrint the label and drop off your package at any ${labelResult.carrier || 'UPS'} location.`;
+
+      console.log(`[GHL Custom Action] Sending SMS to contact ${contactId}`);
+      
+      // Get GHL config for first user (system-level integration)
+      const users = await storage.getAllUsers();
+      if (users.length > 0) {
+        const ghlConfig = await storage.getIntegrationConfig(users[0].id, 'GOHIGHLEVEL');
+        if (ghlConfig?.apiKey && ghlConfig?.config) {
+          const locationId = (ghlConfig.config as any).locationId;
+          if (locationId) {
+            const ghlClient = new GoHighLevelClient(
+              'https://services.leadconnectorhq.com',
+              ghlConfig.apiKey,
+              locationId
+            );
+            
+            const smsResult = await ghlClient.sendSMS(contactId, smsMessage);
+            if (smsResult.success) {
+              console.log(`[GHL Custom Action] SMS sent successfully: ${smsResult.messageId}`);
+            } else {
+              console.warn(`[GHL Custom Action] SMS sending failed: ${smsResult.error}`);
+            }
+          }
+        }
+      }
+
+      // Return response for AI Agent to speak
+      res.json({
+        success: true,
+        agentMessage: "I've created your return label and I'm sending you the details via text right now. You'll receive the tracking number and a link to print your label. Just drop off your package at any UPS location.",
+        trackingNumber: labelResult.trackingNumber,
+        labelUrl: labelResult.labelUrl,
+        carrier: labelResult.carrier,
+        returnId: returnRequest.id,
+        rmaNumber: returnRequest.rmaNumber,
+      });
+
+    } catch (error: any) {
+      console.error("[GHL Custom Action] Error creating return label:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Internal server error",
+        agentMessage: "I'm sorry, something went wrong. Please try again or contact support for assistance."
+      });
     }
   });
 

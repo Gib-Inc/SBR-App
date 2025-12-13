@@ -833,6 +833,7 @@ export default function SalesOrders() {
                   <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Ship To</th>
                   <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Total</th>
                   <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Units</th>
+                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Received</th>
                   <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
@@ -940,6 +941,9 @@ export default function SalesOrders() {
                       </td>
                       <td className="px-2 align-middle text-right whitespace-nowrap" data-testid={`text-total-units-${order.id}`}>
                         {totalUnits}
+                      </td>
+                      <td className="px-2 align-middle text-right whitespace-nowrap" data-testid={`text-total-received-${order.id}`}>
+                        {(order as any).totalQtyReceived || 0}
                       </td>
                       <td className="px-2 align-middle text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">

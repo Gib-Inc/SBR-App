@@ -60,6 +60,7 @@ interface ReturnRequest {
   quickbooksRefundId: string | null;
   quickbooksRefundType: string | null;
   quickbooksRefundCreatedAt: string | null;
+  totalQtyReceived: number;
 }
 
 interface ReturnItem {
@@ -398,6 +399,7 @@ export default function Returns() {
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Resolution</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Received</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                   </tr>
                 </thead>
@@ -433,6 +435,9 @@ export default function Returns() {
                     </td>
                     <td className="px-3 align-middle whitespace-nowrap">
                       {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-received-${returnRequest.id}`}>
+                      {returnRequest.totalQtyReceived || 0}
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 z-10 bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                       <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>

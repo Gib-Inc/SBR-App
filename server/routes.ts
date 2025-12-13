@@ -12603,7 +12603,16 @@ Generate only the email body text, no subject line.`;
         returnRequests = await storage.getAllReturnRequests();
       }
       
-      res.json(returnRequests);
+      // Enrich each return with totalQtyReceived from items
+      const enrichedReturns = await Promise.all(
+        returnRequests.map(async (ret) => {
+          const items = await storage.getReturnItemsByRequestId(ret.id);
+          const totalQtyReceived = items.reduce((sum: number, item: any) => sum + (item.qtyReceived || 0), 0);
+          return { ...ret, totalQtyReceived };
+        })
+      );
+      
+      res.json(enrichedReturns);
     } catch (error: any) {
       console.error("[Returns] Error fetching returns:", error);
       res.status(500).json({ error: error.message || "Failed to fetch returns" });
@@ -13813,6 +13822,7 @@ Generate only the email body text, no subject line.`;
           const linesCount = lines.length;
           const totalUnits = lines.reduce((sum: number, line: SalesOrderLine) => sum + line.qtyOrdered, 0);
           const totalBackorderQty = lines.reduce((sum: number, line: SalesOrderLine) => sum + (line.backorderQty || 0), 0);
+          const totalQtyReceived = lines.reduce((sum: number, line: SalesOrderLine) => sum + (line.qtyFulfilled || 0), 0);
           
           // Compute productionSource based on inventory availability
           // Pivot = Pivot has enough stock for all items
@@ -13861,6 +13871,7 @@ Generate only the email body text, no subject line.`;
             linesCount,
             totalUnits,
             totalBackorderQty,
+            totalQtyReceived,
             productionSource,
           };
         })

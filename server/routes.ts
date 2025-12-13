@@ -13075,7 +13075,7 @@ Generate only the email body text, no subject line.`;
       if (isNaN(refundAmount) || !isFinite(refundAmount)) {
         return res.status(400).json({ 
           error: "Invalid refund amount calculated. Please check return data.",
-          details: { finalRefundAmount: rawFinalRefund, baseRefundAmount: rawBaseRefund }
+          details: { finalRefundAmount: rawFinalRefund, baseRefundAmount: returnRequest.baseRefundAmount }
         });
       }
       
@@ -13120,12 +13120,22 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ error: result.error || "Failed to create QuickBooks refund" });
       }
       
-      // Update return request with QB refund info
+      // Update return request with QB refund info and set status to REFUNDED
       await storage.updateReturnRequest(id, {
         quickbooksRefundId: result.refundId,
         quickbooksRefundType: result.refundType,
         quickbooksRefundCreatedAt: new Date(),
+        status: 'REFUNDED',
       });
+      
+      // Sync to GHL - move opportunity to "Refunded" stage
+      try {
+        const { triggerReturnSync } = await import("./services/ghl-sync-triggers");
+        await triggerReturnSync(userId, id, true); // isRefunded = true
+        console.log(`[Returns] GHL opportunity updated to Refunded stage for return ${id}`);
+      } catch (ghlError: any) {
+        console.warn(`[Returns] GHL sync failed (non-blocking): ${ghlError.message}`);
+      }
       
       // Get updated return details
       const returnDetails = await returnsService.getReturnWithDetails(id);
@@ -13174,6 +13184,26 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Returns] Error fetching return details:", error);
       res.status(500).json({ error: error.message || "Failed to fetch return details" });
+    }
+  });
+
+  // Cleanup old refunded GHL opportunities (run manually or via cron)
+  // POST /api/returns/cleanup-ghl-opportunities
+  app.post("/api/returns/cleanup-ghl-opportunities", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { cleanupOldRefundedOpportunities } = await import("./services/refund-cleanup-scheduler");
+      const result = await cleanupOldRefundedOpportunities(userId);
+      
+      res.json({
+        success: true,
+        message: `Cleanup complete: ${result.deleted} opportunities deleted from ${result.checked} checked`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("[Returns] Error running GHL cleanup:", error);
+      res.status(500).json({ error: error.message || "Failed to run cleanup" });
     }
   });
 

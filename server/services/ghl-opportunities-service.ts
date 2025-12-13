@@ -46,6 +46,10 @@ export class GHLOpportunitiesService {
 
   async initialize(userId: string): Promise<boolean> {
     try {
+      // Always reset credentials to ensure fresh config for this user
+      this.apiKey = null;
+      this.systemContactId = null;
+      
       const config = await storage.getIntegrationConfig(userId, "GOHIGHLEVEL");
       if (!config?.apiKey) {
         console.log("[GHL Opps] No API key configured for user");
@@ -55,6 +59,7 @@ export class GHLOpportunitiesService {
       return true;
     } catch (error) {
       console.error("[GHL Opps] Error initializing:", error);
+      this.apiKey = null;
       return false;
     }
   }
@@ -417,6 +422,37 @@ export class GHLOpportunitiesService {
     } catch (error: any) {
       console.error("[GHL Opps] Error finding/creating contact:", error.message);
       return null;
+    }
+  }
+
+  /**
+   * Delete an opportunity from GHL
+   * Used for cleaning up old completed opportunities (e.g., refunds after 30 days)
+   */
+  async deleteOpportunity(opportunityId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.apiKey) {
+      return { success: false, error: "GHL not configured" };
+    }
+
+    try {
+      console.log(`[GHL Opps] Deleting opportunity: ${opportunityId}`);
+
+      const response = await fetch(`${GHL_CONFIG.baseUrl}/opportunities/${opportunityId}`, {
+        method: "DELETE",
+        headers: this.getHeaders(),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[GHL Opps] Delete failed: ${response.status} - ${errorText}`);
+        return { success: false, error: `Delete failed: ${response.status}` };
+      }
+
+      console.log(`[GHL Opps] Deleted opportunity: ${opportunityId}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error(`[GHL Opps] Error deleting opportunity ${opportunityId}:`, error.message);
+      return { success: false, error: error.message };
     }
   }
 

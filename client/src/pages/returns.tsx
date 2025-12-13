@@ -61,6 +61,12 @@ interface ReturnRequest {
   quickbooksRefundType: string | null;
   quickbooksRefundCreatedAt: string | null;
   totalQtyReceived: number;
+  totalReceived: number | null;
+  shippingCost: number | null;
+  labelFee: number | null;
+  baseRefundAmount: number | null;
+  damageDeductionTotal: number | null;
+  finalRefundAmount: number | null;
 }
 
 interface ReturnItem {
@@ -926,7 +932,7 @@ function ConfirmReturnReceiptModal({
   
   // V1 Damage Fee Logic: 20% fee for damaged returns
   const DAMAGE_FEE_PERCENT = 0.20;
-  const orderTotal = returnDetails.returnRequest.orderTotal || 0;
+  const orderTotal = returnDetails.returnRequest.totalReceived || 0;
   const refundAmount = applyDamageFee 
     ? orderTotal * (1 - DAMAGE_FEE_PERCENT) 
     : orderTotal;

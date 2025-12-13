@@ -5198,10 +5198,43 @@ TOTAL: $${subtotal.toFixed(2)}
         errors.push(`Refunds sync failed: ${refundsErr.message}`);
       }
 
+      // =============== INVENTORY PULL ===============
+      // Pull inventory levels from Shopify to update availableForSaleQty
+      let inventorySynced: number | null = null; // null means not attempted, 0+ means attempted
+      let inventoryPullStatus: 'success' | 'skipped' | 'failed' = 'skipped';
+      try {
+        // Check if two-way sync is enabled before pulling inventory
+        const settings = await storage.getSettings(userId);
+        if (!settings?.shopifyTwoWaySync) {
+          console.log('[Shopify] Skipping inventory pull - two-way sync not enabled');
+        } else {
+          const { shopifyInventorySync } = await import('./services/shopify-inventory-sync-service');
+          const initialized = await shopifyInventorySync.initialize(userId);
+          
+          if (initialized) {
+            console.log('[Shopify] Pulling inventory levels from Shopify...');
+            const inventoryResult = await shopifyInventorySync.pullAllInventoryFromShopify(userId);
+            inventorySynced = inventoryResult.updated;
+            inventoryPullStatus = 'success';
+            console.log(`[Shopify] Inventory pull complete: ${inventoryResult.updated} updated, ${inventoryResult.failed} failed`);
+          } else {
+            console.log('[Shopify] Skipping inventory pull - service not configured');
+          }
+        }
+      } catch (invErr: any) {
+        console.error('[Shopify] Error pulling inventory:', invErr);
+        errors.push(`Inventory pull failed: ${invErr.message}`);
+        inventoryPullStatus = 'failed';
+      }
+
       const refundsSummary = refundsCreated > 0 ? `, ${refundsCreated} refunds synced` : '';
+      // Only include inventory summary when pull was actually attempted and succeeded
+      const inventorySummary = inventoryPullStatus === 'success' && inventorySynced !== null && inventorySynced > 0 
+        ? `, ${inventorySynced} inventory levels updated` 
+        : '';
       const summary = syncMode === "replace"
-        ? `Created ${createdCount}, updated ${updatedCount} orders. ${ordersArchived} archived, ${inventoryMappingsCleared} mappings cleared${refundsSummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`
-        : `Created ${createdCount}, updated ${updatedCount} orders${refundsSummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+        ? `Created ${createdCount}, updated ${updatedCount} orders. ${ordersArchived} archived, ${inventoryMappingsCleared} mappings cleared${refundsSummary}${inventorySummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`
+        : `Created ${createdCount}, updated ${updatedCount} orders${refundsSummary}${inventorySummary}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -5229,6 +5262,10 @@ TOTAL: $${subtotal.toFixed(2)}
             ordersArchived,
             inventoryMappingsCleared,
             inventoryUpdated,
+            // Always include status so consumers can differentiate success/failed/skipped
+            inventoryPullStatus,
+            // Only include inventorySynced count when pull was actually attempted
+            ...(inventorySynced !== null && { inventorySynced }),
             unmatchedSkus: unmatchedSkus.length,
             errors: errors.length 
           }
@@ -5245,6 +5282,10 @@ TOTAL: $${subtotal.toFixed(2)}
         ordersArchived,
         inventoryUpdated,
         inventoryMappingsCleared,
+        // Always include status so consumers can differentiate success/failed/skipped
+        inventoryPullStatus,
+        // Only include inventorySynced count when pull was actually attempted
+        ...(inventorySynced !== null && { inventorySynced }),
         refundsCreated,
         refundsSkipped,
         unmatchedSkus,

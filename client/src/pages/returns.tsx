@@ -38,6 +38,11 @@ import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History,
 import { Switch } from "@/components/ui/switch";
 import { format, subDays } from "date-fns";
 
+const formatCurrency = (amount: number | null | undefined): string => {
+  if (amount == null) return "-";
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+};
+
 interface ReturnRequest {
   id: string;
   externalOrderId: string;
@@ -333,16 +338,18 @@ export default function Returns() {
                       size="sm"
                       onClick={() => {
                         const csvContent = [
-                          ['Order ID', 'Channel', 'Source', 'Customer', 'Email', 'Status', 'Resolution', 'Reason', 'Created', 'QuickBooks Refund'].join(','),
+                          ['Order #', 'Source', 'Customer', 'Email', 'Total Received', 'Shipping Cost', 'Label Fee', 'Damage Cost', 'Total Refunded', 'Status', 'Created', 'QuickBooks Refund'].join(','),
                           ...(returns || []).map(r => [
                             r.externalOrderId,
                             r.salesChannel,
-                            r.initiatedVia,
                             r.customerName,
                             r.customerEmail || '',
+                            r.totalReceived || '',
+                            r.shippingCost || '',
+                            r.labelFee || '',
+                            r.damageDeductionTotal || '',
+                            r.finalRefundAmount || '',
                             r.status,
-                            r.resolutionFinal || r.resolutionRequested,
-                            r.reason || '',
                             format(new Date(r.createdAt), 'yyyy-MM-dd'),
                             r.quickbooksRefundId || ''
                           ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
@@ -398,14 +405,14 @@ export default function Returns() {
               <table className="w-full table-auto">
                 <thead className="bg-muted sticky top-0 z-10">
                   <tr className="border-b">
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order ID</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Channel</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order #</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Source</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Resolution</th>
-                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Created</th>
-                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Received</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total Received</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Shipping</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Label Fee</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Damage</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total Refunded</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px sticky right-0 z-10 bg-muted shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                   </tr>
                 </thead>
@@ -424,26 +431,27 @@ export default function Returns() {
                       <Badge variant="outline">{returnRequest.salesChannel}</Badge>
                     </td>
                     <td className="px-3 align-middle whitespace-nowrap">
-                      <Badge variant={returnRequest.initiatedVia === 'GHL_BOT' ? 'default' : 'secondary'}>
-                        {returnRequest.initiatedVia === 'GHL_BOT' ? 'GHL Bot' : 'Manual'}
-                      </Badge>
-                    </td>
-                    <td className="px-3 align-middle whitespace-nowrap">{returnRequest.customerName}</td>
-                    <td className="px-3 align-middle whitespace-nowrap">
-                      <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
-                        {returnRequest.status.replace(/_/g, ' ')}
-                      </Badge>
-                    </td>
-                    <td className="px-3 align-middle whitespace-nowrap">
-                      <span className={getResolutionColor(returnRequest.resolutionRequested)}>
-                        {returnRequest.resolutionFinal || returnRequest.resolutionRequested}
-                      </span>
-                    </td>
-                    <td className="px-3 align-middle whitespace-nowrap">
-                      {format(new Date(returnRequest.createdAt), 'MMM d, yyyy')}
+                      <div className="flex flex-col">
+                        <span className="font-medium">{returnRequest.customerName}</span>
+                        {returnRequest.customerEmail && (
+                          <span className="text-xs text-muted-foreground">{returnRequest.customerEmail}</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-received-${returnRequest.id}`}>
-                      {returnRequest.totalQtyReceived || 0}
+                      {formatCurrency(returnRequest.totalReceived)}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap">
+                      {formatCurrency(returnRequest.shippingCost)}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap">
+                      {formatCurrency(returnRequest.labelFee)}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap">
+                      {formatCurrency(returnRequest.damageDeductionTotal)}
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap font-medium" data-testid={`text-total-refunded-${returnRequest.id}`}>
+                      {formatCurrency(returnRequest.finalRefundAmount)}
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 z-10 bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                       <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>

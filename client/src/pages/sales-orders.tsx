@@ -1774,7 +1774,7 @@ function CreateReturnForm({ order, onSubmit, isPending, onCancel }: CreateReturn
         .filter(line => (line.qtyFulfilled || 0) > 0)
         .map(line => ({
           salesOrderLineId: line.id,
-          inventoryItemId: line.productId,
+          inventoryItemId: line.productId || '',
           sku: line.sku,
           qtyOrdered: line.qtyOrdered,
           qtyFulfilled: line.qtyFulfilled || 0,

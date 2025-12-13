@@ -338,12 +338,13 @@ export default function Returns() {
                       size="sm"
                       onClick={() => {
                         const csvContent = [
-                          ['Order #', 'Source', 'Customer', 'Email', 'Total Received', 'Shipping Cost', 'Label Fee', 'Damage Cost', 'Total Refunded', 'Status', 'Created', 'QuickBooks Refund'].join(','),
+                          ['Order #', 'Source', 'Customer', 'Email', 'Units', 'Total Received', 'Shipping Cost', 'Label Fee', 'Damage Cost', 'Total Refunded', 'Status', 'Created', 'QuickBooks Refund'].join(','),
                           ...(returns || []).map(r => [
                             r.externalOrderId,
                             r.salesChannel,
                             r.customerName,
                             r.customerEmail || '',
+                            r.totalQtyReceived || 0,
                             r.totalReceived || '',
                             r.shippingCost || '',
                             r.labelFee || '',
@@ -408,6 +409,7 @@ export default function Returns() {
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order #</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Source</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                    <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Units</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total Received</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Shipping</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Label Fee</th>
@@ -437,6 +439,9 @@ export default function Returns() {
                           <span className="text-xs text-muted-foreground">{returnRequest.customerEmail}</span>
                         )}
                       </div>
+                    </td>
+                    <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-units-${returnRequest.id}`}>
+                      {returnRequest.totalQtyReceived || 0}
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-received-${returnRequest.id}`}>
                       {formatCurrency(returnRequest.totalReceived)}

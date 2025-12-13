@@ -5200,13 +5200,20 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // =============== INVENTORY PULL ===============
       // Pull inventory levels from Shopify to update availableForSaleQty
+      // Only runs if "Shopify Inventory Sync Until" date is set and today is before that date
       let inventorySynced: number | null = null; // null means not attempted, 0+ means attempted
       let inventoryPullStatus: 'success' | 'skipped' | 'failed' = 'skipped';
       try {
-        // Check if two-way sync is enabled before pulling inventory
+        // Check if Shopify inventory sync is active based on sunset date
         const settings = await storage.getSettings(userId);
-        if (!settings?.shopifyTwoWaySync) {
-          console.log('[Shopify] Skipping inventory pull - two-way sync not enabled');
+        const sunsetDate = settings?.shopifyInventorySunsetDate;
+        const now = new Date();
+        
+        // Skip if no sunset date is set or if we're past the sunset date
+        if (!sunsetDate) {
+          console.log('[Shopify] Skipping inventory pull - no sunset date configured');
+        } else if (now > new Date(sunsetDate)) {
+          console.log(`[Shopify] Skipping inventory pull - past sunset date (${new Date(sunsetDate).toLocaleDateString()})`);
         } else {
           const { shopifyInventorySync } = await import('./services/shopify-inventory-sync-service');
           const initialized = await shopifyInventorySync.initialize(userId);

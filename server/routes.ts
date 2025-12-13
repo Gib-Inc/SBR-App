@@ -4677,10 +4677,11 @@ TOTAL: $${subtotal.toFixed(2)}
       console.log(`[Shopify] Starting ${syncMode.toUpperCase()} sync from last ${daysBack} days (max ${ordersToFetch} orders)...`);
       try {
         const { logService } = await import('./services/log-service');
-        await logService.logIntegrationEvent({
-          source: 'SHOPIFY',
-          action: 'SYNC_STARTED',
-          status: 'INFO',
+        await logService.logSystemEvent({
+          type: 'SHOPIFY_SYNC_INFO',
+          entityType: 'INTEGRATION',
+          severity: 'INFO',
+          code: 'SYNC_STARTED',
           message: `Shopify ${syncMode} sync started`,
           details: { mode: syncMode, daysBack, ordersToFetch }
         });
@@ -5215,10 +5216,11 @@ TOTAL: $${subtotal.toFixed(2)}
       // Log sync completion
       try {
         const { logService } = await import('./services/log-service');
-        await logService.logIntegrationEvent({
-          source: 'SHOPIFY',
-          action: 'SYNC_COMPLETED',
-          status: hasErrors ? 'WARNING' : 'SUCCESS',
+        await logService.logSystemEvent({
+          type: 'SHOPIFY_SYNC_INFO',
+          entityType: 'INTEGRATION',
+          severity: hasErrors ? 'WARNING' : 'INFO',
+          code: 'SYNC_COMPLETED',
           message: summary,
           details: { 
             mode: syncMode, 

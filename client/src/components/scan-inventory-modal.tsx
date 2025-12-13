@@ -32,6 +32,7 @@ interface ScanInventoryModalProps {
   mode: ScanMode;
   context: ScanContext;
   onModeChange?: (mode: ScanMode) => void;
+  onReturnScanDetected?: (data: any) => void;
 }
 
 type InputMode = "keyboard" | "camera";
@@ -41,7 +42,8 @@ export function ScanInventoryModal({
   onClose,
   mode,
   context,
-  onModeChange
+  onModeChange,
+  onReturnScanDetected
 }: ScanInventoryModalProps) {
   const [barcodeValue, setBarcodeValue] = useState("");
   const [quantity, setQuantity] = useState("1");
@@ -239,7 +241,7 @@ export function ScanInventoryModal({
     },
   });
 
-  const handleScan = () => {
+  const handleScan = async () => {
     const trimmedBarcode = barcodeValue.trim();
     const qty = parseInt(quantity, 10);
     
@@ -254,6 +256,27 @@ export function ScanInventoryModal({
     }
     
     setValidationError(null);
+
+    // First check if this is a return label via unified scan endpoint
+    if (onReturnScanDetected) {
+      try {
+        const ingestRes = await apiRequest("POST", "/api/scans/ingest", { code: trimmedBarcode, source: 'BOM_PAGE' });
+        const ingestData = await ingestRes.json();
+        
+        if (ingestData.status === "PENDING_DAMAGE_ASSESSMENT") {
+          toast({
+            title: "Return Label Detected",
+            description: `Found return for ${ingestData.customerName || ingestData.rmaNumber}`,
+          });
+          onReturnScanDetected(ingestData);
+          setBarcodeValue("");
+          return;
+        }
+      } catch (err) {
+        // Not a return label, continue with normal scan
+      }
+    }
+
     scanMutation.mutate({ 
       barcodeValue: trimmedBarcode, 
       quantity: qty,

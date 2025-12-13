@@ -21,8 +21,30 @@ import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
 import { Textarea } from "@/components/ui/textarea";
 import { BatchProductionDialog } from "@/components/batch-production-dialog";
 import { TransferDialog } from "@/components/transfer-dialog";
+import { DamageAssessmentPopup } from "@/components/damage-assessment-popup";
 import { Factory, ArrowRightLeft } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
+interface DamageAssessmentData {
+  returnRequestId: string;
+  rmaNumber?: string | null;
+  orderNumber?: string | null;
+  customerName?: string | null;
+  baseRefundAmount?: number | null;
+  totalReceived?: number | null;
+  shippingCost?: number | null;
+  labelFee?: number | null;
+  items: Array<{
+    id: string;
+    sku: string;
+    productName: string;
+    unitPrice: number | null;
+    qtyApproved: number;
+    lineTotal: number | null;
+    isDamaged: boolean;
+    damagePhotoUrl?: string | null;
+  }>;
+}
 
 const WAREHOUSE_LOCATIONS = [
   "Spanish Fork",
@@ -1820,6 +1842,7 @@ export default function BOM() {
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [isBatchProductionOpen, setIsBatchProductionOpen] = useState(false);
   const [transferItem, setTransferItem] = useState<any>(null);
+  const [damageAssessmentData, setDamageAssessmentData] = useState<DamageAssessmentData | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -2500,7 +2523,39 @@ export default function BOM() {
         mode={scanMode}
         context="BOM_PAGE"
         onModeChange={setScanMode}
+        onReturnScanDetected={(data) => {
+          setIsScanModalOpen(false);
+          setDamageAssessmentData({
+            returnRequestId: data.returnRequestId,
+            rmaNumber: data.rmaNumber,
+            orderNumber: data.orderNumber,
+            customerName: data.customerName,
+            baseRefundAmount: data.baseRefundAmount,
+            totalReceived: data.totalReceived,
+            shippingCost: data.shippingCost,
+            labelFee: data.labelFee,
+            items: data.items,
+          });
+        }}
       />
+      
+      {/* Damage Assessment Popup */}
+      {damageAssessmentData && (
+        <DamageAssessmentPopup
+          isOpen={!!damageAssessmentData}
+          onClose={() => setDamageAssessmentData(null)}
+          returnRequestId={damageAssessmentData.returnRequestId}
+          rmaNumber={damageAssessmentData.rmaNumber}
+          orderNumber={damageAssessmentData.orderNumber}
+          customerName={damageAssessmentData.customerName}
+          baseRefundAmount={damageAssessmentData.baseRefundAmount}
+          totalReceived={damageAssessmentData.totalReceived}
+          shippingCost={damageAssessmentData.shippingCost}
+          labelFee={damageAssessmentData.labelFee}
+          items={damageAssessmentData.items}
+          onAssessmentComplete={() => setDamageAssessmentData(null)}
+        />
+      )}
       
       {/* SKU Mapping Wizard */}
       <SkuMappingWizard

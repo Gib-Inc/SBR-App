@@ -1033,6 +1033,7 @@ export const returnRequests = pgTable("return_requests", {
   // GHL refund opportunity integration
   ghlRefundOpportunityId: text("ghl_refund_opportunity_id"), // GHL opportunity for "Issue refund" task
   ghlRefundOpportunityUrl: text("ghl_refund_opportunity_url"), // Deep link to GHL opportunity
+  ghlTaskedAt: timestamp("ghl_tasked_at"), // When refund task was created in GHL
   // QuickBooks refund integration
   quickbooksRefundId: text("quickbooks_refund_id"), // QB Credit Memo or Refund Receipt ID
   quickbooksRefundType: text("quickbooks_refund_type"), // 'CREDIT_MEMO' | 'REFUND_RECEIPT' | null

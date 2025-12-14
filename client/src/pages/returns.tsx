@@ -72,6 +72,7 @@ interface ReturnRequest {
   baseRefundAmount: number | null;
   damageDeductionTotal: number | null;
   finalRefundAmount: number | null;
+  ghlTaskedAt: string | null;
 }
 
 interface ReturnItem {
@@ -87,6 +88,9 @@ interface ReturnItem {
   itemReason: string | null;
   disposition: string | null;
   notes: string | null;
+  isDamaged: boolean | null;
+  damageAmount: number | null;
+  lineTotal: number | null;
 }
 
 interface ReturnShipment {
@@ -748,6 +752,43 @@ function ReturnDetailsModal({
             </div>
           )}
 
+          {/* Refund Summary */}
+          {returnRequest.finalRefundAmount != null && (
+            <div className="p-4 bg-muted/50 rounded-md border">
+              <h3 className="font-semibold mb-3">Refund Summary</h3>
+              <RefundSummaryText returnRequest={returnRequest} items={items} />
+              
+              <div className="mt-3 space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Order Total:</span>
+                  <span>{formatCurrency(returnRequest.totalReceived)}</span>
+                </div>
+                {(returnRequest.shippingCost || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Return Shipping:</span>
+                    <span className="text-red-600 dark:text-red-400">-{formatCurrency(returnRequest.shippingCost)}</span>
+                  </div>
+                )}
+                {(returnRequest.labelFee || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Label Fee:</span>
+                    <span className="text-red-600 dark:text-red-400">-{formatCurrency(returnRequest.labelFee)}</span>
+                  </div>
+                )}
+                {(returnRequest.damageDeductionTotal || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Damage Deduction:</span>
+                    <span className="text-red-600 dark:text-red-400">-{formatCurrency(returnRequest.damageDeductionTotal)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold pt-2 border-t">
+                  <span>Final Refund:</span>
+                  <span className="text-green-600 dark:text-green-400">{formatCurrency(returnRequest.finalRefundAmount)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* QuickBooks Info */}
           {returnRequest.quickbooksRefundId && (
             <div className="p-3 bg-green-50 dark:bg-green-950 rounded-md border border-green-200 dark:border-green-800">
@@ -1179,5 +1220,58 @@ function ConfirmReturnReceiptModal({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface RefundSummaryTextProps {
+  returnRequest: ReturnRequest;
+  items: ReturnItem[];
+}
+
+function RefundSummaryText({ returnRequest, items }: RefundSummaryTextProps) {
+  const deductionReasons: string[] = [];
+  
+  if ((returnRequest.shippingCost || 0) > 0) {
+    deductionReasons.push("return shipping");
+  }
+  if ((returnRequest.labelFee || 0) > 0) {
+    deductionReasons.push("label fee");
+  }
+  if ((returnRequest.damageDeductionTotal || 0) > 0) {
+    const damagedItems = items.filter(item => item.isDamaged);
+    if (damagedItems.length > 0) {
+      const damagedSkus = damagedItems.map(item => item.sku).join(", ");
+      deductionReasons.push(`damage deduction for ${damagedSkus}`);
+    } else {
+      deductionReasons.push("damage deduction");
+    }
+  }
+
+  const formatReasons = (reasons: string[]): string => {
+    if (reasons.length === 0) return "";
+    if (reasons.length === 1) return reasons[0];
+    if (reasons.length === 2) return `${reasons[0]} and ${reasons[1]}`;
+    return reasons.slice(0, -1).join(", ") + ", and " + reasons[reasons.length - 1];
+  };
+
+  const summaryParts: string[] = [];
+  
+  if (returnRequest.finalRefundAmount != null) {
+    const refundText = `Customer received ${formatCurrency(returnRequest.finalRefundAmount)} refund`;
+    if (deductionReasons.length > 0) {
+      summaryParts.push(`${refundText} after deducting ${formatReasons(deductionReasons)}.`);
+    } else {
+      summaryParts.push(`${refundText} (full refund, no deductions).`);
+    }
+  }
+
+  if (returnRequest.ghlTaskedAt) {
+    summaryParts.push(`Refund tasked in GHL on ${format(new Date(returnRequest.ghlTaskedAt), 'MMM d, yyyy')}.`);
+  }
+
+  return (
+    <p className="text-sm text-muted-foreground" data-testid="text-refund-summary">
+      {summaryParts.join(" ")}
+    </p>
   );
 }

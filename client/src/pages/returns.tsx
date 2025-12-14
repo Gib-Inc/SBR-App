@@ -383,25 +383,15 @@ export default function Returns() {
             <div className="flex h-48 items-center justify-center">
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
             </div>
-          ) : !returns || returns.length === 0 ? (
-            <div className="flex h-48 flex-col items-center justify-center gap-2">
-              <Package className="h-12 w-12 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">
-                {activeTab === "live" ? "No return requests yet" : "No archived returns found"}
-              </p>
-              {activeTab === "history" && (
-                <p className="text-xs text-muted-foreground">
-                  Try adjusting the date range or check back later
-                </p>
-              )}
-            </div>
           ) : (
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-end px-4 pt-4">
-                <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-returns">
-                  {returns.length} {returns.length === 1 ? 'return' : 'returns'}
-                </Badge>
-              </div>
+              {returns && returns.length > 0 && (
+                <div className="flex items-center justify-end px-4 pt-4">
+                  <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-returns">
+                    {returns.length} {returns.length === 1 ? 'return' : 'returns'}
+                  </Badge>
+                </div>
+              )}
               <div className="overflow-auto max-h-[calc(100vh-360px)] rounded-md">
               <table className="w-full table-auto">
                 <thead className="bg-muted sticky top-0 z-10">
@@ -419,7 +409,24 @@ export default function Returns() {
                   </tr>
                 </thead>
               <tbody>
-                {returns.map((returnRequest) => (
+                {!returns || returns.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="py-16 text-center">
+                      <div className="flex flex-col items-center gap-2">
+                        <Package className="h-12 w-12 text-muted-foreground" />
+                        <p className="text-sm text-muted-foreground">
+                          {activeTab === "live" ? "No return requests yet" : "No archived returns found"}
+                        </p>
+                        {activeTab === "history" && (
+                          <p className="text-xs text-muted-foreground">
+                            Try adjusting the date range or check back later
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  returns.map((returnRequest) => (
                   <tr
                     key={returnRequest.id}
                     className="h-11 border-b hover-elevate cursor-pointer"
@@ -550,7 +557,8 @@ export default function Returns() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  ))
+                )}
               </tbody>
               </table>
               </div>

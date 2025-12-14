@@ -769,35 +769,8 @@ export default function SalesOrders() {
         </Card>
       )}
 
-      {orders.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <Package className="h-16 w-16 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">
-              {activeTab === "live" ? "No sales orders yet" : "No archived orders found"}
-            </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              {activeTab === "live" 
-                ? "Create your first sales order to get started" 
-                : "Try adjusting the date range or check back later"
-              }
-            </p>
-            {activeTab === "live" && (
-              <Button 
-                onClick={() => {
-                  form.reset();
-                  setShowNewOrderDialog(true);
-                }}
-                data-testid="button-create-first-order"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Create First Order
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
+        {orders.length > 0 && (
           <div className="flex items-center justify-end gap-4 flex-wrap">
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-orders">
@@ -818,26 +791,57 @@ export default function SalesOrders() {
               </Select>
             </div>
           </div>
+        )}
 
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full table-auto">
-              <thead className="bg-muted/50">
-                <tr className="border-b">
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Channel</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Customer</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Status</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Production</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">{activeTab === "live" ? "Expected Delivery" : "Delivery Date"}</th>
-                  <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Ship To</th>
-                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Total</th>
-                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Units</th>
-                  <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Actions</th>
+        <div className="overflow-x-auto rounded-md border">
+          <table className="w-full table-auto">
+            <thead className="bg-muted/50">
+              <tr className="border-b">
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order ID</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Channel</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Customer</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Status</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Production</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Order Date</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">{activeTab === "live" ? "Expected Delivery" : "Delivery Date"}</th>
+                <th className="px-2 py-2 text-left text-sm font-medium whitespace-nowrap">Ship To</th>
+                <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Total</th>
+                <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Units</th>
+                <th className="px-2 py-2 text-right text-sm font-medium whitespace-nowrap">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="py-16 text-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <Package className="h-16 w-16 text-muted-foreground" />
+                      <h3 className="text-lg font-medium">
+                        {activeTab === "live" ? "No sales orders yet" : "No archived orders found"}
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {activeTab === "live" 
+                          ? "Create your first sales order to get started" 
+                          : "Try adjusting the date range or check back later"
+                        }
+                      </p>
+                      {activeTab === "live" && (
+                        <Button 
+                          onClick={() => {
+                            form.reset();
+                            setShowNewOrderDialog(true);
+                          }}
+                          data-testid="button-create-first-order"
+                        >
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create First Order
+                        </Button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredOrders.map((order) => {
+              ) : (
+                filteredOrders.map((order) => {
                   const totalUnits = order.totalUnits || 0;
                   const productionSource = (order as any).productionSource || 'Pivot';
                   
@@ -1050,12 +1054,12 @@ export default function SalesOrders() {
                       </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
+                })
+              )}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
       {/* Order Detail Drawer */}
       <Sheet open={!!selectedOrderId} onOpenChange={(open) => !open && setSelectedOrderId(null)}>

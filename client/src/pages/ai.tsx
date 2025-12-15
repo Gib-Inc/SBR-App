@@ -1827,14 +1827,7 @@ function BatchTimelineModal({
                 AI Batch Decision
               </DialogTitle>
               {data && (
-                <div className="flex items-center gap-2">
-                  <Badge 
-                    variant={data.batchLog.urgencyLevel === "HIGH" ? "destructive" : data.batchLog.urgencyLevel === "MEDIUM" ? "default" : "secondary"}
-                    className="text-sm px-3 py-1"
-                    data-testid="badge-urgency-level"
-                  >
-                    {data.batchLog.urgencyLevel || "Unknown"} Priority
-                  </Badge>
+                <div className="flex items-center gap-2 mr-4">
                   <Badge variant="outline" className="text-xs gap-1">
                     <Clock className="h-3 w-3" />
                     {data.batchLog.startedAt 
@@ -1842,6 +1835,13 @@ function BatchTimelineModal({
                           month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' 
                         })
                       : "—"}
+                  </Badge>
+                  <Badge 
+                    variant={data.batchLog.urgencyLevel === "HIGH" ? "destructive" : data.batchLog.urgencyLevel === "MEDIUM" ? "default" : "secondary"}
+                    className="text-sm px-3 py-1"
+                    data-testid="badge-urgency-level"
+                  >
+                    {data.batchLog.urgencyLevel || "Unknown"} Priority
                   </Badge>
                 </div>
               )}
@@ -1893,13 +1893,30 @@ function BatchTimelineModal({
 
                 {/* Decision Summary - After metrics */}
                 <div className="px-5 py-4 border-t border-inherit">
-                  <p className="text-base leading-relaxed" data-testid="text-decision-summary">
-                    {data.batchLog.aiDecisionSummary || 
-                     `Analyzed ${data.batchLog.totalSkus || 0} products and identified ${data.batchLog.criticalItemsFound || 0} items requiring immediate attention. ${
-                       data.batchLog.orderTodayCount ? `${data.batchLog.orderTodayCount} products should be ordered today to prevent stockouts.` : 
-                       "Current inventory levels are sufficient for the near term."
-                     }`}
-                  </p>
+                  <div className="flex items-start gap-3">
+                    <p className="text-base leading-relaxed flex-1" data-testid="text-decision-summary">
+                      {data.batchLog.aiDecisionSummary || 
+                       `Analyzed ${data.batchLog.totalSkus || 0} products and identified ${data.batchLog.criticalItemsFound || 0} items requiring immediate attention. ${
+                         data.batchLog.orderTodayCount ? `${data.batchLog.orderTodayCount} products should be ordered today to prevent stockouts.` : 
+                         "Current inventory levels are sufficient for the near term."
+                       }`}
+                    </p>
+                    {(data.batchLog.criticalItemsFound ?? 0) > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-shrink-0"
+                        onClick={() => {
+                          onClose();
+                          window.location.href = "/products?tab=stock-inventory";
+                        }}
+                        data-testid="button-view-critical-skus"
+                      >
+                        <AlertTriangle className="h-4 w-4 mr-2" />
+                        View Critical SKUs
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Metadata Chips - LLM info only (timestamp moved to header) */}
@@ -1925,33 +1942,19 @@ function BatchTimelineModal({
                 </div>
 
                 {/* Quick Action Buttons */}
-                {(data.batchLog.criticalItemsFound ?? 0) > 0 && (
+                {(data.batchLog.criticalItemsFound ?? 0) > 0 && data.batchLog.primarySupplierId && (
                   <div className="px-5 py-4 border-t border-inherit bg-background/30 flex flex-wrap items-center justify-end gap-3">
                     <Button
-                      variant="outline"
                       size="sm"
                       onClick={() => {
                         onClose();
-                        window.location.href = "/products?tab=stock-inventory";
+                        window.location.href = `/purchase-orders?create=true&supplier=${data.batchLog.primarySupplierId}`;
                       }}
-                      data-testid="button-view-critical-skus"
+                      data-testid="button-create-po"
                     >
-                      <AlertTriangle className="h-4 w-4 mr-2" />
-                      View Critical SKUs
+                      <Send className="h-4 w-4 mr-2" />
+                      Create Purchase Order
                     </Button>
-                    {data.batchLog.primarySupplierId && (
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          onClose();
-                          window.location.href = `/purchase-orders?create=true&supplier=${data.batchLog.primarySupplierId}`;
-                        }}
-                        data-testid="button-create-po"
-                      >
-                        <Send className="h-4 w-4 mr-2" />
-                        Create Purchase Order
-                      </Button>
-                    )}
                   </div>
                 )}
               </div>

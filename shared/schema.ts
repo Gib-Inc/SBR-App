@@ -826,6 +826,8 @@ export const aiRecommendations = pgTable("ai_recommendations", {
   // Order timing decision from batch AI runs
   orderTiming: text("order_timing"), // 'ORDER_TODAY' | 'SAFE_UNTIL_TOMORROW' - LLM decides if order is urgent
   batchLogId: varchar("batch_log_id"), // Reference to the batch run that created/updated this
+  // LLM-generated notes for human review (edge cases, special considerations)
+  notesForHuman: text("notes_for_human"),
 }, (table) => ({
   itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
   createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),

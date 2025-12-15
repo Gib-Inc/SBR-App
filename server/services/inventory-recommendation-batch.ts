@@ -17,6 +17,7 @@ import type { Item, Settings, InsertAIRecommendation, AIBatchLog, InsertAIBatchL
 import { ghlOpportunitiesService } from "./ghl-opportunities-service";
 import { GHL_CONFIG } from "../config/ghl-config";
 import { wsLogsService } from "./websocket-logs";
+import { buildReportContext, formatReportContextForPrompt, type ReportContext } from "./report-context-builder";
 
 export type BatchRunReason = "SCHEDULED_10AM" | "SCHEDULED_3PM" | "CRITICAL_TRIGGER" | "MANUAL";
 export type OrderTiming = "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW";
@@ -67,6 +68,7 @@ interface LLMRecommendation {
   daysUntilStockout: number;
   orderTiming: OrderTiming;
   reasoning: string;
+  notesForHuman?: string;
 }
 
 // Debounce tracking for critical triggers
@@ -226,6 +228,7 @@ export class InventoryRecommendationBatch {
           adjustedVelocity: skuContext ? skuContext.dailyVelocity * (skuContext.adMultiplier || 1.0) : null,
           sourceSignals: sourceSignals,
           contextSnapshot: skuContext ? { ...skuContext, batchReason: params.reason } : null,
+          notesForHuman: rec.notesForHuman || null,
         });
 
         // Auto-create draft PO for critical items with ORDER_TODAY timing
@@ -458,15 +461,24 @@ export class InventoryRecommendationBatch {
       return this.generateDeterministicRecommendations(contexts);
     }
 
-    // Build the prompt
-    const prompt = this.buildBatchPrompt(contexts);
+    // Build report context for business-informed decisions
+    let reportContext: ReportContext | undefined;
+    try {
+      reportContext = await buildReportContext();
+      console.log("[AI Batch] Built report context with sales, PO, and QuickBooks data");
+    } catch (reportError) {
+      console.warn("[AI Batch] Failed to build report context, proceeding without:", reportError);
+    }
+
+    // Build the prompt with report context
+    const prompt = this.buildBatchPrompt(contexts, reportContext);
 
     try {
       const response = await LLMService.askLLM({
         provider,
         apiKey,
         taskType: "order_recommendation",
-        payload: { prompt, contexts },
+        payload: { prompt, contexts, reportContext },
       });
 
       if (!response.success || !response.data) {
@@ -495,19 +507,28 @@ export class InventoryRecommendationBatch {
   }
 
   /**
-   * Build the prompt for the LLM with all SKU contexts
+   * Build the prompt for the LLM with all SKU contexts and business report context
    */
-  private buildBatchPrompt(contexts: SKUContext[]): string {
+  private buildBatchPrompt(contexts: SKUContext[], reportContext?: ReportContext): string {
     const today = new Date().toISOString().split('T')[0];
     const isWeekend = [0, 6].includes(new Date().getDay());
     const nextBusinessDay = isWeekend ? "Monday" : "tomorrow";
+    
+    const businessContextSection = reportContext 
+      ? formatReportContextForPrompt(reportContext)
+      : '';
 
-    return `You are an inventory management AI assistant. Today is ${today}.
+    return `You are an inventory management AI assistant for a manufacturing company. Today is ${today}.
 
-You are analyzing inventory data for ${contexts.length} SKUs. For EACH SKU, you must:
-1. Assess the risk level based on days until stockout vs lead time and safety stock needs
+${businessContextSection}
+
+=== YOUR TASK ===
+
+Analyze inventory data for ${contexts.length} component SKUs. For EACH SKU:
+1. Assess risk level based on days until stockout vs lead time and safety stock
 2. Decide if a purchase order is needed
 3. Determine ORDER TIMING: Must we order TODAY, or can we safely wait until ${nextBusinessDay}?
+4. Consider business context (sales trends, pending POs, historical demand)
 
 RISK LEVEL DEFINITIONS:
 - NEED_ORDER: Days until stockout <= lead time days (immediate action required)
@@ -520,17 +541,20 @@ ORDER TIMING RULES:
 - ORDER_TODAY: Required when daysUntilStockout - leadTimeDays <= 3 (less than 3 days buffer)
 - SAFE_UNTIL_TOMORROW: Can wait if daysUntilStockout - leadTimeDays > 3
 
-For each SKU, consider:
+DECISION FACTORS:
 - Current available stock and daily sales velocity
 - Supplier lead time
-- Inbound POs that will replenish stock
+- Inbound POs that will replenish stock (check if already covered)
 - Safety stock requirements
 - Return rate impact on available inventory
+- Recent sales trends (is demand increasing/decreasing?)
+- Historical seasonality from QuickBooks data
 
-SKU DATA:
+=== SKU DATA ===
 ${JSON.stringify(contexts, null, 2)}
 
-Respond with a JSON array of recommendations in this exact format:
+=== RESPONSE FORMAT ===
+Respond with JSON in this exact format:
 {
   "recommendations": [
     {
@@ -541,7 +565,8 @@ Respond with a JSON array of recommendations in this exact format:
       "recommendedQty": 100,
       "daysUntilStockout": 12,
       "orderTiming": "ORDER_TODAY",
-      "reasoning": "Brief explanation referencing key numbers"
+      "reasoning": "Brief explanation referencing key metrics",
+      "notesForHuman": "Optional context for human reviewer about edge cases or special considerations"
     }
   ]
 }`;
@@ -562,6 +587,7 @@ Respond with a JSON array of recommendations in this exact format:
       daysUntilStockout: typeof rec.daysUntilStockout === "number" ? rec.daysUntilStockout : (context?.daysUntilStockout || 999),
       orderTiming: this.normalizeOrderTiming(rec.orderTiming),
       reasoning: rec.reasoning || rec.rationale || "No reasoning provided",
+      notesForHuman: rec.notesForHuman || undefined,
     };
   }
 

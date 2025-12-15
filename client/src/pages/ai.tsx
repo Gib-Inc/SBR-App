@@ -1926,22 +1926,6 @@ function BatchTimelineModal({
                   </div>
                 </div>
 
-                {/* Metadata Chips - LLM info only (timestamp moved to header) */}
-                <div className="px-5 py-3 border-t border-inherit flex flex-wrap items-center gap-2">
-                  {data.batchLog.llmModel && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <Brain className="h-3 w-3" />
-                      {data.batchLog.llmModel}
-                    </Badge>
-                  )}
-                  {data.batchLog.supplierName && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <Building className="h-3 w-3" />
-                      {data.batchLog.supplierName}
-                    </Badge>
-                  )}
-                </div>
-
                 {/* Quick Action Buttons */}
                 {(data.batchLog.criticalItemsFound ?? 0) > 0 && data.batchLog.primarySupplierId && (
                   <div className="px-5 py-4 border-t border-inherit bg-background/30 flex flex-wrap items-center justify-end gap-3">

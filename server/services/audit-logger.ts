@@ -1,5 +1,6 @@
 import { storage } from "../storage";
 import type { InsertAuditLog, AuditLog } from "@shared/schema";
+import { wsLogsService } from "./websocket-logs";
 
 export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'META_ADS' | 'GOOGLE_ADS' | 'SYSTEM' | 'USER';
 export type AuditStatus = 'INFO' | 'WARNING' | 'ERROR';
@@ -130,7 +131,9 @@ class AuditLoggerService {
       errorMessage: params.status === 'ERROR' ? params.description : null,
     };
 
-    return await storage.createAuditLog(log);
+    const createdLog = await storage.createAuditLog(log);
+    wsLogsService.broadcastAuditLog(createdLog);
+    return createdLog;
   }
 
   async logPOCreated(params: {

@@ -1,6 +1,7 @@
 import { storage } from "../storage";
 import type { InsertSystemLog } from "@shared/schema";
 import { SystemLogSeverity, SystemLogType, SystemLogEntityType } from "@shared/schema";
+import { wsLogsService } from "./websocket-logs";
 
 interface LogEventParams {
   type: string;
@@ -25,7 +26,9 @@ class LogService {
         details: params.details || null,
       };
 
-      await storage.createSystemLog(logEntry);
+      const createdLog = await storage.createSystemLog(logEntry);
+      
+      wsLogsService.broadcastSystemLog(createdLog);
       
       if (params.severity === SystemLogSeverity.ERROR) {
         console.error(`[SystemLog] ${params.type}: ${params.message}`);

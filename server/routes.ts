@@ -16564,6 +16564,13 @@ Generate only the email body text, no subject line.`;
 
   const httpServer = createServer(app);
   
+  // Initialize WebSocket for real-time logs
+  import("./services/websocket-logs").then(({ wsLogsService }) => {
+    wsLogsService.initialize(httpServer);
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize WebSocket logs service:", error);
+  });
+  
   // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time
   import("./services/ai-batch-scheduler").then(({ initializeScheduler }) => {
     initializeScheduler();

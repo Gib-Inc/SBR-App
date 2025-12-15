@@ -16,6 +16,7 @@ import { LLMService, type LLMProvider } from "./llm";
 import type { Item, Settings, InsertAIRecommendation, AIBatchLog, InsertAIBatchLog } from "@shared/schema";
 import { ghlOpportunitiesService } from "./ghl-opportunities-service";
 import { GHL_CONFIG } from "../config/ghl-config";
+import { wsLogsService } from "./websocket-logs";
 
 export type BatchRunReason = "SCHEDULED_10AM" | "SCHEDULED_3PM" | "CRITICAL_TRIGGER" | "MANUAL";
 export type OrderTiming = "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW";
@@ -109,6 +110,7 @@ export class InventoryRecommendationBatch {
         status: "RUNNING",
         startedAt: new Date(),
       });
+      wsLogsService.broadcastBatchLog(batchLog);
 
       console.log(`[AI Batch] Starting batch run: ${params.reason}, log ID: ${batchLog.id}`);
 
@@ -304,7 +306,7 @@ export class InventoryRecommendationBatch {
       const llmResponseTimeMs = Date.now() - startTime;
 
       // Update batch log with results
-      await this.storage.updateAIBatchLog(batchLog.id, {
+      const updatedLog = await this.storage.updateAIBatchLog(batchLog.id, {
         status: "SUCCESS",
         finishedAt: new Date(),
         processedSkus: recommendations.length,
@@ -314,6 +316,7 @@ export class InventoryRecommendationBatch {
         llmProvider: llmProvider,
         llmResponseTimeMs,
       });
+      if (updatedLog) wsLogsService.broadcastBatchLog(updatedLog);
 
       console.log(`[AI Batch] Completed: ${recommendations.length} SKUs, ${criticalItemsFound} critical, ${orderTodayCount} order today, ${llmResponseTimeMs}ms`);
 
@@ -332,12 +335,13 @@ export class InventoryRecommendationBatch {
       console.error("[AI Batch] Error:", error);
 
       if (batchLog) {
-        await this.storage.updateAIBatchLog(batchLog.id, {
+        const failedLog = await this.storage.updateAIBatchLog(batchLog.id, {
           status: "FAILED",
           finishedAt: new Date(),
           errorMessage: error.message || "Unknown error",
           llmResponseTimeMs: Date.now() - startTime,
         });
+        if (failedLog) wsLogsService.broadcastBatchLog(failedLog);
       }
 
       batchRunInProgress = false;

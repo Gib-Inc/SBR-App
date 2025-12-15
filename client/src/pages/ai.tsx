@@ -3336,6 +3336,7 @@ function SyncedRecordsTable({ records }: { records: SyncedRecord[] }) {
 function LogsTab() {
   const { toast } = useToast();
   const [logSubTab, setLogSubTab] = useState<"audit" | "system" | "scheduler">("audit");
+  const [wsConnected, setWsConnected] = useState(false);
   
   // Audit logs state
   const [page, setPage] = useState(1);
@@ -3356,6 +3357,55 @@ function LogsTab() {
   const [selectedBatchLog, setSelectedBatchLog] = useState<AIBatchLogEntry | null>(null);
   
   const pageSize = 25;
+  
+  // WebSocket connection for real-time log updates
+  useEffect(() => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    
+    const connect = () => {
+      ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        setWsConnected(true);
+        console.log("[WebSocket] Connected to logs stream");
+      };
+      
+      ws.onclose = () => {
+        setWsConnected(false);
+        console.log("[WebSocket] Disconnected, reconnecting in 3s...");
+        reconnectTimeout = setTimeout(connect, 3000);
+      };
+      
+      ws.onerror = (error) => {
+        console.error("[WebSocket] Error:", error);
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "audit") {
+            queryClient.invalidateQueries({ queryKey: ["/api/ai/logs"] });
+          } else if (message.type === "system") {
+            queryClient.invalidateQueries({ queryKey: ["/api/system-logs"] });
+          } else if (message.type === "batch") {
+            queryClient.invalidateQueries({ queryKey: ["/api/ai-batch-logs"] });
+          }
+        } catch (err) {
+          console.error("[WebSocket] Failed to parse message:", err);
+        }
+      };
+    };
+    
+    connect();
+    
+    return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) ws.close();
+    };
+  }, []);
   
   // Build query params for audit logs
   const buildQueryParams = () => {
@@ -3546,6 +3596,12 @@ function LogsTab() {
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
                 Developer Logs
+                {wsConnected && (
+                  <Badge variant="outline" className="ml-2 text-xs bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5 animate-pulse" />
+                    Live
+                  </Badge>
+                )}
               </CardTitle>
               <CardDescription className="mt-2">
                 Comprehensive logging for debugging, monitoring, and auditing system activity

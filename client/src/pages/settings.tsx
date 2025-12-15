@@ -114,7 +114,7 @@ function LLMSettings() {
   const { toast } = useToast();
   const [llmProvider, setLlmProvider] = useState("chatgpt");
   const [llmApiKey, setLlmApiKey] = useState("");
-  const [llmModel, setLlmModel] = useState("gpt-4");
+  const [llmModel, setLlmModel] = useState("gpt-5");
   const [llmTemperature, setLlmTemperature] = useState(0.7);
   const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
   const [customEndpoint, setCustomEndpoint] = useState("");
@@ -125,11 +125,11 @@ function LLMSettings() {
   // Model presets for each provider
   const modelPresets: Record<string, { value: string; label: string }[]> = {
     chatgpt: [
-      { value: "gpt-4", label: "GPT-4 (Standard)" },
-      { value: "gpt-4-turbo", label: "GPT-4 Turbo (Faster)" },
-      { value: "gpt-4o", label: "GPT-4o (Latest)" },
-      { value: "gpt-4o-mini", label: "GPT-4o Mini (Cost-effective)" },
-      { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo (Budget)" },
+      { value: "gpt-5", label: "GPT-5 (Standard)" },
+      { value: "gpt-5.1", label: "GPT-5.1 (Recommended)" },
+      { value: "gpt-5.2", label: "GPT-5.2 (Latest)" },
+      { value: "gpt-4o", label: "GPT-4o (Legacy)" },
+      { value: "gpt-4o-mini", label: "GPT-4o Mini (Budget)" },
     ],
     claude: [
       { value: "claude-3-opus", label: "Claude 3 Opus (Most capable)" },
@@ -156,7 +156,7 @@ function LLMSettings() {
       setLlmProvider(settings.llmProvider || 'chatgpt');
       setHasApiKey(!!(settings.llmApiKey && settings.llmApiKey.trim()));
       setLlmApiKey('');
-      setLlmModel(settings.llmModel || 'gpt-4');
+      setLlmModel(settings.llmModel || 'gpt-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
       setCustomEndpoint(settings.llmCustomEndpoint || '');

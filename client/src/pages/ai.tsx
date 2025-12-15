@@ -1902,31 +1902,32 @@ function BatchTimelineModal({
                        }`}
                     </p>
                     {(data.batchLog.criticalItemsFound ?? 0) > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => {
-                          onClose();
-                          window.location.href = "/products?tab=stock-inventory";
-                        }}
-                        data-testid="button-view-critical-skus"
-                      >
-                        <AlertTriangle className="h-4 w-4 mr-2" />
-                        View Critical SKUs
-                      </Button>
+                      <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            onClose();
+                            window.location.href = "/products?tab=stock-inventory";
+                          }}
+                          data-testid="button-view-critical-skus"
+                        >
+                          <AlertTriangle className="h-4 w-4 mr-2" />
+                          View Critical SKUs
+                        </Button>
+                        {data.batchLog.llmResponseTimeMs && (
+                          <Badge variant="outline" className="text-xs gap-1">
+                            <Zap className="h-3 w-3" />
+                            {(data.batchLog.llmResponseTimeMs / 1000).toFixed(1)}s response
+                          </Badge>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
 
                 {/* Metadata Chips - LLM info only (timestamp moved to header) */}
                 <div className="px-5 py-3 border-t border-inherit flex flex-wrap items-center gap-2">
-                  {data.batchLog.llmResponseTimeMs && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <Zap className="h-3 w-3" />
-                      {(data.batchLog.llmResponseTimeMs / 1000).toFixed(1)}s response
-                    </Badge>
-                  )}
                   {data.batchLog.llmModel && (
                     <Badge variant="outline" className="text-xs gap-1">
                       <Brain className="h-3 w-3" />

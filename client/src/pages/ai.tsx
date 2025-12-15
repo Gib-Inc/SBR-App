@@ -750,12 +750,6 @@ function RulesTab() {
     minOrderQuantity: 1,
   });
   
-  // LLM Features state
-  const [enableOrderRecommendations, setEnableOrderRecommendations] = useState(false);
-  const [enableSupplierRanking, setEnableSupplierRanking] = useState(false);
-  const [enableForecasting, setEnableForecasting] = useState(false);
-  const [enableVisionCapture, setEnableVisionCapture] = useState(false);
-  
   // AI Agent auto-send settings
   const [autoSendCriticalPos, setAutoSendCriticalPos] = useState(false);
   const [criticalRescueDays, setCriticalRescueDays] = useState(7);
@@ -778,16 +772,6 @@ function RulesTab() {
     }
   }, [rules]);
   
-  // Sync LLM features with settings
-  useEffect(() => {
-    if (settingsData) {
-      setEnableOrderRecommendations(settingsData.enableLlmOrderRecommendations || false);
-      setEnableSupplierRanking(settingsData.enableLlmSupplierRanking || false);
-      setEnableForecasting(settingsData.enableLlmForecasting || false);
-      setEnableVisionCapture(settingsData.enableVisionCapture || false);
-    }
-  }, [settingsData]);
-  
   // Sync AI Agent settings
   useEffect(() => {
     if (aiAgentSettings) {
@@ -807,17 +791,15 @@ function RulesTab() {
     }
   }, [aiAgentSettings]);
   
-  // Save mutation for rules (also saves AI features and agent settings)
+  // Save mutation for rules and agent settings
   const saveMutation = useMutation({
     mutationFn: async (data: { 
       rules: Partial<AIRules>; 
-      features: { enableLlmOrderRecommendations: boolean; enableLlmSupplierRanking: boolean; enableLlmForecasting: boolean; enableVisionCapture: boolean };
       agentSettings: { autoSendCriticalPos: boolean; criticalRescueDays: number; shopifyTwoWaySync: boolean; shopifySafetyBuffer: number; shopifyInventorySunsetDate: string | null; amazonTwoWaySync: boolean; amazonSafetyBuffer: number; extensivTwoWaySync: boolean; pivotLowDaysThreshold: number; hildaleHighDaysThreshold: number; quickbooksIncludeHistory: boolean; quickbooksHistoryMonths: number; ordersToFetch: number };
     }) => {
-      // Save rules, features, and agent settings in parallel
+      // Save rules and agent settings in parallel
       await Promise.all([
         apiRequest("PATCH", "/api/ai/rules", data.rules),
-        apiRequest("PATCH", "/api/settings", data.features),
         apiRequest("PATCH", "/api/ai-agent-settings", data.agentSettings),
       ]);
     },
@@ -825,11 +807,10 @@ function RulesTab() {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/rules"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/insights"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai/at-risk"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ai-agent-settings"] });
       toast({
         title: "Rules Updated",
-        description: "AI decision rules, features, and agent settings have been saved.",
+        description: "AI decision rules and agent settings have been saved.",
       });
     },
     onError: (error: any) => {
@@ -844,12 +825,6 @@ function RulesTab() {
   const handleSave = () => {
     saveMutation.mutate({
       rules: formValues,
-      features: {
-        enableLlmOrderRecommendations: enableOrderRecommendations,
-        enableLlmSupplierRanking: enableSupplierRanking,
-        enableLlmForecasting: enableForecasting,
-        enableVisionCapture: enableVisionCapture,
-      },
       agentSettings: {
         autoSendCriticalPos,
         criticalRescueDays,
@@ -1079,111 +1054,13 @@ function RulesTab() {
             </div>
           </div>
           
-          {/* AI Features */}
-          <div className="space-y-4">
-            <h3 className="font-semibold flex items-center gap-2">
-              <Zap className="h-4 w-4" />
-              AI Features
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Label htmlFor="enable-order-recommendations">Order Recommendations</Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-order-recommendations-info" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p>When enabled, AI analyzes your inventory levels and sales velocity to suggest when and how much to reorder for each item.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Switch
-                    id="enable-order-recommendations"
-                    checked={enableOrderRecommendations}
-                    onCheckedChange={setEnableOrderRecommendations}
-                    data-testid="switch-order-recommendations"
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Label htmlFor="enable-supplier-ranking" className="text-muted-foreground">Supplier Ranking</Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-supplier-ranking-info" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p>AI will analyze supplier performance (pricing, lead times, reliability) and rank them to help you choose the best supplier for each order.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <Badge variant="secondary" className="text-xs">V2</Badge>
-                  </div>
-                  <Switch
-                    id="enable-supplier-ranking"
-                    checked={false}
-                    disabled
-                    data-testid="switch-supplier-ranking"
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Label htmlFor="enable-forecasting">Demand Forecasting</Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-forecasting-info" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p>Uses machine learning to predict future demand based on historical sales patterns, seasonality, and trends.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Switch
-                    id="enable-forecasting"
-                    checked={enableForecasting}
-                    onCheckedChange={setEnableForecasting}
-                    data-testid="switch-forecasting"
-                  />
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Label htmlFor="enable-vision-capture">Vision Capture</Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-vision-capture-info" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs">
-                        <p>Use your device camera to scan and identify inventory items. AI will recognize products and help you add them to your inventory quickly.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <Switch
-                    id="enable-vision-capture"
-                    checked={enableVisionCapture}
-                    onCheckedChange={setEnableVisionCapture}
-                    data-testid="switch-vision-capture"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-          
           {/* Supplier & Lead Time */}
           <div className="space-y-4">
             <h3 className="font-semibold flex items-center gap-2">
               <Package className="h-4 w-4" />
               Supplier & Lead Time
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
                   <Label htmlFor="default-lead-time">Default Lead Time</Label>
@@ -1233,32 +1110,6 @@ function RulesTab() {
                     data-testid="input-dispute-penalty"
                   />
                   <span className="text-sm text-muted-foreground whitespace-nowrap">days</span>
-                </div>
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <Label htmlFor="min-order-qty">Min Order Quantity</Label>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-min-order-qty-info" />
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs">
-                      <p>The smallest quantity the AI will ever recommend ordering. Even if you only need 2 units, recommendations will be at least this amount.</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="min-order-qty"
-                    type="number"
-                    min={1}
-                    max={1000}
-                    value={formValues.minOrderQuantity}
-                    onChange={(e) => setFormValues(prev => ({ ...prev, minOrderQuantity: parseInt(e.target.value) || 1 }))}
-                    data-testid="input-min-order-qty"
-                  />
-                  <span className="text-sm text-muted-foreground whitespace-nowrap">units</span>
                 </div>
               </div>
             </div>

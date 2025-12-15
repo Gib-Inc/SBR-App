@@ -3336,7 +3336,6 @@ function SyncedRecordsTable({ records }: { records: SyncedRecord[] }) {
 function LogsTab() {
   const { toast } = useToast();
   const [logSubTab, setLogSubTab] = useState<"audit" | "system" | "scheduler">("audit");
-  const [autoRefresh, setAutoRefresh] = useState(false);
   
   // Audit logs state
   const [page, setPage] = useState(1);
@@ -3381,7 +3380,6 @@ function LogsTab() {
       if (!response.ok) throw new Error("Failed to fetch logs");
       return response.json();
     },
-    refetchInterval: autoRefresh ? 10000 : false,
   });
   
   // System logs query
@@ -3397,13 +3395,11 @@ function LogsTab() {
       if (!response.ok) throw new Error("Failed to fetch system logs");
       return response.json();
     },
-    refetchInterval: autoRefresh ? 10000 : false,
   });
   
   // AI batch logs query
   const { data: batchLogsData, isLoading: batchLoading, refetch: refetchBatchLogs, isFetching: batchFetching } = useQuery<AIBatchLogEntry[]>({
     queryKey: ["/api/ai-batch-logs"],
-    refetchInterval: autoRefresh ? 10000 : false,
   });
   
   const eventTypes = [
@@ -3544,29 +3540,18 @@ function LogsTab() {
   return (
     <div className="space-y-4">
       <Card className="mt-8">
-        <CardHeader>
+        <CardHeader className="pb-2">
           <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div>
+            <div className="space-y-1.5">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
                 Developer Logs
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="mt-2">
                 Comprehensive logging for debugging, monitoring, and auditing system activity
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-lg">
-                <Switch
-                  id="auto-refresh"
-                  checked={autoRefresh}
-                  onCheckedChange={setAutoRefresh}
-                  data-testid="switch-auto-refresh"
-                />
-                <Label htmlFor="auto-refresh" className="text-sm cursor-pointer">
-                  Auto-refresh (10s)
-                </Label>
-              </div>
               <Button
                 size="sm"
                 variant="outline"
@@ -3694,7 +3679,7 @@ function LogsTab() {
                   {/* Audit Logs Table */}
                   <div className="rounded-md border overflow-auto max-h-[500px]">
                     <table className="w-full table-auto text-sm">
-                      <thead className="bg-muted/50 sticky top-0 z-10">
+                      <thead className="bg-muted sticky top-0 z-10">
                         <tr>
                           <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
                           <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Event</th>
@@ -3836,7 +3821,7 @@ function LogsTab() {
               ) : (
                 <div className="rounded-md border overflow-auto max-h-[500px]">
                   <table className="w-full table-auto text-sm">
-                    <thead className="bg-muted/50 sticky top-0 z-10">
+                    <thead className="bg-muted sticky top-0 z-10">
                       <tr>
                         <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
                         <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Severity</th>
@@ -3913,7 +3898,7 @@ function LogsTab() {
               ) : (
                 <div className="rounded-md border overflow-auto max-h-[500px]">
                   <table className="w-full table-auto text-sm">
-                    <thead className="bg-muted/50 sticky top-0 z-10">
+                    <thead className="bg-muted sticky top-0 z-10">
                       <tr>
                         <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Started</th>
                         <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Duration</th>

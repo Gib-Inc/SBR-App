@@ -1874,14 +1874,6 @@ export default function BOM() {
         <div className="flex gap-2">
           <Button
             variant="outline"
-            onClick={() => setIsSkuMappingWizardOpen(true)}
-            data-testid="button-sku-mapping-wizard"
-          >
-            <Link2 className="mr-2 h-4 w-4" />
-            SKU Mapping
-          </Button>
-          <Button
-            variant="outline"
             onClick={() => setIsImportDialogOpen(true)}
             data-testid="button-import-products"
           >

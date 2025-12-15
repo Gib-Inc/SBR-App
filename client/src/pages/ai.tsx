@@ -1947,198 +1947,6 @@ function BatchTimelineModal({
 
             {/* Collapsible Report Sections */}
             <div className="px-6 pb-4 space-y-3">
-              {/* SKU Report Section */}
-              {data.recommendations && data.recommendations.length > 0 && (
-                <details className="group border rounded-lg" open data-testid="section-sku-report">
-                  <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
-                    <h4 className="text-sm font-medium flex items-center gap-2">
-                      <Package className="h-4 w-4" />
-                      SKU Report ({data.recommendations.length})
-                    </h4>
-                    <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-                  </summary>
-                  <div className="px-4 pb-4">
-                
-                <div className="space-y-2">
-                  {data.recommendations.map((rec) => (
-                    <details 
-                      key={rec.id} 
-                      className="group border rounded-lg overflow-hidden"
-                      data-testid={`sku-context-${rec.sku}`}
-                    >
-                      <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/30">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <Badge 
-                            variant={rec.riskLevel === "HIGH" ? "destructive" : rec.riskLevel === "MEDIUM" ? "default" : "secondary"}
-                            className="flex-shrink-0"
-                          >
-                            {rec.riskLevel}
-                          </Badge>
-                          <span className="font-mono text-sm font-medium truncate" data-testid={`text-sku-${rec.sku}`}>
-                            {rec.sku}
-                          </span>
-                          <span className="text-sm text-muted-foreground truncate hidden sm:inline">
-                            {rec.productName}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3 flex-shrink-0">
-                          {rec.orderTiming && (
-                            <Badge 
-                              variant={rec.orderTiming === "ORDER_TODAY" ? "destructive" : "outline"}
-                              className="text-xs"
-                            >
-                              {rec.orderTiming === "ORDER_TODAY" ? "Order Today" : "Safe Tomorrow"}
-                            </Badge>
-                          )}
-                          {rec.recommendedQty && (
-                            <span className="text-sm font-medium">
-                              Qty: {rec.recommendedQty}
-                            </span>
-                          )}
-                          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-                        </div>
-                      </summary>
-                      
-                      <div className="px-4 py-4 bg-background border-t">
-                        {/* Reason Summary */}
-                        {rec.reasonSummary && (
-                          <p className="text-sm mb-4 text-muted-foreground" data-testid={`text-reason-${rec.sku}`}>
-                            {rec.reasonSummary}
-                          </p>
-                        )}
-                        
-                        {/* Context Snapshot Grid */}
-                        {rec.contextSnapshot && (
-                          <div className="space-y-3">
-                            <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                              Input Data for LLM
-                            </h5>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Hildale Qty</div>
-                                <div className="font-medium" data-testid={`metric-hildale-${rec.sku}`}>
-                                  {rec.contextSnapshot.hildaleQty ?? 0}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Pivot Qty</div>
-                                <div className="font-medium" data-testid={`metric-pivot-${rec.sku}`}>
-                                  {rec.contextSnapshot.pivotQty ?? 0}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Available</div>
-                                <div className="font-medium" data-testid={`metric-available-${rec.sku}`}>
-                                  {rec.contextSnapshot.availableForSale ?? 0}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Daily Velocity</div>
-                                <div className="font-medium" data-testid={`metric-velocity-${rec.sku}`}>
-                                  {rec.contextSnapshot.dailyVelocity?.toFixed(2) ?? "0.00"}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Days to Stockout</div>
-                                <div className={`font-medium ${(rec.contextSnapshot.daysUntilStockout ?? 999) <= 7 ? "text-red-600" : ""}`} data-testid={`metric-stockout-${rec.sku}`}>
-                                  {rec.contextSnapshot.daysUntilStockout ?? "∞"}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Lead Time</div>
-                                <div className="font-medium" data-testid={`metric-leadtime-${rec.sku}`}>
-                                  {rec.contextSnapshot.leadTimeDays ?? 0}d
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Inbound PO</div>
-                                <div className="font-medium" data-testid={`metric-inbound-${rec.sku}`}>
-                                  {rec.contextSnapshot.inboundPO ?? 0}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Backorders</div>
-                                <div className="font-medium" data-testid={`metric-backorders-${rec.sku}`}>
-                                  {rec.contextSnapshot.backorders ?? 0}
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Return Rate</div>
-                                <div className="font-medium" data-testid={`metric-returnrate-${rec.sku}`}>
-                                  {((rec.contextSnapshot.returnRate ?? 0) * 100).toFixed(1)}%
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Ad Multiplier</div>
-                                <div className="font-medium" data-testid={`metric-admultiplier-${rec.sku}`}>
-                                  {rec.contextSnapshot.adMultiplier?.toFixed(2) ?? "1.00"}x
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Supplier Score</div>
-                                <div className="font-medium" data-testid={`metric-supplierscore-${rec.sku}`}>
-                                  {rec.contextSnapshot.supplierScore ?? 0}%
-                                </div>
-                              </div>
-                              <div className="p-2 bg-muted/50 rounded-md">
-                                <div className="text-xs text-muted-foreground">Safety Stock</div>
-                                <div className="font-medium" data-testid={`metric-safetystock-${rec.sku}`}>
-                                  {rec.contextSnapshot.safetyStockDays ?? 0}d
-                                </div>
-                              </div>
-                            </div>
-                            
-                            {/* Velocity Adjustment Details */}
-                            {(rec.baseVelocity || rec.adjustedVelocity) && (
-                              <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-4 text-sm">
-                                <div className="flex items-center gap-2">
-                                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                                  <span className="text-muted-foreground">Base Velocity:</span>
-                                  <span className="font-medium">{rec.baseVelocity?.toFixed(2) ?? "0.00"}/day</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <Sparkles className="h-4 w-4 text-primary" />
-                                  <span className="text-muted-foreground">Adjusted:</span>
-                                  <span className="font-medium">{rec.adjustedVelocity?.toFixed(2) ?? "0.00"}/day</span>
-                                </div>
-                                {rec.adMultiplier && rec.adMultiplier !== 1 && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {rec.adMultiplier.toFixed(2)}x ad boost
-                                  </Badge>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {/* Source Signals if available */}
-                        {rec.sourceSignals && typeof rec.sourceSignals === 'object' && Object.keys(rec.sourceSignals).length > 0 && (
-                          <div className="mt-3 pt-3 border-t">
-                            <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                              Source Signals
-                            </h5>
-                            <div className="text-xs font-mono bg-muted/50 p-2 rounded-md overflow-x-auto">
-                              <pre className="whitespace-pre-wrap break-all">
-                                {JSON.stringify(rec.sourceSignals, null, 2)}
-                              </pre>
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* Fallback when no context data is available */}
-                        {!rec.contextSnapshot && !rec.reasonSummary && (!rec.sourceSignals || Object.keys(rec.sourceSignals || {}).length === 0) && (
-                          <p className="text-sm text-muted-foreground italic">
-                            No detailed context data available for this recommendation.
-                          </p>
-                        )}
-                      </div>
-                    </details>
-                  ))}
-                </div>
-                  </div>
-                </details>
-              )}
-
               {/* Sales Report Section - Current Sales Data */}
               <details className="group border rounded-lg" data-testid="section-sales-report">
                 <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
@@ -2272,6 +2080,108 @@ function BatchTimelineModal({
                   )}
                 </div>
               </details>
+
+              {/* Inventory Report Section - Pivot & Hildale Qty by SKU */}
+              {data.recommendations && data.recommendations.length > 0 && (
+                <details className="group border rounded-lg" data-testid="section-inventory-report">
+                  <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
+                    <h4 className="text-sm font-medium flex items-center gap-2">
+                      <Database className="h-4 w-4" />
+                      Inventory Report
+                      <Badge variant="secondary" className="text-xs ml-2">
+                        {data.recommendations.length} SKUs
+                      </Badge>
+                    </h4>
+                    <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="px-4 py-4">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-32">SKU</TableHead>
+                          <TableHead className="text-right">Pivot Qty</TableHead>
+                          <TableHead className="text-right">Hildale Qty</TableHead>
+                          <TableHead className="text-right">Available</TableHead>
+                          <TableHead className="text-right">Days to Stockout</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {data.recommendations.map((rec) => (
+                          <TableRow key={rec.id} data-testid={`inventory-row-${rec.sku}`}>
+                            <TableCell className="font-mono text-sm">{rec.sku}</TableCell>
+                            <TableCell className="text-right">{rec.contextSnapshot?.pivotQty ?? 0}</TableCell>
+                            <TableCell className="text-right">{rec.contextSnapshot?.hildaleQty ?? 0}</TableCell>
+                            <TableCell className="text-right">{rec.contextSnapshot?.availableForSale ?? 0}</TableCell>
+                            <TableCell className={`text-right ${(rec.contextSnapshot?.daysUntilStockout ?? 999) <= 7 ? "text-red-600 font-medium" : ""}`}>
+                              {rec.contextSnapshot?.daysUntilStockout ?? "∞"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </details>
+              )}
+
+              {/* SKU Report Section - Individual SKU Recommendations (last) */}
+              {data.recommendations && data.recommendations.length > 0 && (
+                <details className="group border rounded-lg" data-testid="section-sku-report">
+                  <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
+                    <h4 className="text-sm font-medium flex items-center gap-2">
+                      <Package className="h-4 w-4" />
+                      SKU Report ({data.recommendations.length})
+                    </h4>
+                    <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="px-4 pb-4">
+                    <div className="space-y-2">
+                      {data.recommendations.map((rec) => (
+                        <details 
+                          key={rec.id} 
+                          className="group border rounded-lg overflow-hidden"
+                          data-testid={`sku-context-${rec.sku}`}
+                        >
+                          <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/30">
+                            <div className="flex items-center gap-3 flex-1 min-w-0">
+                              <Badge 
+                                variant={rec.riskLevel === "HIGH" ? "destructive" : rec.riskLevel === "MEDIUM" ? "default" : "secondary"}
+                                className="flex-shrink-0"
+                              >
+                                {rec.riskLevel}
+                              </Badge>
+                              <span className="font-mono text-sm font-medium truncate" data-testid={`text-sku-${rec.sku}`}>
+                                {rec.sku}
+                              </span>
+                              <span className="text-sm text-muted-foreground truncate hidden sm:inline">
+                                {rec.productName}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 flex-shrink-0">
+                              {rec.orderTiming && (
+                                <Badge 
+                                  variant={rec.orderTiming === "ORDER_TODAY" ? "destructive" : "outline"}
+                                  className="text-xs"
+                                >
+                                  {rec.orderTiming === "ORDER_TODAY" ? "Order Today" : "Safe Tomorrow"}
+                                </Badge>
+                              )}
+                              {rec.recommendedQty && (
+                                <span className="text-sm font-medium">
+                                  Qty: {rec.recommendedQty}
+                                </span>
+                              )}
+                              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                            </div>
+                          </summary>
+                          <div className="px-4 py-3 bg-background border-t text-sm text-muted-foreground" data-testid={`text-reason-${rec.sku}`}>
+                            {rec.reasonSummary || "No recommendation details available."}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              )}
             </div>
 
             {/* Timeline Section */}

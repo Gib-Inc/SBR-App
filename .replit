@@ -44,3 +44,6 @@ waitForPort = 5000
 QUICKBOOKS_REDIRECT_URI = "https://bfcab733-c192-4844-b024-de0caf23728c-00-1zhsa00hqdpdm.spock.replit.dev/auth/qbo/callback"
 SENDGRID_FROM_EMAIL = "stickerburrroller@gmail.com"
 SENDGRID_FROM_NAME = "Sticker Burr Roller"
+
+[agent]
+integrations = ["javascript_openai:1.0.0"]

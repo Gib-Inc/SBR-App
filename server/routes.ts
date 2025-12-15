@@ -8531,6 +8531,118 @@ Notes: ${po.notes || 'None'}
   });
 
   // ============================================================================
+  // SKU CONSISTENCY CHECK
+  // ============================================================================
+
+  app.get("/api/barcodes/sku-consistency", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const barcodes = await storage.getAllBarcodes();
+      const items = await storage.getAllItems();
+      
+      const itemMap = new Map(items.map(item => [item.id, item]));
+      const skuToItemMap = new Map(items.map(item => [item.sku, item]));
+      
+      const mismatches: Array<{
+        id: string;
+        sku: string | null;
+        name: string;
+        issue: string;
+      }> = [];
+      
+      const orphanedBarcodes: Array<{
+        id: string;
+        sku: string | null;
+        name: string;
+        issue: string;
+      }> = [];
+      
+      const itemsWithoutBarcodes: Array<{
+        id: string;
+        sku: string;
+        name: string;
+        issue: string;
+      }> = [];
+      
+      for (const barcode of barcodes) {
+        if (barcode.purpose === 'bin') continue;
+        
+        if (barcode.referenceId) {
+          const item = itemMap.get(barcode.referenceId);
+          if (!item) {
+            orphanedBarcodes.push({
+              id: barcode.id,
+              sku: barcode.sku,
+              name: barcode.name,
+              issue: `Barcode references non-existent item`,
+            });
+          } else if (barcode.sku && barcode.sku !== item.sku) {
+            mismatches.push({
+              id: barcode.id,
+              sku: barcode.sku,
+              name: barcode.name,
+              issue: `Barcode SKU does not match item SKU "${item.sku}"`,
+            });
+          }
+        } else if (barcode.sku) {
+          const item = skuToItemMap.get(barcode.sku);
+          if (!item) {
+            orphanedBarcodes.push({
+              id: barcode.id,
+              sku: barcode.sku,
+              name: barcode.name,
+              issue: `Barcode SKU not found in products`,
+            });
+          }
+        }
+      }
+      
+      const barcodesWithRefs = new Set(
+        barcodes
+          .filter(b => b.purpose !== 'bin' && b.referenceId)
+          .map(b => b.referenceId)
+      );
+      
+      const barcodesWithSkus = new Set(
+        barcodes
+          .filter(b => b.purpose !== 'bin' && b.sku)
+          .map(b => b.sku)
+      );
+      
+      for (const item of items) {
+        const hasRefBarcode = barcodesWithRefs.has(item.id);
+        const hasSkuBarcode = barcodesWithSkus.has(item.sku);
+        const hasInlineBarcode = !!item.barcodeValue;
+        
+        if (!hasRefBarcode && !hasSkuBarcode && !hasInlineBarcode) {
+          itemsWithoutBarcodes.push({
+            id: item.id,
+            sku: item.sku,
+            name: item.name,
+            issue: `No barcode associated with this product`,
+          });
+        }
+      }
+      
+      res.json({
+        summary: {
+          totalBarcodes: barcodes.filter(b => b.purpose !== 'bin').length,
+          totalItems: items.length,
+          mismatchCount: mismatches.length,
+          orphanedCount: orphanedBarcodes.length,
+          itemsWithoutBarcodesCount: itemsWithoutBarcodes.length,
+          isConsistent: mismatches.length === 0 && orphanedBarcodes.length === 0,
+        },
+        mismatches,
+        orphanedBarcodes,
+        itemsWithoutBarcodes,
+      });
+    } catch (error: any) {
+      console.error("[SKU Consistency] Error checking consistency:", error);
+      res.status(500).json({ error: error.message || "Failed to check SKU consistency" });
+    }
+  });
+
+  // ============================================================================
   // IMPORT PROFILES
   // ============================================================================
 

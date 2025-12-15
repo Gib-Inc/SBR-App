@@ -12,7 +12,7 @@
  */
 
 import { storage } from "../storage";
-import { LLMService, type LLMProvider } from "./llm";
+import { LLMService, type LLMProvider, type PriceExtractionResult } from "./llm";
 import type { Item, Settings, InsertAIRecommendation, AIBatchLog, InsertAIBatchLog } from "@shared/schema";
 import { ghlOpportunitiesService } from "./ghl-opportunities-service";
 import { GHL_CONFIG } from "../config/ghl-config";
@@ -743,8 +743,58 @@ Respond with a JSON array of recommendations in this exact format:
     const poCount = existingPOs.length + 1;
     const poNumber = `AI-PO-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${String(poCount).padStart(4, '0')}`;
     
-    // Calculate cost (use supplier item cost or fallback to 0)
-    const unitCost = designatedSupplierItem.cost ?? 0;
+    // Calculate cost - priority: supplier item price > item defaultPurchaseCost > LLM extraction > 0
+    let unitCost = designatedSupplierItem.price ?? item.defaultPurchaseCost ?? 0;
+    
+    // Check if price needs refresh (no price or >30 days old)
+    const needsPriceRefresh = LLMService.needsPriceRefresh({
+      defaultPurchaseCost: unitCost,
+      lastCostUpdatedAt: item.lastCostUpdatedAt,
+    });
+    
+    if (needsPriceRefresh && item.supplierProductUrl) {
+      console.log(`[AI Batch] Price needs refresh for ${sku}, attempting LLM extraction from ${item.supplierProductUrl}`);
+      
+      try {
+        const defaultUserId = "default";
+        const settings = await this.storage.getSettings(defaultUserId);
+        const llmProvider = (settings?.llmProvider || "chatgpt") as LLMProvider;
+        const apiKey = settings?.llmApiKey;
+        
+        if (apiKey) {
+          const priceResult = await LLMService.extractPriceFromUrl(
+            item.supplierProductUrl,
+            item.name,
+            sku,
+            llmProvider,
+            apiKey
+          );
+          
+          if (priceResult.success && priceResult.price && priceResult.price > 0) {
+            if (priceResult.confidence === 'high' || priceResult.confidence === 'medium') {
+              unitCost = priceResult.price;
+              console.log(`[AI Batch] LLM extracted price $${unitCost} for ${sku} (${priceResult.confidence} confidence)`);
+              
+              await this.storage.updateItem(item.id, {
+                defaultPurchaseCost: unitCost,
+                currency: priceResult.currency,
+                costSource: 'AUTO_SCRAPED',
+                lastCostUpdatedAt: new Date(),
+              });
+            } else {
+              console.log(`[AI Batch] Skipping low-confidence price $${priceResult.price} for ${sku} - not updating`);
+            }
+          } else {
+            console.log(`[AI Batch] LLM price extraction failed for ${sku}: ${priceResult.error}`);
+          }
+        } else {
+          console.log(`[AI Batch] No LLM API key configured, skipping price extraction for ${sku}`);
+        }
+      } catch (priceError: any) {
+        console.warn(`[AI Batch] Error during LLM price extraction for ${sku}: ${priceError.message}`);
+      }
+    }
+    
     const lineTotal = quantity * unitCost;
     
     // Create the PO

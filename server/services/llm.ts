@@ -4,8 +4,27 @@ import OpenAI from "openai";
 // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
 const OPENAI_MODEL = "gpt-5";
 
-// Initialize OpenAI client with API key from environment
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+/**
+ * Get OpenAI client with API key from database settings (user-configured)
+ * Falls back to environment variable only if no database key is configured
+ */
+async function getOpenAIClient(userId?: string): Promise<OpenAI> {
+  // Try to get API key from user's settings in database
+  const settings = await storage.getSettings(userId);
+  const apiKey = settings?.llmApiKey;
+  
+  if (apiKey && apiKey.trim()) {
+    return new OpenAI({ apiKey });
+  }
+  
+  // Fallback to environment variable if no database key configured
+  if (process.env.OPENAI_API_KEY) {
+    console.log("[LLM] Warning: Using env OPENAI_API_KEY - configure API key in Settings for multi-user support");
+    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  
+  throw new Error("No OpenAI API key configured. Please add your API key in Settings > LLM Configuration.");
+}
 
 export type LLMProvider = "chatgpt" | "claude" | "grok" | "custom";
 
@@ -148,8 +167,25 @@ export class LLMService {
 
   /**
    * ChatGPT/OpenAI integration using GPT-5 model
+   * Uses API key from database settings (user-configured)
    */
   private static async askChatGPT(request: LLMRequest): Promise<LLMResponse> {
+    // Get OpenAI client with user's configured API key
+    let openai: OpenAI;
+    try {
+      openai = await getOpenAIClient();
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message,
+        data: {
+          provider: "chatgpt",
+          status: "no_api_key",
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
+
     // Health check - verify OpenAI connection
     if (request.taskType === "HEALTH_CHECK") {
       try {

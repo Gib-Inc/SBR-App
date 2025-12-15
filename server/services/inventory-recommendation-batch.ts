@@ -120,8 +120,9 @@ export class InventoryRecommendationBatch {
       const settings = await this.storage.getSettings(defaultUserId);
 
       // Get all items or filter by affected SKUs
+      // Only analyze components for ordering - finished products are manufactured, not ordered
       let items = await this.storage.getAllItems();
-      items = items.filter(item => item.type === "component" || item.type === "finished_product");
+      items = items.filter(item => item.type === "component");
 
       if (params.affectedSkus && params.affectedSkus.length > 0) {
         items = items.filter(item => params.affectedSkus!.includes(item.sku));

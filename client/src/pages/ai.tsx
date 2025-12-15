@@ -2141,7 +2141,7 @@ function BatchTimelineModal({
                         )}
                         
                         {/* Source Signals if available */}
-                        {rec.sourceSignals && Object.keys(rec.sourceSignals).length > 0 && (
+                        {rec.sourceSignals && typeof rec.sourceSignals === 'object' && Object.keys(rec.sourceSignals).length > 0 && (
                           <div className="mt-3 pt-3 border-t">
                             <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
                               Source Signals
@@ -2152,6 +2152,13 @@ function BatchTimelineModal({
                               </pre>
                             </div>
                           </div>
+                        )}
+                        
+                        {/* Fallback when no context data is available */}
+                        {!rec.contextSnapshot && !rec.reasonSummary && (!rec.sourceSignals || Object.keys(rec.sourceSignals || {}).length === 0) && (
+                          <p className="text-sm text-muted-foreground italic">
+                            No detailed context data available for this recommendation.
+                          </p>
                         )}
                       </div>
                     </details>

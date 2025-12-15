@@ -2036,6 +2036,65 @@ function BatchTimelineModal({
                           </div>
                         </div>
                       )}
+                      {data.poReport.skuPoBreakdown && data.poReport.skuPoBreakdown.length > 0 && (
+                        <div className="mt-4">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                            SKU-Level Breakdown
+                            {data.poReport.skusWithNoPo > 0 && (
+                              <Badge variant="destructive" className="text-xs ml-2">
+                                {data.poReport.skusWithNoPo} without PO
+                              </Badge>
+                            )}
+                          </p>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="text-xs">SKU</TableHead>
+                                <TableHead className="text-xs text-center">Qty Pending</TableHead>
+                                <TableHead className="text-xs text-center">POs</TableHead>
+                                <TableHead className="text-xs">Status</TableHead>
+                                <TableHead className="text-xs">Expected</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {data.poReport.skuPoBreakdown.slice(0, 20).map((item: any) => (
+                                <TableRow 
+                                  key={item.sku} 
+                                  data-testid={`sku-po-row-${item.sku}`}
+                                  className={!item.hasPendingPo ? "bg-destructive/5" : ""}
+                                >
+                                  <TableCell className="font-mono text-xs py-2">{item.sku}</TableCell>
+                                  <TableCell className="text-center font-medium py-2">
+                                    {item.hasPendingPo ? item.totalQtyPending : "-"}
+                                  </TableCell>
+                                  <TableCell className="text-center py-2">{item.poCount}</TableCell>
+                                  <TableCell className="py-2">
+                                    {item.hasPendingPo ? (
+                                      <div className="flex flex-wrap gap-1">
+                                        {[...new Set(item.pos.map((p: any) => p.status))].map((status: string) => (
+                                          <Badge key={status} variant="outline" className="text-xs">{status}</Badge>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <Badge variant="destructive" className="text-xs">NO PO</Badge>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground py-2">
+                                    {item.pos[0]?.expectedDate 
+                                      ? new Date(item.pos[0].expectedDate).toLocaleDateString() 
+                                      : '-'}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                          {data.poReport.skuPoBreakdown.length > 20 && (
+                            <p className="text-xs text-muted-foreground mt-2">
+                              Showing 20 of {data.poReport.skuPoBreakdown.length} SKUs
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <p className="text-sm text-muted-foreground">No PO data available.</p>

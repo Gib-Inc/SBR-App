@@ -9436,6 +9436,17 @@ Notes: ${po.notes || 'None'}
       
       const supplierMap = new Map(allSuppliers.filter(Boolean).map(s => [s!.id, s!.name]));
       
+      // Build SKU-level PO breakdown
+      const skuPoMap: Map<string, Array<{
+        poNumber: string;
+        supplier: string;
+        status: string;
+        qtyOrdered: number;
+        qtyReceived: number;
+        qtyPending: number;
+        expectedDate?: string;
+      }>> = new Map();
+      
       inboundPOs.forEach((po, index) => {
         const poLines = poLinesArrays[index] || [];
         const lineTotal = poLines.reduce((sum, line) => sum + (line.quantityOrdered - (line.quantityReceived || 0)), 0);
@@ -9450,6 +9461,50 @@ Notes: ${po.notes || 'None'}
             expectedDate: po.expectedDeliveryDate?.toString(),
           });
         }
+        
+        // Add SKU-level breakdown
+        for (const line of poLines) {
+          const sku = line.sku || 'UNKNOWN';
+          const qtyPending = (line.quantityOrdered || 0) - (line.quantityReceived || 0);
+          if (qtyPending > 0) {
+            if (!skuPoMap.has(sku)) {
+              skuPoMap.set(sku, []);
+            }
+            skuPoMap.get(sku)!.push({
+              poNumber: po.poNumber || po.id,
+              supplier: po.supplierId ? (supplierMap.get(po.supplierId) || 'Unknown') : 'Unknown',
+              status: po.status || 'UNKNOWN',
+              qtyOrdered: line.quantityOrdered || 0,
+              qtyReceived: line.quantityReceived || 0,
+              qtyPending,
+              expectedDate: po.expectedDeliveryDate?.toString(),
+            });
+          }
+        }
+      });
+      
+      // Build SKU-level breakdown for ALL recommendation SKUs (not just those with POs)
+      // First, get all recommendation SKUs from this batch
+      const recommendationSkus = new Set(recommendations.map(rec => rec.sku));
+      
+      // Create breakdown for each recommendation SKU
+      const skuPoBreakdown = Array.from(recommendationSkus).map(sku => {
+        const matchingPos = skuPoMap.get(sku) || [];
+        return {
+          sku,
+          totalQtyPending: matchingPos.reduce((sum, p) => sum + p.qtyPending, 0),
+          poCount: matchingPos.length,
+          hasPendingPo: matchingPos.length > 0,
+          pos: matchingPos,
+        };
+      });
+      
+      // Sort: SKUs with no POs first (most critical), then by qty pending descending
+      skuPoBreakdown.sort((a, b) => {
+        if (a.hasPendingPo !== b.hasPendingPo) {
+          return a.hasPendingPo ? 1 : -1; // No PO comes first
+        }
+        return b.totalQtyPending - a.totalQtyPending;
       });
       
       const poReport = {
@@ -9457,6 +9512,8 @@ Notes: ${po.notes || 'None'}
         totalInbound,
         pendingPOs: pendingPOs.slice(0, 10),
         totalPOs: purchaseOrders.length,
+        skuPoBreakdown,
+        skusWithNoPo: skuPoBreakdown.filter(s => !s.hasPendingPo).length,
       };
       
       // 3. QuickBooks Report: last 12 months of historical sales

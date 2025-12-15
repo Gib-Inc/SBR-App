@@ -8094,15 +8094,7 @@ Notes: ${po.notes || 'None'}
         payload: { test: true },
       });
       
-      await storage.logSystemEvent({
-        eventType: 'LLM_HEALTH_CHECK',
-        status: 'success',
-        details: {
-          provider: normalizedProvider,
-          model: settings.llmModel,
-          responseLength: testResult?.text?.length || 0,
-        },
-      });
+      console.log(`[LLM Health Check] Success - provider: ${normalizedProvider}, model: ${settings.llmModel}`);
       
       res.json({ 
         success: true, 
@@ -8114,14 +8106,7 @@ Notes: ${po.notes || 'None'}
       const userId = req.session.userId;
       const settings = userId ? await storage.getSettings(userId) : null;
       
-      await storage.logSystemEvent({
-        eventType: 'LLM_HEALTH_CHECK',
-        status: 'error',
-        details: {
-          provider: settings?.llmProvider,
-          error: error.message,
-        },
-      });
+      console.error(`[LLM Health Check] Error - provider: ${settings?.llmProvider}, error: ${error.message}`);
       
       res.status(500).json({ 
         success: false, 

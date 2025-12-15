@@ -245,6 +245,11 @@ export default function SalesOrders() {
     queryKey: ["/api/returns"],
   });
 
+  // Fetch AI agent rules for GHL location ID
+  const { data: aiAgentRules } = useQuery<{ gohighlevelLocationId?: string }>({
+    queryKey: ["/api/ai-agent-rules"],
+  });
+
   const finishedProducts = useMemo(() => 
     items.filter(item => item.type === "finished_product"),
     [items]
@@ -468,13 +473,17 @@ export default function SalesOrders() {
     if (ghlConversationUrl) {
       window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
     } else if (order.ghlContactId) {
-      // Construct GHL conversations URL from contact ID
-      // Format: https://app.gohighlevel.com/conversations/{locationId}?contact={contactId}
-      // For now, just open the conversations page (will need location ID from settings)
-      toast({ 
-        title: "GHL Contact Found",
-        description: "Contact ID: " + order.ghlContactId 
-      });
+      const locationId = aiAgentRules?.gohighlevelLocationId;
+      if (locationId) {
+        const url = `https://app.gohighlevel.com/v2/location/${locationId}/conversations/${order.ghlContactId}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      } else {
+        toast({ 
+          title: "GHL Location Not Configured",
+          description: "Set your GHL Location ID in AI Agent → Data Sources",
+          variant: "destructive"
+        });
+      }
     }
   };
 

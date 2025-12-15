@@ -296,7 +296,23 @@ function ItemTableRow({
       {item.type === "finished_product" && (columnVisibility?.upc ?? true) && (
         <td className="px-3 align-middle whitespace-nowrap">
           <div className="font-mono text-sm" data-testid={`text-upc-${item.id}`}>
-            {item.upc || <span className="text-muted-foreground">—</span>}
+            {item.upc ? (
+              item.upc
+            ) : (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 cursor-help">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      <span className="text-xs">Missing</span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">UPC/GTIN required for marketplace identification</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </div>
         </td>
       )}

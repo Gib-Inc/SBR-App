@@ -2151,17 +2151,49 @@ function BatchTimelineModal({
                 </details>
               )}
 
-              {/* QuickBooks Report Section - Historical Sales Data */}
-              <details className="group border rounded-lg" data-testid="section-quickbooks-report">
+              {/* Sales Report Section - Current Sales Data */}
+              <details className="group border rounded-lg" data-testid="section-sales-report">
                 <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
                   <h4 className="text-sm font-medium flex items-center gap-2">
-                    <Receipt className="h-4 w-4" />
-                    QuickBooks Report
+                    <TrendingUp className="h-4 w-4" />
+                    Sales Report
+                    {data.salesReport?.month?.netRevenue != null && (
+                      <Badge variant="secondary" className="text-xs ml-2">
+                        ${(data.salesReport.month.netRevenue || 0).toLocaleString()} / 30d
+                      </Badge>
+                    )}
                   </h4>
                   <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
                 </summary>
-                <div className="px-4 py-4 text-sm text-muted-foreground">
-                  Historical sales data from QuickBooks will be displayed here when available.
+                <div className="px-4 py-4 space-y-4">
+                  {data.salesReport ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Today</p>
+                          <p className="text-lg font-semibold">{data.salesReport.today?.orders ?? 0} orders</p>
+                          <p className="text-sm text-muted-foreground">{data.salesReport.today?.units ?? 0} units · ${(data.salesReport.today?.netRevenue ?? 0).toLocaleString()}</p>
+                        </div>
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Last 7 Days</p>
+                          <p className="text-lg font-semibold">{data.salesReport.week?.orders ?? 0} orders</p>
+                          <p className="text-sm text-muted-foreground">{data.salesReport.week?.units ?? 0} units · ${(data.salesReport.week?.netRevenue ?? 0).toLocaleString()}</p>
+                        </div>
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Last 30 Days</p>
+                          <p className="text-lg font-semibold">{data.salesReport.month?.orders ?? 0} orders</p>
+                          <p className="text-sm text-muted-foreground">{data.salesReport.month?.units ?? 0} units · ${(data.salesReport.month?.netRevenue ?? 0).toLocaleString()}</p>
+                        </div>
+                      </div>
+                      {(data.salesReport.month?.refunds ?? 0) > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Refunds (30d): ${(data.salesReport.month?.refunds ?? 0).toLocaleString()}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No sales data available.</p>
+                  )}
                 </div>
               </details>
 
@@ -2171,25 +2203,85 @@ function BatchTimelineModal({
                   <h4 className="text-sm font-medium flex items-center gap-2">
                     <FileText className="h-4 w-4" />
                     PO Report
+                    {data.poReport?.totalInbound != null && (
+                      <Badge variant="secondary" className="text-xs ml-2">
+                        {(data.poReport.totalInbound || 0).toLocaleString()} inbound
+                      </Badge>
+                    )}
                   </h4>
                   <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
                 </summary>
-                <div className="px-4 py-4 text-sm text-muted-foreground">
-                  Purchase order status and inbound inventory will be displayed here when available.
+                <div className="px-4 py-4 space-y-4">
+                  {data.poReport ? (
+                    <>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {Object.entries(data.poReport.byStatus || {}).map(([status, count]) => (
+                          <Badge key={status} variant="outline" className="text-xs">
+                            {status}: {count as number}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-4 text-sm">
+                        <span>Total POs: <strong>{data.poReport.totalPOs ?? 0}</strong></span>
+                        <span>Inbound Units: <strong>{(data.poReport.totalInbound ?? 0).toLocaleString()}</strong></span>
+                      </div>
+                      {data.poReport.pendingPOs && data.poReport.pendingPOs.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Pending Deliveries</p>
+                          <div className="space-y-1">
+                            {data.poReport.pendingPOs.slice(0, 5).map((po: any) => (
+                              <div key={po.poNumber} className="flex items-center justify-between text-sm py-1 px-2 bg-muted/20 rounded">
+                                <span className="font-mono">{po.poNumber}</span>
+                                <span className="text-muted-foreground">{po.supplier}</span>
+                                <Badge variant="outline" className="text-xs">{po.status}</Badge>
+                                <span>{po.totalQty ?? 0} units</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No PO data available.</p>
+                  )}
                 </div>
               </details>
 
-              {/* Sales Report Section - Current Sales Data */}
-              <details className="group border rounded-lg" data-testid="section-sales-report">
+              {/* QuickBooks Report Section - Historical Sales Data */}
+              <details className="group border rounded-lg" data-testid="section-quickbooks-report">
                 <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
                   <h4 className="text-sm font-medium flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4" />
-                    Sales Report
+                    <Receipt className="h-4 w-4" />
+                    QuickBooks Report
+                    {data.quickbooksReport?.yearTotals?.revenue != null && (
+                      <Badge variant="secondary" className="text-xs ml-2">
+                        {data.quickbooksReport.year} · ${(data.quickbooksReport.yearTotals.revenue || 0).toLocaleString()}
+                      </Badge>
+                    )}
                   </h4>
                   <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
                 </summary>
-                <div className="px-4 py-4 text-sm text-muted-foreground">
-                  Current sales velocity and trends will be displayed here when available.
+                <div className="px-4 py-4 space-y-4">
+                  {data.quickbooksReport && (data.quickbooksReport.yearTotals?.qty ?? 0) > 0 ? (
+                    <>
+                      <div className="flex items-center gap-4 text-sm mb-3">
+                        <span>Year: <strong>{data.quickbooksReport.year}</strong></span>
+                        <span>Total Units: <strong>{(data.quickbooksReport.yearTotals?.qty ?? 0).toLocaleString()}</strong></span>
+                        <span>Revenue: <strong>${(data.quickbooksReport.yearTotals?.revenue ?? 0).toLocaleString()}</strong></span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-2">
+                        {(data.quickbooksReport.byMonth || []).map((m: any) => (
+                          <div key={m.month} className="text-center p-2 bg-muted/20 rounded">
+                            <p className="text-xs font-medium">{m.monthName}</p>
+                            <p className="text-sm font-semibold">{(m.totalQty ?? 0).toLocaleString()}</p>
+                            <p className="text-xs text-muted-foreground">${((m.totalRevenue ?? 0) / 1000).toFixed(1)}k</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No QuickBooks historical data available.</p>
+                  )}
                 </div>
               </details>
             </div>

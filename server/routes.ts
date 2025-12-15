@@ -9360,12 +9360,153 @@ Notes: ${po.notes || 'None'}
         adMultiplier: rec.adMultiplier,
       }));
       
+      // === REPORTS DATA ===
+      
+      // 1. Sales Report: today, week, month aggregates from daily_sales_snapshots
+      const today = new Date(batchTime);
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString().split('T')[0];
+      
+      // Extend end date by 1 day to ensure today is included (handles exclusive end ranges)
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+      
+      const weekAgo = new Date(today);
+      weekAgo.setDate(weekAgo.getDate() - 6); // Include today = 7 days total
+      const weekAgoStr = weekAgo.toISOString().split('T')[0];
+      
+      const monthAgo = new Date(today);
+      monthAgo.setDate(monthAgo.getDate() - 29); // Include today = 30 days total
+      const monthAgoStr = monthAgo.toISOString().split('T')[0];
+      
+      const [todaySnapshot, weekSnapshots, monthSnapshots] = await Promise.all([
+        storage.getDailySalesSnapshot(todayStr),
+        storage.getDailySalesSnapshotsInRange(weekAgoStr, tomorrowStr),
+        storage.getDailySalesSnapshotsInRange(monthAgoStr, tomorrowStr),
+      ]);
+      
+      const aggregateSalesSnapshots = (snapshots: any[]) => {
+        if (!snapshots || snapshots.length === 0) {
+          return { orders: 0, revenue: 0, units: 0, refunds: 0, netRevenue: 0 };
+        }
+        return {
+          orders: snapshots.reduce((sum, s) => sum + (s?.totalOrders || 0), 0),
+          revenue: snapshots.reduce((sum, s) => sum + parseFloat(s?.totalRevenue || '0'), 0),
+          units: snapshots.reduce((sum, s) => sum + (s?.totalUnits || 0), 0),
+          refunds: snapshots.reduce((sum, s) => sum + parseFloat(s?.totalRefunds || '0'), 0),
+          netRevenue: snapshots.reduce((sum, s) => sum + parseFloat(s?.netRevenue || '0'), 0),
+        };
+      };
+      
+      const salesReport = {
+        today: todaySnapshot ? {
+          orders: todaySnapshot.totalOrders || 0,
+          revenue: parseFloat(todaySnapshot.totalRevenue as any) || 0,
+          units: todaySnapshot.totalUnits || 0,
+          refunds: parseFloat(todaySnapshot.totalRefunds as any) || 0,
+          netRevenue: parseFloat(todaySnapshot.netRevenue as any) || 0,
+        } : { orders: 0, revenue: 0, units: 0, refunds: 0, netRevenue: 0 },
+        week: aggregateSalesSnapshots(weekSnapshots || []),
+        month: aggregateSalesSnapshots(monthSnapshots || []),
+      };
+      
+      // 2. PO Report: status breakdown and inbound quantities
+      const purchaseOrders = await storage.getAllPurchaseOrders();
+      const poStatusCounts: Record<string, number> = {};
+      let totalInbound = 0;
+      let pendingPOs: { poNumber: string; supplier: string; status: string; totalQty: number; expectedDate?: string }[] = [];
+      
+      // Filter POs that need line details (reduce N+1 queries)
+      const inboundStatuses = ['SENT', 'APPROVED', 'PARTIAL_RECEIVED', 'CONFIRMED'];
+      const inboundPOs = purchaseOrders.filter(po => inboundStatuses.includes(po.status || ''));
+      
+      // Count all statuses first (no async needed)
+      for (const po of purchaseOrders) {
+        const status = po.status || 'UNKNOWN';
+        poStatusCounts[status] = (poStatusCounts[status] || 0) + 1;
+      }
+      
+      // Batch fetch lines and suppliers for inbound POs only (parallel)
+      const supplierIds = [...new Set(inboundPOs.map(po => po.supplierId).filter(Boolean))] as string[];
+      const [allSuppliers, ...poLinesArrays] = await Promise.all([
+        Promise.all(supplierIds.map(id => storage.getSupplier(id))),
+        ...inboundPOs.map(po => storage.getPurchaseOrderLines(po.id)),
+      ]);
+      
+      const supplierMap = new Map(allSuppliers.filter(Boolean).map(s => [s!.id, s!.name]));
+      
+      inboundPOs.forEach((po, index) => {
+        const poLines = poLinesArrays[index] || [];
+        const lineTotal = poLines.reduce((sum, line) => sum + (line.quantityOrdered - (line.quantityReceived || 0)), 0);
+        totalInbound += lineTotal;
+        
+        if (lineTotal > 0) {
+          pendingPOs.push({
+            poNumber: po.poNumber || po.id,
+            supplier: po.supplierId ? (supplierMap.get(po.supplierId) || 'Unknown') : 'Unknown',
+            status: po.status || 'UNKNOWN',
+            totalQty: lineTotal,
+            expectedDate: po.expectedDeliveryDate?.toString(),
+          });
+        }
+      });
+      
+      const poReport = {
+        byStatus: poStatusCounts,
+        totalInbound,
+        pendingPOs: pendingPOs.slice(0, 10),
+        totalPOs: purchaseOrders.length,
+      };
+      
+      // 3. QuickBooks Report: last 12 months of historical sales
+      const currentYear = batchTime.getFullYear();
+      const lastYear = currentYear - 1;
+      
+      const qbHistory = await storage.getQuickbooksDemandHistory({
+        year: lastYear,
+        page: 1,
+        pageSize: 1000,
+      });
+      
+      // Aggregate by month
+      const monthlyTotals: Record<number, { qty: number; revenue: number }> = {};
+      for (let m = 1; m <= 12; m++) {
+        monthlyTotals[m] = { qty: 0, revenue: 0 };
+      }
+      
+      for (const item of qbHistory.items || []) {
+        const month = item.month;
+        if (monthlyTotals[month]) {
+          monthlyTotals[month].qty += item.netQty || 0;
+          monthlyTotals[month].revenue += parseFloat(item.revenue as any) || 0;
+        }
+      }
+      
+      const quickbooksReport = {
+        year: lastYear,
+        totalSkus: qbHistory.total || 0,
+        byMonth: Object.entries(monthlyTotals).map(([month, data]) => ({
+          month: parseInt(month),
+          monthName: new Date(2024, parseInt(month) - 1, 1).toLocaleString('default', { month: 'short' }),
+          totalQty: data.qty,
+          totalRevenue: Math.round(data.revenue * 100) / 100,
+        })),
+        yearTotals: {
+          qty: Object.values(monthlyTotals).reduce((sum, m) => sum + m.qty, 0),
+          revenue: Math.round(Object.values(monthlyTotals).reduce((sum, m) => sum + m.revenue, 0) * 100) / 100,
+        },
+      };
+      
       res.json({
         batchLog: log,
         timeline: timelineEvents,
         recommendations: recommendationsWithContext,
         windowStart,
         windowEnd: batchTime,
+        salesReport,
+        poReport,
+        quickbooksReport,
       });
     } catch (error: any) {
       console.error("[AIBatchLog] Error fetching batch timeline:", error);

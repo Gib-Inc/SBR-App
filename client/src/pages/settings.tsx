@@ -318,15 +318,15 @@ function LLMSettings() {
               <Input
                 id="llm-api-key"
                 type="password"
-                placeholder={hasApiKey ? "••••••••••••••• (saved)" : "Enter API key..."}
+                placeholder={hasApiKey ? `${maskedApiKey || "•••"} (saved)` : "Enter API key..."}
                 value={llmApiKey}
                 onChange={(e) => setLlmApiKey(e.target.value)}
                 data-testid="input-llm-api-key"
               />
               {hasApiKey && (
-                <Badge variant="outline" className="shrink-0 font-mono">
+                <Badge variant="outline" className="shrink-0">
                   <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
-                  {maskedApiKey || "Saved"}
+                  Saved
                 </Badge>
               )}
             </div>

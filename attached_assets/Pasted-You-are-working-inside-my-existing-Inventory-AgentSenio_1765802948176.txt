@@ -1,0 +1,122 @@
+You are working inside my existing “Inventory / AgentSeniorStack” Replit app for Sticker Burr Roller.
+
+GOAL
+Connect this app to OpenAI’s GPT-5 family (use the latest reasoning model, e.g. `gpt-5.2`, not GPT-4), and wire a single inventory-planning LLM that runs in BATCH mode to decide “order now vs wait” for every stock item, using ALL relevant data that already lives in this app.
+
+HIGH-LEVEL REQUIREMENTS
+1. Use the official OpenAI Node SDK and the Responses API with model `gpt-5.2` (or the latest GPT-5 reasoning model available on my account).
+2. Read the OpenAI API key from environment variables, NEVER hard-code it.
+3. Reuse the existing LLM / AI Agent concepts in this project; do not delete or break anything that is already working. You are ADDING a dedicated “Inventory Decision LLM” layer, not replacing others.
+4. The LLM must:
+   - Run in batches (not per sale) at scheduled times and on-demand.
+   - See all relevant inventory, sales, and purchasing data for each SKU.
+   - Return structured JSON decisions per SKU: should we order, how much, and why.
+   - Store decisions and explanations in the database so they show up in my AI timeline / logs.
+
+ENV / CONFIG
+1. If not already present, add the following environment variables (respect this naming):
+   - `OPENAI_API_KEY` – my real OpenAI key (I will set it in the Replit Secrets panel).
+   - `OPENAI_INVENTORY_MODEL` – default to `gpt-5.2`.
+   - `OPENAI_INVENTORY_REASONING` – default to `"medium"` (or the recommended value for GPT-5.2).
+2. Create a small config utility, e.g. `src/server/llm/openaiClient.ts` (or similar, following the project’s structure) that:
+   - Imports and initializes the OpenAI client once.
+   - Exposes a function like `callInventoryLlm(promptConfig)` that:
+     - Calls `POST /v1/responses` with:
+       - `model: process.env.OPENAI_INVENTORY_MODEL`
+       - `input`: the inventory decision prompt (see below).
+       - `reasoning.effort: process.env.OPENAI_INVENTORY_REASONING || "medium"`.
+       - Uses Structured Outputs / JSON schema so the model must return valid JSON with a known shape.
+   - Handles basic error logging and retries, but does NOT log my API key or sensitive request bodies.
+
+DATA GATHERING FOR BATCH DECISIONS
+1. Find the existing tables / models that describe:
+   - Current stock by SKU (this is the “Stock Inventory” / finished goods table the app already uses for stock warning and POs).
+   - Reorder / safety levels per SKU (min stock, target stock, lead time, supplier, etc.).
+   - Sales history per SKU (daily or order-level, at least last 30 days and last 12 months).
+   - Open purchase orders and expected incoming quantities.
+2. Create a server-side helper like `buildInventoryDecisionContext()` that:
+   - For every active SKU, builds a compact JSON record similar to:
+     - `sku`, `name`, `currentStock`, `allocatedStock` if applicable,
+     - `minStock`, `targetStock`, `safetyDays`, `leadTimeDays`,
+     - `avgDailySales30d`, `avgDailySales12moSameMonth`,
+     - `openPoQty`, `nextPoArrivalDate`,
+     - `criticalFlags` (e.g. backorders, recent stock-outs),
+     - `supplierName`, `supplierLeadTime`, etc.
+   - Returns an array `items: InventoryItemContext[]`.
+   - Keep the payload efficient: don’t dump the entire DB, just the fields the LLM needs to make reorder decisions.
+
+LLM PROMPT & STRUCTURED OUTPUT
+1. Implement a function like `runInventoryDecisionBatch()` that:
+   - Calls `buildInventoryDecisionContext()` to get `items`.
+   - Creates a single LLM request that:
+     - Sets system instructions such as:
+       - “You are an expert inventory planning assistant for Sticker Burr Roller. You decide whether to place purchase orders today or wait until tomorrow, using safety stock, lead times, and sales trends.”
+       - “Be conservative about stockouts on critical items, but avoid over-ordering slow movers.”
+       - “You must answer ONLY using the JSON schema provided.”
+     - Sends `items` as JSON in the `input` to GPT-5.2.
+   - Uses Structured Outputs / JSON schema so the model returns an array like:
+     ```json
+     {
+       "items": [
+         {
+           "sku": "SKU-123",
+           "decision": "ORDER_NOW" | "WAIT",
+           "recommendedQty": 0,
+           "urgency": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+           "reason": "short sentence explaining why",
+           "daysOfStockEstimate": 0,
+           "notesForHuman": "extra context if needed"
+         }
+       ]
+     }
+     ```
+   - Parse and validate the model output robustly; if the schema validation fails, log an error and mark the batch as failed without crashing the app.
+
+DB & LOGGING
+1. Create or reuse a table for LLM decisions, for example `InventoryDecisionRuns` and `InventoryDecisionItems` (adapt names to the existing ORM):
+   - `InventoryDecisionRuns`: `id`, `runAt`, `triggerSource` ("scheduled_10am", "scheduled_3pm", "manual", "criticalStock"), `status`, `errorMessage`.
+   - `InventoryDecisionItems`: `runId`, `sku`, `decision`, `recommendedQty`, `urgency`, `reason`, `daysOfStockEstimate`, `createdAt`.
+2. When `runInventoryDecisionBatch()` runs:
+   - Create a `run` record.
+   - Save all per-SKU decisions tied to that run.
+   - Also write a short entry into whatever existing “timeline / activity log” system the app uses for AI decisions, e.g.:
+     - “10:02am: GPT-5 inventory agent evaluated 143 SKUs. 21 ORDER_NOW, 17 CRITICAL.”
+
+SCHEDULING & TRIGGERS
+1. Add a server endpoint like:
+   - `POST /api/llm/run-inventory-batch`
+   - It simply calls `runInventoryDecisionBatch()` and returns a summary of results (how many items, how many ORDER_NOW, etc.).
+2. Wire the existing UI (likely in the AI Agent or Reports / Stock Warning area) with:
+   - A “Run Inventory AI Now” button that calls this endpoint and shows a toast/loading state.
+3. For batch / scheduled runs:
+   - If the project already has any scheduling or cron mechanism, hook `runInventoryDecisionBatch()` into it to run at 10:00 and 15:00 local time every business day.
+   - If there is no scheduler, at least implement the endpoint and leave a small TODO comment indicating that in production we’ll call this endpoint from an external scheduler (Replit, n8n, or other cron system).
+4. For critical stock triggers:
+   - Wherever the “critical / warning stock” logic currently exists, add a hook that can optionally trigger `runInventoryDecisionBatch()` for JUST the affected SKUs (or reuse the same function but with a filtered subset) so the AI can react to emergencies between the scheduled runs.
+
+USING DECISIONS TO DRIVE POs
+1. In the Purchase Order creation flow:
+   - Add a view / widget that surfaces the latest LLM decisions:
+     - Show SKUs with `decision = ORDER_NOW`, sorted by urgency.
+     - For each, show `recommendedQty`, `reason`, and a quick link to “Start PO for this SKU / Supplier”.
+2. Make sure no PO is auto-sent to suppliers yet unless the rest of the app is already designed for full automation; for now it’s okay if the AI outputs are recommendations that humans can review and then click to convert into POs.
+
+UI / UX
+1. In the AI Agent or Reports area, create a simple “Inventory AI Decisions” panel:
+   - List recent runs (time, trigger, counts).
+   - Click into a run to see the SKUs and decisions, including reasons.
+   - Add filters for supplier, urgency, decision type.
+2. Do NOT drastically change the existing design language; reuse existing components and styling.
+
+SAFETY & GUARDRAILS
+1. NEVER log API keys or full LLM requests/responses with sensitive business data to the console.
+2. If the LLM call fails, log an error and mark the run as `failed`, but don’t break the rest of the app.
+3. Treat GPT-5 decisions as recommendations; keep it easy for humans to override.
+
+FINAL CHECKLIST
+1. Confirm:
+   - OpenAI SDK is installed and configured once.
+   - Env vars are used correctly.
+   - The `/api/llm/run-inventory-batch` endpoint works end-to-end.
+   - At least one test batch run produces stored decisions in the DB and visible UI logs.
+2. Keep code modular and consistent with the existing project structure, and leave clear comments so I can understand how to extend this later.

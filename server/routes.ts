@@ -3414,13 +3414,18 @@ TOTAL: $${subtotal.toFixed(2)}
         const sanitized = { ...settings } as any;
         const sensitiveFields = [
           'gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 
-          'phantombusterApiKey', 'llmApiKey', 'quickbooksAccessToken',
+          'phantombusterApiKey', 'llmApiKey', 'openaiWebhookSecret', 'quickbooksAccessToken',
           'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
         ];
         
         // Create masked version of llmApiKey showing first 3 + last 3 chars
         if (sanitized.llmApiKey && sanitized.llmApiKey.length >= 8) {
           sanitized.maskedLlmApiKey = `${sanitized.llmApiKey.slice(0, 3)}...${sanitized.llmApiKey.slice(-3)}`;
+        }
+        
+        // Create masked version of openaiWebhookSecret showing first 3 + last 3 chars
+        if (sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.length >= 8) {
+          sanitized.maskedOpenaiWebhookSecret = `${sanitized.openaiWebhookSecret.slice(0, 3)}...${sanitized.openaiWebhookSecret.slice(-3)}`;
         }
         
         for (const field of sensitiveFields) {

@@ -121,6 +121,9 @@ function LLMSettings() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [maskedApiKey, setMaskedApiKey] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+  const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
+  const [maskedWebhookSecret, setMaskedWebhookSecret] = useState("");
 
   // Helper to mask API key showing first 3 and last 3 chars
   const maskApiKey = (key: string): string => {
@@ -168,6 +171,13 @@ function LLMSettings() {
         setMaskedApiKey(maskApiKey(settings.llmApiKey));
       }
       setLlmApiKey('');
+      // Webhook secret handling - use maskedOpenaiWebhookSecret as evidence of saved secret
+      const hasSecret = !!(settings.maskedOpenaiWebhookSecret || (settings.openaiWebhookSecret && settings.openaiWebhookSecret === "••••••••"));
+      setHasWebhookSecret(hasSecret);
+      if (settings.maskedOpenaiWebhookSecret) {
+        setMaskedWebhookSecret(settings.maskedOpenaiWebhookSecret);
+      }
+      setWebhookSecret('');
       setLlmModel(settings.llmModel || 'gpt-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
@@ -220,11 +230,19 @@ function LLMSettings() {
     if (llmApiKey.trim()) {
       updates.llmApiKey = llmApiKey;
     }
+    if (webhookSecret.trim()) {
+      updates.openaiWebhookSecret = webhookSecret;
+    }
     await saveSettingMutation.mutateAsync(updates);
     if (llmApiKey.trim()) {
       setMaskedApiKey(maskApiKey(llmApiKey));
       setHasApiKey(true);
       setLlmApiKey('');
+    }
+    if (webhookSecret.trim()) {
+      setMaskedWebhookSecret(maskApiKey(webhookSecret));
+      setHasWebhookSecret(true);
+      setWebhookSecret('');
     }
   };
 
@@ -336,6 +354,31 @@ function LLMSettings() {
               {llmProvider === "grok" && "Get your key from the Grok platform"}
             </p>
           </div>
+
+          {llmProvider === "chatgpt" && (
+            <div className="space-y-2">
+              <Label htmlFor="webhook-secret">OpenAI Webhook (signing secret)</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="webhook-secret"
+                  type="password"
+                  placeholder={hasWebhookSecret ? `${maskedWebhookSecret || "•••"} (saved)` : "Enter signing secret..."}
+                  value={webhookSecret}
+                  onChange={(e) => setWebhookSecret(e.target.value)}
+                  data-testid="input-webhook-secret"
+                />
+                {hasWebhookSecret && (
+                  <Badge variant="outline" className="shrink-0">
+                    <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
+                    Saved
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Signing secret from your OpenAI webhook configuration
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-3">

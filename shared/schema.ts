@@ -583,6 +583,7 @@ export const settings = pgTable("settings", {
   phantombusterApiKey: text("phantombuster_api_key"),
   llmProvider: text("llm_provider"), // 'chatgpt', 'claude', 'grok', 'custom'
   llmApiKey: text("llm_api_key"),
+  openaiWebhookSecret: text("openai_webhook_secret"), // OpenAI webhook signing secret
   llmModel: text("llm_model"), // 'gpt-4', 'gpt-4-turbo', 'claude-3-opus', etc.
   llmTemperature: real("llm_temperature").notNull().default(0.7), // 0.0-2.0, controls randomness
   llmMaxTokens: integer("llm_max_tokens").notNull().default(2048), // Max tokens for response

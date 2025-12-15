@@ -117,10 +117,16 @@ function LLMSettings() {
   const [llmModel, setLlmModel] = useState("gpt-5");
   const [llmTemperature, setLlmTemperature] = useState(0.7);
   const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
-  const [customEndpoint, setCustomEndpoint] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [maskedApiKey, setMaskedApiKey] = useState("");
+
+  // Helper to mask API key showing first 3 and last 3 chars
+  const maskApiKey = (key: string): string => {
+    if (!key || key.length < 8) return "";
+    return `${key.slice(0, 3)}...${key.slice(-3)}`;
+  };
 
   // Model presets for each provider
   const modelPresets: Record<string, { value: string; label: string }[]> = {
@@ -141,9 +147,6 @@ function LLMSettings() {
       { value: "grok-1", label: "Grok-1" },
       { value: "grok-2", label: "Grok-2" },
     ],
-    custom: [
-      { value: "custom-model", label: "Custom Model" },
-    ],
   };
 
   // Load existing LLM settings
@@ -153,13 +156,21 @@ function LLMSettings() {
 
   useEffect(() => {
     if (settings) {
-      setLlmProvider(settings.llmProvider || 'chatgpt');
-      setHasApiKey(!!(settings.llmApiKey && settings.llmApiKey.trim()));
+      // Coerce legacy "custom" provider to "chatgpt" since custom endpoint is removed
+      const provider = settings.llmProvider === 'custom' ? 'chatgpt' : (settings.llmProvider || 'chatgpt');
+      setLlmProvider(provider);
+      const hasKey = !!(settings.llmApiKey && settings.llmApiKey.trim());
+      setHasApiKey(hasKey);
+      // Use maskedLlmApiKey from backend if available
+      if (settings.maskedLlmApiKey) {
+        setMaskedApiKey(settings.maskedLlmApiKey);
+      } else if (hasKey && settings.llmApiKey) {
+        setMaskedApiKey(maskApiKey(settings.llmApiKey));
+      }
       setLlmApiKey('');
       setLlmModel(settings.llmModel || 'gpt-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
-      setCustomEndpoint(settings.llmCustomEndpoint || '');
     }
   }, [settings]);
 
@@ -209,11 +220,9 @@ function LLMSettings() {
     if (llmApiKey.trim()) {
       updates.llmApiKey = llmApiKey;
     }
-    if (llmProvider === 'custom') {
-      updates.llmCustomEndpoint = customEndpoint;
-    }
     await saveSettingMutation.mutateAsync(updates);
     if (llmApiKey.trim()) {
+      setMaskedApiKey(maskApiKey(llmApiKey));
       setHasApiKey(true);
       setLlmApiKey('');
     }
@@ -266,9 +275,18 @@ function LLMSettings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="chatgpt">ChatGPT (OpenAI)</SelectItem>
-                  <SelectItem value="claude">Claude (Anthropic)</SelectItem>
-                  <SelectItem value="grok">Grok</SelectItem>
-                  <SelectItem value="custom">Custom Endpoint</SelectItem>
+                  <SelectItem value="claude">
+                    <span className="flex items-center gap-2">
+                      Claude (Anthropic)
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">V2</Badge>
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="grok">
+                    <span className="flex items-center gap-2">
+                      Grok
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">V2</Badge>
+                    </span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -290,20 +308,6 @@ function LLMSettings() {
             </div>
           </div>
 
-          {llmProvider === "custom" && (
-            <div className="space-y-2">
-              <Label htmlFor="custom-endpoint">Custom Endpoint URL</Label>
-              <Input
-                id="custom-endpoint"
-                type="url"
-                placeholder="https://api.example.com/v1"
-                value={customEndpoint}
-                onChange={(e) => setCustomEndpoint(e.target.value)}
-                data-testid="input-custom-endpoint"
-              />
-            </div>
-          )}
-
           <div className="space-y-2">
             <Label htmlFor="llm-api-key">
               {llmProvider === "chatgpt" ? "OpenAI API Key" : 
@@ -320,9 +324,9 @@ function LLMSettings() {
                 data-testid="input-llm-api-key"
               />
               {hasApiKey && (
-                <Badge variant="outline" className="shrink-0">
+                <Badge variant="outline" className="shrink-0 font-mono">
                   <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
-                  Saved
+                  {maskedApiKey || "Saved"}
                 </Badge>
               )}
             </div>
@@ -330,7 +334,6 @@ function LLMSettings() {
               {llmProvider === "chatgpt" && "Get your key from platform.openai.com"}
               {llmProvider === "claude" && "Get your key from console.anthropic.com"}
               {llmProvider === "grok" && "Get your key from the Grok platform"}
-              {llmProvider === "custom" && "Enter the API key for your custom endpoint"}
             </p>
           </div>
 

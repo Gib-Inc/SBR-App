@@ -1,4 +1,11 @@
 import { storage } from "../storage";
+import OpenAI from "openai";
+
+// the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+const OPENAI_MODEL = "gpt-5";
+
+// Initialize OpenAI client with API key from environment
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export type LLMProvider = "chatgpt" | "claude" | "grok" | "custom";
 
@@ -140,62 +147,152 @@ export class LLMService {
   }
 
   /**
-   * ChatGPT/OpenAI integration
+   * ChatGPT/OpenAI integration using GPT-5 model
    */
   private static async askChatGPT(request: LLMRequest): Promise<LLMResponse> {
-    // Health check returns simple success
+    // Health check - verify OpenAI connection
     if (request.taskType === "HEALTH_CHECK") {
-      return {
-        success: true,
-        data: {
-          provider: "chatgpt",
-          status: "connected",
-          timestamp: new Date().toISOString(),
-        },
-        text: "ChatGPT connection verified",
-      };
+      try {
+        // Make a simple API call to verify connection
+        const testResponse = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages: [{ role: "user", content: "Say 'OK' to confirm connection." }],
+          max_completion_tokens: 10,
+        });
+        
+        return {
+          success: true,
+          data: {
+            provider: "chatgpt",
+            model: OPENAI_MODEL,
+            status: "connected",
+            timestamp: new Date().toISOString(),
+            response: testResponse.choices[0]?.message?.content,
+          },
+          text: "ChatGPT connection verified with GPT-5",
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          error: `ChatGPT connection failed: ${error.message}`,
+          data: {
+            provider: "chatgpt",
+            status: "disconnected",
+            timestamp: new Date().toISOString(),
+          },
+        };
+      }
     }
     
-    // Stub implementation - would use OpenAI SDK in production
-    // const openai = new OpenAI({ apiKey: request.apiKey });
-    // const completion = await openai.chat.completions.create({
-    //   model: "gpt-4",
-    //   messages: [{ role: "user", content: this.buildPrompt(request) }],
-    // });
-    
+    // Order recommendation - use structured JSON output
     if (request.taskType === "order_recommendation" && request.payload?.prompt) {
+      try {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages: [
+            {
+              role: "system",
+              content: "You are an expert inventory management AI. Analyze inventory data and provide recommendations in JSON format. Always respond with valid JSON."
+            },
+            { role: "user", content: request.payload.prompt }
+          ],
+          response_format: { type: "json_object" },
+          max_completion_tokens: 8192,
+        });
+        
+        const content = response.choices[0]?.message?.content;
+        if (!content) {
+          throw new Error("No response content from OpenAI");
+        }
+        
+        const parsedData = JSON.parse(content);
+        
+        return {
+          success: true,
+          data: {
+            provider: "chatgpt",
+            model: OPENAI_MODEL,
+            ...parsedData,
+            taskType: request.taskType,
+          },
+          text: content,
+        };
+      } catch (error: any) {
+        console.error("[LLM] ChatGPT order_recommendation error:", error.message);
+        return {
+          success: false,
+          error: `ChatGPT API error: ${error.message}`,
+        };
+      }
+    }
+    
+    // Price extraction
+    if (request.taskType === "price_extraction" && request.payload?.prompt) {
+      try {
+        const response = await openai.chat.completions.create({
+          model: OPENAI_MODEL,
+          messages: [
+            {
+              role: "system",
+              content: "You are a price extraction assistant. Extract pricing information from the provided text and return JSON with: found (boolean), price (number or null), currency (string), confidence (high/medium/low), notes (string)."
+            },
+            { role: "user", content: request.payload.prompt }
+          ],
+          response_format: { type: "json_object" },
+          max_completion_tokens: 500,
+        });
+        
+        const content = response.choices[0]?.message?.content || '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "No response"}';
+        
+        return {
+          success: true,
+          text: content,
+          data: { provider: "chatgpt", model: OPENAI_MODEL, taskType: request.taskType },
+        };
+      } catch (error: any) {
+        console.error("[LLM] ChatGPT price_extraction error:", error.message);
+        return {
+          success: true,
+          text: '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "API error"}',
+          data: { provider: "chatgpt", taskType: request.taskType, error: error.message },
+        };
+      }
+    }
+    
+    // Generic request handler
+    try {
+      const prompt = this.buildPrompt(request);
+      const response = await openai.chat.completions.create({
+        model: OPENAI_MODEL,
+        messages: [{ role: "user", content: prompt }],
+        response_format: { type: "json_object" },
+        max_completion_tokens: 4096,
+      });
+      
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("No response content from OpenAI");
+      }
+      
+      const parsedData = JSON.parse(content);
+      
       return {
         success: true,
         data: {
           provider: "chatgpt",
-          recommendation: {
-            daysUntilStockout: 20,
-            willLastFourWeeks: false,
-            urgency: "high",
-            recommendedOrderQty: 150,
-            reasoning: "Based on current daily usage rate of 5 units/day and current stock of 100 units, the inventory will last approximately 20 days. This falls into the 'high' urgency category (14-21 days). Considering the 14-day supplier lead time, ordering now is recommended to avoid stockout. The recommended quantity of 150 units provides a 30-day safety buffer."
-          },
+          model: OPENAI_MODEL,
+          ...parsedData,
           taskType: request.taskType,
         },
+        text: content,
       };
-    }
-    
-    if (request.taskType === "price_extraction" && request.payload?.prompt) {
+    } catch (error: any) {
+      console.error("[LLM] ChatGPT generic error:", error.message);
       return {
-        success: true,
-        text: '{"found": true, "price": 12.99, "currency": "USD", "confidence": "medium", "notes": "Price extracted from product page"}',
-        data: { provider: "chatgpt", taskType: request.taskType },
+        success: false,
+        error: `ChatGPT API error: ${error.message}`,
       };
     }
-    
-    return {
-      success: true,
-      data: {
-        provider: "chatgpt",
-        recommendation: "Stub response from ChatGPT",
-        taskType: request.taskType,
-      },
-    };
   }
 
   /**

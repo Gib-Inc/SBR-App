@@ -6017,7 +6017,7 @@ export class PostgresStorage implements IStorage {
         .orderBy(desc(schema.quickbooksSalesSnapshots.year), desc(schema.quickbooksSalesSnapshots.month))
         .limit(pageSize)
         .offset(offset),
-      this.db.select({ count: sql<number>`count(*)::int` })
+      this.db.select({ count: drizzleSql<number>`count(*)::int` })
         .from(schema.quickbooksSalesSnapshots)
         .where(whereClause),
       this.db.selectDistinct({ year: schema.quickbooksSalesSnapshots.year })

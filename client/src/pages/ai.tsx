@@ -2200,58 +2200,6 @@ function BatchTimelineModal({
                 </details>
               )}
             </div>
-
-            {/* Timeline Section */}
-            <div className="px-6 pb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <History className="h-4 w-4" />
-                  Events Leading to Decision ({data.timeline.length})
-                </h4>
-              </div>
-
-              <div className="relative">
-                {/* Vertical timeline line */}
-                <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-border rounded-full" />
-                
-                <div className="space-y-2">
-                  {visibleEvents?.map((event, index) => (
-                    <div key={event.id} className="relative pl-8">
-                      {/* Timeline dot */}
-                      <div className={`absolute left-[7px] top-3 w-2.5 h-2.5 rounded-full ring-2 ring-background ${
-                        event.type === "LLM_DECISION" ? "bg-primary" : 
-                        event.type === "SALE" ? "bg-blue-500" :
-                        event.type === "PO_RECEIPT" ? "bg-green-500" :
-                        event.type === "RETURN" ? "bg-orange-500" :
-                        "bg-muted-foreground"
-                      }`} />
-                      
-                      <TimelineEventCard event={event} />
-                    </div>
-                  ))}
-                </div>
-                
-                {/* Show more button */}
-                {hiddenCount > 0 && !showAllEvents && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mt-3 ml-8 text-muted-foreground"
-                    onClick={() => setShowAllEvents(true)}
-                    data-testid="button-show-more-events"
-                  >
-                    Show {hiddenCount} more events
-                    <ChevronDown className="h-4 w-4 ml-1" />
-                  </Button>
-                )}
-                
-                {data.timeline.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground ml-8">
-                    No events found in the 24-hour window before this decision
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
         ) : (
           <div className="text-center py-16 text-muted-foreground">

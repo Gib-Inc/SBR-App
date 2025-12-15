@@ -125,10 +125,10 @@ function LLMSettings() {
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
   const [maskedWebhookSecret, setMaskedWebhookSecret] = useState("");
 
-  // Helper to mask API key showing first 3 and last 3 chars
+  // Helper to mask API key showing first 3 chars + *** + last 3 chars
   const maskApiKey = (key: string): string => {
     if (!key || key.length < 8) return "";
-    return `${key.slice(0, 3)}...${key.slice(-3)}`;
+    return `${key.slice(0, 3)}***${key.slice(-3)}`;
   };
 
   // Model presets for each provider

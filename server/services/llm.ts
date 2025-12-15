@@ -6,18 +6,27 @@ const OPENAI_MODEL = "gpt-5";
 
 /**
  * Get OpenAI client with API key from database settings (user-configured)
- * Falls back to environment variable only if no database key is configured
+ * Priority: 1) Explicit apiKey param, 2) Database settings, 3) Environment variable
  */
-async function getOpenAIClient(userId?: string): Promise<OpenAI> {
-  // Try to get API key from user's settings in database
-  const settings = await storage.getSettings(userId);
-  const apiKey = settings?.llmApiKey;
-  
-  if (apiKey && apiKey.trim()) {
-    return new OpenAI({ apiKey });
+async function getOpenAIClient(apiKeyOverride?: string): Promise<OpenAI> {
+  // Priority 1: Use explicit API key if provided (from request)
+  if (apiKeyOverride && apiKeyOverride.trim()) {
+    return new OpenAI({ apiKey: apiKeyOverride });
   }
   
-  // Fallback to environment variable if no database key configured
+  // Priority 2: Get API key from database settings (user-configured in Settings page)
+  try {
+    const settings = await storage.getSettings();
+    const apiKey = settings?.llmApiKey;
+    
+    if (apiKey && apiKey.trim()) {
+      return new OpenAI({ apiKey });
+    }
+  } catch (error) {
+    console.error("[LLM] Error fetching settings:", error);
+  }
+  
+  // Priority 3: Fallback to environment variable
   if (process.env.OPENAI_API_KEY) {
     console.log("[LLM] Warning: Using env OPENAI_API_KEY - configure API key in Settings for multi-user support");
     return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -170,10 +179,10 @@ export class LLMService {
    * Uses API key from database settings (user-configured)
    */
   private static async askChatGPT(request: LLMRequest): Promise<LLMResponse> {
-    // Get OpenAI client with user's configured API key
+    // Get OpenAI client - uses request.apiKey if provided, else database settings, else env var
     let openai: OpenAI;
     try {
-      openai = await getOpenAIClient();
+      openai = await getOpenAIClient(request.apiKey);
     } catch (error: any) {
       return {
         success: false,

@@ -108,6 +108,7 @@ function ItemTableRow({
   aiRecommendations,
   backorderSnapshots,
   columnVisibility,
+  safetyStockDays,
 }: { 
   item: any; 
   onDelete: (item: any) => void;
@@ -121,6 +122,7 @@ function ItemTableRow({
   aiRecommendations?: any[];
   backorderSnapshots?: any[];
   columnVisibility?: ChannelColumnVisibility;
+  safetyStockDays?: number;
 }) {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -341,10 +343,32 @@ function ItemTableRow({
             </div>
           </td>
 
-          {/* MOQ */}
+          {/* MOQ (Calculated: dailyUsage * safetyStockDays - currentStock) */}
           <td className="px-3 align-middle whitespace-nowrap">
             <div className="px-2 py-1 text-right text-sm" data-testid={`text-moq-${item.id}`}>
-              {item.primarySupplier?.minimumOrderQuantity || <span className="text-muted-foreground">—</span>}
+              {(() => {
+                const dailyUsage = item.dailyUsage || 0;
+                const bufferDays = safetyStockDays ?? 7;
+                const currentStock = item.currentStock ?? 0;
+                const calculated = Math.max(0, Math.ceil(dailyUsage * bufferDays - currentStock));
+                return calculated > 0 ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className={calculated > 0 ? "text-amber-600 dark:text-amber-400 font-medium cursor-help" : ""}>
+                          {calculated}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-xs">Units needed for {bufferDays}-day safety buffer</p>
+                        <p className="text-xs text-muted-foreground">Daily usage: {dailyUsage.toFixed(1)} | Stock: {currentStock}</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <span className="text-green-600 dark:text-green-400">0</span>
+                );
+              })()}
             </div>
           </td>
 
@@ -1583,6 +1607,7 @@ export default function BOM() {
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [isBatchProductionOpen, setIsBatchProductionOpen] = useState(false);
   const [transferItem, setTransferItem] = useState<any>(null);
+  const [isBulkTransferOpen, setIsBulkTransferOpen] = useState(false);
   const [damageAssessmentData, setDamageAssessmentData] = useState<DamageAssessmentData | null>(null);
   const { toast } = useToast();
 
@@ -1650,6 +1675,12 @@ export default function BOM() {
   const { data: backorderSnapshots = [] } = useQuery<any[]>({
     queryKey: ["/api/backorder-snapshots"],
   });
+
+  const { data: aiAgentRules } = useQuery<{ safetyStockDays?: number }>({
+    queryKey: ["/api/ai-agent-rules"],
+  });
+  
+  const safetyStockDays = aiAgentRules?.safetyStockDays ?? 7;
 
   const allItems = (items as any[]) ?? [];
   
@@ -1970,6 +2001,15 @@ export default function BOM() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setIsBulkTransferOpen(true)}
+              data-testid="button-bulk-transfer"
+            >
+              <ArrowRightLeft className="mr-2 h-4 w-4" />
+              Transfer
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setIsBatchProductionOpen(true)}
               data-testid="button-batch-production"
             >
@@ -2124,6 +2164,7 @@ export default function BOM() {
                     onReorder={setReorderItem}
                     onCostSettings={setCostSettingsItem}
                     aiRecommendations={aiRecommendations}
+                    safetyStockDays={safetyStockDays}
                   />
                 ))}
               </tbody>
@@ -2162,7 +2203,7 @@ export default function BOM() {
         onClose={() => setIsBatchProductionOpen(false)}
       />
       
-      {/* Transfer Dialog */}
+      {/* Transfer Dialog - Single Item */}
       {transferItem && (
         <TransferDialog
           isOpen={!!transferItem}
@@ -2170,6 +2211,13 @@ export default function BOM() {
           item={transferItem}
         />
       )}
+      
+      {/* Transfer Dialog - Bulk Mode */}
+      <TransferDialog
+        isOpen={isBulkTransferOpen}
+        onClose={() => setIsBulkTransferOpen(false)}
+        bulkMode={true}
+      />
       
       {/* Inventory Change Reason Dialog */}
       {pendingQuantityChange && (

@@ -100,7 +100,7 @@ export function TransferDialog({ isOpen, onClose, item }: TransferDialogProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Transfer Inventory</DialogTitle>
         </DialogHeader>

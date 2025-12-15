@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Scan, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SiShopify, SiAmazon } from "react-icons/si";
@@ -583,37 +583,6 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Category Column (only for stock inventory) */}
-      {item.type === "component" && (
-        <td className="px-3 align-middle whitespace-nowrap">
-          {editingField === "category" ? (
-            <div className="flex items-center gap-2">
-              <Input
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                className="h-8"
-                autoFocus
-                data-testid={`input-edit-category-${item.id}`}
-              />
-              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-8 w-8" data-testid={`button-save-category-${item.id}`}>
-                <Check className="h-4 w-4" />
-              </Button>
-              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-8 w-8" data-testid={`button-cancel-category-${item.id}`}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          ) : (
-            <div 
-              className="cursor-pointer rounded px-2 py-1 hover-elevate" 
-              onClick={() => startEdit("category", item.category || "")}
-              data-testid={`text-item-category-${item.id}`}
-            >
-              {item.category || <span className="text-muted-foreground">—</span>}
-            </div>
-          )}
-        </td>
-      )}
 
       {/* Actions Column */}
       <td className="sticky right-0 z-10 bg-card px-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
@@ -936,274 +905,12 @@ function BOMDialog({
   );
 }
 
-function QuickOrderDialog({ 
-  isOpen, 
-  onClose, 
-  stockItems 
-}: { 
-  isOpen: boolean; 
-  onClose: () => void; 
-  stockItems: any[];
-}) {
-  const { toast } = useToast();
-  const [selectedSupplierId, setSelectedSupplierId] = useState("");
-  const [selectedItems, setSelectedItems] = useState<Map<string, number>>(new Map());
-  const [isCreating, setIsCreating] = useState(false);
-
-  const { data: suppliers = [] } = useQuery<any[]>({
-    queryKey: ['/api/suppliers'],
-    enabled: isOpen,
-  });
-
-  const itemsForSupplier = selectedSupplierId 
-    ? stockItems.filter(item => item.primarySupplier?.supplierId === selectedSupplierId)
-    : [];
-
-  const handleQtyChange = (itemId: string, qty: number) => {
-    const newSelected = new Map(selectedItems);
-    if (qty > 0) {
-      newSelected.set(itemId, qty);
-    } else {
-      newSelected.delete(itemId);
-    }
-    setSelectedItems(newSelected);
-  };
-
-  const handleSelectAll = () => {
-    const newSelected = new Map<string, number>();
-    itemsForSupplier.forEach(item => {
-      const suggestedQty = Math.max(item.primarySupplier?.minimumOrderQuantity || 10, 10);
-      newSelected.set(item.id, suggestedQty);
-    });
-    setSelectedItems(newSelected);
-  };
-
-  const handleClearAll = () => {
-    setSelectedItems(new Map());
-  };
-
-  const createPOMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedSupplierId || selectedItems.size === 0) {
-        throw new Error("Select items to order");
-      }
-
-      const lines = Array.from(selectedItems.entries()).map(([itemId, qty]) => {
-        const item = stockItems.find(i => i.id === itemId);
-        return {
-          itemId,
-          qtyOrdered: qty,
-          unitCost: item?.defaultPurchaseCost || item?.primarySupplier?.unitCost || 0,
-        };
-      });
-
-      const res = await apiRequest("POST", "/api/purchase-orders", {
-        supplierId: selectedSupplierId,
-        status: "DRAFT",
-        lines,
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
-      toast({ 
-        title: "Purchase Order Created", 
-        description: `PO created with ${selectedItems.size} line items` 
-      });
-      handleClose();
-    },
-    onError: (error: Error) => {
-      toast({ 
-        title: "Failed to create PO", 
-        description: error.message, 
-        variant: "destructive" 
-      });
-    },
-  });
-
-  const handleClose = () => {
-    setSelectedSupplierId("");
-    setSelectedItems(new Map());
-    setIsCreating(false);
-    onClose();
-  };
-
-  const totalItems = selectedItems.size;
-  const totalQty = Array.from(selectedItems.values()).reduce((sum, qty) => sum + qty, 0);
-  const totalCost = Array.from(selectedItems.entries()).reduce((sum, [itemId, qty]) => {
-    const item = stockItems.find(i => i.id === itemId);
-    const unitCost = item?.defaultPurchaseCost || item?.primarySupplier?.unitCost || 0;
-    return sum + (qty * unitCost);
-  }, 0);
-
-  return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShoppingCart className="h-5 w-5" />
-            Quick Order from Supplier
-          </DialogTitle>
-          <p className="text-sm text-muted-foreground">
-            Select a supplier and add items to create a new purchase order
-          </p>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div>
-            <Label>Select Supplier</Label>
-            <Select value={selectedSupplierId} onValueChange={(value) => {
-              setSelectedSupplierId(value);
-              setSelectedItems(new Map());
-            }}>
-              <SelectTrigger data-testid="select-quick-order-supplier">
-                <SelectValue placeholder="Choose a supplier..." />
-              </SelectTrigger>
-              <SelectContent>
-                {suppliers.map((supplier: any) => (
-                  <SelectItem key={supplier.id} value={supplier.id}>
-                    {supplier.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {selectedSupplierId && (
-            <>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">
-                  {itemsForSupplier.length} items available from this supplier
-                </span>
-                <div className="flex gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={handleSelectAll}
-                    data-testid="button-select-all-items"
-                  >
-                    Select All
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    onClick={handleClearAll}
-                    data-testid="button-clear-all-items"
-                  >
-                    Clear All
-                  </Button>
-                </div>
-              </div>
-
-              <div className="border rounded-md max-h-[300px] overflow-y-auto">
-                <table className="w-full">
-                  <thead className="bg-muted sticky top-0">
-                    <tr className="border-b">
-                      <th className="p-2 text-left text-xs font-medium">Item</th>
-                      <th className="p-2 text-right text-xs font-medium">Stock</th>
-                      <th className="p-2 text-right text-xs font-medium">MOQ</th>
-                      <th className="p-2 text-right text-xs font-medium">Unit Cost</th>
-                      <th className="p-2 text-center text-xs font-medium w-32">Order Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {itemsForSupplier.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="p-4 text-center text-muted-foreground">
-                          No items linked to this supplier
-                        </td>
-                      </tr>
-                    ) : (
-                      itemsForSupplier.map(item => {
-                        const qty = selectedItems.get(item.id) || 0;
-                        const unitCost = item.defaultPurchaseCost || item.primarySupplier?.unitCost || 0;
-                        return (
-                          <tr key={item.id} className={`border-b last:border-b-0 ${qty > 0 ? 'bg-primary/5' : ''}`}>
-                            <td className="p-2">
-                              <div>
-                                <span className="font-medium text-sm">{item.name}</span>
-                                <span className="text-xs text-muted-foreground block">{item.sku}</span>
-                              </div>
-                            </td>
-                            <td className="p-2 text-right text-sm">{item.currentStock ?? 0}</td>
-                            <td className="p-2 text-right text-sm">{item.primarySupplier?.minimumOrderQuantity || '-'}</td>
-                            <td className="p-2 text-right text-sm">
-                              {unitCost > 0 ? `$${unitCost.toFixed(2)}` : '-'}
-                            </td>
-                            <td className="p-2">
-                              <Input
-                                type="number"
-                                min={0}
-                                value={qty || ''}
-                                onChange={(e) => handleQtyChange(item.id, parseInt(e.target.value) || 0)}
-                                className="w-24 text-center"
-                                placeholder="0"
-                                data-testid={`input-order-qty-${item.id}`}
-                              />
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {totalItems > 0 && (
-                <Card className="bg-muted/50">
-                  <CardContent className="pt-4">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <p className="text-sm font-medium">Order Summary</p>
-                        <p className="text-xs text-muted-foreground">
-                          {totalItems} items • {totalQty} total units
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold">
-                          ${totalCost.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Estimated Total</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </>
-          )}
-
-          <div className="flex justify-end gap-2 pt-4 border-t">
-            <Button variant="outline" onClick={handleClose} data-testid="button-cancel-quick-order">
-              Cancel
-            </Button>
-            <Button 
-              onClick={() => createPOMutation.mutate()} 
-              disabled={selectedItems.size === 0 || createPOMutation.isPending}
-              data-testid="button-create-quick-order"
-            >
-              {createPOMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>Create Purchase Order</>
-              )}
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
   const { toast } = useToast();
   const [orderQty, setOrderQty] = useState("");
   const [poMode, setPoMode] = useState<"new" | "existing">("new");
   const [selectedExistingPO, setSelectedExistingPO] = useState("");
+  const [selectedSupplierId, setSelectedSupplierId] = useState("");
 
   if (!item) return null;
 
@@ -1222,10 +929,10 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
   const moq = item.primarySupplier?.minimumOrderQuantity || 0;
   const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
 
-  // Fetch purchase orders and suppliers for this item's supplier
+  // Fetch purchase orders and suppliers
   const { data: allPOs = [] } = useQuery<any[]>({
     queryKey: ['/api/purchase-orders'],
-    enabled: isOpen && !!item.primarySupplier,
+    enabled: isOpen,
   });
 
   const { data: suppliers = [] } = useQuery<any[]>({
@@ -1233,7 +940,10 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
     enabled: isOpen,
   });
 
-  const supplier = suppliers.find(s => s.id === item.primarySupplier?.supplierId);
+  // Use primary supplier if available, otherwise use selected supplier
+  const supplier = item.primarySupplier 
+    ? suppliers.find(s => s.id === item.primarySupplier?.supplierId)
+    : suppliers.find(s => s.id === selectedSupplierId);
   const draftPOs = allPOs.filter(
     po => po.supplierId === supplier?.id && ['DRAFT', 'APPROVAL_PENDING'].includes(po.status)
   );
@@ -1388,8 +1098,26 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             </Card>
           ) : (
             <Card>
-              <CardContent className="py-8 text-center">
-                <p className="text-muted-foreground">No supplier configured for this item</p>
+              <CardHeader>
+                <CardTitle className="text-sm font-medium">Select Supplier</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">No primary supplier configured. Select a supplier for this order:</p>
+                <Select 
+                  value={selectedSupplierId} 
+                  onValueChange={setSelectedSupplierId}
+                >
+                  <SelectTrigger data-testid="select-supplier-for-order">
+                    <SelectValue placeholder="Choose a supplier..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suppliers.map((s: any) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </CardContent>
             </Card>
           )}
@@ -1852,9 +1580,6 @@ export default function BOM() {
   const [isVerifyingSkus, setIsVerifyingSkus] = useState(false);
   const [verificationResults, setVerificationResults] = useState<any>(null);
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
-  const [showQuickOrderDialog, setShowQuickOrderDialog] = useState(false);
-  const [selectedSupplierForOrder, setSelectedSupplierForOrder] = useState<string>("");
-  const [quickOrderItems, setQuickOrderItems] = useState<Array<{itemId: string; sku: string; name: string; qty: number}>>([]);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [isBatchProductionOpen, setIsBatchProductionOpen] = useState(false);
   const [transferItem, setTransferItem] = useState<any>(null);
@@ -2140,17 +1865,6 @@ export default function BOM() {
             <Upload className="mr-2 h-4 w-4" />
             Export
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setScanMode("FINISHED");
-              setIsScanModalOpen(true);
-            }}
-            data-testid="button-scan-inventory"
-          >
-            <Scan className="mr-2 h-4 w-4" />
-            Scan
-          </Button>
         </div>
       </div>
 
@@ -2253,18 +1967,6 @@ export default function BOM() {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setScanMode("FINISHED");
-                setIsScanModalOpen(true);
-              }}
-              data-testid="button-scan-finished-products"
-            >
-              <Scan className="mr-2 h-4 w-4" />
-              Scan Finished Products
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -2373,27 +2075,6 @@ export default function BOM() {
           </div>
           <div className="flex gap-2 flex-wrap">
             <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowQuickOrderDialog(true)}
-              data-testid="button-quick-order-supplier"
-            >
-              <ShoppingCart className="mr-2 h-4 w-4" />
-              Quick Order
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setScanMode("RAW");
-                setIsScanModalOpen(true);
-              }}
-              data-testid="button-scan-raw-materials"
-            >
-              <Scan className="mr-2 h-4 w-4" />
-              Scan Raw Materials
-            </Button>
-            <Button
               size="sm"
               onClick={() => setIsCreateStockDialogOpen(true)}
               data-testid="button-create-stock-item"
@@ -2430,7 +2111,6 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Stock</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">AI Reorder</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Category</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
@@ -2577,17 +2257,6 @@ export default function BOM() {
       <SkuMappingWizard
         isOpen={isSkuMappingWizardOpen}
         onClose={() => setIsSkuMappingWizardOpen(false)}
-      />
-
-      {/* Quick Order from Supplier Dialog */}
-      <QuickOrderDialog
-        isOpen={showQuickOrderDialog}
-        onClose={() => {
-          setShowQuickOrderDialog(false);
-          setSelectedSupplierForOrder("");
-          setQuickOrderItems([]);
-        }}
-        stockItems={stockInventory}
       />
 
       {/* Verify Channel SKUs Results Modal */}

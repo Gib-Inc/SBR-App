@@ -932,7 +932,7 @@ function RulesTab() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <Label htmlFor="safety-stock">Safety Stock Buffer</Label>
+                    <Label htmlFor="safety-stock">Safety Stock Buffer (MOQ)</Label>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-safety-stock-info" />

@@ -2081,6 +2081,23 @@ function BatchTimelineModal({
                 </div>
               </details>
 
+              {/* Ads Report Section - Meta & Google Ads Summaries */}
+              <details className="group border rounded-lg" data-testid="section-ads-report">
+                <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
+                  <h4 className="text-sm font-medium flex items-center gap-2">
+                    <Zap className="h-4 w-4" />
+                    Ads Report
+                    <Badge variant="outline" className="text-xs ml-2">Coming Soon</Badge>
+                  </h4>
+                  <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="px-4 py-4">
+                  <p className="text-sm text-muted-foreground">
+                    Meta and Google Ads performance summaries will appear here once connected. This data helps the AI agent make better ordering decisions based on ad spend and demand signals.
+                  </p>
+                </div>
+              </details>
+
               {/* Inventory Report Section - Pivot & Hildale Qty by SKU */}
               {data.recommendations && data.recommendations.length > 0 && (
                 <details className="group border rounded-lg" data-testid="section-inventory-report">

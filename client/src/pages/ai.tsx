@@ -3157,6 +3157,39 @@ interface LogsResponse {
   };
 }
 
+interface SystemLogEntry {
+  id: string;
+  type: string;
+  entityType: string | null;
+  entityId: string | null;
+  severity: string;
+  code: string | null;
+  message: string;
+  details: Record<string, any> | null;
+  createdAt: string;
+}
+
+interface AIBatchLogEntry {
+  id: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: string;
+  reason: string;
+  affectedSkus: string[] | null;
+  totalSkus: number;
+  processedSkus: number;
+  criticalItemsFound: number;
+  orderTodayCount: number;
+  safeUntilTomorrowCount: number;
+  llmProvider: string | null;
+  llmModel: string | null;
+  llmResponseTimeMs: number | null;
+  errorMessage: string | null;
+  aiDecisionSummary: string | null;
+  urgencyLevel: string | null;
+  createdAt: string;
+}
+
 interface SyncedRecord {
   id: string;
   orderNumber?: string;
@@ -3301,6 +3334,11 @@ function SyncedRecordsTable({ records }: { records: SyncedRecord[] }) {
 }
 
 function LogsTab() {
+  const { toast } = useToast();
+  const [logSubTab, setLogSubTab] = useState<"audit" | "system" | "scheduler">("audit");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  
+  // Audit logs state
   const [page, setPage] = useState(1);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>("all");
@@ -3309,9 +3347,18 @@ function LogsTab() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedLog, setSelectedLog] = useState<AuditLogEntry | null>(null);
   
+  // System logs state
+  const [sysLogSeverity, setSysLogSeverity] = useState<string>("all");
+  const [sysLogType, setSysLogType] = useState<string>("all");
+  const [sysLogSearch, setSysLogSearch] = useState("");
+  const [selectedSysLog, setSelectedSysLog] = useState<SystemLogEntry | null>(null);
+  
+  // Scheduler/batch logs state
+  const [selectedBatchLog, setSelectedBatchLog] = useState<AIBatchLogEntry | null>(null);
+  
   const pageSize = 25;
   
-  // Build query params - must be inside the component to use state values
+  // Build query params for audit logs
   const buildQueryParams = () => {
     const params = new URLSearchParams();
     params.set("page", page.toString());
@@ -3324,6 +3371,7 @@ function LogsTab() {
     return params.toString();
   };
   
+  // Audit logs query
   const { data: logsData, isLoading, refetch, isFetching } = useQuery<LogsResponse>({
     queryKey: ["/api/ai/logs", page, eventTypeFilter, entityTypeFilter, sourceFilter, statusFilter, searchQuery],
     queryFn: async () => {
@@ -3333,34 +3381,45 @@ function LogsTab() {
       if (!response.ok) throw new Error("Failed to fetch logs");
       return response.json();
     },
+    refetchInterval: autoRefresh ? 10000 : false,
+  });
+  
+  // System logs query
+  const { data: systemLogsData, isLoading: sysLoading, refetch: refetchSysLogs, isFetching: sysFetching } = useQuery<SystemLogEntry[]>({
+    queryKey: ["/api/system-logs", sysLogSeverity, sysLogType],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (sysLogSeverity !== "all") params.set("severity", sysLogSeverity);
+      if (sysLogType !== "all") params.set("type", sysLogType);
+      const response = await fetch(`/api/system-logs?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch system logs");
+      return response.json();
+    },
+    refetchInterval: autoRefresh ? 10000 : false,
+  });
+  
+  // AI batch logs query
+  const { data: batchLogsData, isLoading: batchLoading, refetch: refetchBatchLogs, isFetching: batchFetching } = useQuery<AIBatchLogEntry[]>({
+    queryKey: ["/api/ai-batch-logs"],
+    refetchInterval: autoRefresh ? 10000 : false,
   });
   
   const eventTypes = [
-    "PO_CREATED",
-    "PO_SENT_GHL_EMAIL",
-    "PO_SENT_GHL_SMS",
-    "PO_SEND_FAILED",
-    "SALES_ORDER_IMPORTED",
-    "RETURN_CREATED",
-    "RETURN_LABEL_ISSUED",
-    "RETURN_RECEIVED",
-    "INVENTORY_UPDATED",
-    "AI_RECOMMENDATION",
-    "INTEGRATION_SYNC",
-    "SHOPIFY_SYNC",
-    "AMAZON_SYNC",
-    "CONNECTION_TEST",
-    "SALES_SYNC",
-    "SALES_SYNC_ERROR",
-    "DEMAND_HISTORY_SYNC",
-    "DEMAND_HISTORY_SYNC_ERROR",
-    "TOKEN_REFRESH",
-    "TOKEN_REFRESH_ERROR",
-    "BILL_CREATED",
-    "BILL_CREATE_ERROR",
-    "REFUND_CREATED",
-    "REFUND_CREATE_ERROR",
-    "VENDOR_CREATED",
+    "PO_CREATED", "PO_SENT_GHL_EMAIL", "PO_SENT_GHL_SMS", "PO_SEND_FAILED",
+    "SALES_ORDER_IMPORTED", "RETURN_CREATED", "RETURN_LABEL_ISSUED", "RETURN_RECEIVED",
+    "INVENTORY_UPDATED", "AI_RECOMMENDATION", "INTEGRATION_SYNC", "SHOPIFY_SYNC",
+    "AMAZON_SYNC", "CONNECTION_TEST", "SALES_SYNC", "SALES_SYNC_ERROR",
+    "DEMAND_HISTORY_SYNC", "DEMAND_HISTORY_SYNC_ERROR", "TOKEN_REFRESH",
+    "TOKEN_REFRESH_ERROR", "BILL_CREATED", "BILL_CREATE_ERROR",
+    "REFUND_CREATED", "REFUND_CREATE_ERROR", "VENDOR_CREATED",
+  ];
+  
+  const systemLogTypes = [
+    "SKU_MISMATCH", "API_ERROR", "EXTENSIV_SYNC", "EXTENSIV_REBALANCE_ALERT",
+    "EXTENSIV_ACTIVITY_SYNC", "SHIPPO_ERROR", "GHL_SYNC_ERROR", "GHL_SYNC_INFO",
+    "RETURN_EVENT", "INVENTORY_ADJUSTMENT", "SHOPIFY_RECONCILIATION", "INFO", "WARNING", "ERROR",
   ];
   
   const entityTypes = ["PO", "ORDER", "RETURN", "ITEM", "SUPPLIER", "PURCHASE_ORDER", "RETURN_REQUEST"];
@@ -3373,6 +3432,35 @@ function LogsTab() {
       case "FAILED": return "destructive" as const;
       case "PENDING": return "secondary" as const;
       default: return "outline" as const;
+    }
+  };
+  
+  const getSeverityBadge = (severity: string) => {
+    switch (severity?.toUpperCase()) {
+      case "ERROR": return <Badge variant="destructive" className="text-xs">ERROR</Badge>;
+      case "WARNING": return <Badge className="bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 text-xs">WARNING</Badge>;
+      case "INFO": return <Badge variant="secondary" className="text-xs">INFO</Badge>;
+      default: return <Badge variant="outline" className="text-xs">{severity}</Badge>;
+    }
+  };
+  
+  const getBatchStatusBadge = (status: string) => {
+    switch (status?.toUpperCase()) {
+      case "SUCCESS": return <Badge variant="default" className="text-xs">SUCCESS</Badge>;
+      case "FAILED": return <Badge variant="destructive" className="text-xs">FAILED</Badge>;
+      case "RUNNING": return <Badge className="bg-blue-500/20 text-blue-700 dark:text-blue-400 text-xs">RUNNING</Badge>;
+      case "PARTIAL": return <Badge className="bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 text-xs">PARTIAL</Badge>;
+      default: return <Badge variant="outline" className="text-xs">{status}</Badge>;
+    }
+  };
+  
+  const getReasonBadge = (reason: string) => {
+    switch (reason) {
+      case "SCHEDULED_10AM": return <Badge variant="outline" className="text-xs">10 AM Batch</Badge>;
+      case "SCHEDULED_3PM": return <Badge variant="outline" className="text-xs">3 PM Batch</Badge>;
+      case "CRITICAL_TRIGGER": return <Badge className="bg-red-500/20 text-red-700 dark:text-red-400 text-xs">Critical Trigger</Badge>;
+      case "MANUAL": return <Badge variant="secondary" className="text-xs">Manual</Badge>;
+      default: return <Badge variant="outline" className="text-xs">{reason}</Badge>;
     }
   };
   
@@ -3390,6 +3478,16 @@ function LogsTab() {
     return date.toLocaleString();
   };
   
+  const formatDuration = (startStr: string, endStr: string | null) => {
+    if (!endStr) return "In progress...";
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    const durationMs = end.getTime() - start.getTime();
+    if (durationMs < 1000) return `${durationMs}ms`;
+    if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
+    return `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`;
+  };
+  
   const handleClearFilters = () => {
     setEventTypeFilter("all");
     setEntityTypeFilter("all");
@@ -3399,255 +3497,490 @@ function LogsTab() {
     setPage(1);
   };
   
+  const handleExportLogs = () => {
+    let exportData: any[] = [];
+    let filename = "";
+    
+    if (logSubTab === "audit" && logsData?.logs) {
+      exportData = logsData.logs;
+      filename = `audit-logs-${new Date().toISOString().split('T')[0]}.json`;
+    } else if (logSubTab === "system" && systemLogsData) {
+      exportData = systemLogsData;
+      filename = `system-logs-${new Date().toISOString().split('T')[0]}.json`;
+    } else if (logSubTab === "scheduler" && batchLogsData) {
+      exportData = batchLogsData;
+      filename = `scheduler-logs-${new Date().toISOString().split('T')[0]}.json`;
+    }
+    
+    if (exportData.length === 0) {
+      toast({ title: "No data to export", variant: "destructive" });
+      return;
+    }
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: "Logs exported", description: `Downloaded ${filename}` });
+  };
+  
   const hasActiveFilters = eventTypeFilter !== "all" || entityTypeFilter !== "all" || sourceFilter !== "all" || statusFilter !== "all" || searchQuery !== "";
   
-  if (isLoading) {
+  // Filter system logs by search
+  const filteredSystemLogs = (systemLogsData || []).filter(log => {
+    if (!sysLogSearch) return true;
+    const searchLower = sysLogSearch.toLowerCase();
     return (
-      <div className="space-y-4">
-        <Card className="mt-8">
-          <CardHeader>
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="h-4 w-96" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="h-64 w-full" />
-          </CardContent>
-        </Card>
-      </div>
+      log.message.toLowerCase().includes(searchLower) ||
+      log.type.toLowerCase().includes(searchLower) ||
+      log.code?.toLowerCase().includes(searchLower) ||
+      log.entityId?.toLowerCase().includes(searchLower)
     );
-  }
+  });
   
   return (
     <div className="space-y-4">
       <Card className="mt-8">
         <CardHeader>
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                System Logs
+                Developer Logs
               </CardTitle>
               <CardDescription>
-                Track all system events including order imports, returns, PO sending, and AI decisions
+                Comprehensive logging for debugging, monitoring, and auditing system activity
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => refetch()}
-                    disabled={isFetching}
-                    data-testid="button-refresh-logs"
-                  >
-                    <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
-                    Refresh Logs
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Reload the latest system logs</TooltipContent>
-              </Tooltip>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-muted rounded-lg">
+                <Switch
+                  id="auto-refresh"
+                  checked={autoRefresh}
+                  onCheckedChange={setAutoRefresh}
+                  data-testid="switch-auto-refresh"
+                />
+                <Label htmlFor="auto-refresh" className="text-sm cursor-pointer">
+                  Auto-refresh (10s)
+                </Label>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportLogs}
+                data-testid="button-export-logs"
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                Export JSON
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (logSubTab === "audit") refetch();
+                  else if (logSubTab === "system") refetchSysLogs();
+                  else refetchBatchLogs();
+                }}
+                disabled={isFetching || sysFetching || batchFetching}
+                data-testid="button-refresh-logs"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${(isFetching || sysFetching || batchFetching) ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3 p-3 bg-muted rounded-lg">
-            <div className="flex items-center gap-2">
-              <Filter className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Filters:</span>
-            </div>
+          {/* Inner tabs for log types */}
+          <Tabs value={logSubTab} onValueChange={(v) => setLogSubTab(v as any)}>
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="audit" data-testid="tab-audit-logs">
+                <History className="mr-2 h-4 w-4" />
+                Audit Logs
+              </TabsTrigger>
+              <TabsTrigger value="system" data-testid="tab-system-logs">
+                <AlertTriangle className="mr-2 h-4 w-4" />
+                System Logs
+              </TabsTrigger>
+              <TabsTrigger value="scheduler" data-testid="tab-scheduler-logs">
+                <Clock className="mr-2 h-4 w-4" />
+                Scheduler Logs
+              </TabsTrigger>
+            </TabsList>
             
-            <Select value={eventTypeFilter} onValueChange={(v) => { setEventTypeFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-[180px]" data-testid="select-event-type">
-                <SelectValue placeholder="Event Type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Events</SelectItem>
-                {eventTypes.map((type) => (
-                  <SelectItem key={type} value={type}>{type.replace(/_/g, " ")}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            
-            <Select value={entityTypeFilter} onValueChange={(v) => { setEntityTypeFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-[140px]" data-testid="select-entity-type">
-                <SelectValue placeholder="Entity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Entities</SelectItem>
-                {entityTypes.map((type) => (
-                  <SelectItem key={type} value={type}>{type}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            
-            <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-[130px]" data-testid="select-source">
-                <SelectValue placeholder="Source" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Sources</SelectItem>
-                {sources.map((source) => (
-                  <SelectItem key={source} value={source}>{source}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            
-            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
-              <SelectTrigger className="w-[120px]" data-testid="select-status">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                {statuses.map((status) => (
-                  <SelectItem key={status} value={status}>{status}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search logs..."
-                value={searchQuery}
-                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
-                className="pl-8 w-[180px]"
-                data-testid="input-search-logs"
-              />
-            </div>
-            
-            {hasActiveFilters && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={handleClearFilters}
-                data-testid="button-clear-filters"
-              >
-                <XCircle className="mr-1 h-4 w-4" />
-                Clear
-              </Button>
-            )}
-          </div>
-          
-          {/* Logs Table */}
-          <div className="rounded-md border overflow-auto max-h-[500px]">
-            <table className="w-full table-auto text-sm">
-              <thead className="bg-muted/50 sticky top-0 z-10">
-                <tr>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Event</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Entity</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Source</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Status</th>
-                  <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logsData?.logs && logsData.logs.length > 0 ? (
-                  logsData.logs.map((log) => (
-                    <tr 
-                      key={log.id} 
-                      className="h-11 border-b hover-elevate cursor-pointer" 
-                      data-testid={`row-log-${log.id}`}
-                      onClick={() => setSelectedLog(log)}
-                    >
-                      <td className="px-4 text-muted-foreground whitespace-nowrap">
-                        {formatDate(log.createdAt)}
-                      </td>
-                      <td className="px-4">
-                        <div className="flex items-center gap-2 whitespace-nowrap">
-                          {getEventIcon(log.eventType)}
-                          <span className="font-medium">{log.eventType.replace(/_/g, " ")}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 whitespace-nowrap">
-                        {log.entityType ? (
-                          <Badge variant="outline" className="text-xs">
-                            {log.entityType}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </td>
-                      <td className="px-4 whitespace-nowrap">
-                        {log.source || "-"}
-                      </td>
-                      <td className="px-4 whitespace-nowrap">
-                        {log.status ? (
-                          <Badge variant={getStatusBadgeVariant(log.status)} className="text-xs">
-                            {log.status}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
-                      </td>
-                      <td className="px-4 max-w-[300px] truncate">
-                        {log.description || "-"}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="h-32 text-center">
-                      <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
-                        <FileText className="h-8 w-8" />
-                        <p className="font-medium">No logs found</p>
-                        <p className="text-sm">
-                          {hasActiveFilters 
-                            ? "Try adjusting your filters to see more results" 
-                            : "System logs will appear here as actions occur"}
-                        </p>
-                        {hasActiveFilters && (
-                          <Button size="sm" variant="link" onClick={handleClearFilters}>
-                            Clear all filters
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+            {/* AUDIT LOGS TAB */}
+            <TabsContent value="audit" className="space-y-4">
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-3 p-3 bg-muted rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Filters:</span>
+                </div>
+                
+                <Select value={eventTypeFilter} onValueChange={(v) => { setEventTypeFilter(v); setPage(1); }}>
+                  <SelectTrigger className="w-[180px]" data-testid="select-event-type">
+                    <SelectValue placeholder="Event Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Events</SelectItem>
+                    {eventTypes.map((type) => (
+                      <SelectItem key={type} value={type}>{type.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Select value={entityTypeFilter} onValueChange={(v) => { setEntityTypeFilter(v); setPage(1); }}>
+                  <SelectTrigger className="w-[140px]" data-testid="select-entity-type">
+                    <SelectValue placeholder="Entity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Entities</SelectItem>
+                    {entityTypes.map((type) => (
+                      <SelectItem key={type} value={type}>{type}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(1); }}>
+                  <SelectTrigger className="w-[130px]" data-testid="select-source">
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Sources</SelectItem>
+                    {sources.map((source) => (
+                      <SelectItem key={source} value={source}>{source}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1); }}>
+                  <SelectTrigger className="w-[120px]" data-testid="select-status">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Status</SelectItem>
+                    {statuses.map((status) => (
+                      <SelectItem key={status} value={status}>{status}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search logs..."
+                    value={searchQuery}
+                    onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+                    className="pl-8 w-[180px]"
+                    data-testid="input-search-logs"
+                  />
+                </div>
+                
+                {hasActiveFilters && (
+                  <Button size="sm" variant="ghost" onClick={handleClearFilters} data-testid="button-clear-filters">
+                    <XCircle className="mr-1 h-4 w-4" />
+                    Clear
+                  </Button>
                 )}
-              </tbody>
-            </table>
-          </div>
-          
-          {/* Pagination */}
-          {logsData?.pagination && logsData.pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between px-2">
-              <p className="text-sm text-muted-foreground">
-                Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, logsData.pagination.total)} of {logsData.pagination.total} logs
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  data-testid="button-prev-page"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  Previous
-                </Button>
-                <span className="text-sm text-muted-foreground px-2">
-                  Page {page} of {logsData.pagination.totalPages}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setPage(p => Math.min(logsData.pagination.totalPages, p + 1))}
-                  disabled={page >= logsData.pagination.totalPages}
-                  data-testid="button-next-page"
-                >
-                  Next
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
               </div>
-            </div>
-          )}
+              
+              {isLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <>
+                  {/* Audit Logs Table */}
+                  <div className="rounded-md border overflow-auto max-h-[500px]">
+                    <table className="w-full table-auto text-sm">
+                      <thead className="bg-muted/50 sticky top-0 z-10">
+                        <tr>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Event</th>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Entity</th>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Source</th>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Status</th>
+                          <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logsData?.logs && logsData.logs.length > 0 ? (
+                          logsData.logs.map((log) => (
+                            <tr 
+                              key={log.id} 
+                              className="h-11 border-b hover-elevate cursor-pointer" 
+                              data-testid={`row-log-${log.id}`}
+                              onClick={() => setSelectedLog(log)}
+                            >
+                              <td className="px-4 text-muted-foreground whitespace-nowrap font-mono text-xs">
+                                {formatDate(log.createdAt)}
+                              </td>
+                              <td className="px-4">
+                                <div className="flex items-center gap-2 whitespace-nowrap">
+                                  {getEventIcon(log.eventType)}
+                                  <span className="font-medium">{log.eventType.replace(/_/g, " ")}</span>
+                                </div>
+                              </td>
+                              <td className="px-4 whitespace-nowrap">
+                                {log.entityType ? <Badge variant="outline" className="text-xs">{log.entityType}</Badge> : <span className="text-muted-foreground">-</span>}
+                              </td>
+                              <td className="px-4 whitespace-nowrap">{log.source || "-"}</td>
+                              <td className="px-4 whitespace-nowrap">
+                                {log.status ? <Badge variant={getStatusBadgeVariant(log.status)} className="text-xs">{log.status}</Badge> : <span className="text-muted-foreground">-</span>}
+                              </td>
+                              <td className="px-4 max-w-[300px] truncate">{log.description || "-"}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={6} className="h-32 text-center">
+                              <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
+                                <FileText className="h-8 w-8" />
+                                <p className="font-medium">No logs found</p>
+                                <p className="text-sm">{hasActiveFilters ? "Try adjusting your filters" : "Logs will appear here"}</p>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  {/* Pagination */}
+                  {logsData?.pagination && logsData.pagination.totalPages > 1 && (
+                    <div className="flex items-center justify-between px-2">
+                      <p className="text-sm text-muted-foreground">
+                        Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, logsData.pagination.total)} of {logsData.pagination.total}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} data-testid="button-prev-page">
+                          <ChevronLeft className="h-4 w-4" /> Previous
+                        </Button>
+                        <span className="text-sm text-muted-foreground px-2">Page {page} of {logsData.pagination.totalPages}</span>
+                        <Button size="sm" variant="outline" onClick={() => setPage(p => Math.min(logsData.pagination.totalPages, p + 1))} disabled={page >= logsData.pagination.totalPages} data-testid="button-next-page">
+                          Next <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </TabsContent>
+            
+            {/* SYSTEM LOGS TAB */}
+            <TabsContent value="system" className="space-y-4">
+              {/* System logs filters */}
+              <div className="flex flex-wrap items-center gap-3 p-3 bg-muted rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Filter className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Filters:</span>
+                </div>
+                
+                <Select value={sysLogSeverity} onValueChange={setSysLogSeverity}>
+                  <SelectTrigger className="w-[130px]" data-testid="select-sys-severity">
+                    <SelectValue placeholder="Severity" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Severity</SelectItem>
+                    <SelectItem value="ERROR">ERROR</SelectItem>
+                    <SelectItem value="WARNING">WARNING</SelectItem>
+                    <SelectItem value="INFO">INFO</SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                <Select value={sysLogType} onValueChange={setSysLogType}>
+                  <SelectTrigger className="w-[180px]" data-testid="select-sys-type">
+                    <SelectValue placeholder="Log Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Types</SelectItem>
+                    {systemLogTypes.map((type) => (
+                      <SelectItem key={type} value={type}>{type.replace(/_/g, " ")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search message, code, entity..."
+                    value={sysLogSearch}
+                    onChange={(e) => setSysLogSearch(e.target.value)}
+                    className="pl-8 w-[220px]"
+                    data-testid="input-search-sys-logs"
+                  />
+                </div>
+              </div>
+              
+              {/* Stats summary */}
+              {systemLogsData && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 bg-red-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-red-600">{systemLogsData.filter(l => l.severity === "ERROR").length}</p>
+                    <p className="text-xs text-muted-foreground">Errors</p>
+                  </div>
+                  <div className="p-3 bg-yellow-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-yellow-600">{systemLogsData.filter(l => l.severity === "WARNING").length}</p>
+                    <p className="text-xs text-muted-foreground">Warnings</p>
+                  </div>
+                  <div className="p-3 bg-blue-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-blue-600">{systemLogsData.filter(l => l.severity === "INFO").length}</p>
+                    <p className="text-xs text-muted-foreground">Info</p>
+                  </div>
+                </div>
+              )}
+              
+              {sysLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <div className="rounded-md border overflow-auto max-h-[500px]">
+                  <table className="w-full table-auto text-sm">
+                    <thead className="bg-muted/50 sticky top-0 z-10">
+                      <tr>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Timestamp</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Severity</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Type</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Code</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSystemLogs.length > 0 ? (
+                        filteredSystemLogs.slice(0, 100).map((log) => (
+                          <tr 
+                            key={log.id} 
+                            className="h-11 border-b hover-elevate cursor-pointer" 
+                            data-testid={`row-syslog-${log.id}`}
+                            onClick={() => setSelectedSysLog(log)}
+                          >
+                            <td className="px-4 text-muted-foreground whitespace-nowrap font-mono text-xs">
+                              {formatDate(log.createdAt)}
+                            </td>
+                            <td className="px-4 whitespace-nowrap">{getSeverityBadge(log.severity)}</td>
+                            <td className="px-4 whitespace-nowrap">
+                              <Badge variant="outline" className="text-xs">{log.type.replace(/_/g, " ")}</Badge>
+                            </td>
+                            <td className="px-4 whitespace-nowrap font-mono text-xs">{log.code || "-"}</td>
+                            <td className="px-4 max-w-[400px] truncate">{log.message}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="h-32 text-center">
+                            <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
+                              <AlertTriangle className="h-8 w-8" />
+                              <p className="font-medium">No system logs found</p>
+                              <p className="text-sm">System events will appear here</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </TabsContent>
+            
+            {/* SCHEDULER LOGS TAB */}
+            <TabsContent value="scheduler" className="space-y-4">
+              {/* Scheduler stats */}
+              {batchLogsData && batchLogsData.length > 0 && (
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="p-3 bg-muted rounded-lg text-center">
+                    <p className="text-2xl font-bold">{batchLogsData.length}</p>
+                    <p className="text-xs text-muted-foreground">Total Runs</p>
+                  </div>
+                  <div className="p-3 bg-green-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-green-600">{batchLogsData.filter(l => l.status === "SUCCESS").length}</p>
+                    <p className="text-xs text-muted-foreground">Successful</p>
+                  </div>
+                  <div className="p-3 bg-red-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-red-600">{batchLogsData.filter(l => l.status === "FAILED").length}</p>
+                    <p className="text-xs text-muted-foreground">Failed</p>
+                  </div>
+                  <div className="p-3 bg-blue-500/10 rounded-lg text-center">
+                    <p className="text-2xl font-bold text-blue-600">
+                      {batchLogsData.reduce((sum, l) => sum + (l.criticalItemsFound || 0), 0)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Critical Items Found</p>
+                  </div>
+                </div>
+              )}
+              
+              {batchLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <div className="rounded-md border overflow-auto max-h-[500px]">
+                  <table className="w-full table-auto text-sm">
+                    <thead className="bg-muted/50 sticky top-0 z-10">
+                      <tr>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Started</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Duration</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Reason</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap w-px">Status</th>
+                        <th className="h-11 px-4 text-center font-medium text-muted-foreground whitespace-nowrap w-px">SKUs</th>
+                        <th className="h-11 px-4 text-center font-medium text-muted-foreground whitespace-nowrap w-px">Critical</th>
+                        <th className="h-11 px-4 text-center font-medium text-muted-foreground whitespace-nowrap w-px">Order Today</th>
+                        <th className="h-11 px-4 text-left font-medium text-muted-foreground whitespace-nowrap">LLM</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchLogsData && batchLogsData.length > 0 ? (
+                        batchLogsData.map((log) => (
+                          <tr 
+                            key={log.id} 
+                            className="h-11 border-b hover-elevate cursor-pointer" 
+                            data-testid={`row-batch-${log.id}`}
+                            onClick={() => setSelectedBatchLog(log)}
+                          >
+                            <td className="px-4 text-muted-foreground whitespace-nowrap font-mono text-xs">
+                              {formatDate(log.startedAt)}
+                            </td>
+                            <td className="px-4 whitespace-nowrap font-mono text-xs">
+                              {formatDuration(log.startedAt, log.finishedAt)}
+                            </td>
+                            <td className="px-4 whitespace-nowrap">{getReasonBadge(log.reason)}</td>
+                            <td className="px-4 whitespace-nowrap">{getBatchStatusBadge(log.status)}</td>
+                            <td className="px-4 text-center font-mono">{log.processedSkus}/{log.totalSkus}</td>
+                            <td className="px-4 text-center">
+                              {log.criticalItemsFound > 0 ? (
+                                <Badge className="bg-red-500/20 text-red-700 dark:text-red-400">{log.criticalItemsFound}</Badge>
+                              ) : (
+                                <span className="text-muted-foreground">0</span>
+                              )}
+                            </td>
+                            <td className="px-4 text-center font-mono">{log.orderTodayCount || 0}</td>
+                            <td className="px-4 whitespace-nowrap text-xs">
+                              {log.llmProvider && log.llmModel ? (
+                                <span className="font-mono">{log.llmProvider}/{log.llmModel}</span>
+                              ) : (
+                                <span className="text-muted-foreground">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={8} className="h-32 text-center">
+                            <div className="flex flex-col items-center gap-2 text-muted-foreground py-8">
+                              <Clock className="h-8 w-8" />
+                              <p className="font-medium">No scheduler runs found</p>
+                              <p className="text-sm">AI batch runs will appear here (10 AM and 3 PM MT)</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
       
-      {/* Log Detail Dialog */}
+      {/* Audit Log Detail Dialog */}
       <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
@@ -3655,105 +3988,98 @@ function LogsTab() {
               {selectedLog && getEventIcon(selectedLog.eventType)}
               {selectedLog?.eventType.replace(/_/g, " ")}
             </DialogTitle>
-            <DialogDescription>
-              {selectedLog && formatDate(selectedLog.createdAt)}
-            </DialogDescription>
+            <DialogDescription>{selectedLog && formatDate(selectedLog.createdAt)}</DialogDescription>
           </DialogHeader>
           {selectedLog && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Entity Type</p>
-                  <p className="font-medium">{selectedLog.entityType || "N/A"}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Entity ID</p>
-                  <p className="font-medium font-mono text-sm">{selectedLog.entityId || "N/A"}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Source</p>
-                  <p className="font-medium">{selectedLog.source || "N/A"}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Status</p>
-                  {selectedLog.status ? (
-                    <Badge variant={getStatusBadgeVariant(selectedLog.status)}>
-                      {selectedLog.status}
-                    </Badge>
-                  ) : (
-                    <span>N/A</span>
-                  )}
-                </div>
+                <div><p className="text-sm text-muted-foreground">Entity Type</p><p className="font-medium">{selectedLog.entityType || "N/A"}</p></div>
+                <div><p className="text-sm text-muted-foreground">Entity ID</p><p className="font-medium font-mono text-sm">{selectedLog.entityId || "N/A"}</p></div>
+                <div><p className="text-sm text-muted-foreground">Source</p><p className="font-medium">{selectedLog.source || "N/A"}</p></div>
+                <div><p className="text-sm text-muted-foreground">Status</p>{selectedLog.status ? <Badge variant={getStatusBadgeVariant(selectedLog.status)}>{selectedLog.status}</Badge> : <span>N/A</span>}</div>
               </div>
-              
               {selectedLog.description && (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Description</p>
-                  <div className="p-3 bg-muted rounded-lg">
-                    <p className="text-sm">{selectedLog.description}</p>
-                  </div>
-                </div>
+                <div><p className="text-sm text-muted-foreground mb-1">Description</p><div className="p-3 bg-muted rounded-lg"><p className="text-sm">{selectedLog.description}</p></div></div>
               )}
-              
-              {/* Synced Records Table for INTEGRATION_SYNC logs */}
-              {selectedLog.eventType === "INTEGRATION_SYNC" && 
-               selectedLog.details?.syncedRecords && 
-               Array.isArray(selectedLog.details.syncedRecords) && 
-               selectedLog.details.syncedRecords.length > 0 && (
+              {selectedLog.eventType === "INTEGRATION_SYNC" && selectedLog.details?.syncedRecords && Array.isArray(selectedLog.details.syncedRecords) && selectedLog.details.syncedRecords.length > 0 && (
                 <SyncedRecordsTable records={selectedLog.details.syncedRecords} />
               )}
-              
-              {/* Summary stats for sync logs without detailed records */}
-              {selectedLog.eventType === "INTEGRATION_SYNC" && 
-               selectedLog.details && 
-               !selectedLog.details.syncedRecords && (
-                <div className="grid grid-cols-4 gap-3">
-                  {selectedLog.details.recordsProcessed !== undefined && (
-                    <div className="p-3 bg-muted rounded-lg text-center">
-                      <p className="text-2xl font-bold">{selectedLog.details.recordsProcessed}</p>
-                      <p className="text-xs text-muted-foreground">Processed</p>
-                    </div>
-                  )}
-                  {selectedLog.details.recordsCreated !== undefined && (
-                    <div className="p-3 bg-green-500/10 rounded-lg text-center">
-                      <p className="text-2xl font-bold text-green-600">{selectedLog.details.recordsCreated}</p>
-                      <p className="text-xs text-muted-foreground">Created</p>
-                    </div>
-                  )}
-                  {selectedLog.details.recordsUpdated !== undefined && (
-                    <div className="p-3 bg-blue-500/10 rounded-lg text-center">
-                      <p className="text-2xl font-bold text-blue-600">{selectedLog.details.recordsUpdated}</p>
-                      <p className="text-xs text-muted-foreground">Updated</p>
-                    </div>
-                  )}
-                  {selectedLog.details.recordsSkipped !== undefined && (
-                    <div className="p-3 bg-yellow-500/10 rounded-lg text-center">
-                      <p className="text-2xl font-bold text-yellow-600">{selectedLog.details.recordsSkipped}</p>
-                      <p className="text-xs text-muted-foreground">Skipped</p>
-                    </div>
-                  )}
-                </div>
+              {selectedLog.details && Object.keys(selectedLog.details).length > 0 && !selectedLog.details.syncedRecords && (
+                <div><p className="text-sm text-muted-foreground mb-1">Details (JSON)</p><ScrollArea className="h-[200px]"><pre className="p-3 bg-muted rounded-lg text-xs font-mono overflow-x-auto">{JSON.stringify(selectedLog.details, null, 2)}</pre></ScrollArea></div>
               )}
-              
-              {/* Show raw details for non-sync logs */}
-              {selectedLog.eventType !== "INTEGRATION_SYNC" && 
-               selectedLog.details && 
-               Object.keys(selectedLog.details).length > 0 && (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Details</p>
-                  <ScrollArea className="h-[200px]">
-                    <pre className="p-3 bg-muted rounded-lg text-xs font-mono overflow-x-auto">
-                      {JSON.stringify(selectedLog.details, null, 2)}
-                    </pre>
-                  </ScrollArea>
-                </div>
-              )}
-              
               {selectedLog.performedByUserId && (
-                <div>
-                  <p className="text-sm text-muted-foreground">Performed By</p>
-                  <p className="font-medium font-mono text-sm">{selectedLog.performedByUserId}</p>
+                <div><p className="text-sm text-muted-foreground">Performed By</p><p className="font-medium font-mono text-sm">{selectedLog.performedByUserId}</p></div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      
+      {/* System Log Detail Dialog */}
+      <Dialog open={!!selectedSysLog} onOpenChange={(open) => !open && setSelectedSysLog(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              System Log Details
+            </DialogTitle>
+            <DialogDescription>{selectedSysLog && formatDate(selectedSysLog.createdAt)}</DialogDescription>
+          </DialogHeader>
+          {selectedSysLog && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div><p className="text-sm text-muted-foreground">Severity</p>{getSeverityBadge(selectedSysLog.severity)}</div>
+                <div><p className="text-sm text-muted-foreground">Type</p><Badge variant="outline">{selectedSysLog.type}</Badge></div>
+                <div><p className="text-sm text-muted-foreground">Code</p><p className="font-mono text-sm">{selectedSysLog.code || "N/A"}</p></div>
+                <div><p className="text-sm text-muted-foreground">Entity</p><p className="font-mono text-sm">{selectedSysLog.entityType ? `${selectedSysLog.entityType}: ${selectedSysLog.entityId || "N/A"}` : "N/A"}</p></div>
+              </div>
+              <div><p className="text-sm text-muted-foreground mb-1">Message</p><div className="p-3 bg-muted rounded-lg"><p className="text-sm">{selectedSysLog.message}</p></div></div>
+              {selectedSysLog.details && Object.keys(selectedSysLog.details).length > 0 && (
+                <div><p className="text-sm text-muted-foreground mb-1">Details (JSON)</p><ScrollArea className="h-[250px]"><pre className="p-3 bg-muted rounded-lg text-xs font-mono overflow-x-auto">{JSON.stringify(selectedSysLog.details, null, 2)}</pre></ScrollArea></div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      
+      {/* Batch Log Detail Dialog */}
+      <Dialog open={!!selectedBatchLog} onOpenChange={(open) => !open && setSelectedBatchLog(null)}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              AI Batch Run Details
+            </DialogTitle>
+            <DialogDescription>{selectedBatchLog && formatDate(selectedBatchLog.startedAt)}</DialogDescription>
+          </DialogHeader>
+          {selectedBatchLog && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div><p className="text-sm text-muted-foreground">Reason</p>{getReasonBadge(selectedBatchLog.reason)}</div>
+                <div><p className="text-sm text-muted-foreground">Status</p>{getBatchStatusBadge(selectedBatchLog.status)}</div>
+                <div><p className="text-sm text-muted-foreground">Duration</p><p className="font-mono">{formatDuration(selectedBatchLog.startedAt, selectedBatchLog.finishedAt)}</p></div>
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="p-3 bg-muted rounded-lg text-center"><p className="text-xl font-bold">{selectedBatchLog.processedSkus}/{selectedBatchLog.totalSkus}</p><p className="text-xs text-muted-foreground">SKUs Processed</p></div>
+                <div className="p-3 bg-red-500/10 rounded-lg text-center"><p className="text-xl font-bold text-red-600">{selectedBatchLog.criticalItemsFound}</p><p className="text-xs text-muted-foreground">Critical</p></div>
+                <div className="p-3 bg-orange-500/10 rounded-lg text-center"><p className="text-xl font-bold text-orange-600">{selectedBatchLog.orderTodayCount}</p><p className="text-xs text-muted-foreground">Order Today</p></div>
+                <div className="p-3 bg-green-500/10 rounded-lg text-center"><p className="text-xl font-bold text-green-600">{selectedBatchLog.safeUntilTomorrowCount}</p><p className="text-xs text-muted-foreground">Safe Tomorrow</p></div>
+              </div>
+              {selectedBatchLog.llmProvider && (
+                <div className="grid grid-cols-3 gap-4">
+                  <div><p className="text-sm text-muted-foreground">LLM Provider</p><p className="font-medium">{selectedBatchLog.llmProvider}</p></div>
+                  <div><p className="text-sm text-muted-foreground">Model</p><p className="font-mono text-sm">{selectedBatchLog.llmModel || "N/A"}</p></div>
+                  <div><p className="text-sm text-muted-foreground">Response Time</p><p className="font-mono text-sm">{selectedBatchLog.llmResponseTimeMs ? `${selectedBatchLog.llmResponseTimeMs}ms` : "N/A"}</p></div>
                 </div>
+              )}
+              {selectedBatchLog.aiDecisionSummary && (
+                <div><p className="text-sm text-muted-foreground mb-1">AI Decision Summary</p><div className="p-3 bg-muted rounded-lg"><p className="text-sm">{selectedBatchLog.aiDecisionSummary}</p></div></div>
+              )}
+              {selectedBatchLog.errorMessage && (
+                <div><p className="text-sm text-muted-foreground mb-1">Error Message</p><div className="p-3 bg-red-500/10 rounded-lg border border-red-500/20"><p className="text-sm text-red-700 dark:text-red-400">{selectedBatchLog.errorMessage}</p></div></div>
+              )}
+              {selectedBatchLog.affectedSkus && selectedBatchLog.affectedSkus.length > 0 && (
+                <div><p className="text-sm text-muted-foreground mb-1">Affected SKUs ({selectedBatchLog.affectedSkus.length})</p><div className="flex flex-wrap gap-1 p-3 bg-muted rounded-lg max-h-[150px] overflow-y-auto">{selectedBatchLog.affectedSkus.slice(0, 50).map((sku, i) => (<Badge key={i} variant="outline" className="text-xs font-mono">{sku}</Badge>))}{selectedBatchLog.affectedSkus.length > 50 && <Badge variant="secondary">+{selectedBatchLog.affectedSkus.length - 50} more</Badge>}</div></div>
               )}
             </div>
           )}

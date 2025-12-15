@@ -26,53 +26,6 @@ import { IntegrationSettings } from "@/components/integration-settings";
 import { CreatePOSheet } from "@/components/create-po-sheet";
 import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
 
-const DEFAULT_PROMPT_TEMPLATE = `You are an inventory management expert. Analyze the following data:
-
-Current Date: {current_date}
-Item: {item_name} (SKU: {item_sku})
-Current Stock: {current_stock} units
-Recent Sales (4 weeks): {sales_data}
-Supplier Lead Time (avg): {lead_time_days} days
-Seasonal Trend: {seasonal_pattern}
-
-Question: If sales continue at this rate for the next 4 weeks, will we have enough inventory? When should we reorder?
-
-Provide a clear recommendation with reasoning.`;
-
-const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  chatgpt: [
-    { value: "gpt-4o", label: "GPT-4o (Latest)" },
-    { value: "gpt-4o-mini", label: "GPT-4o Mini" },
-    { value: "o1-preview", label: "o1 Preview" },
-    { value: "o1-mini", label: "o1 Mini" },
-    { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
-    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-  ],
-  claude: [
-    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-    { value: "claude-opus-4-20250514", label: "Claude Opus 4" },
-    { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
-    { value: "claude-3-5-haiku-20241022", label: "Claude 3.5 Haiku" },
-  ],
-  google: [
-    { value: "gemini-2.0-flash-exp", label: "Gemini 2.0 Flash" },
-    { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
-    { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
-  ],
-  grok: [
-    { value: "grok-2", label: "Grok-2" },
-    { value: "grok-1", label: "Grok-1" },
-  ],
-};
-
-const PROVIDER_OPTIONS = [
-  { value: "chatgpt", label: "OpenAI (ChatGPT)" },
-  { value: "claude", label: "Anthropic (Claude)" },
-  { value: "google", label: "Google (Gemini)" },
-  { value: "grok", label: "X.AI (Grok)" },
-  { value: "custom", label: "Custom Endpoint" },
-];
-
 interface AIRules {
   velocityLookbackDays: number;
   safetyStockDays: number;
@@ -315,386 +268,6 @@ function LinkedPOsSection({ recommendationId }: { recommendationId: string }) {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-function LLMConfigTab({ settingsData }: { settingsData: any }) {
-  const { toast } = useToast();
-  const [promptTemplate, setPromptTemplate] = useState<string>(DEFAULT_PROMPT_TEMPLATE);
-  const [provider, setProvider] = useState<string>("");
-  const [model, setModel] = useState<string>("");
-  const [temperature, setTemperature] = useState<number>(0.7);
-  const [maxTokens, setMaxTokens] = useState<number>(2048);
-  
-  // AI Prompt Generator modal state
-  const [promptGeneratorOpen, setPromptGeneratorOpen] = useState(false);
-  const [promptGeneratorInput, setPromptGeneratorInput] = useState("");
-  const [generatedPrompt, setGeneratedPrompt] = useState("");
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const hasApiKey = !!settingsData?.llmApiKey;
-
-  useEffect(() => {
-    if (settingsData) {
-      setPromptTemplate(settingsData.llmPromptTemplate || DEFAULT_PROMPT_TEMPLATE);
-      setProvider(settingsData.llmProvider || "");
-      setModel(settingsData.llmModel || "");
-      setTemperature(settingsData.llmTemperature ?? 0.7);
-      setMaxTokens(settingsData.llmMaxTokens ?? 2048);
-    }
-  }, [settingsData]);
-
-  const handleProviderChange = (newProvider: string) => {
-    setProvider(newProvider);
-    const models = MODEL_OPTIONS[newProvider];
-    if (models && models.length > 0) {
-      setModel(models[0].value);
-    } else {
-      setModel("");
-    }
-  };
-
-  const saveConfigMutation = useMutation({
-    mutationFn: async () => {
-      return await apiRequest("PATCH", "/api/settings", {
-        llmProvider: provider || null,
-        llmModel: model || null,
-        llmTemperature: temperature,
-        llmMaxTokens: maxTokens,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({
-        title: "Configuration Saved",
-        description: "LLM settings have been updated successfully",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Save Failed",
-        description: error.message || "Failed to save configuration",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const savePromptMutation = useMutation({
-    mutationFn: async () => {
-      return await apiRequest("PATCH", "/api/settings", {
-        llmPromptTemplate: promptTemplate || null,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
-      toast({
-        title: "Configuration Saved",
-        description: "Prompt template has been updated successfully",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Save Failed",
-        description: error.message || "Failed to save configuration",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const generatePromptTemplate = async () => {
-    if (!promptGeneratorInput.trim()) {
-      toast({
-        title: "Input Required",
-        description: "Please describe what you want the AI to accomplish",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsGenerating(true);
-    setGeneratedPrompt("");
-    try {
-      const metaPrompt = `You are an expert at writing prompts for inventory management AI systems. Based on the user's desired outcome, create an optimized prompt template for generating reorder recommendations. The prompt must use these placeholders: {item_name}, {item_sku}, {current_stock}, {current_date}, {sales_data}, {lead_time_days}, {seasonal_pattern}, {daily_usage}. User's desired outcome: ${promptGeneratorInput}`;
-      
-      const data = await apiRequest("POST", "/api/llm/ask", {
-        prompt: metaPrompt,
-      }) as { answer?: string };
-      
-      if (data?.answer) {
-        setGeneratedPrompt(data.answer);
-      } else {
-        throw new Error("No response from AI");
-      }
-    } catch (error: any) {
-      toast({
-        title: "Generation Failed",
-        description: error.message || "Failed to generate prompt template",
-        variant: "destructive",
-      });
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const handleUsePrompt = () => {
-    setPromptTemplate(generatedPrompt);
-    setPromptGeneratorOpen(false);
-    setPromptGeneratorInput("");
-    setGeneratedPrompt("");
-    toast({
-      title: "Prompt template updated successfully",
-    });
-  };
-
-  const availableModels = MODEL_OPTIONS[provider] || [];
-
-  return (
-    <div className="space-y-4">
-      <Card className="mt-8">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5" />
-            AI Provider Configuration
-          </CardTitle>
-          <CardDescription>
-            Configure your AI provider to power intelligent inventory recommendations and analysis. Manage your API key in Settings → LLM Configuration.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="llm-provider">Provider</Label>
-              <Select value={provider} onValueChange={handleProviderChange}>
-                <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
-                  <SelectValue placeholder="Select a provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROVIDER_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="llm-model">Model</Label>
-              <Select 
-                value={model} 
-                onValueChange={setModel}
-                disabled={!provider || provider === "custom"}
-              >
-                <SelectTrigger id="llm-model" data-testid="select-llm-model">
-                  <SelectValue placeholder={provider === "custom" ? "N/A for custom" : "Select a model"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableModels.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50">
-            <div className="flex items-center gap-2">
-              <Label className="text-muted-foreground text-sm">API Key Status:</Label>
-              {hasApiKey ? (
-                <Badge variant="outline" className="text-xs">
-                  <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
-                  Configured
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="text-xs text-amber-600">
-                  <AlertTriangle className="mr-1 h-3 w-3" />
-                  Not Set
-                </Badge>
-              )}
-            </div>
-            <Button variant="link" size="sm" className="ml-auto h-auto p-0" asChild>
-              <a href="/settings?tab=llm">Manage API Key</a>
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="llm-temperature">Temperature</Label>
-              <div className="flex items-center gap-3">
-                <Slider
-                  id="llm-temperature"
-                  min={0}
-                  max={2}
-                  step={0.1}
-                  value={[temperature]}
-                  onValueChange={([val]) => setTemperature(val)}
-                  className="flex-1"
-                  data-testid="slider-llm-temperature"
-                />
-                <span className="w-12 text-right font-mono text-sm">{temperature.toFixed(1)}</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Lower values produce more focused responses, higher values increase creativity.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="llm-max-tokens">Max Tokens</Label>
-              <Input
-                id="llm-max-tokens"
-                type="number"
-                min={100}
-                max={8192}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value) || 2048)}
-                data-testid="input-llm-max-tokens"
-              />
-              <p className="text-xs text-muted-foreground">
-                Maximum length of AI responses (100-8192).
-              </p>
-            </div>
-          </div>
-
-          <Button
-            onClick={() => saveConfigMutation.mutate()}
-            disabled={saveConfigMutation.isPending || !provider}
-            className="w-full md:w-auto"
-            data-testid="button-save-llm-config"
-          >
-            {saveConfigMutation.isPending ? "Saving..." : "Save Configuration"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>AI Prompt Template</CardTitle>
-          <CardDescription>
-            Customize the prompt template used for reorder recommendations
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Button
-            variant="outline"
-            onClick={() => setPromptGeneratorOpen(true)}
-            className="w-full md:w-auto"
-            data-testid="button-ai-prompt-generator"
-          >
-            <Sparkles className="h-4 w-4 mr-2" />
-            AI Prompt Generator
-          </Button>
-          
-          <div className="space-y-2">
-            <Label htmlFor="prompt-template">Reorder Recommendation Prompt</Label>
-            <Textarea
-              id="prompt-template"
-              rows={8}
-              placeholder="Enter custom prompt template..."
-              value={promptTemplate}
-              onChange={(e) => setPromptTemplate(e.target.value)}
-              data-testid="textarea-prompt-template"
-            />
-            <p className="text-xs text-muted-foreground">
-              This template is used when generating AI-powered reorder recommendations. Use placeholders like {'{item_name}'}, {'{current_stock}'}, {'{daily_usage}'}.
-            </p>
-          </div>
-
-          <Button
-            onClick={() => savePromptMutation.mutate()}
-            disabled={savePromptMutation.isPending}
-            data-testid="button-save-prompt-template"
-          >
-            {savePromptMutation.isPending ? "Saving..." : "Save Prompt Template"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* AI Prompt Generator Modal */}
-      <Dialog open={promptGeneratorOpen} onOpenChange={setPromptGeneratorOpen}>
-        <DialogContent className="sm:max-w-[600px] p-6">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5" />
-              AI Prompt Generator
-            </DialogTitle>
-            <DialogDescription>
-              Describe your inventory management goals and priorities, and AI will create an optimized prompt template for you
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="prompt-generator-input">Describe what you want the AI to accomplish</Label>
-              <Textarea
-                id="prompt-generator-input"
-                rows={5}
-                placeholder="Example: Focus on fast-moving items and seasonal trends, prioritize suppliers with shorter lead times"
-                value={promptGeneratorInput}
-                onChange={(e) => setPromptGeneratorInput(e.target.value)}
-                data-testid="textarea-prompt-generator-input"
-              />
-            </div>
-
-            <Button
-              onClick={generatePromptTemplate}
-              disabled={isGenerating || !promptGeneratorInput.trim()}
-              className="w-full"
-              data-testid="button-generate-prompt"
-            >
-              {isGenerating ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Generate Prompt
-                </>
-              )}
-            </Button>
-
-            {generatedPrompt && (
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label>Generated Prompt Preview</Label>
-                  <Textarea
-                    rows={8}
-                    value={generatedPrompt}
-                    readOnly
-                    className="bg-muted"
-                    data-testid="textarea-generated-prompt-preview"
-                  />
-                </div>
-
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={generatePromptTemplate}
-                    disabled={isGenerating}
-                    className="flex-1"
-                    data-testid="button-regenerate-prompt"
-                  >
-                    <RotateCcw className="h-4 w-4 mr-2" />
-                    Regenerate
-                  </Button>
-                  <Button
-                    onClick={handleUsePrompt}
-                    className="flex-1"
-                    data-testid="button-use-this-prompt"
-                  >
-                    <CheckCircle className="h-4 w-4 mr-2" />
-                    Use This Prompt
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -2070,6 +1643,7 @@ interface BatchDecision {
   recommendationsCount: number;
   acceptedCount: number;
   dismissedCount: number;
+  totalRecommendedQty: number;
 }
 
 interface TimelineEvent {
@@ -2083,9 +1657,48 @@ interface TimelineEvent {
   sku?: string;
 }
 
+interface ContextSnapshot {
+  sku: string;
+  itemId: string;
+  productName: string;
+  productType?: string;
+  hildaleQty: number;
+  pivotQty: number;
+  availableForSale: number;
+  dailyVelocity: number;
+  daysUntilStockout: number;
+  leadTimeDays: number;
+  inboundPO: number;
+  backorders: number;
+  returnRate: number;
+  adMultiplier: number;
+  supplierScore: number;
+  safetyStockDays: number;
+  riskThresholdHighDays: number;
+  riskThresholdMediumDays: number;
+}
+
+interface RecommendationWithContext {
+  id: string;
+  sku: string;
+  productName: string;
+  riskLevel: string;
+  recommendedQty: number | null;
+  daysUntilStockout: number | null;
+  orderTiming: "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW" | null;
+  reasonSummary: string | null;
+  status: string;
+  sourceSignals: Record<string, unknown> | null;
+  contextSnapshot: ContextSnapshot | null;
+  baseVelocity: number | null;
+  adjustedVelocity: number | null;
+  adMultiplier: number | null;
+}
+
 interface BatchTimelineResponse {
   batchLog: BatchDecision;
   timeline: TimelineEvent[];
+  recommendations: RecommendationWithContext[];
   windowStart: string;
   windowEnd: string;
 }
@@ -2365,6 +1978,188 @@ function BatchTimelineModal({
               </div>
             </div>
 
+            {/* SKU Recommendations Section */}
+            {data.recommendations && data.recommendations.length > 0 && (
+              <div className="px-6 pb-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                    <Package className="h-4 w-4" />
+                    SKU Decisions ({data.recommendations.length})
+                  </h4>
+                </div>
+                
+                <div className="space-y-2">
+                  {data.recommendations.map((rec) => (
+                    <details 
+                      key={rec.id} 
+                      className="group border rounded-lg overflow-hidden"
+                      data-testid={`sku-context-${rec.sku}`}
+                    >
+                      <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/30">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <Badge 
+                            variant={rec.riskLevel === "HIGH" ? "destructive" : rec.riskLevel === "MEDIUM" ? "default" : "secondary"}
+                            className="flex-shrink-0"
+                          >
+                            {rec.riskLevel}
+                          </Badge>
+                          <span className="font-mono text-sm font-medium truncate" data-testid={`text-sku-${rec.sku}`}>
+                            {rec.sku}
+                          </span>
+                          <span className="text-sm text-muted-foreground truncate hidden sm:inline">
+                            {rec.productName}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          {rec.orderTiming && (
+                            <Badge 
+                              variant={rec.orderTiming === "ORDER_TODAY" ? "destructive" : "outline"}
+                              className="text-xs"
+                            >
+                              {rec.orderTiming === "ORDER_TODAY" ? "Order Today" : "Safe Tomorrow"}
+                            </Badge>
+                          )}
+                          {rec.recommendedQty && (
+                            <span className="text-sm font-medium">
+                              Qty: {rec.recommendedQty}
+                            </span>
+                          )}
+                          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                        </div>
+                      </summary>
+                      
+                      <div className="px-4 py-4 bg-background border-t">
+                        {/* Reason Summary */}
+                        {rec.reasonSummary && (
+                          <p className="text-sm mb-4 text-muted-foreground" data-testid={`text-reason-${rec.sku}`}>
+                            {rec.reasonSummary}
+                          </p>
+                        )}
+                        
+                        {/* Context Snapshot Grid */}
+                        {rec.contextSnapshot && (
+                          <div className="space-y-3">
+                            <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                              Input Data for LLM
+                            </h5>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Hildale Qty</div>
+                                <div className="font-medium" data-testid={`metric-hildale-${rec.sku}`}>
+                                  {rec.contextSnapshot.hildaleQty ?? 0}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Pivot Qty</div>
+                                <div className="font-medium" data-testid={`metric-pivot-${rec.sku}`}>
+                                  {rec.contextSnapshot.pivotQty ?? 0}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Available</div>
+                                <div className="font-medium" data-testid={`metric-available-${rec.sku}`}>
+                                  {rec.contextSnapshot.availableForSale ?? 0}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Daily Velocity</div>
+                                <div className="font-medium" data-testid={`metric-velocity-${rec.sku}`}>
+                                  {rec.contextSnapshot.dailyVelocity?.toFixed(2) ?? "0.00"}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Days to Stockout</div>
+                                <div className={`font-medium ${(rec.contextSnapshot.daysUntilStockout ?? 999) <= 7 ? "text-red-600" : ""}`} data-testid={`metric-stockout-${rec.sku}`}>
+                                  {rec.contextSnapshot.daysUntilStockout ?? "∞"}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Lead Time</div>
+                                <div className="font-medium" data-testid={`metric-leadtime-${rec.sku}`}>
+                                  {rec.contextSnapshot.leadTimeDays ?? 0}d
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Inbound PO</div>
+                                <div className="font-medium" data-testid={`metric-inbound-${rec.sku}`}>
+                                  {rec.contextSnapshot.inboundPO ?? 0}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Backorders</div>
+                                <div className="font-medium" data-testid={`metric-backorders-${rec.sku}`}>
+                                  {rec.contextSnapshot.backorders ?? 0}
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Return Rate</div>
+                                <div className="font-medium" data-testid={`metric-returnrate-${rec.sku}`}>
+                                  {((rec.contextSnapshot.returnRate ?? 0) * 100).toFixed(1)}%
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Ad Multiplier</div>
+                                <div className="font-medium" data-testid={`metric-admultiplier-${rec.sku}`}>
+                                  {rec.contextSnapshot.adMultiplier?.toFixed(2) ?? "1.00"}x
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Supplier Score</div>
+                                <div className="font-medium" data-testid={`metric-supplierscore-${rec.sku}`}>
+                                  {rec.contextSnapshot.supplierScore ?? 0}%
+                                </div>
+                              </div>
+                              <div className="p-2 bg-muted/50 rounded-md">
+                                <div className="text-xs text-muted-foreground">Safety Stock</div>
+                                <div className="font-medium" data-testid={`metric-safetystock-${rec.sku}`}>
+                                  {rec.contextSnapshot.safetyStockDays ?? 0}d
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Velocity Adjustment Details */}
+                            {(rec.baseVelocity || rec.adjustedVelocity) && (
+                              <div className="mt-3 pt-3 border-t flex flex-wrap items-center gap-4 text-sm">
+                                <div className="flex items-center gap-2">
+                                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                                  <span className="text-muted-foreground">Base Velocity:</span>
+                                  <span className="font-medium">{rec.baseVelocity?.toFixed(2) ?? "0.00"}/day</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Sparkles className="h-4 w-4 text-primary" />
+                                  <span className="text-muted-foreground">Adjusted:</span>
+                                  <span className="font-medium">{rec.adjustedVelocity?.toFixed(2) ?? "0.00"}/day</span>
+                                </div>
+                                {rec.adMultiplier && rec.adMultiplier !== 1 && (
+                                  <Badge variant="outline" className="text-xs">
+                                    {rec.adMultiplier.toFixed(2)}x ad boost
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                        {/* Source Signals if available */}
+                        {rec.sourceSignals && Object.keys(rec.sourceSignals).length > 0 && (
+                          <div className="mt-3 pt-3 border-t">
+                            <h5 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                              Source Signals
+                            </h5>
+                            <div className="text-xs font-mono bg-muted/50 p-2 rounded-md overflow-x-auto">
+                              <pre className="whitespace-pre-wrap break-all">
+                                {JSON.stringify(rec.sourceSignals, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Timeline Section */}
             <div className="px-6 pb-6">
               <div className="flex items-center justify-between mb-4">
@@ -2512,6 +2307,7 @@ function BatchDecisionsSection() {
                     <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-date">Date</th>
                     <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-ai-decision">AI Decision</th>
                     <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-staff-decision">Staff Decision</th>
+                    <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-moq">MOQ</th>
                     <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-accuracy">Accuracy</th>
                     <th className="px-4 text-center font-medium whitespace-nowrap" data-testid="header-urgency">Urgency</th>
                     <th className="px-4 text-left font-medium whitespace-nowrap" data-testid="header-supplier">Supplier</th>
@@ -2545,6 +2341,9 @@ function BatchDecisionsSection() {
                         <p className="truncate text-muted-foreground">
                           {batch.staffDecisionSummary || `${batch.acceptedCount}/${batch.recommendationsCount} accepted`}
                         </p>
+                      </td>
+                      <td className="px-4 align-middle text-center font-mono" data-testid={`cell-moq-${batch.id}`}>
+                        {batch.totalRecommendedQty > 0 ? batch.totalRecommendedQty.toLocaleString() : "-"}
                       </td>
                       <td className="px-4 align-middle text-center" data-testid={`cell-accuracy-${batch.id}`}>
                         <span className={`font-mono ${
@@ -4709,22 +4508,19 @@ export default function AIAgent() {
         </p>
       </div>
 
-      <Tabs defaultValue="data-sources" className="w-full">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="data-sources" data-testid="tab-data-sources">
-            Data Sources
-          </TabsTrigger>
-          <TabsTrigger value="rules" data-testid="tab-rules">
-            Rules
-          </TabsTrigger>
-          <TabsTrigger value="llm-config" data-testid="tab-llm-config">
-            LLM Config
-          </TabsTrigger>
+      <Tabs defaultValue="order-feedback" className="w-full">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="order-feedback" data-testid="tab-order-feedback">
             Order Feedback
           </TabsTrigger>
           <TabsTrigger value="logs" data-testid="tab-logs">
             Logs
+          </TabsTrigger>
+          <TabsTrigger value="rules" data-testid="tab-rules">
+            Rules
+          </TabsTrigger>
+          <TabsTrigger value="data-sources" data-testid="tab-data-sources">
+            Data Sources
           </TabsTrigger>
         </TabsList>
 
@@ -4908,11 +4704,6 @@ export default function AIAgent() {
         {/* Rules Tab */}
         <TabsContent value="rules" className="space-y-4">
           <RulesTab />
-        </TabsContent>
-
-        {/* LLM Config Tab */}
-        <TabsContent value="llm-config" className="space-y-4">
-          <LLMConfigTab settingsData={settingsData} />
         </TabsContent>
 
         {/* Order Feedback Tab (formerly Insights) */}

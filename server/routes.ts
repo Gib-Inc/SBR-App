@@ -9229,9 +9229,29 @@ Notes: ${po.notes || 'None'}
       // Sort by timestamp descending (newest first)
       timelineEvents.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       
+      // Get recommendations for this batch with their full context snapshots
+      const recommendations = await storage.getAIRecommendationsByBatchId(id);
+      const recommendationsWithContext = recommendations.map(rec => ({
+        id: rec.id,
+        sku: rec.sku,
+        productName: rec.productName,
+        riskLevel: rec.riskLevel,
+        recommendedQty: rec.recommendedQty,
+        daysUntilStockout: rec.daysUntilStockout,
+        orderTiming: rec.orderTiming,
+        reasonSummary: rec.reasonSummary,
+        status: rec.status,
+        sourceSignals: rec.sourceSignals,
+        contextSnapshot: rec.contextSnapshot,
+        baseVelocity: rec.baseVelocity,
+        adjustedVelocity: rec.adjustedVelocity,
+        adMultiplier: rec.adMultiplier,
+      }));
+      
       res.json({
         batchLog: log,
         timeline: timelineEvents,
+        recommendations: recommendationsWithContext,
         windowStart,
         windowEnd: batchTime,
       });
@@ -9261,12 +9281,16 @@ Notes: ${po.notes || 'None'}
         const dismissedCount = recommendations.filter(r => r.status === "DISMISSED").length;
         const totalCount = recommendations.length;
         
+        // Compute total recommended quantity (MOQ) across all recommendations in this batch
+        const totalRecommendedQty = recommendations.reduce((sum, r) => sum + (r.recommendedQty || 0), 0);
+        
         return {
           ...log,
           supplierName,
           recommendationsCount: totalCount,
           acceptedCount,
           dismissedCount,
+          totalRecommendedQty,
         };
       }));
       

@@ -5,6 +5,7 @@
  * - 10:00 AM Mountain Time (America/Denver)
  * - 3:00 PM Mountain Time (America/Denver)
  * 
+ * Uses interval-based checking for robustness against server restarts.
  * Also provides debounced critical trigger functionality.
  */
 
@@ -12,56 +13,66 @@ import { runInventoryRecommendationsBatch, inventoryRecommendationBatch, type Ba
 
 const TIMEZONE = "America/Denver";
 
-// Track scheduled jobs
+// Scheduled batch times (24-hour format in Mountain Time)
+const SCHEDULED_RUNS = [
+  { hour: 10, minute: 0, reason: "SCHEDULED_10AM" as BatchRunReason },
+  { hour: 15, minute: 0, reason: "SCHEDULED_3PM" as BatchRunReason },
+];
+
+// Track scheduler state
 let schedulerInitialized = false;
-let nextScheduledRun: { time: Date; reason: BatchRunReason } | null = null;
+let lastRunTimestamp: { [key: string]: number } = {};  // Track last run by reason to prevent double-runs
+let checkIntervalId: NodeJS.Timeout | null = null;
 
 /**
- * Convert a local time in Mountain timezone to a Date object
+ * Get current time in Mountain timezone as hours and minutes
  */
-function getMountainTime(hour: number, minute: number = 0): Date {
+function getCurrentMountainTime(): { hour: number; minute: number; dateKey: string } {
   const now = new Date();
+  const mountainTimeStr = now.toLocaleString("en-US", { 
+    timeZone: TIMEZONE,
+    hour: "numeric",
+    minute: "numeric",
+    hour12: false,
+  });
   
-  // Create a date in Mountain time by using toLocaleString
-  const mountainNow = new Date(now.toLocaleString("en-US", { timeZone: TIMEZONE }));
+  // Parse the time string (format: "10:00" or "15:30")
+  const [hourStr, minuteStr] = mountainTimeStr.split(":");
+  const hour = parseInt(hourStr, 10);
+  const minute = parseInt(minuteStr, 10);
   
-  // Set the target time
-  const target = new Date(mountainNow);
-  target.setHours(hour, minute, 0, 0);
+  // Create a date key for today in Mountain time (to prevent running same batch twice in a day)
+  const dateStr = now.toLocaleString("en-US", { 
+    timeZone: TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
   
-  // If target time has passed today, schedule for tomorrow
-  if (target <= mountainNow) {
-    target.setDate(target.getDate() + 1);
-  }
-  
-  // Convert back to UTC by calculating the offset
-  const utcOffset = mountainNow.getTime() - now.getTime();
-  return new Date(target.getTime() - utcOffset);
+  return { hour, minute, dateKey: dateStr };
 }
 
 /**
- * Get the next scheduled run time and reason
+ * Check if it's time to run a scheduled batch
+ * Runs within a 5-minute window of the scheduled time
  */
-function getNextScheduledRun(): { time: Date; reason: BatchRunReason } {
-  const run10am = getMountainTime(10, 0);
-  const run3pm = getMountainTime(15, 0);
+function shouldRunBatch(scheduledHour: number, scheduledMinute: number, currentHour: number, currentMinute: number): boolean {
+  // Check if we're within the target time window (5-minute window after scheduled time)
+  if (currentHour !== scheduledHour) return false;
   
-  if (run10am <= run3pm) {
-    return { time: run10am, reason: "SCHEDULED_10AM" };
-  } else {
-    return { time: run3pm, reason: "SCHEDULED_3PM" };
-  }
+  const minuteDiff = currentMinute - scheduledMinute;
+  return minuteDiff >= 0 && minuteDiff < 5;
 }
 
 /**
- * Calculate milliseconds until the next scheduled run
+ * Generate a unique key for tracking batch runs
  */
-function msUntilNextRun(targetTime: Date): number {
-  return Math.max(0, targetTime.getTime() - Date.now());
+function getBatchKey(reason: BatchRunReason, dateKey: string): string {
+  return `${reason}-${dateKey}`;
 }
 
 /**
- * Run a scheduled batch and schedule the next one
+ * Run a scheduled batch
  */
 async function runScheduledBatch(reason: BatchRunReason): Promise<void> {
   console.log(`[AI Scheduler] Running scheduled batch: ${reason}`);
@@ -77,23 +88,77 @@ async function runScheduledBatch(reason: BatchRunReason): Promise<void> {
   } catch (error: any) {
     console.error(`[AI Scheduler] Batch error:`, error);
   }
-  
-  // Schedule the next run
-  scheduleNextRun();
 }
 
 /**
- * Schedule the next batch run
+ * Check if any scheduled batch should run now
+ * Called every minute by the interval timer
  */
-function scheduleNextRun(): void {
-  nextScheduledRun = getNextScheduledRun();
-  const msUntil = msUntilNextRun(nextScheduledRun.time);
+async function checkScheduledBatches(): Promise<void> {
+  const { hour, minute, dateKey } = getCurrentMountainTime();
   
-  console.log(`[AI Scheduler] Next run scheduled: ${nextScheduledRun.reason} at ${nextScheduledRun.time.toISOString()} (in ${Math.round(msUntil / 60000)} minutes)`);
+  for (const schedule of SCHEDULED_RUNS) {
+    if (shouldRunBatch(schedule.hour, schedule.minute, hour, minute)) {
+      const batchKey = getBatchKey(schedule.reason, dateKey);
+      
+      // Check if this batch already ran today
+      if (!lastRunTimestamp[batchKey]) {
+        lastRunTimestamp[batchKey] = Date.now();
+        
+        console.log(`[AI Scheduler] Time match for ${schedule.reason} at ${hour}:${minute.toString().padStart(2, '0')} Mountain Time`);
+        
+        // Run the batch (don't await to avoid blocking the check loop)
+        runScheduledBatch(schedule.reason).catch((err) => {
+          console.error(`[AI Scheduler] Error running ${schedule.reason}:`, err);
+        });
+      }
+    }
+  }
   
-  setTimeout(() => {
-    runScheduledBatch(nextScheduledRun!.reason);
-  }, msUntil);
+  // Clean up old run timestamps (older than 24 hours)
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  for (const key of Object.keys(lastRunTimestamp)) {
+    if (lastRunTimestamp[key] < oneDayAgo) {
+      delete lastRunTimestamp[key];
+    }
+  }
+}
+
+/**
+ * Get the next scheduled run time for status display
+ */
+function getNextScheduledRun(): { time: Date; reason: BatchRunReason } | null {
+  const now = new Date();
+  const { hour, minute } = getCurrentMountainTime();
+  
+  // Find the next scheduled run
+  for (const schedule of SCHEDULED_RUNS) {
+    if (hour < schedule.hour || (hour === schedule.hour && minute < schedule.minute)) {
+      // This schedule hasn't run yet today
+      const mountainNow = new Date(now.toLocaleString("en-US", { timeZone: TIMEZONE }));
+      const target = new Date(mountainNow);
+      target.setHours(schedule.hour, schedule.minute, 0, 0);
+      
+      // Convert back to UTC
+      const utcOffset = mountainNow.getTime() - now.getTime();
+      return {
+        time: new Date(target.getTime() - utcOffset),
+        reason: schedule.reason,
+      };
+    }
+  }
+  
+  // All schedules passed today, return first schedule for tomorrow
+  const mountainNow = new Date(now.toLocaleString("en-US", { timeZone: TIMEZONE }));
+  const target = new Date(mountainNow);
+  target.setDate(target.getDate() + 1);
+  target.setHours(SCHEDULED_RUNS[0].hour, SCHEDULED_RUNS[0].minute, 0, 0);
+  
+  const utcOffset = mountainNow.getTime() - now.getTime();
+  return {
+    time: new Date(target.getTime() - utcOffset),
+    reason: SCHEDULED_RUNS[0].reason,
+  };
 }
 
 /**
@@ -108,14 +173,30 @@ export function initializeScheduler(): void {
   
   schedulerInitialized = true;
   console.log("[AI Scheduler] Initializing scheduler for Mountain Time (America/Denver)");
+  console.log("[AI Scheduler] Scheduled runs: 10:00 AM and 3:00 PM Mountain Time");
   
-  // Schedule the first run
-  scheduleNextRun();
+  // Check every minute for scheduled batch times
+  checkIntervalId = setInterval(() => {
+    checkScheduledBatches().catch((err) => {
+      console.error("[AI Scheduler] Error checking scheduled batches:", err);
+    });
+  }, 60 * 1000);  // Check every minute
+  
+  // Run initial check immediately
+  checkScheduledBatches().catch((err) => {
+    console.error("[AI Scheduler] Error on initial batch check:", err);
+  });
   
   // Set up periodic debounce cleanup (every hour)
   setInterval(() => {
     inventoryRecommendationBatch.cleanupDebounceMap();
   }, 60 * 60 * 1000);
+  
+  const nextRun = getNextScheduledRun();
+  if (nextRun) {
+    const msUntil = nextRun.time.getTime() - Date.now();
+    console.log(`[AI Scheduler] Next run: ${nextRun.reason} at ${nextRun.time.toISOString()} (in ${Math.round(msUntil / 60000)} minutes)`);
+  }
   
   console.log("[AI Scheduler] Scheduler initialized");
 }
@@ -127,11 +208,13 @@ export function getSchedulerStatus(): {
   initialized: boolean; 
   nextRun: { time: Date; reason: BatchRunReason } | null;
   timezone: string;
+  scheduledTimes: string[];
 } {
   return {
     initialized: schedulerInitialized,
-    nextRun: nextScheduledRun,
+    nextRun: getNextScheduledRun(),
     timezone: TIMEZONE,
+    scheduledTimes: SCHEDULED_RUNS.map(s => `${s.hour}:${s.minute.toString().padStart(2, '0')} Mountain Time (${s.reason})`),
   };
 }
 
@@ -169,5 +252,18 @@ export async function checkAndTriggerCritical(
   return false;
 }
 
+/**
+ * Stop the scheduler (for testing/cleanup)
+ */
+export function stopScheduler(): void {
+  if (checkIntervalId) {
+    clearInterval(checkIntervalId);
+    checkIntervalId = null;
+  }
+  schedulerInitialized = false;
+  lastRunTimestamp = {};
+  console.log("[AI Scheduler] Scheduler stopped");
+}
+
 // Export for testing
-export { getMountainTime, getNextScheduledRun };
+export { getCurrentMountainTime, getNextScheduledRun };

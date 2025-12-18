@@ -15418,6 +15418,30 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // POST /api/quickbooks/refresh-tokens - Manually trigger token refresh
+  app.post("/api/quickbooks/refresh-tokens", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { triggerManualTokenRefresh } = await import("./services/quickbooks-token-refresh-scheduler");
+      const result = await triggerManualTokenRefresh();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Manual token refresh error:", error);
+      res.status(500).json({ success: false, message: error.message || "Token refresh failed" });
+    }
+  });
+
+  // GET /api/quickbooks/token-refresh-status - Get token refresh scheduler status
+  app.get("/api/quickbooks/token-refresh-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getQuickBooksTokenRefreshStatus } = await import("./services/quickbooks-token-refresh-scheduler");
+      const status = getQuickBooksTokenRefreshStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error("[QuickBooks] Token refresh status error:", error);
+      res.status(500).json({ error: error.message || "Failed to get status" });
+    }
+  });
+
   // POST /api/quickbooks/sync-sales - Sync historical sales data (legacy snapshots)
   app.post("/api/quickbooks/sync-sales", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -17229,6 +17253,14 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Credential Rotation Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Credential Rotation Scheduler:", error);
+  });
+  
+  // Initialize QuickBooks Token Refresh Scheduler for automatic token refresh every 45 minutes
+  import("./services/quickbooks-token-refresh-scheduler").then(({ initializeQuickBooksTokenRefreshScheduler }) => {
+    initializeQuickBooksTokenRefreshScheduler();
+    console.log("[Server] QuickBooks Token Refresh Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize QuickBooks Token Refresh Scheduler:", error);
   });
   
   // Initialize Shopify Reconciliation Scheduler for Tuesday & Thursday at 9:00 AM Mountain time

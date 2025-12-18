@@ -114,6 +114,13 @@ Preferred communication style: Simple, everyday language.
 *   **Label Printing**: Customizable label printing with support for various dimensions, layouts, and saved format presets.
 *   **System Logs**: Unified logging for integration events and mismatches (e.g., SKU_MISMATCH, API_ERRORS).
 *   **Integration Health**: Automated monitoring of API keys and tokens with status classification (OK, WARNING, CRITICAL).
+*   **QuickBooks Automatic Token Refresh**:
+    *   Proactive token refresh runs every 45 minutes (access tokens expire in ~60 min)
+    *   Refresh tokens are rotated automatically (expire in ~100 days)
+    *   Creates GHL "Needs Attention" opportunity when token refresh fails, alerting team to reconnect
+    *   Manual refresh available via `/api/quickbooks/refresh-tokens`
+    *   Status check via `/api/quickbooks/token-refresh-status`
+    *   Enables fully autonomous operation without daily sign-ins
 *   **System of Record**: This application is the system of record for inventory quantities, while other platforms serve specific functions (e.g., Shopify/Amazon for orders, QuickBooks for finance).
 
 ## External Dependencies

@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
@@ -15320,11 +15320,11 @@ Generate only the email body text, no subject line.`;
   });
 
   // POST /api/quickbooks/webhooks - Receive webhook notifications from Intuit
-  // Requires raw body for HMAC signature verification
-  app.post("/api/quickbooks/webhooks", express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+  // Uses req.rawBody saved by express.json() verify callback in app.ts for HMAC verification
+  app.post("/api/quickbooks/webhooks", async (req: Request, res: Response) => {
     try {
-      const crypto = await import('crypto');
-      const rawBody = req.body instanceof Buffer ? req.body.toString('utf8') : String(req.body);
+      // Use rawBody saved by express.json() verify callback (preserved before parsing)
+      const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
       const signatureHeader = req.headers['intuit-signature'] as string | undefined;
       
       // Get webhook verifier token (try DB first, then env var fallback)

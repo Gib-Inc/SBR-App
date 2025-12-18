@@ -1,0 +1,185 @@
+You are editing my existing Inventory app in this Replit project.
+
+GOAL
+Fix the Settings → “LLM Configuration” page so that:
+- If an OpenAI API key and an OpenAI webhook signing secret are already saved, they are shown to the user in MASKED form (first 3 characters + *** + last 3 characters).
+- The full secrets are NEVER sent back to the browser, never logged, and never accidentally overwritten by the masked value.
+- New values can still be entered and saved normally.
+- Both the API key and the webhook secret follow this behavior.
+
+Do NOT change the overall architecture, move settings to a new place, or expose secrets in logs. Work only with the existing settings storage, API routes, and the LLM Configuration tab UI.
+
+====================================================
+1. FIND THE CURRENT LLM SETTINGS IMPLEMENTATION
+====================================================
+
+1. Backend:
+   - Locate the LLM configuration storage and API.
+   - Search for fields like: openAiApiKey, openAiWebhookSigningSecret, llmConfig, defaultModel, temperature, maxTokens.
+   - There should be:
+     - A storage helper (likely in a file such as server/storage.ts or a similar service) that reads and writes the LLM configuration.
+     - An API route, most likely under a path such as /api/settings/llm or /api/settings/llm-config, that returns and updates this configuration.
+
+2. Frontend:
+   - Locate the Settings page that matches this UI:
+     - Left navigation items include: Reports, Products, Barcodes, Suppliers, Purchase Orders, Sales Orders, Returns, AI Agent, Settings.
+     - Inside Settings there are tabs such as: Account, LLM Configuration, Barcode Settings.
+     - The LLM Configuration tab currently shows:
+       - A provider dropdown (e.g., ChatGPT / OpenAI).
+       - A default model dropdown.
+       - An input for “OpenAI API Key”.
+       - An input for “OpenAI Webhook (signing secret)”.
+       - Temperature slider, Max Tokens input, and “Test Connection” / “Save Configuration” buttons.
+   - Identify the React component(s) that render this tab (for example a SettingsPage with an LlmConfigurationTab or similar).
+
+You will update only the LLM settings API and this LLM Configuration tab.
+
+====================================================
+2. BACKEND: ADD MASKED PREVIEW FIELDS (NEVER RETURN FULL SECRET)
+====================================================
+
+Objective: The GET endpoint for LLM settings must return only masked previews and flags indicating whether a secret exists. The full secrets remain on the server only.
+
+2.1 Add a masking helper on the server
+
+- Create or update a small helper function, in a shared server utility file (for example server/utils/secrets.ts).
+- The helper is called maskSecret and behaves as follows:
+  - Input: a string secret (or null/undefined).
+  - If the value is null or empty, return null.
+  - Otherwise, trim whitespace.
+  - If the trimmed string length is 6 characters or less, return a string composed of the first character, then three asterisks, then the last character (for example “a***z”).
+  - If the trimmed string is longer than 6 characters, return a string composed of:
+    - the first 3 characters,
+    - then three asterisks,
+    - then the last 3 characters.
+    - Example: “sk-longapikey123” becomes “sk-***123”.
+  - This function must never log or otherwise expose the original secret.
+
+2.2 Update the LLM config GET handler
+
+- In the LLM settings GET route (for example /api/settings/llm-config):
+  - Load the full configuration from storage as you currently do, including the real openAiApiKey and openAiWebhookSigningSecret values.
+  - When building the JSON response for the client:
+    - Do NOT include the real openAiApiKey.
+    - Do NOT include the real openAiWebhookSigningSecret.
+  - Instead, include the following additional fields in the JSON output:
+    - hasApiKey: a boolean that is true if a real API key is present, false otherwise.
+    - apiKeyMasked: the result of calling maskSecret on the real API key (or null).
+    - hasWebhookSigningSecret: a boolean that is true if a webhook signing secret is present.
+    - webhookSigningSecretMasked: the result of calling maskSecret on the real webhook signing secret (or null).
+  - All other non-secret config values (provider, default model, temperature, max tokens, etc.) should be returned as before.
+  - Confirm that nowhere in this handler is the full key or secret added to the JSON or logs.
+
+2.3 Update the LLM config UPDATE handler
+
+- In the POST or PUT route that saves the LLM configuration:
+  - Read the incoming body which contains provider, defaultModel, temperature, maxTokens and optionally apiKey and webhookSigningSecret.
+  - Before saving, load the existing configuration from storage so you know the currently stored secrets.
+  - For the API key:
+    - If the request body does not include an apiKey field at all, or if the apiKey is an empty string after trimming, then keep the existing stored API key unchanged.
+    - If the request includes a non-empty apiKey string, trim it and overwrite the stored openAiApiKey with this new value.
+  - For the webhook signing secret:
+    - Use the same rule: only overwrite if a non-empty string is provided; otherwise keep the existing stored secret.
+  - Save the updated configuration with:
+    - provider, defaultModel, temperature, maxTokens updated from the request,
+    - openAiApiKey set to either the previous or the new value as described,
+    - openAiWebhookSigningSecret set similarly.
+  - Ensure there are no console logs or logger statements that print the full secret values. If any exist, remove them or change them to use the masked form only.
+
+====================================================
+3. FRONTEND: SHOW MASKED PREVIEW IN THE UI, NEVER PRE-FILL THE SECRET INPUTS
+====================================================
+
+Objective: The LLM Configuration tab should show the masked preview text underneath each secret input, while the input fields themselves stay empty unless the user types a new value. The masked text must not be bound to the input value.
+
+3.1 Adjust the data model used by the LLM settings page
+
+- When fetching the LLM settings from the backend, expect and handle the following fields:
+  - provider
+  - defaultModel
+  - temperature
+  - maxTokens
+  - hasApiKey (boolean)
+  - apiKeyMasked (string or null)
+  - hasWebhookSigningSecret (boolean)
+  - webhookSigningSecretMasked (string or null)
+- In the React component for the LLM Configuration tab:
+  - Keep a piece of state for the entire settings object returned from the server.
+  - Additionally, keep separate local pieces of state for the editable secret inputs, for example:
+    - localApiKey (string)
+    - localWebhookSecret (string)
+  - Initialize localApiKey and localWebhookSecret as empty strings when the component mounts.
+
+3.2 Render the “OpenAI API Key” field
+
+- The text input for the API key should:
+  - Use type=password.
+  - Have its value bound to localApiKey only.
+  - Update localApiKey when the user types.
+  - Have a placeholder that depends on whether a key already exists:
+    - If hasApiKey is true, use a placeholder like: “Enter new API key to replace existing”.
+    - If hasApiKey is false, use a placeholder like: “Enter API key from platform.openai.com”.
+- Under the input, render a small read-only line when there is a saved key:
+  - If hasApiKey is true and apiKeyMasked is not null, show something like:
+    - “Saved key: sk-***b0A” using the apiKeyMasked string from the API.
+  - This line is purely informational; it is not an input and cannot be edited.
+
+3.3 Render the “OpenAI Webhook (signing secret)” field
+
+- Use the same pattern as the API key:
+  - The input’s value is bound only to localWebhookSecret.
+  - The placeholder depends on whether a secret exists:
+    - If hasWebhookSigningSecret is true, placeholder like: “Enter new signing secret to replace existing”.
+    - If false, placeholder like: “Enter webhook signing secret”.
+  - Under the input, if hasWebhookSigningSecret is true and webhookSigningSecretMasked is present, render:
+    - “Saved signing secret: whs***XYZ” using the masked value from the API.
+  - Again, this masked value is for display only, not the input value.
+
+3.4 Save behavior for the LLM configuration form
+
+- When the user clicks “Save Configuration”:
+  - Construct the payload for the LLM settings update as follows:
+    - Always include non-secret configuration values that the user can change: provider, defaultModel, temperature, maxTokens.
+    - Include apiKey in the payload ONLY if localApiKey, after trimming, is a non-empty string.
+    - Include webhookSigningSecret in the payload ONLY if localWebhookSecret, after trimming, is a non-empty string.
+  - Send this payload to the LLM settings update API route.
+- After a successful save:
+  - Clear localApiKey and localWebhookSecret back to empty strings so the inputs are blank again.
+  - Re-fetch the LLM settings from the API, update the settings state, and therefore refresh hasApiKey, apiKeyMasked, hasWebhookSigningSecret, and webhookSigningSecretMasked.
+  - This ensures that after a change, the user sees the new masked previews.
+
+====================================================
+4. TESTING AND EDGE CASES
+====================================================
+
+After making the changes, verify these scenarios:
+
+1. No secrets configured yet:
+   - The GET LLM settings endpoint returns hasApiKey = false and apiKeyMasked = null, and hasWebhookSigningSecret = false with webhookSigningSecretMasked = null.
+   - The LLM Configuration UI shows empty inputs and no “Saved key” or “Saved signing secret” lines.
+
+2. First-time save of both secrets:
+   - Enter a real API key and webhook secret in the inputs and click Save.
+   - The backend stores them.
+   - The UI re-fetches settings and shows:
+     - hasApiKey = true and apiKeyMasked showing first 3 + *** + last 3 characters.
+     - hasWebhookSigningSecret = true and webhookSigningSecretMasked with the same masking pattern.
+   - The inputs themselves are empty again, and the preview text under each input shows the masked values.
+
+3. Browser refresh:
+   - After reloading the page, the UI still shows the masked previews under each input, and the inputs remain empty.
+   - Inspect the network tab to confirm that the responses contain only the masked values and not the full secrets.
+
+4. Updating only one secret:
+   - Type a new API key but leave the webhook input blank and save.
+   - Confirm that:
+     - The API key stored on the backend changes to the new value.
+     - The webhook signing secret remains the same.
+     - The masked preview for the API key updates and the webhook preview does not.
+   - Repeat the same in reverse (changing only the webhook secret).
+
+5. Security checks:
+   - Search the backend code for any logs or errors that output openAiApiKey or openAiWebhookSigningSecret and remove or sanitize them so that they never print the full values.
+   - Confirm that the LLM settings GET endpoint never returns the full secrets, only hasApiKey, apiKeyMasked, hasWebhookSigningSecret, and webhookSigningSecretMasked.
+
+Implement all of these steps so that the LLM Configuration screen behaves like the OpenAI platform UI: you can always see that a key/secret is present (first 3 characters + *** + last 3 characters), but the full values never leave the server and can only be replaced by typing new ones.

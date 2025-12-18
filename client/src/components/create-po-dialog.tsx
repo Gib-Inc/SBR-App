@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Popover,
@@ -50,7 +51,6 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier, Item } from "@shared/schema";
 import { cn } from "@/lib/utils";
-import { QBConfirmModal } from "@/components/qb-confirm-modal";
 
 interface DraftLineItem {
   id: string;
@@ -86,10 +86,8 @@ export function CreatePODialog({
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   
-  // QuickBooks confirmation modal state
-  const [qbModalOpen, setQbModalOpen] = useState(false);
-  const [pendingItem, setPendingItem] = useState<Item | null>(null);
 
   // Add Supplier inline modal state
   const [addSupplierOpen, setAddSupplierOpen] = useState(false);
@@ -334,100 +332,67 @@ export function CreatePODialog({
     setLineItems([]);
     setProductSearchQuery("");
     setErrors({});
-    setPendingItem(null);
-    setQbModalOpen(false);
+    setSelectedItemIds(new Set());
     onOpenChange(false);
   }, [onOpenChange]);
 
-  // Stage item for QB confirmation - opens the modal instead of adding directly
-  const handleAddItem = useCallback((item: Item) => {
-    const existingLine = lineItems.find(l => l.itemId === item.id);
-    if (existingLine) {
-      // If item already exists, just increment quantity
-      setLineItems(prev => prev.map(l => 
-        l.itemId === item.id 
-          ? { ...l, qtyOrdered: l.qtyOrdered + 1 }
-          : l
-      ));
-      setProductSearchOpen(false);
-      setProductSearchQuery("");
-    } else {
-      // Stage the item and open QB confirmation modal
-      setPendingItem(item);
-      setQbModalOpen(true);
-      setProductSearchOpen(false);
-      setProductSearchQuery("");
-    }
-  }, [lineItems]);
-
-  // Handle QB modal "Apply" - use QuickBooks data
-  const handleQBApply = useCallback((data: {
-    unitCost: number;
-    taxRate: number | null;
-    vendorName: string | null;
-    vendorId: string | null;
-    quickbooksItemId: string | null;
-  }) => {
-    if (!pendingItem) return;
-    
-    const lineId = `temp-${Date.now()}`;
-    const newLine: DraftLineItem = {
-      id: lineId,
-      itemId: pendingItem.id,
-      sku: pendingItem.sku,
-      name: pendingItem.name,
-      qtyOrdered: 1,
-      unitCost: data.unitCost,
-      taxAmount: 0,
-      taxRate: data.taxRate,
-      quickbooksItemId: data.quickbooksItemId,
-    };
-    setLineItems(prev => [...prev, newLine]);
-    
-    // If vendor info provided and no supplier selected, try to match
-    if (data.vendorName && !supplierId) {
-      const matchingSupplier = suppliers.find(s => 
-        s.name.toLowerCase() === data.vendorName!.toLowerCase()
-      );
-      if (matchingSupplier) {
-        setSupplierId(matchingSupplier.id);
-        toast({
-          title: "Supplier set from QuickBooks",
-          description: `${matchingSupplier.name} is the preferred vendor`,
-        });
+  // Toggle item selection for multi-select
+  const toggleItemSelection = useCallback((itemId: string) => {
+    setSelectedItemIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(itemId)) {
+        newSet.delete(itemId);
+      } else {
+        newSet.add(itemId);
       }
-    }
+      return newSet;
+    });
+  }, []);
+
+  // Add all selected items to line items and close dialog (batched update)
+  const handleAddSelectedItems = useCallback(() => {
+    const itemsToAdd = items.filter(item => selectedItemIds.has(item.id));
     
-    toast({
-      title: "QuickBooks data applied",
-      description: `Unit cost: $${data.unitCost.toFixed(2)}${data.taxRate ? `, Tax: ${data.taxRate}%` : ''}`,
+    setLineItems(prev => {
+      const updatedLines = [...prev];
+      const newLines: DraftLineItem[] = [];
+      
+      itemsToAdd.forEach(item => {
+        const existingIndex = updatedLines.findIndex(l => l.itemId === item.id);
+        if (existingIndex !== -1) {
+          // Increment quantity for existing item
+          updatedLines[existingIndex] = {
+            ...updatedLines[existingIndex],
+            qtyOrdered: updatedLines[existingIndex].qtyOrdered + 1
+          };
+        } else {
+          // Create new line item with default cost
+          const itemWithAny = item as any;
+          const defaultCost = itemWithAny.defaultPurchaseCost || 
+                              itemWithAny.primarySupplier?.unitCost || 
+                              itemWithAny.primarySupplier?.price || 
+                              0;
+          
+          newLines.push({
+            id: `temp-${Date.now()}-${item.id}`,
+            itemId: item.id,
+            sku: item.sku,
+            name: item.name,
+            qtyOrdered: 1,
+            unitCost: defaultCost,
+            taxAmount: 0,
+          });
+        }
+      });
+      
+      return [...updatedLines, ...newLines];
     });
     
-    setPendingItem(null);
-  }, [pendingItem, supplierId, suppliers, toast]);
-
-  // Handle QB modal "Manual" - add item with default values
-  const handleQBManual = useCallback(() => {
-    if (!pendingItem) return;
-    
-    const itemWithAny = pendingItem as any;
-    const defaultCost = itemWithAny.defaultPurchaseCost || 
-                        itemWithAny.primarySupplier?.unitCost || 
-                        itemWithAny.primarySupplier?.price || 
-                        0;
-    
-    const newLine: DraftLineItem = {
-      id: `temp-${Date.now()}`,
-      itemId: pendingItem.id,
-      sku: pendingItem.sku,
-      name: pendingItem.name,
-      qtyOrdered: 1,
-      unitCost: defaultCost,
-      taxAmount: 0,
-    };
-    setLineItems(prev => [...prev, newLine]);
-    setPendingItem(null);
-  }, [pendingItem]);
+    // Reset and close dialog
+    setSelectedItemIds(new Set());
+    setProductSearchQuery("");
+    setProductSearchOpen(false);
+  }, [items, selectedItemIds]);
 
   const handleUpdateLineQty = useCallback((lineId: string, qty: number) => {
     if (qty < 1) return;
@@ -593,12 +558,18 @@ export function CreatePODialog({
                 </Button>
                 
                 {/* Add Item Modal - uses Dialog for guaranteed scrolling */}
-                <Dialog open={productSearchOpen} onOpenChange={setProductSearchOpen}>
-                  <DialogContent className="max-w-md p-0">
+                <Dialog open={productSearchOpen} onOpenChange={(open) => {
+                  setProductSearchOpen(open);
+                  if (!open) {
+                    setSelectedItemIds(new Set());
+                    setProductSearchQuery("");
+                  }
+                }}>
+                  <DialogContent className="max-w-2xl p-0">
                     <DialogHeader className="px-4 pt-4 pb-2">
                       <DialogTitle>Add Item from Stock Inventory</DialogTitle>
                       <DialogDescription>
-                        Select an item to add to this purchase order
+                        Select items to add to this purchase order
                       </DialogDescription>
                     </DialogHeader>
                     
@@ -616,35 +587,74 @@ export function CreatePODialog({
                       </div>
                     </div>
                     
-                    {/* Count */}
-                    <div className="px-4 py-1 text-xs font-medium text-muted-foreground">
-                      Stock Inventory ({filteredItems.length} items)
+                    {/* Count and selected count */}
+                    <div className="px-4 py-1 text-xs font-medium text-muted-foreground flex justify-between">
+                      <span>Stock Inventory ({filteredItems.length} items)</span>
+                      {selectedItemIds.size > 0 && (
+                        <span className="text-primary">{selectedItemIds.size} selected</span>
+                      )}
                     </div>
                     
-                    {/* 
-                      Scrollable items list - uses Stock Inventory data (type === "component").
-                      Fixed height with overflow-y-auto ensures scrolling works.
-                    */}
-                    <div className="px-2 pb-4" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                    {/* Scrollable items list with checkboxes */}
+                    <div className="px-2" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                       {filteredItems.length === 0 ? (
                         <div className="py-6 text-center text-sm text-muted-foreground">
                           No items found.
                         </div>
                       ) : (
-                        filteredItems.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => handleAddItem(item)}
-                            className="w-full text-left px-2 py-2 rounded hover:bg-accent hover:text-accent-foreground"
-                            data-testid={`item-option-${item.id}`}
-                          >
-                            <span className="font-mono text-sm font-medium">{item.sku}</span>
-                            <span className="ml-2 text-sm text-muted-foreground">{item.name}</span>
-                          </button>
-                        ))
+                        filteredItems.map((item) => {
+                          const isSelected = selectedItemIds.has(item.id);
+                          const isAlreadyAdded = lineItems.some(l => l.itemId === item.id);
+                          return (
+                            <div
+                              key={item.id}
+                              onClick={() => toggleItemSelection(item.id)}
+                              className={cn(
+                                "flex items-center gap-3 w-full text-left px-3 py-2 rounded cursor-pointer",
+                                isSelected ? "bg-primary/10" : "hover:bg-accent hover:text-accent-foreground"
+                              )}
+                              data-testid={`item-option-${item.id}`}
+                            >
+                              <Checkbox 
+                                checked={isSelected}
+                                onCheckedChange={() => toggleItemSelection(item.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                data-testid={`checkbox-item-${item.id}`}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <span className="font-mono text-sm font-medium">{item.sku}</span>
+                                <span className="ml-2 text-sm text-muted-foreground truncate">{item.name}</span>
+                              </div>
+                              {isAlreadyAdded && (
+                                <Badge variant="secondary" className="text-xs">Already added</Badge>
+                              )}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
+                    
+                    {/* Footer with Add button */}
+                    <DialogFooter className="px-4 py-3 border-t">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setProductSearchOpen(false);
+                          setSelectedItemIds(new Set());
+                          setProductSearchQuery("");
+                        }}
+                        data-testid="button-cancel-add-items"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={handleAddSelectedItems}
+                        disabled={selectedItemIds.size === 0}
+                        data-testid="button-confirm-add-items"
+                      >
+                        Add {selectedItemIds.size > 0 ? `(${selectedItemIds.size})` : ""} Items
+                      </Button>
+                    </DialogFooter>
                   </DialogContent>
                 </Dialog>
               </div>
@@ -845,19 +855,6 @@ export function CreatePODialog({
           </Button>
         </DialogFooter>
       </DialogContent>
-
-      {/* QuickBooks Confirmation Modal */}
-      <QBConfirmModal
-        isOpen={qbModalOpen}
-        onClose={() => {
-          setQbModalOpen(false);
-          setPendingItem(null);
-        }}
-        itemSku={pendingItem?.sku || ""}
-        itemName={pendingItem?.name || ""}
-        onApply={handleQBApply}
-        onManual={handleQBManual}
-      />
 
       {/* Add Supplier Inline Dialog */}
       <Dialog open={addSupplierOpen} onOpenChange={setAddSupplierOpen}>

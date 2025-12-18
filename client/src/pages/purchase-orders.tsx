@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
@@ -947,7 +948,7 @@ export default function PurchaseOrders() {
       </Card>
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ClipboardList className="h-5 w-5" />
@@ -1088,10 +1089,17 @@ export default function PurchaseOrders() {
                           
                           return (
                             <tr key={line.id} className="border-b last:border-b-0" data-testid={`row-line-${line.id}`}>
-                              <td className="p-3 whitespace-nowrap">
-                                <div>
-                                  <p className="font-medium">{line.item?.name || line.itemName || "-"}</p>
-                                  <p className="text-xs text-muted-foreground">{line.item?.sku || line.sku || "-"}</p>
+                              <td className="p-3">
+                                <div className="max-w-[180px]">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <p className="font-medium truncate cursor-default">{line.item?.name || line.itemName || "-"}</p>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-xs">
+                                      <p>{line.item?.name || line.itemName || "-"}</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <p className="text-xs text-muted-foreground truncate">{line.item?.sku || line.sku || "-"}</p>
                                 </div>
                               </td>
                               <td className="p-3 text-right whitespace-nowrap">{line.qtyOrdered}</td>

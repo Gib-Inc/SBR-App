@@ -1269,6 +1269,10 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
   const [amazonSku, setAmazonSku] = useState("");
   const [extensivSku, setExtensivSku] = useState("");
   const [upc, setUpc] = useState("");
+  // Cost settings fields
+  const [defaultPurchaseCost, setDefaultPurchaseCost] = useState("");
+  const [purchaseCurrency, setPurchaseCurrency] = useState("USD");
+  const [supplierProductUrl, setSupplierProductUrl] = useState("");
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1292,6 +1296,9 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       setAmazonSku("");
       setExtensivSku("");
       setUpc("");
+      setDefaultPurchaseCost("");
+      setPurchaseCurrency("USD");
+      setSupplierProductUrl("");
     },
     onError: (error: Error) => {
       toast({
@@ -1329,6 +1336,15 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
       payload.category = category;
       payload.hildaleQty = 0;
       payload.pivotQty = 0;
+    }
+    
+    // Cost settings (for both finished products and components)
+    if (defaultPurchaseCost.trim()) {
+      payload.defaultPurchaseCost = defaultPurchaseCost.trim();
+      payload.purchaseCurrency = purchaseCurrency;
+    }
+    if (supplierProductUrl.trim()) {
+      payload.supplierProductUrl = supplierProductUrl.trim();
     }
     
     createMutation.mutate(payload);
@@ -1474,6 +1490,57 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
               />
             </div>
           )}
+          
+          {/* Cost Settings (Optional) */}
+          <div className="space-y-3 border-t pt-4">
+            <Label className="text-sm font-medium">Cost Settings (Optional)</Label>
+            <div className="space-y-2">
+              <Label htmlFor="purchase-cost" className="text-xs">Default Purchase Cost</Label>
+              <div className="flex gap-2">
+                <span className="flex items-center text-sm text-muted-foreground w-4">
+                  {purchaseCurrency === "USD" || purchaseCurrency === "CAD" ? "$" : 
+                   purchaseCurrency === "EUR" ? "€" : 
+                   purchaseCurrency === "GBP" ? "£" : 
+                   purchaseCurrency === "CNY" ? "¥" : "$"}
+                </span>
+                <Input
+                  id="purchase-cost"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={defaultPurchaseCost}
+                  onChange={(e) => setDefaultPurchaseCost(e.target.value)}
+                  placeholder="0.00"
+                  className="flex-1"
+                  data-testid="input-create-purchase-cost"
+                />
+                <select
+                  value={purchaseCurrency}
+                  onChange={(e) => setPurchaseCurrency(e.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  data-testid="select-create-currency"
+                >
+                  <option value="USD">USD</option>
+                  <option value="CAD">CAD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="GBP">GBP</option>
+                  <option value="CNY">CNY</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="supplier-url" className="text-xs">Supplier Product URL</Label>
+              <Input
+                id="supplier-url"
+                value={supplierProductUrl}
+                onChange={(e) => setSupplierProductUrl(e.target.value)}
+                placeholder="https://supplier.com/product/123"
+                data-testid="input-create-supplier-url"
+              />
+              <p className="text-xs text-muted-foreground">URL to the supplier's product page for price suggestions</p>
+            </div>
+          </div>
+          
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={onClose} data-testid="button-cancel-create">
               Cancel

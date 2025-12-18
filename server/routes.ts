@@ -15304,14 +15304,10 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ error: "webhookVerifierToken must be a string" });
       }
       
-      // Update the token in quickbooks_auth table
-      const updated = await storage.updateQuickbooksWebhookToken(userId, webhookVerifierToken);
+      // Update or create the token in quickbooks_auth table (upsert)
+      await storage.updateQuickbooksWebhookToken(userId, webhookVerifierToken);
       
-      if (!updated) {
-        return res.status(404).json({ error: "QuickBooks connection not found. Please connect QuickBooks first." });
-      }
-      
-      console.log(`[QuickBooks] Webhook verifier token updated for user ${userId}`);
+      console.log(`[QuickBooks] Webhook verifier token saved for user ${userId}`);
       res.json({ success: true, message: "Webhook verifier token updated" });
     } catch (error: any) {
       console.error("[QuickBooks] Error updating webhook config:", error);

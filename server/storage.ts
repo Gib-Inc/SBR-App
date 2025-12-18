@@ -5980,11 +5980,29 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateQuickbooksWebhookToken(userId: string, token: string): Promise<boolean> {
+    // First try to update existing row
     const result = await this.db.update(schema.quickbooksAuth)
       .set({ webhookVerifierToken: token, updatedAt: new Date() })
       .where(eq(schema.quickbooksAuth.userId, userId))
       .returning();
-    return result.length > 0;
+    
+    if (result.length > 0) {
+      return true;
+    }
+    
+    // If no row exists, create one with just the webhook token
+    const inserted = await this.db.insert(schema.quickbooksAuth)
+      .values({
+        userId,
+        webhookVerifierToken: token,
+        accessToken: '',
+        refreshToken: '',
+        tokenExpiresAt: new Date(),
+        realmId: '',
+      })
+      .returning();
+    
+    return inserted.length > 0;
   }
 
   // Integration Config health check methods - use getIntegrationConfigById from line 3554 instead

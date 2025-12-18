@@ -9553,7 +9553,7 @@ Notes: ${po.notes || 'None'}
       const supplierIds = [...new Set(inboundPOs.map(po => po.supplierId).filter(Boolean))] as string[];
       const [allSuppliers, ...poLinesArrays] = await Promise.all([
         Promise.all(supplierIds.map(id => storage.getSupplier(id))),
-        ...inboundPOs.map(po => storage.getPurchaseOrderLines(po.id)),
+        ...inboundPOs.map(po => storage.getPurchaseOrderLinesByPOId(po.id)),
       ]);
       
       const supplierMap = new Map(allSuppliers.filter(Boolean).map(s => [s!.id, s!.name]));

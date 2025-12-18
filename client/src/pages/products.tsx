@@ -972,7 +972,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
     po => po.supplierId === supplier?.id && ['DRAFT', 'APPROVAL_PENDING'].includes(po.status)
   );
 
-  const createPOMutation = useMutation({
+  const createAndSendPOMutation = useMutation({
     mutationFn: async (data: { mode: "new" | "existing"; qty: number; poId?: string }) => {
       if (!supplier) throw new Error("No supplier configured");
       
@@ -980,8 +980,8 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
       const unitCost = item.defaultPurchaseCost || item.primarySupplier?.unitCost || item.primarySupplier?.price || 0;
 
       if (data.mode === "new") {
-        // Create new PO
-        const res = await apiRequest("POST", "/api/purchase-orders", {
+        // Create new PO as DRAFT first
+        const createRes = await apiRequest("POST", "/api/purchase-orders", {
           supplierId: supplier.id,
           status: "DRAFT",
           lines: [{
@@ -990,10 +990,22 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             unitCost,
           }],
         });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
+        if (!createRes.ok) {
+          const errText = await createRes.text();
+          throw new Error(errText || "Failed to create purchase order");
+        }
+        const newPO = await createRes.json();
+        
+        // Immediately send the PO
+        const sendRes = await apiRequest("POST", `/api/purchase-orders/${newPO.id}/send`, {});
+        if (!sendRes.ok) {
+          const sendErr = await sendRes.json();
+          throw new Error(sendErr.error || "PO created but failed to send email. Check supplier has a valid email address.");
+        }
+        const sentPO = await sendRes.json();
+        return { ...sentPO, emailSent: true };
       } else {
-        // Add to existing PO
+        // Add to existing PO (stays as draft - user can send separately)
         const res = await apiRequest("POST", `/api/purchase-orders/${data.poId}/lines`, {
           lines: [{
             itemId: item.id,
@@ -1005,21 +1017,29 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
         return res.json();
       }
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders'] });
       queryClient.invalidateQueries({ queryKey: ['/api/purchase-orders/summary'] });
-      toast({ title: poMode === "new" ? "Purchase order created" : "Line added to PO" });
+      // Use result.emailSent flag to determine which toast to show (set only for new POs that were sent)
+      if (result.emailSent) {
+        toast({ 
+          title: "Purchase order sent!", 
+          description: result.emailTo ? `Email sent to ${result.emailTo}` : "Email sent to supplier",
+        });
+      } else {
+        toast({ title: "Line added to PO" });
+      }
       onClose();
       setOrderQty("");
       setPoMode("new");
       setSelectedExistingPO("");
     },
     onError: (error: Error) => {
-      toast({ title: "Failed to create PO", description: error.message, variant: "destructive" });
+      toast({ title: "Failed to send PO", description: error.message, variant: "destructive" });
     },
   });
 
-  const handleCreatePO = () => {
+  const handleSendPO = () => {
     const qty = parseInt(orderQty) || suggestedOrderQty;
     
     if (!supplier) {
@@ -1037,7 +1057,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
       return;
     }
 
-    createPOMutation.mutate({
+    createAndSendPOMutation.mutate({
       mode: poMode,
       qty,
       poId: selectedExistingPO,
@@ -1208,14 +1228,14 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
               Close
             </Button>
             <Button 
-              onClick={handleCreatePO}
-              disabled={!supplier || createPOMutation.isPending}
-              data-testid="button-create-po-from-reorder"
+              onClick={handleSendPO}
+              disabled={!supplier || createAndSendPOMutation.isPending}
+              data-testid="button-send-po-from-reorder"
             >
-              {createPOMutation.isPending 
-                ? "Creating..." 
+              {createAndSendPOMutation.isPending 
+                ? "Sending..." 
                 : poMode === "new" 
-                  ? "Create PO" 
+                  ? "Send PO" 
                   : "Add to PO"}
             </Button>
           </div>

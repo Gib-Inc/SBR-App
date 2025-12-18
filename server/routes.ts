@@ -5243,15 +5243,13 @@ TOTAL: $${subtotal.toFixed(2)}
               customerName,
               customerEmail,
               customerPhone,
-              status: 'REFUNDED',
+              status: 'IN_TRANSIT', // Start in Live tab, moves to History when warehouse confirms receipt
               resolutionRequested: 'REFUND',
-              resolutionFinal: 'REFUND',
-              resolutionNotes: `Refund synced from Shopify. Amount: $${totalRefundAmount.toFixed(2)}`,
+              resolutionFinal: null, // Not finalized until warehouse receives
+              resolutionNotes: `Refund initiated in Shopify. Amount: $${totalRefundAmount.toFixed(2)}`,
               reason: refund.note || 'Refund from Shopify',
               requestedAt: new Date(refund.created_at || Date.now()),
-              refundedAt: new Date(refund.processed_at || refund.created_at || Date.now()),
-              // Use status-based filtering - do NOT set isHistorical here
-              // REFUNDED status will cause it to appear in History tab via status-based filter
+              refundedAt: null, // Set when warehouse confirms receipt
               isHistorical: false,
               archivedAt: null,
               // Populate financial fields for proper display

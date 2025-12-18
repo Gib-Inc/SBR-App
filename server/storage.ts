@@ -116,6 +116,7 @@ import {
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
+  TERMINAL_STATUSES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
@@ -2209,17 +2210,15 @@ export class MemStorage implements IStorage {
   }
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
-    // Live = NOT in terminal states (everything except REFUNDED, CLOSED, CANCELLED)
-    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
+    // Live = NOT in terminal states - use schema-defined terminal statuses for consistency
     return Array.from(this.returnRequests.values())
-      .filter(r => !terminalStatuses.includes(r.status))
+      .filter(r => !isReturnStatusTerminal(r.status))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
-    // History = terminal states (REFUNDED, CLOSED, CANCELLED) - confirmed refunds only
-    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
-    let returns = Array.from(this.returnRequests.values()).filter(r => terminalStatuses.includes(r.status));
+    // History = terminal states - use schema helper for consistency
+    let returns = Array.from(this.returnRequests.values()).filter(r => isReturnStatusTerminal(r.status));
     if (options?.startDate) {
       returns = returns.filter(r => new Date(r.createdAt) >= options.startDate!);
     }
@@ -4969,17 +4968,15 @@ export class PostgresStorage implements IStorage {
   }
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
-    // Live = NOT in terminal states (everything except REFUNDED, CLOSED, CANCELLED)
-    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
+    // Live = NOT in terminal states - use schema-defined terminal statuses for consistency
     return await this.db.select().from(schema.returnRequests)
-      .where(notInArray(schema.returnRequests.status, terminalStatuses))
+      .where(notInArray(schema.returnRequests.status, [...TERMINAL_STATUSES.returnRequest]))
       .orderBy(desc(schema.returnRequests.createdAt));
   }
 
   async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
-    // History = terminal states (REFUNDED, CLOSED, CANCELLED) - confirmed refunds only
-    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
-    const conditions: any[] = [inArray(schema.returnRequests.status, terminalStatuses)];
+    // History = terminal states - use schema-defined terminal statuses for consistency
+    const conditions: any[] = [inArray(schema.returnRequests.status, [...TERMINAL_STATUSES.returnRequest])];
     
     // Date filtering based on refundedAt (when refund was completed) or createdAt
     if (options?.startDate) {

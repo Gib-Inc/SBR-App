@@ -3418,13 +3418,15 @@ TOTAL: $${subtotal.toFixed(2)}
           'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
         ];
         
-        // LLM API Key - use new hasApiKey/apiKeyMasked pattern
-        const hasApiKey = !!(sanitized.llmApiKey && sanitized.llmApiKey.trim());
+        // LLM API Key - read from OPENAI_API_KEY environment secret (single source of truth)
+        // Database llm_api_key field is deprecated
+        const envApiKey = process.env.OPENAI_API_KEY;
+        const hasApiKey = !!(envApiKey && envApiKey.trim());
         sanitized.hasApiKey = hasApiKey;
-        sanitized.apiKeyMasked = hasApiKey ? maskSecret(sanitized.llmApiKey) : null;
-        delete sanitized.llmApiKey;
+        sanitized.apiKeyMasked = hasApiKey ? maskSecret(envApiKey) : null;
+        delete sanitized.llmApiKey; // Remove deprecated database field from response
         
-        // Webhook signing secret - use new hasWebhookSigningSecret/webhookSigningSecretMasked pattern
+        // Webhook signing secret - still from database (user can configure)
         const hasWebhookSigningSecret = !!(sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.trim());
         sanitized.hasWebhookSigningSecret = hasWebhookSigningSecret;
         sanitized.webhookSigningSecretMasked = hasWebhookSigningSecret ? maskSecret(sanitized.openaiWebhookSecret) : null;
@@ -3438,7 +3440,15 @@ TOTAL: $${subtotal.toFixed(2)}
         }
         res.json(sanitized);
       } else {
-        res.json({ hasApiKey: false, apiKeyMasked: null, hasWebhookSigningSecret: false, webhookSigningSecretMasked: null });
+        // Check env secret even if no settings exist
+        const envApiKey = process.env.OPENAI_API_KEY;
+        const hasApiKey = !!(envApiKey && envApiKey.trim());
+        res.json({ 
+          hasApiKey, 
+          apiKeyMasked: hasApiKey ? maskSecret(envApiKey) : null, 
+          hasWebhookSigningSecret: false, 
+          webhookSigningSecretMasked: null 
+        });
       }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });

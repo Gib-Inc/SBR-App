@@ -113,7 +113,6 @@ function AccountSettings() {
 function LLMSettings() {
   const { toast } = useToast();
   const [llmProvider, setLlmProvider] = useState("chatgpt");
-  const [llmApiKey, setLlmApiKey] = useState("");
   const [llmModel, setLlmModel] = useState("gpt-5");
   const [llmTemperature, setLlmTemperature] = useState(0.7);
   const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
@@ -122,6 +121,7 @@ function LLMSettings() {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [maskedApiKey, setMaskedApiKey] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [isEditingWebhookSecret, setIsEditingWebhookSecret] = useState(false);
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
   const [maskedWebhookSecret, setMaskedWebhookSecret] = useState("");
 
@@ -157,15 +157,15 @@ function LLMSettings() {
       const provider = settings.llmProvider === 'custom' ? 'chatgpt' : (settings.llmProvider || 'chatgpt');
       setLlmProvider(provider);
       
-      // Use new hasApiKey/apiKeyMasked pattern from backend
+      // API key comes from env secret, just display masked value
       setHasApiKey(!!settings.hasApiKey);
       setMaskedApiKey(settings.apiKeyMasked || '');
-      setLlmApiKey('');
       
-      // Use new hasWebhookSigningSecret/webhookSigningSecretMasked pattern from backend
+      // Webhook secret from database
       setHasWebhookSecret(!!settings.hasWebhookSigningSecret);
       setMaskedWebhookSecret(settings.webhookSigningSecretMasked || '');
       setWebhookSecret('');
+      setIsEditingWebhookSecret(false);
       
       setLlmModel(settings.llmModel || 'gpt-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
@@ -216,17 +216,14 @@ function LLMSettings() {
       llmTemperature,
       llmMaxTokens,
     };
-    // Only include secrets if they have new non-empty values
-    if (llmApiKey.trim()) {
-      updates.llmApiKey = llmApiKey.trim();
-    }
+    // Only include webhook secret if user entered a new value
     if (webhookSecret.trim()) {
       updates.openaiWebhookSecret = webhookSecret.trim();
     }
     await saveSettingMutation.mutateAsync(updates);
-    // Clear input fields after save - re-fetch will update masked values
-    setLlmApiKey('');
+    // Clear webhook input after save - re-fetch will update masked value
     setWebhookSecret('');
+    setIsEditingWebhookSecret(false);
   };
 
   const testConnection = async () => {
@@ -318,34 +315,24 @@ function LLMSettings() {
             <div className="flex items-center gap-2">
               <Input
                 id="llm-api-key"
-                type="password"
-                placeholder={hasApiKey ? "Enter new API key to replace existing" : 
-                  llmProvider === "chatgpt" ? "Enter API key from platform.openai.com" :
-                  llmProvider === "claude" ? "Enter API key from console.anthropic.com" :
-                  llmProvider === "grok" ? "Enter API key from Grok platform" : "Enter API key..."}
-                value={llmApiKey}
-                onChange={(e) => setLlmApiKey(e.target.value)}
+                type="text"
+                readOnly
+                value={hasApiKey ? maskedApiKey : "Not configured"}
+                className={hasApiKey ? "" : "text-muted-foreground"}
                 data-testid="input-llm-api-key"
               />
               {hasApiKey && (
                 <Badge variant="outline" className="shrink-0">
                   <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
-                  Saved
+                  Configured
                 </Badge>
               )}
             </div>
-            {hasApiKey && maskedApiKey && (
-              <p className="text-xs text-muted-foreground">
-                Saved key: {maskedApiKey}
-              </p>
-            )}
-            {!hasApiKey && (
-              <p className="text-xs text-muted-foreground">
-                {llmProvider === "chatgpt" && "Get your key from platform.openai.com"}
-                {llmProvider === "claude" && "Get your key from console.anthropic.com"}
-                {llmProvider === "grok" && "Get your key from the Grok platform"}
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground">
+              {hasApiKey 
+                ? "API key is managed via Replit Secrets (OPENAI_API_KEY)" 
+                : "Add OPENAI_API_KEY in Replit Secrets to configure"}
+            </p>
           </div>
 
           {llmProvider === "chatgpt" && (
@@ -354,24 +341,21 @@ function LLMSettings() {
               <div className="flex items-center gap-2">
                 <Input
                   id="webhook-secret"
-                  type="password"
-                  placeholder={hasWebhookSecret ? "Enter new signing secret to replace existing" : "Enter webhook signing secret"}
-                  value={webhookSecret}
+                  type={isEditingWebhookSecret ? "password" : "text"}
+                  placeholder="Enter webhook signing secret"
+                  value={isEditingWebhookSecret ? webhookSecret : (hasWebhookSecret ? maskedWebhookSecret : "")}
+                  onFocus={() => setIsEditingWebhookSecret(true)}
+                  onBlur={() => { if (!webhookSecret) setIsEditingWebhookSecret(false); }}
                   onChange={(e) => setWebhookSecret(e.target.value)}
                   data-testid="input-webhook-secret"
                 />
-                {hasWebhookSecret && (
+                {hasWebhookSecret && !isEditingWebhookSecret && (
                   <Badge variant="outline" className="shrink-0">
                     <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
                     Saved
                   </Badge>
                 )}
               </div>
-              {hasWebhookSecret && maskedWebhookSecret && (
-                <p className="text-xs text-muted-foreground">
-                  Saved signing secret: {maskedWebhookSecret}
-                </p>
-              )}
               {!hasWebhookSecret && (
                 <p className="text-xs text-muted-foreground">
                   Signing secret from your OpenAI webhook configuration

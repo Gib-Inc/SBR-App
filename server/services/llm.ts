@@ -5,8 +5,8 @@ import OpenAI from "openai";
 const OPENAI_MODEL = "gpt-5";
 
 /**
- * Get OpenAI client with API key from database settings (user-configured)
- * Priority: 1) Explicit apiKey param, 2) Database settings, 3) Environment variable
+ * Get OpenAI client with API key from environment secret OPENAI_API_KEY
+ * The database llm_api_key field is deprecated - use environment secret only
  */
 async function getOpenAIClient(apiKeyOverride?: string): Promise<OpenAI> {
   // Priority 1: Use explicit API key if provided (from request)
@@ -14,25 +14,12 @@ async function getOpenAIClient(apiKeyOverride?: string): Promise<OpenAI> {
     return new OpenAI({ apiKey: apiKeyOverride });
   }
   
-  // Priority 2: Get API key from database settings (user-configured in Settings page)
-  try {
-    const settings = await storage.getSettings();
-    const apiKey = settings?.llmApiKey;
-    
-    if (apiKey && apiKey.trim()) {
-      return new OpenAI({ apiKey });
-    }
-  } catch (error) {
-    console.error("[LLM] Error fetching settings:", error);
-  }
-  
-  // Priority 3: Fallback to environment variable
+  // Priority 2: Use OPENAI_API_KEY environment secret (single source of truth)
   if (process.env.OPENAI_API_KEY) {
-    console.log("[LLM] Warning: Using env OPENAI_API_KEY - configure API key in Settings for multi-user support");
     return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   }
   
-  throw new Error("No OpenAI API key configured. Please add your API key in Settings > LLM Configuration.");
+  throw new Error("No OpenAI API key configured. Please add OPENAI_API_KEY in your Replit Secrets.");
 }
 
 export type LLMProvider = "chatgpt" | "claude" | "grok" | "custom";

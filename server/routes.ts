@@ -9885,7 +9885,7 @@ Notes: ${po.notes || 'None'}
           const taxAmount = Math.round((Number(line.taxAmount) || 0) * 100) / 100;
           const unitCost = Number(line.unitCost) || 0;
           const qtyOrdered = Number(line.quantity) || Number(line.qtyOrdered) || 1;
-          const lineTotal = Math.round((qtyOrdered * unitCost + taxAmount) * 100) / 100;
+          const lineTotal = Math.round(qtyOrdered * unitCost * 100) / 100;
           
           const validatedLine = insertPurchaseOrderLineSchema.parse({
             ...line,
@@ -10488,7 +10488,7 @@ Notes: ${po.notes || 'None'}
           if (!item) continue;
 
           const taxAmount = Math.round((Number(line.taxAmount) || 0) * 100) / 100;
-          const lineTotal = Math.round((line.qtyOrdered * line.unitCost + taxAmount) * 100) / 100;
+          const lineTotal = Math.round(line.qtyOrdered * line.unitCost * 100) / 100;
 
           if (line.id && existingLineIds.has(line.id)) {
             // Update existing line

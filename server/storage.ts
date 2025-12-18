@@ -4850,11 +4850,11 @@ export class PostgresStorage implements IStorage {
     let totalItemsOrdered = 0;
     for (const line of lines) {
       const taxAmount = Number(line.taxAmount) || 0;
-      const lineTotal = Math.round(((line.qtyOrdered || 0) * (line.unitCost || 0) + taxAmount) * 100) / 100;
+      const lineTotal = Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
       if (lineTotal !== line.lineTotal) {
         await this.updatePurchaseOrderLine(line.id, { lineTotal, updatedAt: new Date() });
       }
-      subtotal += Math.round((line.qtyOrdered || 0) * (line.unitCost || 0) * 100) / 100;
+      subtotal += lineTotal;
       lineTaxTotal += taxAmount;
       totalItemsOrdered += line.qtyOrdered || 0;
     }

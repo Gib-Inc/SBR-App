@@ -34,7 +34,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload, AlertTriangle } from "lucide-react";
+import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload, AlertTriangle, Truck } from "lucide-react";
+import { useLocation } from "wouter";
 import { Switch } from "@/components/ui/switch";
 import { format, subDays } from "date-fns";
 
@@ -113,6 +114,7 @@ interface ReturnDetails {
 
 export default function Returns() {
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
   const [selectedReturnId, setSelectedReturnId] = useState<string | null>(null);
   const [issuingLabelForId, setIssuingLabelForId] = useState<string | null>(null);
   const [showReceiptModalId, setShowReceiptModalId] = useState<string | null>(null);
@@ -234,22 +236,24 @@ export default function Returns() {
     },
   });
 
-  const getStatusBadgeVariant = (status: string) => {
+  const getStatusBadgeVariant = (status: string): "default" | "secondary" | "outline" | "destructive" => {
     switch (status) {
       case 'OPEN':
         return 'default';
       case 'LABEL_CREATED':
-      case 'LABEL_ISSUED': // Legacy status
+      case 'LABEL_ISSUED':
       case 'IN_TRANSIT':
         return 'secondary';
-      case 'RECEIVED': // Legacy status
+      case 'RECEIVED':
       case 'RECEIVED_AT_WAREHOUSE':
       case 'COMPLETED':
-        return 'default';
-      case 'CANCELLED':
+      case 'REFUNDED':
         return 'outline';
+      case 'CANCELLED':
+      case 'REJECTED':
+        return 'destructive';
       default:
-        return 'default';
+        return 'secondary';
     }
   };
 
@@ -403,6 +407,7 @@ export default function Returns() {
                   <tr className="border-b">
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Order #</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Source</th>
+                    <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
                     <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Customer</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Units</th>
                     <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total Received</th>
@@ -416,7 +421,7 @@ export default function Returns() {
               <tbody>
                 {!returns || returns.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-16 text-center">
+                    <td colSpan={11} className="py-16 text-center">
                       <div className="flex flex-col items-center gap-2">
                         <Package className="h-12 w-12 text-muted-foreground" />
                         <p className="text-sm text-muted-foreground">
@@ -443,6 +448,11 @@ export default function Returns() {
                     </td>
                     <td className="px-3 align-middle whitespace-nowrap">
                       <Badge variant="outline">{returnRequest.salesChannel}</Badge>
+                    </td>
+                    <td className="px-3 align-middle whitespace-nowrap" data-testid={`text-status-${returnRequest.id}`}>
+                      <Badge variant={getStatusBadgeVariant(returnRequest.status)}>
+                        {returnRequest.status.replace(/_/g, ' ')}
+                      </Badge>
                     </td>
                     <td className="px-3 align-middle whitespace-nowrap">
                       <div className="flex flex-col">
@@ -473,21 +483,23 @@ export default function Returns() {
                     <td className="px-3 align-middle text-right whitespace-nowrap sticky right-0 z-10 bg-card shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                       <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                         <TooltipProvider>
-                          {/* Receipt Icon - Always visible */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-8 w-8"
-                                onClick={() => setShowReceiptModalId(returnRequest.id)}
-                                data-testid={`button-receipt-${returnRequest.id}`}
-                              >
-                                <Receipt className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>View Return Receipt</TooltipContent>
-                          </Tooltip>
+                          {/* Receipt Icon - Only visible in History tab */}
+                          {activeTab === "history" && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  onClick={() => setShowReceiptModalId(returnRequest.id)}
+                                  data-testid={`button-receipt-${returnRequest.id}`}
+                                >
+                                  <Receipt className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>View Return Receipt</TooltipContent>
+                            </Tooltip>
+                          )}
 
                           {/* Issue Label Icon - Only for OPEN status */}
                           {returnRequest.status === 'OPEN' && (
@@ -508,7 +520,7 @@ export default function Returns() {
                             </Tooltip>
                           )}
 
-                          {/* View Label Icon - For statuses with label created */}
+                          {/* View Shipping Label - Navigate to Barcodes page */}
                           {['LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT', 'RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) && (
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -516,18 +528,18 @@ export default function Returns() {
                                   size="icon"
                                   variant="ghost"
                                   className="h-8 w-8"
-                                  onClick={() => setSelectedReturnId(returnRequest.id)}
+                                  onClick={() => setLocation('/barcodes?tab=shippo')}
                                   data-testid={`button-view-label-${returnRequest.id}`}
                                 >
-                                  <ExternalLink className="h-4 w-4" />
+                                  <Truck className="h-4 w-4" />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>View Shipping Label</TooltipContent>
                             </Tooltip>
                           )}
 
-                          {/* Checkmark Icon - Grey when not received, Green when received */}
-                          {['OPEN', 'LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) ? (
+                          {/* Checkmark Icon - Mark as Received (Live tab only) */}
+                          {activeTab === "live" && ['OPEN', 'LABEL_CREATED', 'LABEL_ISSUED', 'IN_TRANSIT'].includes(returnRequest.status) && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -542,7 +554,9 @@ export default function Returns() {
                               </TooltipTrigger>
                               <TooltipContent>Mark as Received</TooltipContent>
                             </Tooltip>
-                          ) : ['RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED'].includes(returnRequest.status) ? (
+                          )}
+                          {/* Green checkmark for already received (History tab) */}
+                          {activeTab === "history" && ['RECEIVED', 'RECEIVED_AT_WAREHOUSE', 'COMPLETED', 'REFUNDED'].includes(returnRequest.status) && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -555,9 +569,9 @@ export default function Returns() {
                                   <Check className="h-4 w-4 text-green-600" />
                                 </Button>
                               </TooltipTrigger>
-                              <TooltipContent>Return already received</TooltipContent>
+                              <TooltipContent>Return received</TooltipContent>
                             </Tooltip>
-                          ) : null}
+                          )}
                         </TooltipProvider>
                       </div>
                     </td>

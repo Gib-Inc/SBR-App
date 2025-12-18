@@ -194,14 +194,14 @@ export class InventoryMovement {
           break;
 
         case "RETURN_RECEIVED":
-          // Returns for resellable finished products go directly to availableForSaleQty
-          // This makes the returned stock immediately sellable again
-          // INVARIANT: pivotQty is READ-ONLY from Extensiv, so we only update availableForSaleQty
+          // Returns for finished products go to HILDALE warehouse for inspection
+          // They are NOT immediately sellable - must be transferred to Pivot to become sellable
+          // INVARIANT: pivotQty is READ-ONLY from Extensiv
           quantityDelta = params.quantity;
           if (isFinished) {
-            // Increment availableForSaleQty - makes returned stock immediately sellable
-            // Note: pivotQty remains unchanged (read-only from Extensiv)
-            updates.availableForSaleQty = beforeState.availableForSaleQty + params.quantity;
+            // Increment hildaleQty - returned stock arrives at Hildale for processing
+            // Stock is NOT sellable until transferred from Hildale to Pivot
+            updates.hildaleQty = beforeState.hildaleQty + params.quantity;
           } else {
             // Components: increment currentStock
             updates.currentStock = beforeState.currentStock + params.quantity;

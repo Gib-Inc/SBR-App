@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useSearch } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -614,6 +615,8 @@ function BarcodeItemsSection({
 }
 
 export default function Barcodes() {
+  const searchString = useSearch();
+  const shippoSectionRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [channelFilter, setChannelFilter] = useState<string>("all");
@@ -629,6 +632,16 @@ export default function Barcodes() {
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
   const [cameraContext, setCameraContext] = useState<"finished_product" | "item">("finished_product");
   const { toast } = useToast();
+  
+  // Scroll to Shippo section when ?tab=shippo is in URL
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    if (params.get('tab') === 'shippo' && shippoSectionRef.current) {
+      setTimeout(() => {
+        shippoSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [searchString]);
   
   // Fetch items with barcode metadata
   const { data: items, isLoading } = useQuery({
@@ -1037,7 +1050,9 @@ export default function Barcodes() {
           />
 
           {/* Shippo Labels Section */}
-          <ShippoLabelsSection searchQuery={searchQuery} />
+          <div ref={shippoSectionRef}>
+            <ShippoLabelsSection searchQuery={searchQuery} />
+          </div>
         </div>
       )}
 

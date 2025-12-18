@@ -7,18 +7,9 @@ async function seed() {
   console.log("Seeding database...");
 
   try {
-    // Create demo user
-    const existingUser = await storage.getUserByEmail("demo@example.com");
-    if (!existingUser) {
-      const hashedPassword = await bcrypt.hash("demo123", SALT_ROUNDS);
-      await storage.createUser({
-        email: "demo@example.com",
-        password: hashedPassword,
-      });
-      console.log("✓ Created demo user (email: demo@example.com, password: demo123)");
-    } else {
-      console.log("✓ Demo user already exists");
-    }
+    // NOTE: Demo user creation removed for security
+    // Users must be created through proper registration or admin setup
+    console.log("✓ Skipping user seeding (production security mode)");
 
     // Create demo items (components) - idempotent
     let nut = await storage.getItemBySku("NUT-M8");

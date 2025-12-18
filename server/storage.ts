@@ -131,6 +131,7 @@ export interface IStorage {
   getAllUsers(): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, user: Partial<InsertUser>): Promise<User | undefined>;
+  deleteUser(id: string): Promise<boolean>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -668,13 +669,8 @@ export class MemStorage implements IStorage {
   }
 
   private seedData() {
-    // Seed some initial data for demo purposes
-    const demoUserId = randomUUID();
-    this.users.set(demoUserId, {
-      id: demoUserId,
-      email: "demo@inventory.com",
-      password: "$2b$10$K7L1OJ45/4Y2nIvhRVpCe.FSmhDdWoXehVzJptJ/op0lSsvqNu/1u", // "password"
-    });
+    // NOTE: Demo user seeding removed for security
+    // Users must be created through proper registration or admin setup
 
     // Demo items (components)
     const nutId = randomUUID();
@@ -959,6 +955,10 @@ export class MemStorage implements IStorage {
     const updated = { ...user, ...updateData };
     this.users.set(id, updated);
     return updated;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    return this.users.delete(id);
   }
 
   // Items
@@ -3766,6 +3766,11 @@ export class PostgresStorage implements IStorage {
   async updateUser(id: string, updateData: Partial<InsertUser>): Promise<User | undefined> {
     const results = await this.db.update(schema.users).set(updateData).where(eq(schema.users.id, id)).returning();
     return results[0];
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.users).where(eq(schema.users.id, id)).returning();
+    return results.length > 0;
   }
 
   // Items

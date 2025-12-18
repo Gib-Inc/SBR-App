@@ -54,7 +54,7 @@ export default function Login() {
               <Input
                 id="email"
                 type="email"
-                placeholder="demo@example.com"
+                placeholder="Enter your email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -84,9 +84,6 @@ export default function Login() {
               {isLoading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-muted-foreground">
-            Demo credentials: demo@example.com / demo123
-          </div>
         </CardContent>
       </Card>
     </div>

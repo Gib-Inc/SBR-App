@@ -122,6 +122,13 @@ Preferred communication style: Simple, everyday language.
     *   Status check via `/api/quickbooks/token-refresh-status`
     *   Enables fully autonomous operation without daily sign-ins
 *   **System of Record**: This application is the system of record for inventory quantities, while other platforms serve specific functions (e.g., Shopify/Amazon for orders, QuickBooks for finance).
+*   **Production Security**:
+    *   **Single-User Mode**: In production (`NODE_ENV=production`), defaults to single-user enforcement (set `SINGLE_USER_MODE=false` to disable)
+    *   **PRIMARY_ADMIN_EMAIL**: Required env var for automatic single-user enforcement on startup; without it, enforcement is skipped to prevent data loss
+    *   **Registration Disabled**: New user registration blocked in production unless `ALLOW_REGISTRATION=true`
+    *   **Login Rate Limiting**: 5 attempts per 15 minutes per IP, returns 429 on exceed
+    *   **Admin Endpoints**: `POST /api/admin/enforce-single-user` (requires auth, keeps current session user), `GET /api/admin/user-count` (requires auth)
+    *   **Safe Enforcement**: Never deletes users unless keeper is explicitly identified; returns 409 error if keeper cannot be resolved
 
 ## External Dependencies
 

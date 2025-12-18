@@ -70,6 +70,99 @@ import { shippoReturnsService } from "./services/shippo-returns-service";
 
 const SALT_ROUNDS = 10;
 
+// Simple in-memory rate limiter for login attempts
+const loginAttempts = new Map<string, { count: number; resetTime: number }>();
+const LOGIN_RATE_LIMIT = 5; // max attempts
+const LOGIN_RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
+
+function checkLoginRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const attempt = loginAttempts.get(ip);
+  
+  if (!attempt || now > attempt.resetTime) {
+    loginAttempts.set(ip, { count: 1, resetTime: now + LOGIN_RATE_WINDOW });
+    return { allowed: true };
+  }
+  
+  if (attempt.count >= LOGIN_RATE_LIMIT) {
+    return { allowed: false, retryAfter: Math.ceil((attempt.resetTime - now) / 1000) };
+  }
+  
+  attempt.count++;
+  return { allowed: true };
+}
+
+function resetLoginRateLimit(ip: string) {
+  loginAttempts.delete(ip);
+}
+
+// Single-user mode enforcement
+// keepUserId: when called from admin endpoint, keeps the current logged-in user
+// requireExplicitKeeper: when true (startup), refuses to delete if no explicit keeper is identified
+async function enforceSingleUserMode(keepUserId?: string, requireExplicitKeeper: boolean = false): Promise<{ kept: string; deleted: number; skipped?: boolean }> {
+  const users = await storage.getAllUsers();
+  
+  if (users.length === 0) {
+    return { kept: '', deleted: 0 };
+  }
+  
+  if (users.length === 1) {
+    return { kept: users[0].email, deleted: 0 };
+  }
+  
+  let primaryUser;
+  const primaryEmail = process.env.PRIMARY_ADMIN_EMAIL;
+  
+  // Priority 1: Explicit user ID from admin endpoint (current logged-in user)
+  if (keepUserId) {
+    primaryUser = users.find(u => u.id === keepUserId);
+  }
+  
+  // Priority 2: PRIMARY_ADMIN_EMAIL environment variable
+  if (!primaryUser && primaryEmail) {
+    primaryUser = users.find(u => u.email.toLowerCase() === primaryEmail.toLowerCase());
+  }
+  
+  // Safety check: if no explicit keeper identified and we're in strict mode, skip deletion
+  if (!primaryUser && requireExplicitKeeper) {
+    if (primaryEmail) {
+      console.warn(`[Single-User Mode] PRIMARY_ADMIN_EMAIL='${primaryEmail}' does not match any user. Skipping enforcement.`);
+    } else {
+      console.warn(`[Single-User Mode] Multiple users exist (${users.length}) but no PRIMARY_ADMIN_EMAIL set. Skipping enforcement.`);
+    }
+    console.warn(`[Single-User Mode] Set correct PRIMARY_ADMIN_EMAIL or use /api/admin/enforce-single-user endpoint while logged in.`);
+    return { kept: '', deleted: 0, skipped: true };
+  }
+  
+  // No keeper found - refuse to proceed under all circumstances
+  if (!primaryUser) {
+    if (primaryEmail) {
+      console.warn(`[Single-User Mode] PRIMARY_ADMIN_EMAIL='${primaryEmail}' not found among ${users.length} users. Aborting.`);
+    } else if (keepUserId) {
+      console.warn(`[Single-User Mode] Keeper user ID '${keepUserId}' not found. Session may be stale. Aborting.`);
+    } else {
+      console.warn(`[Single-User Mode] No keeper identified. Aborting.`);
+    }
+    return { kept: '', deleted: 0, skipped: true };
+  }
+  
+  let deletedCount = 0;
+  for (const user of users) {
+    if (user.id !== primaryUser.id) {
+      try {
+        await storage.deleteUser(user.id);
+        deletedCount++;
+        console.log(`[Single-User Mode] Deleted user: ${user.email}`);
+      } catch (err) {
+        console.warn(`[Single-User Mode] Failed to delete user ${user.email}:`, err);
+      }
+    }
+  }
+  
+  console.log(`[Single-User Mode] Kept primary user: ${primaryUser.email}, deleted ${deletedCount} other users`);
+  return { kept: primaryUser.email, deleted: deletedCount };
+}
+
 // Create a single instance of the decision engine
 const decisionEngine = new InventoryDecisionEngine(storage);
 
@@ -330,6 +423,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
+      // Block registration in production unless explicitly allowed
+      const isProduction = process.env.NODE_ENV === 'production';
+      const allowRegistration = process.env.ALLOW_REGISTRATION === 'true';
+      
+      if (isProduction && !allowRegistration) {
+        return res.status(403).json({ 
+          error: "Registration is disabled. Contact administrator for access." 
+        });
+      }
+
       const { email, password } = req.body;
 
       if (!email || !password) {
@@ -376,6 +479,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
+      // Rate limiting
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      const rateCheck = checkLoginRateLimit(clientIp);
+      
+      if (!rateCheck.allowed) {
+        return res.status(429).json({ 
+          error: "Too many login attempts. Please try again later.",
+          retryAfter: rateCheck.retryAfter
+        });
+      }
+
       const { email, password } = req.body;
 
       if (!email || !password) {
@@ -393,6 +507,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isValidPassword) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
+
+      // Reset rate limit on successful login
+      resetLoginRateLimit(clientIp);
 
       // Set session
       req.session.userId = user.id;
@@ -469,6 +586,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error logging out:", error);
       res.status(500).json({ error: "Failed to logout" });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN - SINGLE USER MODE ENFORCEMENT
+  // ============================================================================
+
+  app.post("/api/admin/enforce-single-user", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const currentUserId = req.session.userId;
+      
+      if (!currentUserId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const result = await enforceSingleUserMode(currentUserId);
+      
+      // Return error if enforcement was skipped due to missing keeper
+      if (result.skipped) {
+        return res.status(409).json({
+          success: false,
+          error: "Could not identify keeper user. Your session may be stale. Please log in again.",
+          details: "Single-user enforcement requires a valid session or PRIMARY_ADMIN_EMAIL to identify which user to keep."
+        });
+      }
+      
+      res.json({
+        success: true,
+        message: `Single-user mode enforced. Kept user: ${result.kept}. Deleted ${result.deleted} other user(s).`,
+        keptUser: result.kept,
+        deletedCount: result.deleted
+      });
+    } catch (error) {
+      console.error("[Admin] Error enforcing single-user mode:", error);
+      res.status(500).json({ error: "Failed to enforce single-user mode" });
+    }
+  });
+
+  app.get("/api/admin/user-count", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const users = await storage.getAllUsers();
+      res.json({ 
+        count: users.length,
+        singleUserMode: process.env.SINGLE_USER_MODE !== 'false'
+      });
+    } catch (error) {
+      console.error("[Admin] Error getting user count:", error);
+      res.status(500).json({ error: "Failed to get user count" });
     }
   });
 
@@ -17304,6 +17469,31 @@ Generate only the email body text, no subject line.`;
       console.log(`[Server] Shopify Webhooks: Auto-registration completed - ${result.registered} registered, ${result.existing} existing, ${result.failed} failed`);
     } catch (error: any) {
       console.warn("[Server] Shopify Webhooks: Auto-registration failed (non-blocking):", error.message);
+    }
+  })();
+  
+  // Single-user mode enforcement on startup (production security)
+  (async () => {
+    const singleUserMode = process.env.SINGLE_USER_MODE !== 'false';
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    if (singleUserMode && isProduction) {
+      try {
+        // Use requireExplicitKeeper=true to prevent accidental data loss
+        // Will only delete users if PRIMARY_ADMIN_EMAIL is set
+        const result = await enforceSingleUserMode(undefined, true);
+        if (result.skipped) {
+          console.log(`[Server] Single-User Mode: Skipped - set PRIMARY_ADMIN_EMAIL to enable auto-enforcement`);
+        } else if (result.deleted > 0) {
+          console.log(`[Server] Single-User Mode: Enforced on startup. Kept: ${result.kept}, Deleted: ${result.deleted}`);
+        } else if (result.kept) {
+          console.log(`[Server] Single-User Mode: Active. Primary user: ${result.kept}`);
+        }
+      } catch (error: any) {
+        console.error("[Server] Single-User Mode: Failed to enforce:", error.message);
+      }
+    } else if (!singleUserMode) {
+      console.log("[Server] Single-User Mode: Disabled via SINGLE_USER_MODE=false");
     }
   })();
   

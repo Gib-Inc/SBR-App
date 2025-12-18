@@ -5582,7 +5582,11 @@ export default function AIAgent() {
                       const response = await apiRequest("GET", "/api/quickbooks/auth-url");
                       const data = await response.json();
                       if (data.authUrl) {
-                        window.location.href = data.authUrl;
+                        window.open(data.authUrl, '_blank');
+                        toast({ 
+                          title: "OAuth Window Opened", 
+                          description: "Complete the QuickBooks login in the new tab, then return here." 
+                        });
                       }
                     } catch (error: any) {
                       toast({ title: "Error", description: error.message, variant: "destructive" });

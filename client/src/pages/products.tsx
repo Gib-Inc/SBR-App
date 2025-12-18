@@ -1082,66 +1082,39 @@ function ReorderDialog({ isOpen, onClose, item, aiRecommendations = [] }: { isOp
             <p className="text-sm text-muted-foreground">SKU: {item.sku}</p>
           </div>
 
-          {/* Current Stock & Coverage */}
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">
-                  {isFinished ? "Total Stock (Hildale + Pivot)" : "Current Stock"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{totalStock}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {daysOfCover} days of cover at current usage
-                </p>
-              </CardContent>
+          {/* Current Stock, Safety Stock Gap & AI Recommendation - side by side */}
+          <div className="grid grid-cols-3 gap-3">
+            <Card className="p-3">
+              <p className="text-xs font-medium text-muted-foreground mb-1">
+                {isFinished ? "Total Stock" : "Current Stock"}
+              </p>
+              <div className="text-xl font-bold">{totalStock}</div>
+              <p className="text-[10px] text-muted-foreground">{daysOfCover} days cover</p>
             </Card>
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Safety Stock Gap</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{safetyStockGap}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Units needed for 21-day buffer
-                </p>
-              </CardContent>
+            <Card className="p-3">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Safety Stock Gap</p>
+              <div className="text-xl font-bold">{safetyStockGap}</div>
+              <p className="text-[10px] text-muted-foreground">21-day buffer</p>
             </Card>
+            {(() => {
+              const itemRecs = aiRecommendations.filter((r: any) => r.itemId === item.id && r.status === 'pending');
+              const latestRec = itemRecs.length > 0 ? itemRecs[itemRecs.length - 1] : null;
+              return (
+                <Card className="p-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1">
+                    <Sparkles className="h-3 w-3 text-primary" />
+                    AI Rec
+                  </p>
+                  <div className="text-xl font-bold text-primary">
+                    {latestRec ? (latestRec.suggestedQty || latestRec.quantity || "—") : "—"}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground truncate">
+                    {latestRec ? "LLM suggestion" : "No rec available"}
+                  </p>
+                </Card>
+              );
+            })()}
           </div>
-
-          {/* AI Recommendation Card - shows LLM-powered suggestion */}
-          {(() => {
-            const itemRecs = aiRecommendations.filter((r: any) => r.itemId === item.id && r.status === 'pending');
-            const latestRec = itemRecs.length > 0 ? itemRecs[itemRecs.length - 1] : null;
-            return (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                    AI Recommendation
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {latestRec ? (
-                    <>
-                      <div className="text-2xl font-bold text-primary">{latestRec.suggestedQty || latestRec.quantity || "—"}</div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {latestRec.reasoning || "Based on sales trends & seasonality"}
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <div className="text-2xl font-bold text-muted-foreground">—</div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        No AI recommendation available
-                      </p>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })()}
 
           {/* Supplier Information */}
           {item.primarySupplier ? (

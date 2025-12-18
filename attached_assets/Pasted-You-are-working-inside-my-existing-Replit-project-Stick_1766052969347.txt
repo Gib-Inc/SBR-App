@@ -1,0 +1,53 @@
+You are working inside my existing Replit project (StickerBurrRoller inventory app). I need you to discover and document the REAL backend API endpoints that already exist so I can integrate them with an external MCP server.
+
+Goal
+Produce an accurate “Inventory App API Spec” (endpoints + auth + payloads + examples) by inspecting the codebase—NOT guessing.
+
+What to do (in order)
+1) Identify the backend framework (Express/FastAPI/Next API routes/etc) and where routes are defined.
+2) Enumerate every HTTP endpoint (REST) in the app:
+   - method (GET/POST/PUT/PATCH/DELETE)
+   - full path
+   - required headers (auth keys/tokens/cookies)
+   - query params
+   - request JSON schema (fields + types + required/optional)
+   - response JSON schema (fields + types)
+   - main side effects (db writes, emails, webhooks)
+   - rate limits (if any)
+3) Locate all webhook endpoints (Shopify/GHL/etc) and document:
+   - expected incoming payload
+   - signature verification method (if present)
+   - what internal actions they trigger
+4) Identify the database layer:
+   - what DB is used
+   - key tables/models relevant to: orders, returns/refunds, inventory, purchase orders, customers/contacts
+5) Identify any existing service-to-service authentication pattern:
+   - API key header (e.g., X-API-Key / Bearer token)
+   - session-based auth
+   - admin-only routes
+   - how secrets are stored (env vars)
+
+Hard requirements
+- Do NOT refactor, rename, or reorganize anything.
+- If something is unclear, follow imports and references until you find the route definition.
+- If the app has NO API endpoints, explicitly say that and explain what it currently exposes instead (UI-only, server actions, etc).
+- Output must be precise and code-backed.
+
+Output format
+A single markdown report with:
+A) Summary: framework, entrypoints, base URL(s), auth approach
+B) Endpoint catalog table (one row per endpoint)
+C) Detailed sections for the most critical endpoints:
+   - Orders: get/list/update status
+   - Refunds/Returns: create/propose/approve/mark received/mark refunded
+   - Inventory: list items, get item, adjust inventory, low stock
+   - Purchase Orders: create draft, send, update status
+   - Customers/Contacts: lookup, message log
+D) “MCP Integration Notes”:
+   - which endpoints are safe read-only tools
+   - which endpoints are write tools and need propose/commit pattern
+   - any missing endpoints we should add later (but do NOT add them now)
+
+Finish by printing:
+- A JSON object called “inventory_api_spec” with an array of endpoints:
+  [{ "method": "...", "path": "...", "auth": "...", "req_fields": [...], "res_fields": [...] }]

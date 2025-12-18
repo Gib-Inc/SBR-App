@@ -1650,6 +1650,8 @@ export const quickbooksAuth = pgTable("quickbooks_auth", {
   isConnected: boolean("is_connected").notNull().default(true),
   lastSalesSyncAt: timestamp("last_sales_sync_at"),
   lastSalesSyncStatus: text("last_sales_sync_status"), // SUCCESS, FAILED
+  // Webhook verification token (from Intuit Developer portal)
+  webhookVerifierToken: text("webhook_verifier_token"), // HMAC verification for incoming webhooks
   // Integration Health Check fields
   lastTokenCheckAt: timestamp("last_token_check_at"),
   lastTokenCheckStatus: text("last_token_check_status"), // OK, WARNING, CRITICAL, EXPIRED

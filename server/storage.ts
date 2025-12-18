@@ -466,9 +466,11 @@ export interface IStorage {
   // QuickBooks Auth
   getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null>;
   getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]>;
+  getAllQuickbooksAuths(): Promise<QuickbooksAuth[]>;
   createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth>;
   updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null>;
   updateQuickbooksAuthHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void>;
+  updateQuickbooksWebhookToken(userId: string, token: string): Promise<boolean>;
   
   // Integration Configs health check support (supplements existing methods)
   getIntegrationConfigsByUserId(userId: string): Promise<IntegrationConfig[]>;
@@ -3114,6 +3116,14 @@ export class MemStorage implements IStorage {
 
   async updateQuickbooksAuthHealthStatus(_id: string, _status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void> {
     // Not supported in MemStorage
+  }
+
+  async getAllQuickbooksAuths(): Promise<QuickbooksAuth[]> {
+    return [];
+  }
+
+  async updateQuickbooksWebhookToken(_userId: string, _token: string): Promise<boolean> {
+    return false;
   }
 
   // Integration Config health check methods - use getIntegrationConfigById from line 1367 instead
@@ -5963,6 +5973,18 @@ export class PostgresStorage implements IStorage {
     await this.db.update(schema.quickbooksAuth)
       .set({ ...status, updatedAt: new Date() })
       .where(eq(schema.quickbooksAuth.id, id));
+  }
+
+  async getAllQuickbooksAuths(): Promise<QuickbooksAuth[]> {
+    return await this.db.select().from(schema.quickbooksAuth);
+  }
+
+  async updateQuickbooksWebhookToken(userId: string, token: string): Promise<boolean> {
+    const result = await this.db.update(schema.quickbooksAuth)
+      .set({ webhookVerifierToken: token, updatedAt: new Date() })
+      .where(eq(schema.quickbooksAuth.userId, userId))
+      .returning();
+    return result.length > 0;
   }
 
   // Integration Config health check methods - use getIntegrationConfigById from line 3554 instead

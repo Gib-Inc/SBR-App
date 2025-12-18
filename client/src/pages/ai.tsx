@@ -336,6 +336,7 @@ function RulesTab() {
   const [hildaleHighDaysThreshold, setHildaleHighDaysThreshold] = useState(20);
   const [quickbooksIncludeHistory, setQuickbooksIncludeHistory] = useState(false);
   const [quickbooksHistoryMonths, setQuickbooksHistoryMonths] = useState(12);
+  const [quickbooksWebhookVerifierToken, setQuickbooksWebhookVerifierToken] = useState("");
   const [ordersToFetch, setOrdersToFetch] = useState(250);
   
   // Sync form with fetched rules
@@ -1065,6 +1066,33 @@ function RulesTab() {
                     </div>
                   </div>
                 )}
+              </div>
+              
+              {/* QuickBooks Webhook Configuration */}
+              <div className="p-4 border rounded-lg space-y-4">
+                <div className="flex items-center gap-1.5">
+                  <Link2 className="h-4 w-4" />
+                  <Label htmlFor="quickbooks-webhook-verifier-token" className="font-medium">QuickBooks Webhook Verifier Token</Label>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" data-testid="icon-qb-webhook-info" />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p>Paste the webhook verifier token from your Intuit Developer Webhooks page. This is used to verify that webhook calls really come from QuickBooks.</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <Input
+                  id="quickbooks-webhook-verifier-token"
+                  type="password"
+                  placeholder="Enter your QuickBooks webhook verifier token"
+                  value={quickbooksWebhookVerifierToken}
+                  onChange={(e) => setQuickbooksWebhookVerifierToken(e.target.value)}
+                  data-testid="input-qb-webhook-verifier-token"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Find this in Intuit Developer Portal → Webhooks → Show verifier token. Used to authenticate incoming webhook notifications.
+                </p>
               </div>
             </div>
           </div>

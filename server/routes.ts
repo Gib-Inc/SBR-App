@@ -15276,6 +15276,131 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/quickbooks/webhook-config - Get webhook configuration (masked token)
+  app.get("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id || 'system';
+      const auth = await storage.getQuickbooksAuthByUserId(userId);
+      
+      // Return masked token status (not the actual value)
+      const hasToken = !!auth?.webhookVerifierToken;
+      res.json({
+        hasToken,
+        tokenMasked: hasToken ? '••••••••••••' : null,
+      });
+    } catch (error: any) {
+      console.error("[QuickBooks] Error getting webhook config:", error);
+      res.status(500).json({ error: error.message || "Failed to get webhook config" });
+    }
+  });
+
+  // PATCH /api/quickbooks/webhook-config - Update webhook verifier token
+  app.patch("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id || 'system';
+      const { webhookVerifierToken } = req.body;
+      
+      if (typeof webhookVerifierToken !== 'string') {
+        return res.status(400).json({ error: "webhookVerifierToken must be a string" });
+      }
+      
+      // Update the token in quickbooks_auth table
+      const updated = await storage.updateQuickbooksWebhookToken(userId, webhookVerifierToken);
+      
+      if (!updated) {
+        return res.status(404).json({ error: "QuickBooks connection not found. Please connect QuickBooks first." });
+      }
+      
+      console.log(`[QuickBooks] Webhook verifier token updated for user ${userId}`);
+      res.json({ success: true, message: "Webhook verifier token updated" });
+    } catch (error: any) {
+      console.error("[QuickBooks] Error updating webhook config:", error);
+      res.status(500).json({ error: error.message || "Failed to update webhook config" });
+    }
+  });
+
+  // POST /api/quickbooks/webhooks - Receive webhook notifications from Intuit
+  // Requires raw body for HMAC signature verification
+  app.post("/api/quickbooks/webhooks", express.raw({ type: 'application/json' }), async (req: Request, res: Response) => {
+    try {
+      const crypto = await import('crypto');
+      const rawBody = req.body instanceof Buffer ? req.body.toString('utf8') : String(req.body);
+      const signatureHeader = req.headers['intuit-signature'] as string | undefined;
+      
+      // Get webhook verifier token (try DB first, then env var fallback)
+      let verifierToken: string | null = null;
+      
+      // Try to get from any QuickBooks auth record
+      const allAuths = await storage.getAllQuickbooksAuths();
+      if (allAuths.length > 0 && allAuths[0].webhookVerifierToken) {
+        verifierToken = allAuths[0].webhookVerifierToken;
+      }
+      
+      // Fallback to environment variable
+      if (!verifierToken) {
+        verifierToken = process.env.QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN || null;
+      }
+      
+      if (!verifierToken) {
+        console.error("[QuickBooks Webhook] No verifier token configured");
+        return res.status(500).json({ success: false, error: "Webhook verifier token not configured" });
+      }
+      
+      if (!signatureHeader) {
+        console.warn("[QuickBooks Webhook] Missing intuit-signature header");
+        return res.status(401).json({ success: false, error: "Missing signature" });
+      }
+      
+      // Compute HMAC-SHA256 signature
+      const computedSignature = crypto.createHmac('sha256', verifierToken)
+        .update(rawBody)
+        .digest('base64');
+      
+      // Timing-safe comparison
+      const signatureBuffer = Buffer.from(signatureHeader);
+      const computedBuffer = Buffer.from(computedSignature);
+      
+      if (signatureBuffer.length !== computedBuffer.length || 
+          !crypto.timingSafeEqual(signatureBuffer, computedBuffer)) {
+        console.warn("[QuickBooks Webhook] Invalid signature");
+        return res.status(401).json({ success: false, error: "Invalid signature" });
+      }
+      
+      // Parse and process the webhook payload
+      const payload = JSON.parse(rawBody);
+      
+      // Log event notifications (structured logging, no secrets)
+      if (payload.eventNotifications && Array.isArray(payload.eventNotifications)) {
+        for (const notification of payload.eventNotifications) {
+          const realmId = notification.realmId;
+          const dataChangeEvent = notification.dataChangeEvent;
+          
+          if (dataChangeEvent?.entities && Array.isArray(dataChangeEvent.entities)) {
+            for (const entity of dataChangeEvent.entities) {
+              console.log(`[QuickBooks Webhook] Event received:`, {
+                realmId,
+                entity: entity.name,
+                operation: entity.operation,
+                id: entity.id,
+                lastUpdated: entity.lastUpdated,
+              });
+              
+              // TODO: Implement business logic for specific events
+              // - Sync payments/refunds to internal refund ledger
+              // - Trigger updates to Sales Orders / Returns flows
+              // - Handle inventory adjustments
+            }
+          }
+        }
+      }
+      
+      res.status(200).json({ success: true });
+    } catch (error: any) {
+      console.error("[QuickBooks Webhook] Error processing webhook:", error.message);
+      res.status(500).json({ success: false, error: "Internal server error" });
+    }
+  });
+
   // POST /api/quickbooks/test-connection - Test connection
   app.post("/api/quickbooks/test-connection", requireAuth, async (req: Request, res: Response) => {
     try {

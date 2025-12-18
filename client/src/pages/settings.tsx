@@ -125,12 +125,6 @@ function LLMSettings() {
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
   const [maskedWebhookSecret, setMaskedWebhookSecret] = useState("");
 
-  // Helper to mask API key showing first 3 chars + *** + last 3 chars
-  const maskApiKey = (key: string): string => {
-    if (!key || key.length < 8) return "";
-    return `${key.slice(0, 3)}***${key.slice(-3)}`;
-  };
-
   // Model presets for each provider
   const modelPresets: Record<string, { value: string; label: string }[]> = {
     chatgpt: [
@@ -162,22 +156,17 @@ function LLMSettings() {
       // Coerce legacy "custom" provider to "chatgpt" since custom endpoint is removed
       const provider = settings.llmProvider === 'custom' ? 'chatgpt' : (settings.llmProvider || 'chatgpt');
       setLlmProvider(provider);
-      const hasKey = !!(settings.llmApiKey && settings.llmApiKey.trim());
-      setHasApiKey(hasKey);
-      // Use maskedLlmApiKey from backend if available
-      if (settings.maskedLlmApiKey) {
-        setMaskedApiKey(settings.maskedLlmApiKey);
-      } else if (hasKey && settings.llmApiKey) {
-        setMaskedApiKey(maskApiKey(settings.llmApiKey));
-      }
+      
+      // Use new hasApiKey/apiKeyMasked pattern from backend
+      setHasApiKey(!!settings.hasApiKey);
+      setMaskedApiKey(settings.apiKeyMasked || '');
       setLlmApiKey('');
-      // Webhook secret handling - use maskedOpenaiWebhookSecret as evidence of saved secret
-      const hasSecret = !!(settings.maskedOpenaiWebhookSecret || (settings.openaiWebhookSecret && settings.openaiWebhookSecret === "••••••••"));
-      setHasWebhookSecret(hasSecret);
-      if (settings.maskedOpenaiWebhookSecret) {
-        setMaskedWebhookSecret(settings.maskedOpenaiWebhookSecret);
-      }
+      
+      // Use new hasWebhookSigningSecret/webhookSigningSecretMasked pattern from backend
+      setHasWebhookSecret(!!settings.hasWebhookSigningSecret);
+      setMaskedWebhookSecret(settings.webhookSigningSecretMasked || '');
       setWebhookSecret('');
+      
       setLlmModel(settings.llmModel || 'gpt-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
@@ -227,23 +216,17 @@ function LLMSettings() {
       llmTemperature,
       llmMaxTokens,
     };
+    // Only include secrets if they have new non-empty values
     if (llmApiKey.trim()) {
-      updates.llmApiKey = llmApiKey;
+      updates.llmApiKey = llmApiKey.trim();
     }
     if (webhookSecret.trim()) {
-      updates.openaiWebhookSecret = webhookSecret;
+      updates.openaiWebhookSecret = webhookSecret.trim();
     }
     await saveSettingMutation.mutateAsync(updates);
-    if (llmApiKey.trim()) {
-      setMaskedApiKey(maskApiKey(llmApiKey));
-      setHasApiKey(true);
-      setLlmApiKey('');
-    }
-    if (webhookSecret.trim()) {
-      setMaskedWebhookSecret(maskApiKey(webhookSecret));
-      setHasWebhookSecret(true);
-      setWebhookSecret('');
-    }
+    // Clear input fields after save - re-fetch will update masked values
+    setLlmApiKey('');
+    setWebhookSecret('');
   };
 
   const testConnection = async () => {
@@ -336,7 +319,10 @@ function LLMSettings() {
               <Input
                 id="llm-api-key"
                 type="password"
-                placeholder={hasApiKey ? `${maskedApiKey || "•••"} (saved)` : "Enter API key..."}
+                placeholder={hasApiKey ? "Enter new API key to replace existing" : 
+                  llmProvider === "chatgpt" ? "Enter API key from platform.openai.com" :
+                  llmProvider === "claude" ? "Enter API key from console.anthropic.com" :
+                  llmProvider === "grok" ? "Enter API key from Grok platform" : "Enter API key..."}
                 value={llmApiKey}
                 onChange={(e) => setLlmApiKey(e.target.value)}
                 data-testid="input-llm-api-key"
@@ -348,11 +334,18 @@ function LLMSettings() {
                 </Badge>
               )}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {llmProvider === "chatgpt" && "Get your key from platform.openai.com"}
-              {llmProvider === "claude" && "Get your key from console.anthropic.com"}
-              {llmProvider === "grok" && "Get your key from the Grok platform"}
-            </p>
+            {hasApiKey && maskedApiKey && (
+              <p className="text-xs text-muted-foreground">
+                Saved key: {maskedApiKey}
+              </p>
+            )}
+            {!hasApiKey && (
+              <p className="text-xs text-muted-foreground">
+                {llmProvider === "chatgpt" && "Get your key from platform.openai.com"}
+                {llmProvider === "claude" && "Get your key from console.anthropic.com"}
+                {llmProvider === "grok" && "Get your key from the Grok platform"}
+              </p>
+            )}
           </div>
 
           {llmProvider === "chatgpt" && (
@@ -362,7 +355,7 @@ function LLMSettings() {
                 <Input
                   id="webhook-secret"
                   type="password"
-                  placeholder={hasWebhookSecret ? `${maskedWebhookSecret || "•••"} (saved)` : "Enter signing secret..."}
+                  placeholder={hasWebhookSecret ? "Enter new signing secret to replace existing" : "Enter webhook signing secret"}
                   value={webhookSecret}
                   onChange={(e) => setWebhookSecret(e.target.value)}
                   data-testid="input-webhook-secret"
@@ -374,9 +367,16 @@ function LLMSettings() {
                   </Badge>
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                Signing secret from your OpenAI webhook configuration
-              </p>
+              {hasWebhookSecret && maskedWebhookSecret && (
+                <p className="text-xs text-muted-foreground">
+                  Saved signing secret: {maskedWebhookSecret}
+                </p>
+              )}
+              {!hasWebhookSecret && (
+                <p className="text-xs text-muted-foreground">
+                  Signing secret from your OpenAI webhook configuration
+                </p>
+              )}
             </div>
           )}
 

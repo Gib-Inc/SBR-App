@@ -3406,28 +3406,31 @@ TOTAL: $${subtotal.toFixed(2)}
   app.get("/api/settings", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
+      const { maskSecret } = await import("./utils/secrets");
       
       const settings = await storage.getSettings(userId);
       
-      // Sanitize API keys - return masked values instead of actual keys
       if (settings) {
         const sanitized = { ...settings } as any;
         const sensitiveFields = [
           'gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 
-          'phantombusterApiKey', 'llmApiKey', 'openaiWebhookSecret', 'quickbooksAccessToken',
+          'phantombusterApiKey', 'quickbooksAccessToken',
           'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
         ];
         
-        // Create masked version of llmApiKey showing first 3 + *** + last 3 chars
-        if (sanitized.llmApiKey && sanitized.llmApiKey.length >= 8) {
-          sanitized.maskedLlmApiKey = `${sanitized.llmApiKey.slice(0, 3)}***${sanitized.llmApiKey.slice(-3)}`;
-        }
+        // LLM API Key - use new hasApiKey/apiKeyMasked pattern
+        const hasApiKey = !!(sanitized.llmApiKey && sanitized.llmApiKey.trim());
+        sanitized.hasApiKey = hasApiKey;
+        sanitized.apiKeyMasked = hasApiKey ? maskSecret(sanitized.llmApiKey) : null;
+        delete sanitized.llmApiKey;
         
-        // Create masked version of openaiWebhookSecret showing first 3 + *** + last 3 chars
-        if (sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.length >= 8) {
-          sanitized.maskedOpenaiWebhookSecret = `${sanitized.openaiWebhookSecret.slice(0, 3)}***${sanitized.openaiWebhookSecret.slice(-3)}`;
-        }
+        // Webhook signing secret - use new hasWebhookSigningSecret/webhookSigningSecretMasked pattern
+        const hasWebhookSigningSecret = !!(sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.trim());
+        sanitized.hasWebhookSigningSecret = hasWebhookSigningSecret;
+        sanitized.webhookSigningSecretMasked = hasWebhookSigningSecret ? maskSecret(sanitized.openaiWebhookSecret) : null;
+        delete sanitized.openaiWebhookSecret;
         
+        // Mask other sensitive fields
         for (const field of sensitiveFields) {
           if (sanitized[field]) {
             sanitized[field] = "••••••••";
@@ -3435,7 +3438,7 @@ TOTAL: $${subtotal.toFixed(2)}
         }
         res.json(sanitized);
       } else {
-        res.json({});
+        res.json({ hasApiKey: false, apiKeyMasked: null, hasWebhookSigningSecret: false, webhookSigningSecretMasked: null });
       }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
@@ -3449,15 +3452,7 @@ TOTAL: $${subtotal.toFixed(2)}
       // Validate partial updates (only allowed fields, no userId)
       const validated = patchSettingsSchema.parse(req.body);
       
-      // Normalize empty strings to null for all string fields
-      const normalized = Object.fromEntries(
-        Object.entries(validated).map(([key, value]) => [
-          key,
-          typeof value === 'string' && value.trim() === '' ? null : value
-        ])
-      );
-      
-      // Ensure settings exist, create with full defaults if needed
+      // Ensure settings exist first so we can preserve secrets
       let existing = await storage.getSettings(userId);
       if (!existing) {
         existing = await storage.createOrUpdateSettings({ 
@@ -3475,6 +3470,34 @@ TOTAL: $${subtotal.toFixed(2)}
           enableLlmSupplierRanking: false,
           enableLlmForecasting: false,
         });
+      }
+      
+      // Normalize empty strings to null for all string fields
+      // BUT preserve existing secrets (llmApiKey, openaiWebhookSecret) when empty/not provided
+      const normalized = Object.fromEntries(
+        Object.entries(validated).map(([key, value]) => {
+          // Check if this is an empty string that should become null
+          if (typeof value === 'string' && value.trim() === '') {
+            // For secrets, preserve existing value instead of nullifying
+            if (key === 'llmApiKey' && existing?.llmApiKey) {
+              return [key, existing.llmApiKey];
+            }
+            if (key === 'openaiWebhookSecret' && existing?.openaiWebhookSecret) {
+              return [key, existing.openaiWebhookSecret];
+            }
+            return [key, null];
+          }
+          return [key, value];
+        })
+      );
+      
+      // Remove secret fields from normalized if they weren't actually provided (preserve existing)
+      // This handles case where field is omitted entirely from request
+      if (!('llmApiKey' in validated) || (validated.llmApiKey === '' || validated.llmApiKey === null)) {
+        delete normalized.llmApiKey;
+      }
+      if (!('openaiWebhookSecret' in validated) || (validated.openaiWebhookSecret === '' || validated.openaiWebhookSecret === null)) {
+        delete normalized.openaiWebhookSecret;
       }
       
       // Apply validated partial updates (no id or userId in update)
@@ -3559,15 +3582,29 @@ TOTAL: $${subtotal.toFixed(2)}
       }
       
       // Sanitize settings response - mask API keys before returning
+      const { maskSecret } = await import("./utils/secrets");
       const sensitiveFields = [
         'gohighlevelApiKey', 'shopifyApiKey', 'extensivApiKey', 
-        'phantombusterApiKey', 'llmApiKey', 'quickbooksAccessToken',
+        'phantombusterApiKey', 'quickbooksAccessToken',
         'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
       ];
-      const sanitized = { ...updated };
+      const sanitized = { ...updated } as any;
+      
+      // Use hasApiKey/apiKeyMasked pattern for LLM API key
+      const hasApiKey = !!(sanitized.llmApiKey && sanitized.llmApiKey.trim());
+      sanitized.hasApiKey = hasApiKey;
+      sanitized.apiKeyMasked = hasApiKey ? maskSecret(sanitized.llmApiKey) : null;
+      delete sanitized.llmApiKey;
+      
+      // Use hasWebhookSigningSecret/webhookSigningSecretMasked pattern for webhook secret
+      const hasWebhookSigningSecret = !!(sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.trim());
+      sanitized.hasWebhookSigningSecret = hasWebhookSigningSecret;
+      sanitized.webhookSigningSecretMasked = hasWebhookSigningSecret ? maskSecret(sanitized.openaiWebhookSecret) : null;
+      delete sanitized.openaiWebhookSecret;
+      
       for (const field of sensitiveFields) {
-        if ((sanitized as any)[field]) {
-          (sanitized as any)[field] = "••••••••";
+        if (sanitized[field]) {
+          sanitized[field] = "••••••••";
         }
       }
       res.json(sanitized);

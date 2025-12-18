@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle } from "lucide-react";
+import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SiShopify, SiAmazon } from "react-icons/si";
@@ -343,12 +343,12 @@ function ItemTableRow({
             </div>
           </td>
 
-          {/* MOQ (Calculated: dailyUsage * safetyStockDays - currentStock) */}
+          {/* Safety Stock Gap (Calculated: dailyUsage * 21 - currentStock) */}
           <td className="px-3 align-middle whitespace-nowrap">
-            <div className="px-2 py-1 text-right text-sm" data-testid={`text-moq-${item.id}`}>
+            <div className="px-2 py-1 text-right text-sm" data-testid={`text-safety-stock-gap-${item.id}`}>
               {(() => {
                 const dailyUsage = item.dailyUsage || 0;
-                const bufferDays = safetyStockDays ?? 7;
+                const bufferDays = 21;
                 const currentStock = item.currentStock ?? 0;
                 const calculated = Math.max(0, Math.ceil(dailyUsage * bufferDays - currentStock));
                 return calculated > 0 ? (
@@ -369,6 +369,13 @@ function ItemTableRow({
                   <span className="text-green-600 dark:text-green-400">0</span>
                 );
               })()}
+            </div>
+          </td>
+
+          {/* Supplier MOQ */}
+          <td className="px-3 align-middle whitespace-nowrap">
+            <div className="px-2 py-1 text-right text-sm" data-testid={`text-supplier-moq-${item.id}`}>
+              {item.primarySupplier?.minimumOrderQuantity || <span className="text-muted-foreground">—</span>}
             </div>
           </td>
 
@@ -929,7 +936,7 @@ function BOMDialog({
   );
 }
 
-function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: () => void; item: any }) {
+function ReorderDialog({ isOpen, onClose, item, aiRecommendations = [] }: { isOpen: boolean; onClose: () => void; item: any; aiRecommendations?: any[] }) {
   const { toast } = useToast();
   const [orderQty, setOrderQty] = useState("");
   const [poMode, setPoMode] = useState<"new" | "existing">("new");
@@ -947,11 +954,9 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
   const dailyUsage = item.dailyUsage ?? 1;
   const daysOfCover = dailyUsage > 0 ? Math.floor(totalStock / dailyUsage) : 0;
   
-  // Calculate suggested order quantity
-  const targetStock = Math.max(dailyUsage * 30, 100);
-  const calculatedOrderQty = Math.max(0, targetStock - totalStock);
-  const moq = item.primarySupplier?.minimumOrderQuantity || 0;
-  const suggestedOrderQty = moq > 0 ? Math.max(moq, calculatedOrderQty) : calculatedOrderQty;
+  // Calculate safety stock gap (21-day buffer)
+  const safetyStockGap = Math.max(0, Math.ceil(dailyUsage * 21 - totalStock));
+  const supplierMOQ = item.primarySupplier?.minimumOrderQuantity || 0;
 
   // Fetch purchase orders and suppliers
   const { data: allPOs = [] } = useQuery<any[]>({
@@ -1040,7 +1045,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
   });
 
   const handleSendPO = () => {
-    const qty = parseInt(orderQty) || suggestedOrderQty;
+    const qty = parseInt(orderQty) || safetyStockGap;
     
     if (!supplier) {
       toast({ title: "No supplier configured for this item", variant: "destructive" });
@@ -1094,16 +1099,49 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             </Card>
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Suggested Order Qty</CardTitle>
+                <CardTitle className="text-sm font-medium">Safety Stock Gap</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">{suggestedOrderQty}</div>
+                <div className="text-2xl font-bold">{safetyStockGap}</div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  ~30 days supply
+                  Units needed for 21-day buffer
                 </p>
               </CardContent>
             </Card>
           </div>
+
+          {/* AI Recommendation Card - shows LLM-powered suggestion */}
+          {(() => {
+            const itemRecs = aiRecommendations.filter((r: any) => r.itemId === item.id && r.status === 'pending');
+            const latestRec = itemRecs.length > 0 ? itemRecs[itemRecs.length - 1] : null;
+            return (
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    AI Recommendation
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {latestRec ? (
+                    <>
+                      <div className="text-2xl font-bold text-primary">{latestRec.suggestedQty || latestRec.quantity || "—"}</div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {latestRec.reasoning || "Based on sales trends & seasonality"}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-2xl font-bold text-muted-foreground">—</div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        No AI recommendation available
+                      </p>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {/* Supplier Information */}
           {item.primarySupplier ? (
@@ -1128,7 +1166,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">MOQ</p>
+                    <p className="text-sm text-muted-foreground">Supplier MOQ</p>
                     <p className="font-medium">{item.primarySupplier.minimumOrderQuantity || "—"}</p>
                   </div>
                   <div>
@@ -1173,7 +1211,7 @@ function ReorderDialog({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
               id="orderQty"
               type="number"
               min="1"
-              placeholder={`Suggested: ${suggestedOrderQty}`}
+              placeholder={`Suggested: ${safetyStockGap}`}
               value={orderQty}
               onChange={(e) => setOrderQty(e.target.value)}
               data-testid="input-order-qty"
@@ -2159,7 +2197,8 @@ export default function BOM() {
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier SKU</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Unit Cost</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">MOQ</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Safety Stock Gap</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Supplier MOQ</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Stock</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">AI Reorder</th>
@@ -2262,6 +2301,7 @@ export default function BOM() {
           isOpen={!!reorderItem}
           onClose={() => setReorderItem(null)}
           item={reorderItem}
+          aiRecommendations={aiRecommendations}
         />
       )}
       {costSettingsItem && (

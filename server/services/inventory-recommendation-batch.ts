@@ -49,6 +49,7 @@ interface SKUContext {
   dailyVelocity: number;
   daysUntilStockout: number;
   leadTimeDays: number;
+  supplierMOQ: number;
   inboundPO: number;
   backorders: number;
   returnRate: number;
@@ -391,14 +392,16 @@ export class InventoryRecommendationBatch {
       }
     }
 
-    // Get supplier info for lead times
+    // Get supplier info for lead times and MOQ
     const supplierItems = await this.storage.getAllSupplierItems();
     const leadTimeMap = new Map<string, number>();
+    const moqMap = new Map<string, number>();
     const supplierScoreMap = new Map<string, number>();
 
     for (const si of supplierItems) {
       if (si.isDesignatedSupplier && si.itemId) {
         leadTimeMap.set(si.itemId, si.leadTimeDays || 14);
+        moqMap.set(si.itemId, si.minimumOrderQuantity || 0);
         supplierScoreMap.set(si.itemId, 85); // Default score, would calculate from disputes/history
       }
     }
@@ -417,6 +420,7 @@ export class InventoryRecommendationBatch {
       const dailyVelocity = item.dailyUsage || 0.1; // Avoid division by zero
       const daysUntilStockout = dailyVelocity > 0 ? availableForSale / dailyVelocity : 999;
       const leadTimeDays = leadTimeMap.get(item.id) || 14;
+      const supplierMOQ = moqMap.get(item.id) || 0;
       const inboundPO = inboundMap.get(item.id) || 0;
       const backorders = backorderMap.get(item.id) || 0;
       const supplierScore = supplierScoreMap.get(item.id) || 85;
@@ -432,6 +436,7 @@ export class InventoryRecommendationBatch {
         dailyVelocity,
         daysUntilStockout: Math.round(daysUntilStockout),
         leadTimeDays,
+        supplierMOQ,
         inboundPO,
         backorders,
         returnRate: 0.05, // Would calculate from returns data
@@ -544,11 +549,16 @@ ORDER TIMING RULES:
 DECISION FACTORS:
 - Current available stock and daily sales velocity
 - Supplier lead time
+- Supplier MOQ (minimum order quantity) - order quantity must be >= MOQ when ordering
 - Inbound POs that will replenish stock (check if already covered)
 - Safety stock requirements
 - Return rate impact on available inventory
 - Recent sales trends (is demand increasing/decreasing?)
 - Historical seasonality from QuickBooks data
+
+MOQ CONSTRAINT:
+- If recommending an order, ensure recommendedQty >= supplierMOQ
+- If calculated need is less than MOQ, still recommend MOQ quantity (supplier won't ship less)
 
 === SKU DATA ===
 ${JSON.stringify(contexts, null, 2)}
@@ -647,14 +657,21 @@ Respond with JSON in this exact format:
         recommendedAction = "OK";
       }
 
-      // Calculate recommended order quantity
+      // Calculate recommended order quantity (respecting supplier MOQ)
       const targetDays = leadTimeDays + safetyStockDays;
       const targetStock = ctx.dailyVelocity * targetDays;
       const currentCoverage = ctx.availableForSale + ctx.inboundPO;
-      const recommendedQty = Math.max(0, Math.round(targetStock - currentCoverage));
+      const calculatedQty = Math.max(0, Math.round(targetStock - currentCoverage));
 
       // Determine order timing
       const orderTiming: OrderTiming = coverageBuffer <= 3 ? "ORDER_TODAY" : "SAFE_UNTIL_TOMORROW";
+
+      // Apply MOQ constraint: if recommending ORDER action, quantity must be at least supplier MOQ
+      // Even if calculated qty is 0, if we're ordering, use MOQ as minimum
+      let recommendedQty = calculatedQty;
+      if (recommendedAction === "ORDER" && ctx.supplierMOQ > 0) {
+        recommendedQty = Math.max(calculatedQty, ctx.supplierMOQ);
+      }
 
       // Generate reasoning
       let reasoning = "";

@@ -23,6 +23,10 @@ interface POData {
   expectedDate?: string;
   supplierName: string;
   buyerCompanyName: string;
+  subtotal?: string | number;
+  shippingCost?: string | number;
+  taxes?: string | number;
+  otherFees?: string | number;
   total: string | number;
   currency: string;
   acknowledgementStatus: string;
@@ -198,11 +202,50 @@ export default function POAcknowledge() {
               </div>
             </div>
 
-            <div className="flex justify-end items-center gap-3 py-3 border-t">
-              <span className="text-lg font-semibold">Order Total:</span>
-              <span className="text-2xl font-bold text-primary" data-testid="text-po-total">
-                {formatCurrency(poData.total, poData.currency)}
-              </span>
+            <div className="border-t py-3 space-y-2">
+              {/* Subtotal */}
+              {poData.subtotal !== undefined && poData.subtotal !== null && (
+                <div className="flex justify-end items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Subtotal:</span>
+                  <span className="text-sm font-medium w-24 text-right">
+                    {formatCurrency(poData.subtotal, poData.currency)}
+                  </span>
+                </div>
+              )}
+              {/* Shipping */}
+              {poData.shippingCost !== undefined && poData.shippingCost !== null && Number(poData.shippingCost) > 0 && (
+                <div className="flex justify-end items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Shipping:</span>
+                  <span className="text-sm font-medium w-24 text-right">
+                    {formatCurrency(poData.shippingCost, poData.currency)}
+                  </span>
+                </div>
+              )}
+              {/* Taxes */}
+              {poData.taxes !== undefined && poData.taxes !== null && Number(poData.taxes) > 0 && (
+                <div className="flex justify-end items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Taxes:</span>
+                  <span className="text-sm font-medium w-24 text-right">
+                    {formatCurrency(poData.taxes, poData.currency)}
+                  </span>
+                </div>
+              )}
+              {/* Other Fees */}
+              {poData.otherFees !== undefined && poData.otherFees !== null && Number(poData.otherFees) > 0 && (
+                <div className="flex justify-end items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Other Fees:</span>
+                  <span className="text-sm font-medium w-24 text-right">
+                    {formatCurrency(poData.otherFees, poData.currency)}
+                  </span>
+                </div>
+              )}
+              {/* Total */}
+              <div className="flex justify-end items-center gap-3 pt-2 border-t">
+                <span className="text-lg font-semibold">Order Total:</span>
+                <span className="text-2xl font-bold text-primary w-24 text-right" data-testid="text-po-total">
+                  {formatCurrency(poData.total, poData.currency)}
+                </span>
+              </div>
             </div>
 
             <Separator />

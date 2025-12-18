@@ -4873,6 +4873,33 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToCountry: orderData.shipToCountry,
             });
 
+            // Auto-link GHL contact on order creation (non-blocking)
+            if (req.user?.id && (orderData.customerEmail || orderData.customerPhone)) {
+              try {
+                const ghlConfig = await storage.getIntegrationConfig(req.user.id, 'GOHIGHLEVEL');
+                const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+                const ghlLocationId = (ghlConfig?.config as any)?.locationId;
+                
+                if (ghlApiKey && ghlLocationId) {
+                  const { GoHighLevelClient } = await import("./services/gohighlevel-client");
+                  const ghlClient = new GoHighLevelClient("https://services.leadconnectorhq.com", ghlApiKey, ghlLocationId);
+                  
+                  const ghlResult = await ghlClient.createOrFindContact(
+                    orderData.customerName || "Unknown Customer",
+                    orderData.customerEmail || undefined,
+                    orderData.customerPhone || undefined
+                  );
+                  
+                  if (ghlResult.success && ghlResult.contactId) {
+                    await storage.updateSalesOrder(salesOrder.id, { ghlContactId: ghlResult.contactId });
+                    console.log(`[Shopify] Linked GHL contact ${ghlResult.contactId} to order ${salesOrder.id}`);
+                  }
+                }
+              } catch (ghlError) {
+                console.warn(`[Shopify] Failed to link GHL contact for order ${salesOrder.id}:`, ghlError);
+              }
+            }
+
             // Create order lines
             for (const lineItem of orderData.lineItems) {
               try {
@@ -5589,6 +5616,33 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip: orderData.shipToZip,
               shipToCountry: orderData.shipToCountry,
             });
+
+            // Auto-link GHL contact on order creation (non-blocking)
+            if (req.user?.id && (orderData.customerEmail || orderData.customerPhone)) {
+              try {
+                const ghlConfig = await storage.getIntegrationConfig(req.user.id, 'GOHIGHLEVEL');
+                const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+                const ghlLocationId = (ghlConfig?.config as any)?.locationId;
+                
+                if (ghlApiKey && ghlLocationId) {
+                  const { GoHighLevelClient } = await import("./services/gohighlevel-client");
+                  const ghlClient = new GoHighLevelClient("https://services.leadconnectorhq.com", ghlApiKey, ghlLocationId);
+                  
+                  const ghlResult = await ghlClient.createOrFindContact(
+                    orderData.customerName || "Unknown Customer",
+                    orderData.customerEmail || undefined,
+                    orderData.customerPhone || undefined
+                  );
+                  
+                  if (ghlResult.success && ghlResult.contactId) {
+                    await storage.updateSalesOrder(salesOrder.id, { ghlContactId: ghlResult.contactId });
+                    console.log(`[Amazon] Linked GHL contact ${ghlResult.contactId} to order ${salesOrder.id}`);
+                  }
+                }
+              } catch (ghlError) {
+                console.warn(`[Amazon] Failed to link GHL contact for order ${salesOrder.id}:`, ghlError);
+              }
+            }
 
             // Create order lines
             for (const lineItem of orderData.lineItems) {
@@ -14758,28 +14812,30 @@ Generate only the email body text, no subject line.`;
         return res.status(404).json({ error: "Sales order not found" });
       }
 
-      // Check if already linked
+      // Get GHL config from integration settings (need locationId for response)
+      const ghlConfig = await storage.getIntegrationConfig(req.session.userId!, 'GOHIGHLEVEL');
+      const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+      const locationId = (ghlConfig?.config as any)?.locationId;
+
+      // Check if already linked - return early with locationId
       if (order.ghlContactId) {
         return res.json({ 
           success: true, 
           contactId: order.ghlContactId,
+          locationId: locationId,
           message: "Already linked to GHL contact" 
         });
       }
 
-      // Get AI agent rules for GHL config
-      const aiAgentRules = await storage.getAIAgentRulesByUserId(req.session.userId!);
-      if (!aiAgentRules?.gohighlevelLocationId) {
-        return res.status(400).json({ 
-          error: "GHL Location ID not configured",
-          message: "Please set your GHL Location ID in AI Agent → Data Sources" 
-        });
-      }
-
-      // Get GHL API key
-      const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY;
+      // Validate config
       if (!ghlApiKey) {
         return res.status(400).json({ error: "GHL API key not configured" });
+      }
+      if (!locationId) {
+        return res.status(400).json({ 
+          error: "GHL Location ID not configured",
+          message: "Please set your GHL Location ID in AI Agent → Data Sources → GoHighLevel" 
+        });
       }
 
       // Initialize GHL client
@@ -14787,7 +14843,7 @@ Generate only the email body text, no subject line.`;
       const ghlClient = new GoHighLevelClient(
         "https://services.leadconnectorhq.com",
         ghlApiKey,
-        aiAgentRules.gohighlevelLocationId
+        locationId
       );
 
       // Find or create contact
@@ -14810,7 +14866,7 @@ Generate only the email body text, no subject line.`;
       res.json({
         success: true,
         contactId: result.contactId,
-        locationId: aiAgentRules.gohighlevelLocationId,
+        locationId: locationId,
         message: "GHL contact linked successfully"
       });
     } catch (error: any) {

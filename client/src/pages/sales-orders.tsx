@@ -470,35 +470,16 @@ export default function SalesOrders() {
   // State for GHL linking in progress
   const [linkingGhlOrderId, setLinkingGhlOrderId] = useState<string | null>(null);
 
-  // Handle opening GHL Conversation - find/create contact if needed and open conversations page
+  // Handle opening GHL Conversation - always use the link endpoint which returns early if already linked
   const handleOpenGhlConversation = async (order: EnrichedSalesOrder) => {
+    // If we have a direct conversation URL, open it immediately
     const ghlConversationUrl = (order as any).ghlConversationUrl;
-    const locationId = aiAgentRules?.gohighlevelLocationId;
-
-    // If we have a direct conversation URL, open it
     if (ghlConversationUrl) {
       window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
       return;
     }
 
-    // If we have a contact ID already, open the conversation
-    if (order.ghlContactId && locationId) {
-      const url = `https://app.gohighlevel.com/v2/location/${locationId}/conversations/${order.ghlContactId}`;
-      window.open(url, "_blank", "noopener,noreferrer");
-      return;
-    }
-
-    // No contact linked - call the link endpoint to find/create
-    if (!locationId) {
-      toast({ 
-        title: "GHL Location Not Configured",
-        description: "Set your GHL Location ID in AI Agent → Data Sources",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    // Call the API to link GHL contact
+    // Call the link endpoint - it returns early if already linked and provides the locationId
     setLinkingGhlOrderId(order.id);
     try {
       const response = await apiRequest("POST", `/api/sales-orders/${order.id}/link-ghl-contact`, {});
@@ -510,26 +491,26 @@ export default function SalesOrders() {
         message?: string;
       };
 
-      if (data.success && data.contactId) {
-        // Invalidate the orders query to refresh the data
-        queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      if (data.success && data.contactId && data.locationId) {
+        // Invalidate cache if this was a new link (not already linked)
+        if (!order.ghlContactId) {
+          queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+        }
         
         // Open the conversation
-        const url = `https://app.gohighlevel.com/v2/location/${data.locationId || locationId}/conversations/${data.contactId}`;
+        const url = `https://app.gohighlevel.com/v2/location/${data.locationId}/conversations/${data.contactId}`;
         window.open(url, "_blank", "noopener,noreferrer");
-        
-        toast({ title: "GHL Contact Linked", description: "Opening conversation..." });
       } else {
         toast({ 
-          title: "Failed to Link GHL Contact",
-          description: data.error || data.message || "Unknown error",
+          title: "Could Not Open GHL Conversation",
+          description: data.error || data.message || "Check GHL configuration in Data Sources",
           variant: "destructive"
         });
       }
     } catch (error: any) {
       toast({ 
-        title: "Failed to Link GHL Contact",
-        description: error.message || "Failed to connect to GHL",
+        title: "Failed to Open GHL Conversation",
+        description: error.message || "Check GHL configuration",
         variant: "destructive"
       });
     } finally {

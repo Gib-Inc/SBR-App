@@ -14746,6 +14746,79 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Link sales order to GHL contact (find or create)
+  // POST /api/sales-orders/:id/link-ghl-contact
+  app.post("/api/sales-orders/:id/link-ghl-contact", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Get the sales order
+      const order = await storage.getSalesOrder(id);
+      if (!order) {
+        return res.status(404).json({ error: "Sales order not found" });
+      }
+
+      // Check if already linked
+      if (order.ghlContactId) {
+        return res.json({ 
+          success: true, 
+          contactId: order.ghlContactId,
+          message: "Already linked to GHL contact" 
+        });
+      }
+
+      // Get AI agent rules for GHL config
+      const aiAgentRules = await storage.getAIAgentRulesByUserId(req.session.userId!);
+      if (!aiAgentRules?.gohighlevelLocationId) {
+        return res.status(400).json({ 
+          error: "GHL Location ID not configured",
+          message: "Please set your GHL Location ID in AI Agent → Data Sources" 
+        });
+      }
+
+      // Get GHL API key
+      const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY;
+      if (!ghlApiKey) {
+        return res.status(400).json({ error: "GHL API key not configured" });
+      }
+
+      // Initialize GHL client
+      const { GoHighLevelClient } = await import("./services/gohighlevel-client");
+      const ghlClient = new GoHighLevelClient(
+        "https://services.leadconnectorhq.com",
+        ghlApiKey,
+        aiAgentRules.gohighlevelLocationId
+      );
+
+      // Find or create contact
+      const result = await ghlClient.createOrFindContact(
+        order.customerName || "Unknown Customer",
+        order.customerEmail || undefined,
+        order.customerPhone || undefined
+      );
+
+      if (!result.success || !result.contactId) {
+        return res.status(500).json({ 
+          error: "Failed to find or create GHL contact",
+          details: result.error 
+        });
+      }
+
+      // Update the sales order with the contact ID
+      await storage.updateSalesOrder(id, { ghlContactId: result.contactId });
+
+      res.json({
+        success: true,
+        contactId: result.contactId,
+        locationId: aiAgentRules.gohighlevelLocationId,
+        message: "GHL contact linked successfully"
+      });
+    } catch (error: any) {
+      console.error("[Sales Orders] Error linking GHL contact:", error);
+      res.status(500).json({ error: error.message || "Failed to link GHL contact" });
+    }
+  });
+
   // Backfill shipping addresses from rawPayload for existing sales orders
   // POST /api/sales-orders/backfill-addresses
   app.post("/api/sales-orders/backfill-addresses", requireAuth, async (req: Request, res: Response) => {

@@ -467,23 +467,73 @@ export default function SalesOrders() {
     createOrderMutation.mutate(data);
   };
 
-  // Handle opening GHL Conversation - upsert contact if needed and open conversations page
+  // State for GHL linking in progress
+  const [linkingGhlOrderId, setLinkingGhlOrderId] = useState<string | null>(null);
+
+  // Handle opening GHL Conversation - find/create contact if needed and open conversations page
   const handleOpenGhlConversation = async (order: EnrichedSalesOrder) => {
     const ghlConversationUrl = (order as any).ghlConversationUrl;
+    const locationId = aiAgentRules?.gohighlevelLocationId;
+
+    // If we have a direct conversation URL, open it
     if (ghlConversationUrl) {
       window.open(ghlConversationUrl, "_blank", "noopener,noreferrer");
-    } else if (order.ghlContactId) {
-      const locationId = aiAgentRules?.gohighlevelLocationId;
-      if (locationId) {
-        const url = `https://app.gohighlevel.com/v2/location/${locationId}/conversations/${order.ghlContactId}`;
+      return;
+    }
+
+    // If we have a contact ID already, open the conversation
+    if (order.ghlContactId && locationId) {
+      const url = `https://app.gohighlevel.com/v2/location/${locationId}/conversations/${order.ghlContactId}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    // No contact linked - call the link endpoint to find/create
+    if (!locationId) {
+      toast({ 
+        title: "GHL Location Not Configured",
+        description: "Set your GHL Location ID in AI Agent → Data Sources",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Call the API to link GHL contact
+    setLinkingGhlOrderId(order.id);
+    try {
+      const response = await apiRequest("POST", `/api/sales-orders/${order.id}/link-ghl-contact`, {});
+      const data = await response.json() as { 
+        success?: boolean; 
+        contactId?: string; 
+        locationId?: string;
+        error?: string;
+        message?: string;
+      };
+
+      if (data.success && data.contactId) {
+        // Invalidate the orders query to refresh the data
+        queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+        
+        // Open the conversation
+        const url = `https://app.gohighlevel.com/v2/location/${data.locationId || locationId}/conversations/${data.contactId}`;
         window.open(url, "_blank", "noopener,noreferrer");
+        
+        toast({ title: "GHL Contact Linked", description: "Opening conversation..." });
       } else {
         toast({ 
-          title: "GHL Location Not Configured",
-          description: "Set your GHL Location ID in AI Agent → Data Sources",
+          title: "Failed to Link GHL Contact",
+          description: data.error || data.message || "Unknown error",
           variant: "destructive"
         });
       }
+    } catch (error: any) {
+      toast({ 
+        title: "Failed to Link GHL Contact",
+        description: error.message || "Failed to connect to GHL",
+        variant: "destructive"
+      });
+    } finally {
+      setLinkingGhlOrderId(null);
     }
   };
 
@@ -985,17 +1035,24 @@ export default function SalesOrders() {
                                   variant="ghost"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    e.preventDefault();
                                     handleOpenGhlConversation(order);
                                   }}
-                                  disabled={!(order as any).ghlConversationUrl && !order.ghlContactId}
+                                  disabled={linkingGhlOrderId === order.id}
                                   data-testid={`button-ghl-conversation-${order.id}`}
                                 >
-                                  <GhlConversationIcon className="h-4 w-4" />
+                                  {linkingGhlOrderId === order.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <GhlConversationIcon className="h-4 w-4" />
+                                  )}
                                 </Button>
                               </span>
                             </TooltipTrigger>
                             <TooltipContent>
-                              {(order as any).ghlConversationUrl || order.ghlContactId ? "GHL Conversation" : "No GHL contact linked"}
+                              {(order as any).ghlConversationUrl || order.ghlContactId 
+                                ? "Open GHL Conversation" 
+                                : "Link & Open GHL Conversation"}
                             </TooltipContent>
                           </Tooltip>
 

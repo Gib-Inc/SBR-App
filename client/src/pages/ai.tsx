@@ -2199,65 +2199,6 @@ function BatchTimelineModal({
                 </details>
               )}
 
-              {/* SKU Report Section - Individual SKU Recommendations (last) */}
-              {data.recommendations && data.recommendations.length > 0 && (
-                <details className="group border rounded-lg" data-testid="section-sku-report">
-                  <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/20">
-                    <h4 className="text-sm font-medium flex items-center gap-2">
-                      <Package className="h-4 w-4" />
-                      SKU Report ({data.recommendations.length})
-                    </h4>
-                    <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-                  </summary>
-                  <div className="px-4 pb-4">
-                    <div className="space-y-2">
-                      {data.recommendations.map((rec) => (
-                        <details 
-                          key={rec.id} 
-                          className="group border rounded-lg overflow-hidden"
-                          data-testid={`sku-context-${rec.sku}`}
-                        >
-                          <summary className="flex items-center justify-between px-4 py-3 cursor-pointer hover-elevate bg-muted/30">
-                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <Badge 
-                                variant={rec.riskLevel === "HIGH" ? "destructive" : rec.riskLevel === "MEDIUM" ? "default" : "secondary"}
-                                className="flex-shrink-0"
-                              >
-                                {rec.riskLevel}
-                              </Badge>
-                              <span className="font-mono text-sm font-medium truncate" data-testid={`text-sku-${rec.sku}`}>
-                                {rec.sku}
-                              </span>
-                              <span className="text-sm text-muted-foreground truncate hidden sm:inline">
-                                {rec.productName}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3 flex-shrink-0">
-                              {rec.orderTiming && (
-                                <Badge 
-                                  variant={rec.orderTiming === "ORDER_TODAY" ? "destructive" : "outline"}
-                                  className="text-xs"
-                                >
-                                  {rec.orderTiming === "ORDER_TODAY" ? "Order Today" : "Safe Tomorrow"}
-                                </Badge>
-                              )}
-                              {rec.recommendedQty && (
-                                <span className="text-sm font-medium">
-                                  Qty: {rec.recommendedQty}
-                                </span>
-                              )}
-                              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-                            </div>
-                          </summary>
-                          <div className="px-4 py-3 bg-background border-t text-sm text-muted-foreground" data-testid={`text-reason-${rec.sku}`}>
-                            {rec.reasonSummary || "No recommendation details available."}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  </div>
-                </details>
-              )}
             </div>
           </div>
         ) : (

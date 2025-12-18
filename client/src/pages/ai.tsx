@@ -4168,11 +4168,13 @@ export default function AIAgent() {
   const [quickbooksSyncMode, setQuickbooksSyncMode] = useState<"append" | "rebuild">("append");
   const [quickbooksRebuildMonths, setQuickbooksRebuildMonths] = useState(24);
   
-  // QuickBooks Credentials Modal state
-  const [showQbCredentialsModal, setShowQbCredentialsModal] = useState(false);
+  // QuickBooks Settings Dialog state
+  const [showQbSettingsDialog, setShowQbSettingsDialog] = useState(false);
   const [qbClientId, setQbClientId] = useState("");
   const [qbClientSecret, setQbClientSecret] = useState("");
+  const [qbWebhookToken, setQbWebhookToken] = useState("");
   const [savingQbCredentials, setSavingQbCredentials] = useState(false);
+  const [testingQbConnection, setTestingQbConnection] = useState(false);
 
   // Handle QuickBooks OAuth callback params
   useEffect(() => {
@@ -5024,11 +5026,7 @@ export default function AIAgent() {
                                   variant="default"
                                   onClick={() => {
                                     if (source.id === "quickbooks") {
-                                      if (!source.configured) {
-                                        handleQuickBooksConnect();
-                                      } else {
-                                        handleQuickBooksDisconnect();
-                                      }
+                                      setShowQbSettingsDialog(true);
                                     } else if (source.id === "meta-ads") {
                                       if (!source.configured) {
                                         handleMetaAdsConnect();
@@ -5486,6 +5484,154 @@ export default function AIAgent() {
               <RefreshCw className="mr-2 h-4 w-4" />
               Start Sync
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* QuickBooks Settings Dialog */}
+      <Dialog open={showQbSettingsDialog} onOpenChange={setShowQbSettingsDialog}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-quickbooks-settings">QuickBooks Online Settings</DialogTitle>
+            <DialogDescription>
+              Configure your QuickBooks connection credentials.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="qb-client-id">Client ID</Label>
+              <Input
+                id="qb-client-id"
+                type="text"
+                placeholder="Enter QuickBooks Client ID"
+                value={qbClientId}
+                onChange={(e) => setQbClientId(e.target.value)}
+                data-testid="input-qb-client-id"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="qb-client-secret">Client Secret</Label>
+              <Input
+                id="qb-client-secret"
+                type="password"
+                placeholder="Enter QuickBooks Client Secret"
+                value={qbClientSecret}
+                onChange={(e) => setQbClientSecret(e.target.value)}
+                data-testid="input-qb-client-secret"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <Label htmlFor="qb-webhook-token">Webhook Verifier Token</Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs">
+                    <p>Found in your Intuit Developer Portal under Webhooks. Used to verify webhook notifications are from QuickBooks.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              <Input
+                id="qb-webhook-token"
+                type="password"
+                placeholder="Enter Webhook Verifier Token"
+                value={qbWebhookToken}
+                onChange={(e) => setQbWebhookToken(e.target.value)}
+                data-testid="input-qb-webhook-token"
+              />
+            </div>
+            
+            {quickbooksStatus?.isConnected && (
+              <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle className="h-4 w-4" />
+                  <span className="text-sm font-medium">Connected to QuickBooks</span>
+                </div>
+                {quickbooksStatus?.companyName && (
+                  <p className="text-xs text-muted-foreground mt-1">Company: {quickbooksStatus.companyName}</p>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex justify-between gap-2">
+            <div>
+              {quickbooksStatus?.isConnected ? (
+                <Button 
+                  variant="destructive" 
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await apiRequest("POST", "/api/quickbooks/disconnect");
+                      refetchQbStatus();
+                      toast({ title: "Disconnected", description: "QuickBooks has been disconnected." });
+                    } catch (error: any) {
+                      toast({ title: "Error", description: error.message, variant: "destructive" });
+                    }
+                  }}
+                  data-testid="button-qb-disconnect"
+                >
+                  Disconnect
+                </Button>
+              ) : (
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const response = await apiRequest("GET", "/api/quickbooks/auth-url");
+                      const data = await response.json();
+                      if (data.authUrl) {
+                        window.location.href = data.authUrl;
+                      }
+                    } catch (error: any) {
+                      toast({ title: "Error", description: error.message, variant: "destructive" });
+                    }
+                  }}
+                  data-testid="button-qb-connect-oauth"
+                >
+                  Connect via OAuth
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                onClick={() => setShowQbSettingsDialog(false)} 
+                data-testid="button-qb-settings-cancel"
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={async () => {
+                  setSavingQbCredentials(true);
+                  try {
+                    // Save webhook token if provided
+                    if (qbWebhookToken) {
+                      await apiRequest("PATCH", "/api/quickbooks/webhook-config", { webhookVerifierToken: qbWebhookToken });
+                    }
+                    // Test connection
+                    const response = await apiRequest("POST", "/api/quickbooks/test-connection");
+                    const data = await response.json();
+                    if (data.success) {
+                      toast({ title: "Success", description: "QuickBooks connection verified!" });
+                      refetchQbStatus();
+                      setShowQbSettingsDialog(false);
+                    } else {
+                      toast({ title: "Connection Failed", description: data.error || "Could not verify connection", variant: "destructive" });
+                    }
+                  } catch (error: any) {
+                    toast({ title: "Error", description: error.message, variant: "destructive" });
+                  } finally {
+                    setSavingQbCredentials(false);
+                  }
+                }}
+                disabled={savingQbCredentials}
+                data-testid="button-qb-save-test"
+              >
+                {savingQbCredentials ? "Testing..." : "Save & Test"}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

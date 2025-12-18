@@ -552,6 +552,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update current user's email and/or password
+  const updateUserSchema = z.object({
+    email: z.string().email().optional(),
+    currentPassword: z.string().min(1, "Current password is required"),
+    newPassword: z.string().min(8, "Password must be at least 8 characters").optional(),
+  });
+
+  app.patch("/api/users/me", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      // Validate request body with Zod
+      const parseResult = updateUserSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        const firstError = parseResult.error.errors[0];
+        return res.status(400).json({ error: firstError.message });
+      }
+
+      const { email, currentPassword, newPassword } = parseResult.data;
+
+      // Fetch current user
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Verify current password
+      const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+      if (!isValidPassword) {
+        return res.status(401).json({ error: "Current password is incorrect" });
+      }
+
+      // Build update object
+      const updates: Partial<{ email: string; password: string }> = {};
+
+      // Handle email update
+      if (email && typeof email === 'string') {
+        const normalizedEmail = email.toLowerCase().trim();
+        if (normalizedEmail !== user.email.toLowerCase()) {
+          // Check if email is already taken
+          const existingUser = await storage.getUserByEmail(normalizedEmail);
+          if (existingUser && existingUser.id !== userId) {
+            return res.status(409).json({ error: "Email is already in use" });
+          }
+          updates.email = normalizedEmail;
+        }
+      }
+
+      // Handle password update (Zod already validates min 8 chars)
+      if (newPassword) {
+        updates.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+      }
+
+      // Check if there's anything to update
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No changes to save" });
+      }
+
+      // Perform update
+      const updatedUser = await storage.updateUser(userId, updates);
+      if (!updatedUser) {
+        return res.status(500).json({ error: "Failed to update account" });
+      }
+
+      console.log(`[Auth] User ${userId} updated account settings`);
+      res.json({ success: true, message: "Account updated successfully" });
+    } catch (error: any) {
+      console.error("[Auth] Error updating user:", error);
+      res.status(500).json({ error: "Failed to update account" });
+    }
+  });
+
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId;

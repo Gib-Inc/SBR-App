@@ -57,6 +57,110 @@ export default function Settings() {
 
 function AccountSettings() {
   const { toast } = useToast();
+  const [email, setEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Fetch current user info
+  const { data: user } = useQuery<{ id: string; email: string }>({
+    queryKey: ["/api/auth/me"],
+  });
+
+  // Set email from current user when loaded
+  useEffect(() => {
+    if (user?.email) {
+      setEmail(user.email);
+    }
+  }, [user]);
+
+  const updateAccountMutation = useMutation({
+    mutationFn: async (data: { email?: string; currentPassword: string; newPassword?: string }) => {
+      const res = await apiRequest("PATCH", "/api/users/me", data);
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to update account");
+      }
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      toast({
+        title: "Success",
+        description: "Account updated successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update account",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSave = () => {
+    // Validate current password is provided
+    if (!currentPassword) {
+      toast({
+        title: "Error",
+        description: "Current password is required to save changes",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate new password matches confirm
+    if (newPassword && newPassword !== confirmPassword) {
+      toast({
+        title: "Error",
+        description: "New passwords do not match",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate minimum password length
+    if (newPassword && newPassword.length < 8) {
+      toast({
+        title: "Error",
+        description: "New password must be at least 8 characters",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if there's anything to update
+    const hasEmailChange = email && email !== user?.email;
+    const hasPasswordChange = !!newPassword;
+
+    if (!hasEmailChange && !hasPasswordChange) {
+      toast({
+        title: "No changes",
+        description: "No changes detected to save",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Build update payload
+    const payload: { email?: string; currentPassword: string; newPassword?: string } = {
+      currentPassword,
+    };
+
+    if (hasEmailChange) {
+      payload.email = email;
+    }
+
+    if (hasPasswordChange) {
+      payload.newPassword = newPassword;
+    }
+
+    updateAccountMutation.mutate(payload);
+  };
 
   return (
     <div className="space-y-4">
@@ -73,6 +177,8 @@ function AccountSettings() {
                 id="email"
                 type="email"
                 placeholder="user@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 data-testid="input-email"
               />
             </div>
@@ -81,6 +187,9 @@ function AccountSettings() {
               <Input
                 id="current-password"
                 type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Required to save changes"
                 data-testid="input-current-password"
               />
             </div>
@@ -89,6 +198,9 @@ function AccountSettings() {
               <Input
                 id="new-password"
                 type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Leave blank to keep current"
                 data-testid="input-new-password"
               />
             </div>
@@ -97,12 +209,21 @@ function AccountSettings() {
               <Input
                 id="confirm-password"
                 type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
                 data-testid="input-confirm-password"
               />
             </div>
           </div>
           <div className="flex justify-end">
-            <Button data-testid="button-save-account">Save Changes</Button>
+            <Button 
+              onClick={handleSave}
+              disabled={updateAccountMutation.isPending}
+              data-testid="button-save-account"
+            >
+              {updateAccountMutation.isPending ? "Saving..." : "Save Changes"}
+            </Button>
           </div>
         </CardContent>
       </Card>

@@ -4285,9 +4285,10 @@ export default function AIAgent() {
   const handleQuickBooksConnect = async () => {
     try {
       const response = await apiRequest("GET", "/api/quickbooks/auth-url");
-      if (response.authUrl) {
+      const data = await response.json();
+      if (data.authUrl) {
         // Direct navigation - browsers don't block this like popups
-        window.location.href = response.authUrl;
+        window.location.href = data.authUrl;
       }
     } catch (error: any) {
       toast({

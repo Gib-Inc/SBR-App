@@ -5213,15 +5213,26 @@ TOTAL: $${subtotal.toFixed(2)}
             const customerEmail = existingOrder?.customerEmail || refund.customer?.email || null;
             const customerPhone = existingOrder?.customerPhone || refund.customer?.phone || null;
             
-            // Calculate total refund amount
+            // Calculate total refund amount from successful refund transactions
             const totalRefundAmount = (refund.transactions || [])
               .filter((t: any) => t.kind === 'refund' && t.status === 'success')
               .reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0);
             
+            // Calculate total received (original order total from linked sales order)
+            const totalReceived = existingOrder?.totalAmount || 0;
+            
+            // Calculate total units from line items
+            const totalUnitsRequested = (refund.refund_line_items || [])
+              .reduce((sum: number, item: any) => sum + (item.quantity || 1), 0);
+            
+            // For Shopify synced refunds, set finalRefundAmount to actual refund amount
+            // These are already processed refunds, so we set shippingCost to 0 (unknown)
+            // and damageDeductionTotal to 0 (no damage assessment for synced returns)
+            
             // Generate RMA number
             const rmaNumber = await storage.getNextRMANumber();
             
-            // Create the return request
+            // Create the return request with financial data populated
             const returnRequest = await storage.createReturnRequest({
               rmaNumber,
               salesOrderId: existingOrder?.id || null,
@@ -5239,8 +5250,17 @@ TOTAL: $${subtotal.toFixed(2)}
               reason: refund.note || 'Refund from Shopify',
               requestedAt: new Date(refund.created_at || Date.now()),
               refundedAt: new Date(refund.processed_at || refund.created_at || Date.now()),
-              isHistorical: true,
-              archivedAt: new Date(),
+              // Use status-based filtering - do NOT set isHistorical here
+              // REFUNDED status will cause it to appear in History tab via status-based filter
+              isHistorical: false,
+              archivedAt: null,
+              // Populate financial fields for proper display
+              totalReceived: totalReceived,
+              shippingCost: 0, // Unknown for synced refunds
+              labelFee: 0, // No label fee for synced refunds (already processed)
+              baseRefundAmount: totalRefundAmount,
+              damageDeductionTotal: 0, // No damage assessment for synced refunds
+              finalRefundAmount: totalRefundAmount,
             });
             
             // Create return items
@@ -5252,6 +5272,9 @@ TOTAL: $${subtotal.toFixed(2)}
               const productName = lineItem.title || lineItem.name || 'Unknown Product';
               
               const item = await storage.getItemBySku(sku);
+              
+              // Calculate line total for the item
+              const lineTotal = unitPrice * quantity;
               
               await storage.createReturnItem({
                 returnRequestId: returnRequest.id,
@@ -5266,6 +5289,10 @@ TOTAL: $${subtotal.toFixed(2)}
                 condition: refundLineItem.restock_type === 'return' ? 'GOOD' : null,
                 disposition: refundLineItem.restock_type === 'return' ? 'RETURN_TO_STOCK' : null,
                 itemReason: `Shopify refund (${refundLineItem.restock_type || 'no_restock'})`,
+                lineTotal: lineTotal,
+                isDamaged: false,
+                damagePercent: 0,
+                damageAmount: 0,
               });
             }
             
@@ -13038,12 +13065,24 @@ Generate only the email body text, no subject line.`;
         returnRequests = await storage.getAllReturnRequests();
       }
       
-      // Enrich each return with totalQtyReceived from items
+      // Enrich each return with computed aggregates from items
       const enrichedReturns = await Promise.all(
         returnRequests.map(async (ret) => {
           const items = await storage.getReturnItemsByRequestId(ret.id);
+          // Sum of qtyRequested (units the customer wants to return)
+          const totalUnitsRequested = items.reduce((sum: number, item: any) => sum + (item.qtyRequested || 0), 0);
+          // Sum of qtyReceived (for tracking receive progress)
           const totalQtyReceived = items.reduce((sum: number, item: any) => sum + (item.qtyReceived || 0), 0);
-          return { ...ret, totalQtyReceived };
+          // Sum of damage amounts
+          const computedDamageTotal = items.reduce((sum: number, item: any) => sum + (item.damageAmount || 0), 0);
+          
+          return { 
+            ...ret, 
+            totalUnitsRequested,
+            totalQtyReceived,
+            // Use computed damage total if damageDeductionTotal not already set
+            damageDeductionTotal: ret.damageDeductionTotal ?? computedDamageTotal,
+          };
         })
       );
       

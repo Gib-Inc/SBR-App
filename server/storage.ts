@@ -120,7 +120,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql } from "drizzle-orm";
+import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -2209,17 +2209,22 @@ export class MemStorage implements IStorage {
   }
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
+    // Live = NOT in terminal states (everything except REFUNDED, CLOSED, CANCELLED)
+    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
     return Array.from(this.returnRequests.values())
-      .filter(r => !r.isHistorical);
+      .filter(r => !terminalStatuses.includes(r.status))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
-    let returns = Array.from(this.returnRequests.values()).filter(r => r.isHistorical);
+    // History = terminal states (REFUNDED, CLOSED, CANCELLED) - confirmed refunds only
+    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
+    let returns = Array.from(this.returnRequests.values()).filter(r => terminalStatuses.includes(r.status));
     if (options?.startDate) {
-      returns = returns.filter(r => r.archivedAt && new Date(r.archivedAt) >= options.startDate!);
+      returns = returns.filter(r => new Date(r.createdAt) >= options.startDate!);
     }
     if (options?.endDate) {
-      returns = returns.filter(r => r.archivedAt && new Date(r.archivedAt) <= options.endDate!);
+      returns = returns.filter(r => new Date(r.createdAt) <= options.endDate!);
     }
     if (options?.status) {
       returns = returns.filter(r => r.status === options.status);
@@ -2227,7 +2232,7 @@ export class MemStorage implements IStorage {
     if (options?.channel) {
       returns = returns.filter(r => r.salesChannel === options.channel);
     }
-    return returns;
+    return returns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
@@ -4964,17 +4969,24 @@ export class PostgresStorage implements IStorage {
   }
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
+    // Live = NOT in terminal states (everything except REFUNDED, CLOSED, CANCELLED)
+    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
     return await this.db.select().from(schema.returnRequests)
-      .where(eq(schema.returnRequests.isHistorical, false));
+      .where(notInArray(schema.returnRequests.status, terminalStatuses))
+      .orderBy(desc(schema.returnRequests.createdAt));
   }
 
   async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
-    const conditions = [eq(schema.returnRequests.isHistorical, true)];
+    // History = terminal states (REFUNDED, CLOSED, CANCELLED) - confirmed refunds only
+    const terminalStatuses = ['REFUNDED', 'CLOSED', 'CANCELLED'];
+    const conditions: any[] = [inArray(schema.returnRequests.status, terminalStatuses)];
+    
+    // Date filtering based on refundedAt (when refund was completed) or createdAt
     if (options?.startDate) {
-      conditions.push(gte(schema.returnRequests.archivedAt, options.startDate));
+      conditions.push(gte(schema.returnRequests.createdAt, options.startDate));
     }
     if (options?.endDate) {
-      conditions.push(lte(schema.returnRequests.archivedAt, options.endDate));
+      conditions.push(lte(schema.returnRequests.createdAt, options.endDate));
     }
     if (options?.status) {
       conditions.push(eq(schema.returnRequests.status, options.status));
@@ -4984,7 +4996,7 @@ export class PostgresStorage implements IStorage {
     }
     return await this.db.select().from(schema.returnRequests)
       .where(and(...conditions))
-      .orderBy(desc(schema.returnRequests.archivedAt));
+      .orderBy(desc(schema.returnRequests.createdAt));
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {

@@ -66,6 +66,7 @@ interface ReturnRequest {
   quickbooksRefundType: string | null;
   quickbooksRefundCreatedAt: string | null;
   totalQtyReceived: number;
+  totalUnitsRequested: number; // Total units customer wants to return
   totalReceived: number | null;
   shippingCost: number | null;
   labelFee: number | null;
@@ -452,7 +453,7 @@ export default function Returns() {
                       </div>
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-units-${returnRequest.id}`}>
-                      {returnRequest.totalQtyReceived || 0}
+                      {returnRequest.totalUnitsRequested || 0}
                     </td>
                     <td className="px-3 align-middle text-right whitespace-nowrap" data-testid={`text-total-received-${returnRequest.id}`}>
                       {formatCurrency(returnRequest.totalReceived)}

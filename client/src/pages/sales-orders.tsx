@@ -497,8 +497,8 @@ export default function SalesOrders() {
           queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
         }
         
-        // Open the conversation
-        const url = `https://app.gohighlevel.com/v2/location/${data.locationId}/conversations/${data.contactId}`;
+        // Open the contact detail page in GHL (where you can view/start conversations)
+        const url = `https://app.gohighlevel.com/v2/location/${data.locationId}/contacts/detail/${data.contactId}`;
         window.open(url, "_blank", "noopener,noreferrer");
       } else {
         toast({ 

@@ -46,8 +46,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     await loginMutation.mutateAsync({ email, password });
-    // Wait for auth state to update before navigating
-    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    // Wait for auth state to actually update (refetchQueries waits for completion, invalidateQueries doesn't)
+    await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
     setLocation("/");
   };
 

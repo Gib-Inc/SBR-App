@@ -28,14 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
 
   const loginMutation = useMutation({
-    mutationFn: async ({ email, password }: { email: string; password: string }) => {
-      const res = await apiRequest("POST", "/api/auth/login", { email, password });
+    mutationFn: async ({ email: e, password: p }: { email: string; password: string }) => {
+      const res = await apiRequest("POST", "/api/auth/login", { email: e, password: p });
       return await res.json();
-    },
-    onSuccess: async () => {
-      // Wait for auth state to update before navigating
-      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      setLocation("/");
     },
   });
 
@@ -51,6 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     await loginMutation.mutateAsync({ email, password });
+    // Wait for auth state to update before navigating
+    await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    setLocation("/");
   };
 
   const logout = async () => {

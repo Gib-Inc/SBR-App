@@ -32,8 +32,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const res = await apiRequest("POST", "/api/auth/login", { email, password });
       return await res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    onSuccess: async () => {
+      // Wait for auth state to update before navigating
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       setLocation("/");
     },
   });

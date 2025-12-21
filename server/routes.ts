@@ -457,6 +457,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Auto-login after registration
       req.session.userId = user.id;
 
+      // Explicitly save session and wait for it to complete before responding
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Auth] Session save error:', err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+
       // Log user registration
       try {
         await AuditLogger.logUserRegistered({
@@ -513,6 +525,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Set session
       req.session.userId = user.id;
+
+      // Explicitly save session and wait for it to complete before responding
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => {
+          if (err) {
+            console.error('[Auth] Session save error:', err);
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
 
       // Log user login
       try {

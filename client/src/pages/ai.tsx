@@ -4143,8 +4143,11 @@ function LogsTab() {
 export default function AIAgent() {
   const { toast } = useToast();
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
+  const [syncingAttribution, setSyncingAttribution] = useState(false);
   const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "SHIPPO" | null>(null);
   const [showPhantomV2Modal, setShowPhantomV2Modal] = useState(false);
+  const [showAttributionModal, setShowAttributionModal] = useState(false);
+  const [attributionMode, setAttributionMode] = useState<"incremental" | "backfill">("incremental");
   const [showShopifySyncModal, setShowShopifySyncModal] = useState(false);
   const [shopifySyncMode, setShopifySyncMode] = useState<"merge" | "replace">("merge");
   const [showSkuMappingWizard, setShowSkuMappingWizard] = useState(false);
@@ -4553,6 +4556,45 @@ export default function AIAgent() {
       });
     } finally {
       setSyncingSource(null);
+    }
+  };
+
+  // Commerce Attribution Sync Handler
+  const handleAttributionSync = async () => {
+    setShowAttributionModal(false);
+    setSyncingAttribution(true);
+    
+    toast({
+      title: "Commerce Attribution sync started...",
+      description: attributionMode === "backfill" ? "Processing historical orders" : "Processing new orders",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/shopify/commerce-attribution/sync`, { 
+        mode: attributionMode 
+      });
+      const result = await response.json();
+      
+      if (result.success) {
+        toast({
+          title: "Commerce Attribution sync completed",
+          description: `${result.ordersProcessed || 0} orders, ${result.customersUpdated || 0} customers, ${result.contactsUpdated || 0} GHL contacts updated`,
+        });
+      } else {
+        toast({
+          title: "Attribution sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Attribution sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingAttribution(false);
     }
   };
 
@@ -5070,6 +5112,27 @@ export default function AIAgent() {
                                   />
                                   {syncingSource === source.id ? "Syncing..." : "Sync"}
                                 </Button>
+                                {source.id === "shopify" && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setShowAttributionModal(true)}
+                                        disabled={!source.configured || syncingAttribution}
+                                        data-testid="button-attribution-sync"
+                                      >
+                                        <Users
+                                          className={`mr-2 h-4 w-4 ${syncingAttribution ? "animate-spin" : ""}`}
+                                        />
+                                        {syncingAttribution ? "Syncing..." : "Attribution"}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Sync customer purchase sources (Amazon/Shopify) to GHL</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
                               </>
                             )}
                           </div>
@@ -5216,6 +5279,81 @@ export default function AIAgent() {
                 Start Sync
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Commerce Attribution Sync Modal */}
+      <Dialog open={showAttributionModal} onOpenChange={setShowAttributionModal}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle data-testid="title-attribution-sync-options">Commerce Attribution Sync</DialogTitle>
+            <DialogDescription>
+              Sync customer purchase sources from Shopify to GoHighLevel custom fields and tags.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            <div className="text-sm text-muted-foreground space-y-2">
+              <p>This sync analyzes Shopify orders to determine customer purchase sources:</p>
+              <ul className="list-disc list-inside text-xs space-y-1 ml-2">
+                <li>First purchase source (Amazon, Shopify, or Unknown)</li>
+                <li>Latest purchase source for repeat customers</li>
+                <li>Purchase count and lifetime value</li>
+                <li>First and last purchase dates</li>
+              </ul>
+            </div>
+            
+            <RadioGroup 
+              value={attributionMode} 
+              onValueChange={(value: "incremental" | "backfill") => setAttributionMode(value)}
+              className="space-y-4"
+            >
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${attributionMode === "incremental" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setAttributionMode("incremental")}
+              >
+                <RadioGroupItem value="incremental" id="attr-incremental" data-testid="radio-attr-incremental" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="attr-incremental" className="text-sm font-medium cursor-pointer">
+                    Incremental (recommended)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Process orders since the last sync. Fast and efficient for regular use.
+                  </p>
+                </div>
+              </div>
+              
+              <div 
+                className={`flex items-start space-x-3 p-3 rounded-lg border cursor-pointer transition-colors ${attributionMode === "backfill" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
+                onClick={() => setAttributionMode("backfill")}
+              >
+                <RadioGroupItem value="backfill" id="attr-backfill" data-testid="radio-attr-backfill" />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="attr-backfill" className="text-sm font-medium cursor-pointer">
+                    Backfill (historical)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Process all historical orders. Use for initial setup or to rebuild attribution data.
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => setShowAttributionModal(false)}
+              data-testid="button-cancel-attribution-sync"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleAttributionSync}
+              data-testid="button-start-attribution-sync"
+            >
+              <Users className="mr-2 h-4 w-4" />
+              Start Sync
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

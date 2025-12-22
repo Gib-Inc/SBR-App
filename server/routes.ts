@@ -5693,6 +5693,126 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // ============================================================
+  // Commerce Attribution - Shopify to GHL customer attribution sync
+  // ============================================================
+  
+  // Start commerce attribution sync (backfill or incremental)
+  app.post("/api/integrations/shopify/commerce-attribution/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { mode = "incremental", startDate, endDate } = req.body;
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      // Initialize and verify configurations
+      const initResult = await service.initialize();
+      if (!initResult.success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: initResult.error || "Failed to initialize commerce attribution service" 
+        });
+      }
+      
+      let result;
+      if (mode === "backfill") {
+        // Full historical backfill
+        const fromDate = startDate ? new Date(startDate) : undefined;
+        const toDate = endDate ? new Date(endDate) : undefined;
+        result = await service.runBackfillSync(fromDate, toDate);
+      } else {
+        // Incremental sync since last run
+        result = await service.runIncrementalSync();
+      }
+      
+      res.json({
+        success: true,
+        mode,
+        ...result
+      });
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Sync error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Commerce attribution sync failed" 
+      });
+    }
+  });
+  
+  // Get commerce attribution sync status
+  app.get("/api/integrations/shopify/commerce-attribution/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      const status = await service.getSyncStatus();
+      const recentRuns = await service.getRecentSyncRuns(5);
+      
+      res.json({
+        success: true,
+        status,
+        recentRuns
+      });
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Status error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to get attribution sync status" 
+      });
+    }
+  });
+  
+  // Get attributed customers
+  app.get("/api/integrations/shopify/commerce-attribution/customers", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { source, page = "1", limit = "50" } = req.query;
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      const customers = await service.getAttributedCustomers(
+        source as string | undefined,
+        parseInt(page as string),
+        parseInt(limit as string)
+      );
+      
+      res.json({
+        success: true,
+        ...customers
+      });
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Customers error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to get attributed customers" 
+      });
+    }
+  });
+  
+  // Cancel running sync
+  app.post("/api/integrations/shopify/commerce-attribution/cancel", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      await service.cancelSync();
+      
+      res.json({ success: true, message: "Sync cancelled" });
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Cancel error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to cancel sync" 
+      });
+    }
+  });
+
   // Amazon - Test Connection
   app.post("/api/integrations/amazon/test", requireAuth, async (req: Request, res: Response) => {
     try {

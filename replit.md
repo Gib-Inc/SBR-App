@@ -109,6 +109,16 @@ Preferred communication style: Simple, everyday language.
         *   Uses idempotent upsert with `sales-order-{id}` external key
         *   Non-blocking: GHL sync errors don't prevent order creation
         *   Tracks `ghlSynced` count in reconciliation logs
+    *   **Commerce Attribution Sync**: Tracks customer purchase sources (Amazon/Shopify) and syncs to GHL:
+        *   Analyzes Shopify orders via GraphQL to classify source (Amazon, Shopify, or Unknown)
+        *   Uses channel_handle, channel_display, app_title, and order tags for classification
+        *   Aggregates per-customer: first/latest source, purchase count, lifetime value, first/last purchase dates
+        *   Syncs to GHL custom fields: originalPurchaseSource, latestPurchaseSource, allPurchaseSources, purchaseCount, firstPurchaseDate, lastPurchaseDate, lifetimeValue
+        *   Syncs to GHL tags: srcFirstAmazon, srcFirstShopify, srcLatestAmazon, srcLatestShopify, buyerMultiple, buyerOnce
+        *   Supports backfill (historical) and incremental sync modes
+        *   Database tables: `commerce_attribution_customers`, `commerce_attribution_sync_state`, `commerce_attribution_sync_runs`, `commerce_attribution_sync_errors`, `commerce_attribution_patterns`
+        *   API endpoints: `POST /api/integrations/shopify/commerce-attribution/sync`, `GET /api/integrations/shopify/commerce-attribution/status`, `GET /api/integrations/shopify/commerce-attribution/customers`
+        *   UI: Attribution button on Shopify card in AI Agent > Data Sources tab
 *   **Product Identification**: Supports UPC/GTIN for finished products, enhancing marketplace identification and cross-channel matching.
 *   **SKU Mapping Wizard**: Centralized interface for mapping internal SKUs to external platform SKUs (e.g., Shopify, Extensiv) with auto-matching capabilities.
 *   **Label Printing**: Customizable label printing with support for various dimensions, layouts, and saved format presets.

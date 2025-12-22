@@ -2307,3 +2307,152 @@ export const insertUserTablePreferencesSchema = createInsertSchema(userTablePref
 });
 export type InsertUserTablePreferences = z.infer<typeof insertUserTablePreferencesSchema>;
 export type UserTablePreferences = typeof userTablePreferences.$inferSelect;
+
+// ============================================================================
+// COMMERCE ATTRIBUTION (Shopify → GHL purchase source sync)
+// ============================================================================
+
+// Source types for commerce attribution
+export const CommerceSource = {
+  AMAZON: "amazon",
+  SHOPIFY: "shopify",
+  UNKNOWN: "unknown",
+} as const;
+export type CommerceSource = typeof CommerceSource[keyof typeof CommerceSource];
+
+// Per-customer attribution aggregates
+export const commerceAttributionCustomers = pgTable("commerce_attribution_customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  emailKey: text("email_key"), // Normalized lowercase email
+  phoneKey: text("phone_key"), // E164 normalized phone
+  firstOrderId: text("first_order_id"),
+  firstOrderAt: timestamp("first_order_at"),
+  firstSource: text("first_source"), // amazon, shopify, unknown
+  lastOrderId: text("last_order_id"),
+  lastOrderAt: timestamp("last_order_at"),
+  lastSource: text("last_source"), // amazon, shopify, unknown
+  purchaseCount: integer("purchase_count").notNull().default(0),
+  lifetimeValueCents: integer("lifetime_value_cents").notNull().default(0),
+  sourcesSet: text("sources_set"), // Sorted comma list: "amazon,shopify"
+  ghlContactId: text("ghl_contact_id"), // Matched GHL contact ID
+  ghlLastSyncAt: timestamp("ghl_last_sync_at"), // When last synced to GHL
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userEmailIdx: uniqueIndex("commerce_attr_user_email_idx").on(table.userId, table.emailKey).where(sql`email_key IS NOT NULL`),
+  userPhoneIdx: uniqueIndex("commerce_attr_user_phone_idx").on(table.userId, table.phoneKey).where(sql`phone_key IS NOT NULL`),
+}));
+
+export const insertCommerceAttributionCustomerSchema = createInsertSchema(commerceAttributionCustomers).omit({ 
+  id: true, 
+  updatedAt: true,
+});
+export type InsertCommerceAttributionCustomer = z.infer<typeof insertCommerceAttributionCustomerSchema>;
+export type CommerceAttributionCustomer = typeof commerceAttributionCustomers.$inferSelect;
+
+// Sync state per Shopify store (for backfill/incremental tracking)
+export const commerceAttributionSyncState = pgTable("commerce_attribution_sync_state", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  backfillComplete: boolean("backfill_complete").notNull().default(false),
+  lastOrdersCursor: text("last_orders_cursor"), // GraphQL cursor for incremental paging
+  lastSyncedAt: timestamp("last_synced_at"),
+  lastBackfillStartedAt: timestamp("last_backfill_started_at"),
+  lastBackfillCompletedAt: timestamp("last_backfill_completed_at"),
+  isRunning: boolean("is_running").notNull().default(false), // Lock to prevent concurrent runs
+  runningJobId: text("running_job_id"), // ID of currently running job
+}, (table) => ({
+  userIdIdx: uniqueIndex("commerce_attr_sync_state_user_idx").on(table.userId),
+}));
+
+export const insertCommerceAttributionSyncStateSchema = createInsertSchema(commerceAttributionSyncState).omit({ 
+  id: true,
+});
+export type InsertCommerceAttributionSyncState = z.infer<typeof insertCommerceAttributionSyncStateSchema>;
+export type CommerceAttributionSyncState = typeof commerceAttributionSyncState.$inferSelect;
+
+// Sync run mode enum
+export const CommerceAttributionSyncMode = {
+  BACKFILL: "backfill",
+  INCREMENTAL: "incremental",
+  WEBHOOK: "webhook",
+} as const;
+export type CommerceAttributionSyncMode = typeof CommerceAttributionSyncMode[keyof typeof CommerceAttributionSyncMode];
+
+// Sync run status enum
+export const CommerceAttributionSyncStatus = {
+  RUNNING: "running",
+  SUCCESS: "success",
+  PARTIAL: "partial",
+  FAILED: "failed",
+} as const;
+export type CommerceAttributionSyncStatus = typeof CommerceAttributionSyncStatus[keyof typeof CommerceAttributionSyncStatus];
+
+// Audit log for sync runs
+export const commerceAttributionSyncRuns = pgTable("commerce_attribution_sync_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  mode: text("mode").notNull(), // backfill, incremental, webhook
+  status: text("status").notNull().default("running"), // running, success, partial, failed
+  startedAt: timestamp("started_at").notNull().default(sql`now()`),
+  finishedAt: timestamp("finished_at"),
+  ordersProcessed: integer("orders_processed").notNull().default(0),
+  customersUpdated: integer("customers_updated").notNull().default(0),
+  contactsUpdated: integer("contacts_updated").notNull().default(0),
+  unknownContacts: integer("unknown_contacts").notNull().default(0),
+  conflicts: integer("conflicts").notNull().default(0),
+  errorCount: integer("error_count").notNull().default(0),
+  summaryJson: jsonb("summary_json"), // Diagnostic info like channel counts
+}, (table) => ({
+  userIdIdx: index("commerce_attr_sync_runs_user_idx").on(table.userId),
+  startedAtIdx: index("commerce_attr_sync_runs_started_idx").on(table.startedAt),
+}));
+
+export const insertCommerceAttributionSyncRunSchema = createInsertSchema(commerceAttributionSyncRuns).omit({ 
+  id: true,
+  startedAt: true,
+});
+export type InsertCommerceAttributionSyncRun = z.infer<typeof insertCommerceAttributionSyncRunSchema>;
+export type CommerceAttributionSyncRun = typeof commerceAttributionSyncRuns.$inferSelect;
+
+// Detailed error logs for sync runs
+export const commerceAttributionSyncErrors = pgTable("commerce_attribution_sync_errors", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: varchar("run_id").notNull().references(() => commerceAttributionSyncRuns.id, { onDelete: 'cascade' }),
+  entityType: text("entity_type").notNull(), // order, customer, ghl_contact, api
+  entityId: text("entity_id"),
+  code: text("code").notNull(), // Error code like MISSING_READ_ALL_ORDERS
+  message: text("message").notNull(),
+  detailsJson: jsonb("details_json"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  runIdIdx: index("commerce_attr_sync_errors_run_idx").on(table.runId),
+}));
+
+export const insertCommerceAttributionSyncErrorSchema = createInsertSchema(commerceAttributionSyncErrors).omit({ 
+  id: true,
+  createdAt: true,
+});
+export type InsertCommerceAttributionSyncError = z.infer<typeof insertCommerceAttributionSyncErrorSchema>;
+export type CommerceAttributionSyncError = typeof commerceAttributionSyncErrors.$inferSelect;
+
+// Source classification patterns (configurable mapping)
+export const commerceAttributionPatterns = pgTable("commerce_attribution_patterns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade' }),
+  patternType: text("pattern_type").notNull(), // 'channel_handle', 'channel_display', 'app_title', 'tag'
+  pattern: text("pattern").notNull(), // The pattern to match (case-insensitive)
+  source: text("source").notNull(), // amazon, shopify
+  priority: integer("priority").notNull().default(0), // Higher priority patterns checked first
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  userIdIdx: index("commerce_attr_patterns_user_idx").on(table.userId),
+}));
+
+export const insertCommerceAttributionPatternSchema = createInsertSchema(commerceAttributionPatterns).omit({ 
+  id: true,
+  createdAt: true,
+});
+export type InsertCommerceAttributionPattern = z.infer<typeof insertCommerceAttributionPatternSchema>;
+export type CommerceAttributionPattern = typeof commerceAttributionPatterns.$inferSelect;

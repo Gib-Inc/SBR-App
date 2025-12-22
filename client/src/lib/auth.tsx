@@ -46,8 +46,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     await loginMutation.mutateAsync({ email, password });
-    // Wait for auth state to actually update (refetchQueries waits for completion, invalidateQueries doesn't)
-    await queryClient.refetchQueries({ queryKey: ["/api/auth/me"] });
+    // Use fetchQuery to get the actual user data and verify login succeeded
+    // This ensures the session cookie was properly set before we navigate
+    const userData = await queryClient.fetchQuery({
+      queryKey: ["/api/auth/me"],
+      queryFn: getQueryFn({ on401: "returnNull" }),
+      staleTime: 0, // Force fresh fetch
+    });
+    
+    if (!userData) {
+      throw new Error("Login failed - session not established");
+    }
+    
+    // Set the cache directly with the fetched user data (don't invalidate which triggers another request)
+    queryClient.setQueryData(["/api/auth/me"], userData);
     setLocation("/");
   };
 

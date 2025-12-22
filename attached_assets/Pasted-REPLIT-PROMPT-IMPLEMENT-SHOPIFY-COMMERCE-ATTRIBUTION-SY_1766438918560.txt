@@ -1,0 +1,274 @@
+REPLIT PROMPT — IMPLEMENT “SHOPIFY COMMERCE ATTRIBUTION SYNC” (BACKFILL + ONGOING) INSIDE EXISTING SHOPIFY SYNC BUTTON
+
+Goal
+Upgrade the existing “Sync” action on:
+AI Agents → Data Sources → Shopify card → Sync
+so that it performs a Shopify-driven mapping job that:
+1) Backfills historical attribution for ALL Shopify orders (6,000+ orders, not just 60 days)
+2) Keeps attribution updated going forward (webhooks + incremental sync)
+3) Updates GHL contacts using the exact Custom Field IDs + Tag IDs below
+
+IMPORTANT CONSTRAINTS
+- Do NOT rely on Shopify Admin UI “Channel column” or tabs; use Shopify Admin API (GraphQL) order attribution fields.
+- Do NOT delete/modify the native GHL “Source” field. Only update the new custom fields/tags Walker created.
+- This must be resumable, idempotent, and must report errors clearly in UI + logs.
+- Must attempt to fetch orders older than 60 days. If Shopify access is limited (missing read_all_orders), detect it and show an actionable error (don’t silently proceed).
+- All changes must be added into the existing Shopify integration + Sync path (not a separate app).
+
+GHL CUSTOM FIELD IDs (Contact-level fields)
+- Original Purchase Source: euuEYInRjyPm54FMsGRl
+- Latest Purchase Source: gYLLeq4XgmjX81BC0P4P
+- All Purchase Sources: zQms4kbFCOjfnCyNoSjy
+- Purchase Count: QWH8t6fAnPa8swVFSoIV
+- First Purchase Date: 4w3S0TS3njUlIhzoz6eu
+- Last Purchase Date: FkyUn2IE9OKeIXg0i0jI
+- Lifetime Value: GLkj2CwqASl0lPgnB3YM
+
+GHL TAG IDs
+- src.first.amazon:   T6ZSk1QJVMVic0aeeYDO
+- src.first.shopify:  h7wDFKmSw83LaXQ18flg
+- src.first.unknown:  6xB0AtCzlQpicv7MmBHh
+- src.latest.amazon:  RNNReOFEKclM6KeiYfeq
+- src.latest.shopify: y7REy3Fua1RmEHsbIsWQ
+- src.latest.unknown: W2im5PmmInK8u1hmZ0bg
+- buyer.multiple:     Usy0iBWEJsWSQ3eYHYeT
+- buyer.once:         I7D6zT7GpQOcWeMLpWht
+
+What the Sync must do (high-level behavior)
+When user clicks Shopify → Sync:
+A) If no completed backfill exists:
+   - Run ONE-TIME BACKFILL:
+     1) Pull ALL Shopify orders historically (6K+) using GraphQL paging OR Bulk Operation if implemented
+     2) Aggregate per customer: first source/date, last source/date, total purchase count, LTV, all sources set
+     3) Match those aggregates to GHL contacts by email/phone and update fields/tags
+     4) Save sync checkpoints and mark backfill complete
+B) If backfill completed:
+   - Run INCREMENTAL SYNC:
+     1) Pull orders since last sync checkpoint
+     2) Recompute aggregates only for impacted customers
+     3) Patch GHL contact(s) for those customers
+
+Also: Update Shopify webhook workflows so that new orders update attribution continuously:
+- On orders/create and/or orders/paid webhook:
+  - classify order source
+  - update aggregates for that customer
+  - patch the matching GHL contact immediately
+
+Data model changes (add DB tables)
+Add these tables (or equivalents in existing ORM) to support resumable jobs + performance:
+
+1) commerce_attribution_customer (per customer key)
+- id (pk)
+- shopify_store_id (or integration id)
+- email_key (lowercased trimmed email; nullable)
+- phone_key (E164 normalized; nullable)
+- first_order_id
+- first_order_at (datetime)
+- first_source (enum: amazon/shopify/unknown)
+- last_order_id
+- last_order_at (datetime)
+- last_source (enum: amazon/shopify/unknown)
+- purchase_count (int)
+- lifetime_value_cents (int)  // use cents to avoid float errors
+- sources_set (string)        // canonical sorted comma list: "amazon,shopify"
+- updated_at
+
+Unique index on (shopify_store_id, email_key) where email_key not null
+Unique index on (shopify_store_id, phone_key) where phone_key not null
+
+2) commerce_attribution_sync_state (per store/integration)
+- shopify_store_id (pk)
+- backfill_complete (bool)
+- last_orders_cursor (string nullable) // for incremental paging
+- last_synced_at (datetime nullable)
+- last_backfill_started_at (datetime nullable)
+- last_backfill_completed_at (datetime nullable)
+
+3) commerce_attribution_sync_run (auditing)
+- run_id (pk)
+- shopify_store_id
+- mode (backfill|incremental|webhook)
+- status (running|success|partial|failed)
+- started_at / finished_at
+- orders_processed
+- customers_updated
+- contacts_updated
+- unknown_contacts
+- conflicts
+- error_count
+- summary_json
+
+4) commerce_attribution_sync_error (detailed errors)
+- id (pk)
+- run_id
+- entity_type (order|customer|ghl_contact|api)
+- entity_id (string nullable)
+- code (string)
+- message (string)
+- details_json
+- created_at
+
+Locking / concurrency
+- Add a lock so only one sync per Shopify integration runs at a time.
+- If a sync is already running, Sync button should return “Sync already running” and show the current run status.
+
+Shopify API requirements (MUST FETCH OLDER THAN 60 DAYS)
+Implement a hard check during backfill:
+- Query for at least one order older than 60 days (or request earliest order via sorting).
+- If Shopify returns only recent orders:
+  - Mark run as FAILED with error code “MISSING_READ_ALL_ORDERS”
+  - UI message: “Shopify access is limited to recent orders. App must have read_all_orders scope to backfill historical data.”
+Even if Walker says key has full access, still verify via data returned. Do not assume.
+
+Shopify order pull (GraphQL)
+Use Shopify Admin GraphQL. For each order fetch:
+- createdAt (or processedAt)
+- id
+- email (order email)
+- customer { email phone }
+- billingAddress/ shippingAddress phone (optional fallback)
+- tags
+- totalPriceSet (for LTV)
+- channelInformation { displayName channelDefinition { handle } app { title } }
+- app { name }   // if available in schema used
+
+Paging:
+- For backfill: oldest → newest (so first/last computations are stable)
+- Use cursor-based pagination with persisted checkpoints to resume.
+- Prefer Bulk Operations if you already have a bulk framework; otherwise standard pagination is acceptable for ~6k orders.
+
+Source classification (THIS FIXES “ALL SALES BECOME SHOPIFY” BUG)
+Implement classifyOrderSource(order) with configurable mapping:
+Primary:
+- If channelInformation.channelDefinition.handle == "web" OR channelInformation.displayName includes "Online Store" -> source = "shopify"
+- If channelInformation.displayName / app.title / handle contains “amazon” (case-insensitive) -> source = "amazon"
+
+Fallbacks when channelInformation is empty (as seen in admin UI):
+- If order.tags contains any of: "AMZN", "AMZN Orders", "Amazon" -> source = "amazon"
+- If order.app.name contains “amazon” or matches known Amazon sync app name (configurable) -> source = "amazon"
+- Else -> "unknown"
+
+Make mapping editable in config (db table or JSON config) so Walker can add patterns without redeploy.
+Also create a “diagnostic sample” log on first run:
+- Count distinct channelInformation.displayName values
+- Count distinct channelDefinition.handle values
+- Count distinct channelInformation.app.title values
+- Top 20 tags
+Store this in sync_run.summary_json (no PII).
+
+Aggregation rules (per customer key)
+Customer identity keys (strict; avoid fuzzy):
+- email_key: prefer order.customer.email, else order.email; lowercase trim.
+- phone_key: prefer customer.phone, else shipping/billing phone; normalize to E164.
+
+Aggregation:
+- purchase_count: total number of qualifying orders for that customer
+- first_order_at/source: minimum createdAt among qualifying orders + its source
+- last_order_at/source: maximum createdAt among qualifying orders + its source
+- sources_set: set of sources encountered (amazon/shopify/unknown) but store as sorted comma list excluding unknown unless all unknown
+- lifetime_value_cents: sum of totalPriceSet amounts for qualifying orders
+
+Qualifying orders:
+- v1: include paid orders; exclude canceled/voided if flagged by API fields available.
+- If cancellation/refund fields are complicated, at minimum exclude fully canceled orders. Log if uncertain.
+
+GHL contact matching and updates
+Matching:
+1) Try match by email_key (exact)
+2) If no email match, try phone_key (exact)
+3) If multiple contacts match, mark as conflict and do NOT update (log conflict count and store in errors table). Optionally choose oldest contact only if Walker wants; default safer behavior is “no update on ambiguous”.
+
+Updates to apply (idempotent)
+For each matched contact_id:
+1) Custom fields:
+- Set Original Purchase Source (euuEYInRjyPm54FMsGRl) to one of: "amazon" | "shopify" | "unknown"
+- Set Latest Purchase Source (gYLLeq4XgmjX81BC0P4P) to one of: "amazon" | "shopify" | "unknown"
+- Set All Purchase Sources (zQms4kbFCOjfnCyNoSjy) to comma list, e.g. "amazon,shopify" (stable order)
+- Set Purchase Count (QWH8t6fAnPa8swVFSoIV) integer
+- Set First Purchase Date (4w3S0TS3njUlIhzoz6eu) ISO datetime
+- Set Last Purchase Date (FkyUn2IE9OKeIXg0i0jI) ISO datetime
+- Set Lifetime Value (GLkj2CwqASl0lPgnB3YM) as number (if field expects string, convert safely)
+
+NOTE about dropdown fields:
+- If GHL requires option “value” instead of label, fetch the custom field definition once and map allowed options.
+- If field update fails due to option mismatch, still apply tags and log the field error clearly.
+
+2) Tags:
+- For first source:
+  - If amazon: add T6ZSk1QJVMVic0aeeYDO; remove h7wDFKmSw83LaXQ18flg and 6xB0AtCzlQpicv7MmBHh
+  - If shopify: add h7wDFKmSw83LaXQ18flg; remove T6ZSk1QJVMVic0aeeYDO and 6xB0AtCzlQpicv7MmBHh
+  - If unknown: add 6xB0AtCzlQpicv7MmBHh; remove the other two
+- For latest source:
+  - amazon: add RNNReOFEKclM6KeiYfeq; remove y7REy3Fua1RmEHsbIsWQ and W2im5PmmInK8u1hmZ0bg
+  - shopify: add y7REy3Fua1RmEHsbIsWQ; remove RNNReOFEKclM6KeiYfeq and W2im5PmmInK8u1hmZ0bg
+  - unknown: add W2im5PmmInK8u1hmZ0bg; remove the other two
+- Purchase frequency:
+  - If purchase_count >= 2: add Usy0iBWEJsWSQ3eYHYeT; remove I7D6zT7GpQOcWeMLpWht
+  - If purchase_count == 1: add I7D6zT7GpQOcWeMLpWht; remove Usy0iBWEJsWSQ3eYHYeT
+
+Overwrite policy
+- Default: ALWAYS overwrite these derived fields/tags because they are computed from Shopify canonical order history.
+- Provide a config flag to switch to “only set when empty” if Walker wants later.
+
+Where to hook this in the app
+- Locate the existing Shopify “Sync” handler (the same one used today).
+- Extend it so it triggers the new job pipeline:
+  - If backfill_complete=false -> enqueue backfill job
+  - Else -> enqueue incremental job
+- Return immediate response and show progress in UI (don’t block request thread for the full run).
+
+UI requirements (minimal but must exist)
+On the Shopify card Sync modal or existing sync UI:
+- Show current run status: running/success/failed
+- Progress counts: orders_processed, contacts_updated, unknowns, conflicts, errors
+- “View errors” list (from commerce_attribution_sync_error) with last 50 errors
+- If failed due to missing historical access, show the specific actionable message.
+
+Webhooks / workflows updates (ongoing sync)
+- Update existing Shopify order webhook handlers (orders/create and/or orders/paid):
+  - Fetch the full order via GraphQL (so we have channelInformation)
+  - classify source
+  - update aggregation row(s) for that customer
+  - patch the matching GHL contact
+  - write a sync_run entry mode=webhook for audit
+- Add a daily scheduled “reconcile last 7 days” job:
+  - Pull orders from last 7 days and reapply aggregation + patch
+  - This catches missed webhooks.
+
+Error handling / reporting (must be strict)
+- All external API calls must have:
+  - retries with exponential backoff
+  - rate limit handling (Shopify cost throttling; GHL rate limits)
+  - timeouts
+- Any failure:
+  - write a commerce_attribution_sync_error row with request context (no PII; redact emails/phones)
+  - increment error_count
+- At end of run:
+  - status = success if no errors
+  - status = partial if some errors but overall run completed
+  - status = failed if cannot proceed (auth/scopes/critical)
+
+Security / PII
+- Do not store raw emails/phones in logs. Store normalized keys in DB and redact in logs.
+- Ensure tokens/secrets remain in existing secrets manager/env vars.
+
+Acceptance tests (must pass)
+1) Backfill processes > 6,000 orders and updates attribution aggregates.
+2) At least one contact gets:
+   - both source fields set
+   - purchase_count set
+   - first/last dates set
+   - tags applied correctly (first + latest + buyer.once/multiple)
+3) Incremental sync processes only new orders since last cursor.
+4) Webhook updates a single customer end-to-end.
+5) If historical orders are not accessible, UI shows “missing read_all_orders” and run fails clearly.
+
+Deliverables
+- Code changes wired into existing Shopify Sync button
+- New tables/migrations
+- Source classification + configurable mapping
+- Backfill + incremental jobs + webhook updates + daily reconcile
+- UI progress + error reporting
+- Clear logs for debugging
+
+Build this now in the existing inventory app codebase, respecting current architecture (language/framework/ORM/job runner). If architecture lacks a job queue, add a lightweight in-process queue + DB checkpointing, but prefer the app’s existing background job system if present.

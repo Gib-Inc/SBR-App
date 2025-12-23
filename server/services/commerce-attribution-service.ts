@@ -442,23 +442,28 @@ export class CommerceAttributionService {
 
     let cleaned = 0;
     let errors = 0;
-    let page = 1;
+    let totalScanned = 0;
+    let startAfterId: string | null = null;
     const pageSize = 100;
 
     console.log("[CommerceAttribution] Starting cleanup of wrong tag IDs...");
 
     while (true) {
       try {
-        // Get contacts from GHL
-        const response = await fetch(
-          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&limit=${pageSize}&skip=${(page - 1) * pageSize}`,
-          {
-            headers: {
-              Authorization: `Bearer ${this.ghlApiKey}`,
-              Version: "2021-07-28",
-            },
-          }
-        );
+        // Build URL with proper pagination (startAfterId, not skip)
+        const url = new URL(`https://services.leadconnectorhq.com/contacts/`);
+        url.searchParams.set("locationId", this.ghlLocationId!);
+        url.searchParams.set("limit", String(pageSize));
+        if (startAfterId) {
+          url.searchParams.set("startAfterId", startAfterId);
+        }
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            Authorization: `Bearer ${this.ghlApiKey}`,
+            Version: "2021-07-28",
+          },
+        });
 
         if (!response.ok) {
           if (response.status === 429) {
@@ -466,13 +471,17 @@ export class CommerceAttributionService {
             await delay(5000);
             continue;
           }
-          throw new Error(`GHL API error: ${response.status}`);
+          const errorText = await response.text();
+          throw new Error(`GHL API error: ${response.status} - ${errorText}`);
         }
 
         const data = await response.json();
         const contacts = data.contacts || [];
+        const meta = data.meta || {};
 
         if (contacts.length === 0) break;
+
+        totalScanned += contacts.length;
 
         for (const contact of contacts) {
           const tags = contact.tags || [];
@@ -515,7 +524,11 @@ export class CommerceAttributionService {
           }
         }
 
-        page++;
+        // Use startAfterId for pagination (GHL v2 API)
+        startAfterId = meta.startAfterId || null;
+        if (!startAfterId) break;
+
+        console.log(`[CommerceAttribution] Scanned ${totalScanned} contacts, ${cleaned} cleaned so far`);
         await delay(500); // Delay between pages
 
       } catch (err: any) {

@@ -101,12 +101,18 @@ query GetOrders($cursor: String, $first: Int!) {
           id
           email
           phone
+          firstName
+          lastName
         }
         billingAddress {
           phone
+          firstName
+          lastName
         }
         shippingAddress {
           phone
+          firstName
+          lastName
         }
         channelInformation {
           channelId
@@ -141,12 +147,18 @@ interface ShopifyGraphQLOrder {
     id: string;
     email?: string;
     phone?: string;
+    firstName?: string;
+    lastName?: string;
   };
   billingAddress?: {
     phone?: string;
+    firstName?: string;
+    lastName?: string;
   };
   shippingAddress?: {
     phone?: string;
+    firstName?: string;
+    lastName?: string;
   };
   channelInformation?: {
     channelId?: string;
@@ -163,6 +175,8 @@ interface ShopifyGraphQLOrder {
 interface AttributionAggregation {
   emailKey?: string;
   phoneKey?: string;
+  firstName?: string;
+  lastName?: string;
   firstOrderId: string;
   firstOrderAt: Date;
   firstSource: string;
@@ -519,7 +533,8 @@ export class CommerceAttributionService {
     // Update customer records and sync to GHL
     let customersUpdated = 0;
     let contactsUpdated = 0;
-    let notFoundInGHL = 0;
+    let contactsCreated = 0;
+    let contactsMatched = 0;
     let errors = 0;
     let processed = 0;
 
@@ -530,7 +545,7 @@ export class CommerceAttributionService {
       
       // Log progress every 25 customers (more frequent for smoother UI updates)
       if (processed % 25 === 0 || processed === totalCustomers) {
-        console.log(`[CommerceAttribution] GHL sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
+        console.log(`[CommerceAttribution] GHL sync progress: ${processed}/${totalCustomers} (${contactsMatched} matched, ${contactsCreated} created, ${errors} errors)`);
         
         // Update sync run stats incrementally - use processed count for progress
         if (this.runId) {
@@ -547,13 +562,15 @@ export class CommerceAttributionService {
         await this.upsertCustomerAttribution(agg);
         customersUpdated++;
 
-        // Sync to GHL
+        // Sync to GHL - will either match existing contact or create new
         const ghlResult = await this.syncToGHL(agg);
         if (ghlResult.success) {
           contactsUpdated++;
-        } else if (ghlResult.notFound) {
-          notFoundInGHL++;
-          // Contact not found in GHL - log but don't count as error
+          if (ghlResult.created) {
+            contactsCreated++;
+          } else {
+            contactsMatched++;
+          }
         } else {
           errors++;
           console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
@@ -565,7 +582,7 @@ export class CommerceAttributionService {
       }
     }
 
-    console.log(`[CommerceAttribution] Backfill complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced, ${notFoundInGHL} not found in GHL, ${errors} errors`);
+    console.log(`[CommerceAttribution] Backfill complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced (${contactsMatched} matched, ${contactsCreated} created), ${errors} errors`);
 
     return {
       ordersProcessed: totalCustomers,
@@ -616,7 +633,8 @@ export class CommerceAttributionService {
     // For each impacted customer, fetch ALL their orders and re-aggregate
     let customersUpdated = 0;
     let contactsUpdated = 0;
-    let notFoundInGHL = 0;
+    let contactsCreated = 0;
+    let contactsMatched = 0;
     let errors = 0;
 
     // For simplicity, just aggregate the new orders (full re-aggregation would require fetching all orders again)
@@ -639,7 +657,7 @@ export class CommerceAttributionService {
 
       // Log progress every 25 customers for incremental
       if (processed % 25 === 0 || processed === totalCustomers) {
-        console.log(`[CommerceAttribution] Incremental sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
+        console.log(`[CommerceAttribution] Incremental sync progress: ${processed}/${totalCustomers} (${contactsMatched} matched, ${contactsCreated} created, ${errors} errors)`);
         
         // Update sync run stats incrementally
         if (this.runId) {
@@ -663,8 +681,11 @@ export class CommerceAttributionService {
         const ghlResult = await this.syncToGHL(merged);
         if (ghlResult.success) {
           contactsUpdated++;
-        } else if (ghlResult.notFound) {
-          notFoundInGHL++;
+          if (ghlResult.created) {
+            contactsCreated++;
+          } else {
+            contactsMatched++;
+          }
         } else {
           errors++;
           console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
@@ -676,7 +697,7 @@ export class CommerceAttributionService {
       }
     }
 
-    console.log(`[CommerceAttribution] Incremental sync complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced, ${notFoundInGHL} not found in GHL, ${errors} errors`);
+    console.log(`[CommerceAttribution] Incremental sync complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced (${contactsMatched} matched, ${contactsCreated} created), ${errors} errors`);
 
     // Update last synced timestamp
     await getDb()
@@ -784,12 +805,18 @@ export class CommerceAttributionService {
                 id
                 email
                 phone
+                firstName
+                lastName
               }
               billingAddress {
                 phone
+                firstName
+                lastName
               }
               shippingAddress {
                 phone
+                firstName
+                lastName
               }
               channelInformation {
                 channelId
@@ -913,6 +940,10 @@ export class CommerceAttributionService {
         order.customer?.phone || order.shippingAddress?.phone || order.billingAddress?.phone
       );
 
+      // Get customer name - try customer, then shipping, then billing address
+      const firstName = order.customer?.firstName || order.shippingAddress?.firstName || order.billingAddress?.firstName;
+      const lastName = order.customer?.lastName || order.shippingAddress?.lastName || order.billingAddress?.lastName;
+
       if (!emailKey && !phoneKey) {
         // Can't aggregate without identity
         continue;
@@ -933,6 +964,8 @@ export class CommerceAttributionService {
         aggregations.set(customerKey, {
           emailKey,
           phoneKey,
+          firstName,
+          lastName,
           firstOrderId: orderId,
           firstOrderAt: orderAt,
           firstSource: source,
@@ -944,6 +977,9 @@ export class CommerceAttributionService {
           sourcesSet: source,
         });
       } else {
+        // Update name if we didn't have it before
+        if (!existing.firstName && firstName) existing.firstName = firstName;
+        if (!existing.lastName && lastName) existing.lastName = lastName;
         // Update aggregation
         if (orderAt < existing.firstOrderAt) {
           existing.firstOrderId = orderId;
@@ -1014,19 +1050,12 @@ export class CommerceAttributionService {
   }
 
   /**
-   * Sync attribution to GHL contact
+   * Sync attribution to GHL contact - smart matching with fallback to create
    */
   private async syncToGHL(
     agg: AttributionAggregation
-  ): Promise<{ success: boolean; notFound?: boolean; error?: string }> {
+  ): Promise<{ success: boolean; notFound?: boolean; created?: boolean; matchMethod?: string; error?: string }> {
     try {
-      // Find GHL contact by email or phone
-      const contact = await this.findGHLContact(agg.emailKey, agg.phoneKey);
-
-      if (!contact) {
-        return { success: false, notFound: true };
-      }
-
       // Build custom fields array for V2 API
       const customFields: Array<{ id: string; value: any }> = [
         { id: GHL_FIELD_IDS.originalPurchaseSource, value: agg.firstSource },
@@ -1038,7 +1067,7 @@ export class CommerceAttributionService {
         { id: GHL_FIELD_IDS.lifetimeValue, value: agg.lifetimeValueCents / 100 },
       ];
 
-      // Build tags to add/remove
+      // Build tags to add
       const tagsToAdd: string[] = [];
       const tagsToRemove: string[] = [];
 
@@ -1075,17 +1104,41 @@ export class CommerceAttributionService {
         tagsToRemove.push(GHL_TAG_IDS.buyerMultiple);
       }
 
-      // Update contact with custom fields
-      await this.updateGHLContact(contact.id, customFields);
+      // Try to find and verify GHL contact with smart matching
+      const matchResult = await this.findAndVerifyGHLContact(agg);
 
-      // Update tags
-      await this.updateGHLContactTags(contact.id, tagsToAdd, tagsToRemove);
+      let contactId: string;
+      let wasCreated = false;
+      let matchMethod: string | undefined;
+
+      if ("matched" in matchResult && matchResult.matched) {
+        // Found a verified match
+        contactId = matchResult.id;
+        matchMethod = matchResult.matchMethod;
+        
+        // Update existing contact with custom fields
+        await this.updateGHLContact(contactId, customFields);
+        
+        // Update tags
+        await this.updateGHLContactTags(contactId, tagsToAdd, tagsToRemove);
+      } else {
+        // No match found - create new contact
+        const newContact = await this.createGHLContact(agg, customFields, tagsToAdd);
+        
+        if (!newContact || !newContact.id) {
+          return { success: false, error: "Failed to create new GHL contact" };
+        }
+        
+        contactId = newContact.id;
+        wasCreated = true;
+        matchMethod = "created new";
+      }
 
       // Update our record with GHL contact ID
       if (agg.emailKey) {
         await getDb()
           .update(commerceAttributionCustomers)
-          .set({ ghlContactId: contact.id, ghlLastSyncAt: new Date() })
+          .set({ ghlContactId: contactId, ghlLastSyncAt: new Date() })
           .where(
             and(
               eq(commerceAttributionCustomers.userId, this.userId),
@@ -1094,7 +1147,7 @@ export class CommerceAttributionService {
           );
       }
 
-      return { success: true };
+      return { success: true, created: wasCreated, matchMethod };
     } catch (error: any) {
       console.error("[CommerceAttribution] GHL sync error:", error);
       return { success: false, error: error.message };
@@ -1102,40 +1155,169 @@ export class CommerceAttributionService {
   }
 
   /**
-   * Find GHL contact by email or phone
+   * Find and verify GHL contact with smart matching:
+   * 1. Search by full name first, verify with email/phone
+   * 2. If no name match, fallback to direct email/phone search
+   * 3. Only create new contact if no match found
    */
-  private async findGHLContact(
-    email?: string,
-    phone?: string
-  ): Promise<{ id: string } | null> {
-    const searchValue = email || phone;
-    if (!searchValue) return null;
+  private async findAndVerifyGHLContact(
+    agg: AttributionAggregation
+  ): Promise<{ id: string; matched: boolean; matchMethod?: string } | { id: null; shouldCreate: boolean }> {
+    const fullName = `${agg.firstName || ""} ${agg.lastName || ""}`.trim();
+    const aggEmail = agg.emailKey?.toLowerCase().trim();
+    const aggPhone = agg.phoneKey;
 
     try {
+      // STEP 1: If we have a name, search by name first
+      if (fullName) {
+        const nameResponse: Response = await fetch(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(fullName)}&limit=10`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.ghlApiKey}`,
+              "Content-Type": "application/json",
+              Version: "2021-07-28",
+            },
+          }
+        );
+
+        if (nameResponse.ok) {
+          const nameData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await nameResponse.json();
+          const nameContacts = nameData.contacts || [];
+
+          // Check each contact found by name search - if email/phone matches, it's the same person
+          // (name search returns fuzzy matches, so we verify with email/phone)
+          for (const contact of nameContacts) {
+            const contactEmail = contact.email?.toLowerCase().trim();
+            const contactPhone = this.normalizePhone(contact.phone);
+
+            // Email matches - accept even if name formatting differs
+            if (aggEmail && contactEmail && aggEmail === contactEmail) {
+              return { id: contact.id, matched: true, matchMethod: "name-search+email" };
+            }
+
+            // Phone matches - accept even if name formatting differs
+            if (aggPhone && contactPhone && aggPhone === contactPhone) {
+              return { id: contact.id, matched: true, matchMethod: "name-search+phone" };
+            }
+          }
+        }
+      }
+
+      // STEP 2: Fallback - search directly by email if available
+      if (aggEmail) {
+        const emailResponse: Response = await fetch(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(aggEmail)}&limit=5`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.ghlApiKey}`,
+              "Content-Type": "application/json",
+              Version: "2021-07-28",
+            },
+          }
+        );
+
+        if (emailResponse.ok) {
+          const emailData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await emailResponse.json();
+          const emailContacts = emailData.contacts || [];
+
+          for (const contact of emailContacts) {
+            const contactEmail = contact.email?.toLowerCase().trim();
+            
+            // Direct email match - update existing contact even if name differs
+            if (contactEmail && aggEmail === contactEmail) {
+              return { id: contact.id, matched: true, matchMethod: "email (direct)" };
+            }
+          }
+        }
+      }
+
+      // STEP 3: Fallback - search directly by phone if available
+      if (aggPhone) {
+        const phoneResponse: Response = await fetch(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(aggPhone)}&limit=5`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.ghlApiKey}`,
+              "Content-Type": "application/json",
+              Version: "2021-07-28",
+            },
+          }
+        );
+
+        if (phoneResponse.ok) {
+          const phoneData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await phoneResponse.json();
+          const phoneContacts = phoneData.contacts || [];
+
+          for (const contact of phoneContacts) {
+            const contactPhone = this.normalizePhone(contact.phone);
+            
+            // Direct phone match - update existing contact even if name differs
+            if (contactPhone && aggPhone === contactPhone) {
+              return { id: contact.id, matched: true, matchMethod: "phone (direct)" };
+            }
+          }
+        }
+      }
+
+      // STEP 4: No match found anywhere - should create new contact
+      return { id: null, shouldCreate: true };
+    } catch (error) {
+      console.error("[CommerceAttribution] GHL contact search error:", error);
+      return { id: null, shouldCreate: true };
+    }
+  }
+
+  /**
+   * Create a new GHL contact with attribution data
+   */
+  private async createGHLContact(
+    agg: AttributionAggregation,
+    customFields: Array<{ id: string; value: any }>,
+    tags: string[]
+  ): Promise<{ id: string } | null> {
+    try {
+      // Add the special tag for contacts created by this sync
+      const allTags = [...tags, "new contact from app sync"];
+
+      const contactData: Record<string, any> = {
+        locationId: this.ghlLocationId,
+        firstName: agg.firstName || "",
+        lastName: agg.lastName || "",
+        tags: allTags,
+        customFields,
+      };
+
+      if (agg.emailKey) {
+        contactData.email = agg.emailKey;
+      }
+      if (agg.phoneKey) {
+        contactData.phone = agg.phoneKey;
+      }
+
       const response = await fetch(
-        `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(searchValue)}&limit=1`,
+        "https://services.leadconnectorhq.com/contacts/",
         {
+          method: "POST",
           headers: {
             Authorization: `Bearer ${this.ghlApiKey}`,
             "Content-Type": "application/json",
             Version: "2021-07-28",
           },
+          body: JSON.stringify(contactData),
         }
       );
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[CommerceAttribution] Failed to create GHL contact: ${response.status} - ${errorText}`);
         return null;
       }
 
-      const data = await response.json();
-      const contacts = data.contacts || [];
-
-      if (contacts.length === 0) {
-        return null;
-      }
-
-      return { id: contacts[0].id };
-    } catch {
+      const result = await response.json();
+      return { id: result.contact?.id };
+    } catch (error) {
+      console.error("[CommerceAttribution] Error creating GHL contact:", error);
       return null;
     }
   }
@@ -1413,6 +1595,9 @@ export class CommerceAttributionService {
     return {
       emailKey: incoming.emailKey || existing.emailKey || undefined,
       phoneKey: incoming.phoneKey || existing.phoneKey || undefined,
+      // Preserve existing names if incoming has none (don't overwrite with empty)
+      firstName: incoming.firstName || (existing as any).firstName || undefined,
+      lastName: incoming.lastName || (existing as any).lastName || undefined,
       firstOrderId:
         existingFirstAt && existingFirstAt < incoming.firstOrderAt
           ? existing.firstOrderId!

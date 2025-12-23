@@ -238,11 +238,26 @@ export class CommerceAttributionService {
       }
 
       const ghlConfigData = ghlConfig.config as Record<string, any> || {};
-      this.ghlApiKey = ghlConfig.apiKey || "";
+      
+      // Use database API key, but fallback to environment variable if database key is invalid
+      // (e.g., contains non-ASCII characters like bullet points from masked copy-paste)
+      let dbApiKey = ghlConfig.apiKey || "";
+      const isValidAscii = /^[\x00-\x7F]*$/.test(dbApiKey) && dbApiKey.length > 10;
+      
+      if (isValidAscii) {
+        this.ghlApiKey = dbApiKey;
+      } else {
+        // Fallback to environment variable
+        this.ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || "";
+        if (this.ghlApiKey) {
+          console.log("[CommerceAttribution] Using GOHIGHLEVEL_API_KEY from environment (database key was invalid)");
+        }
+      }
+      
       this.ghlLocationId = ghlConfigData.locationId || "";
 
       if (!this.ghlApiKey || !this.ghlLocationId) {
-        return { success: false, error: "GoHighLevel credentials not configured" };
+        return { success: false, error: "GoHighLevel credentials not configured. Please update the API key in Settings or set GOHIGHLEVEL_API_KEY environment variable." };
       }
 
       this.initialized = true;

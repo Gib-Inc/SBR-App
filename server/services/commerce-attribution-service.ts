@@ -304,11 +304,12 @@ export class CommerceAttributionService {
    * Get recent sync runs
    */
   async getRecentSyncRuns(limit: number = 5): Promise<CommerceAttributionSyncRun[]> {
-    const runs = await getDb().query.commerceAttributionSyncRuns.findMany({
-      where: eq(commerceAttributionSyncRuns.userId, this.userId),
-      orderBy: [desc(commerceAttributionSyncRuns.startedAt)],
-      limit,
-    });
+    const runs = await getDb()
+      .select()
+      .from(commerceAttributionSyncRuns)
+      .where(eq(commerceAttributionSyncRuns.userId, this.userId))
+      .orderBy(desc(commerceAttributionSyncRuns.startedAt))
+      .limit(limit);
     return runs;
   }
 
@@ -331,16 +332,17 @@ export class CommerceAttributionService {
     if (sourceFilter) {
       whereClause = and(
         whereClause,
-        eq(commerceAttributionCustomers.latestSource, sourceFilter as typeof CommerceSource.AMAZON | typeof CommerceSource.SHOPIFY | typeof CommerceSource.UNKNOWN)
+        eq(commerceAttributionCustomers.lastSource, sourceFilter as typeof CommerceSource.AMAZON | typeof CommerceSource.SHOPIFY | typeof CommerceSource.UNKNOWN)
       )!;
     }
 
-    const customers = await getDb().query.commerceAttributionCustomers.findMany({
-      where: whereClause,
-      orderBy: [desc(commerceAttributionCustomers.lastPurchaseAt)],
-      limit,
-      offset,
-    });
+    const customers = await getDb()
+      .select()
+      .from(commerceAttributionCustomers)
+      .where(whereClause)
+      .orderBy(desc(commerceAttributionCustomers.lastOrderAt))
+      .limit(limit)
+      .offset(offset);
 
     const countResult = await getDb().select({ count: drizzleSql<number>`count(*)` })
       .from(commerceAttributionCustomers)
@@ -510,9 +512,31 @@ export class CommerceAttributionService {
     // Update customer records and sync to GHL
     let customersUpdated = 0;
     let contactsUpdated = 0;
+    let notFoundInGHL = 0;
     let errors = 0;
+    const totalCustomers = aggregations.size;
+    let processed = 0;
+
+    console.log(`[CommerceAttribution] Starting GHL sync for ${totalCustomers} customers...`);
 
     for (const [key, agg] of aggregations) {
+      processed++;
+      
+      // Log progress every 50 customers
+      if (processed % 50 === 0 || processed === totalCustomers) {
+        console.log(`[CommerceAttribution] GHL sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
+        
+        // Update sync run stats incrementally
+        if (this.runId) {
+          await this.updateSyncRunProgress({
+            ordersProcessed: orders.length,
+            customersUpdated,
+            contactsUpdated,
+            errors,
+          });
+        }
+      }
+
       try {
         await this.upsertCustomerAttribution(agg);
         customersUpdated++;
@@ -522,15 +546,20 @@ export class CommerceAttributionService {
         if (ghlResult.success) {
           contactsUpdated++;
         } else if (ghlResult.notFound) {
+          notFoundInGHL++;
           // Contact not found in GHL - log but don't count as error
         } else {
           errors++;
+          console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
         }
       } catch (error: any) {
         errors++;
+        console.error(`[CommerceAttribution] Error processing ${key}: ${error.message}`);
         await this.logError("customer", key, "CUSTOMER_UPDATE_FAILED", error.message);
       }
     }
+
+    console.log(`[CommerceAttribution] Backfill complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced, ${notFoundInGHL} not found in GHL, ${errors} errors`);
 
     return {
       ordersProcessed: orders.length,
@@ -581,12 +610,24 @@ export class CommerceAttributionService {
     // For each impacted customer, fetch ALL their orders and re-aggregate
     let customersUpdated = 0;
     let contactsUpdated = 0;
+    let notFoundInGHL = 0;
     let errors = 0;
 
     // For simplicity, just aggregate the new orders (full re-aggregation would require fetching all orders again)
     const aggregations = await this.aggregateOrders(orders);
+    const totalCustomers = aggregations.size;
+    let processed = 0;
+
+    console.log(`[CommerceAttribution] Starting incremental GHL sync for ${totalCustomers} customers...`);
 
     for (const [key, agg] of aggregations) {
+      processed++;
+
+      // Log progress every 25 customers for incremental
+      if (processed % 25 === 0 || processed === totalCustomers) {
+        console.log(`[CommerceAttribution] Incremental sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
+      }
+
       try {
         // Merge with existing customer data
         const existing = await this.getExistingCustomer(agg.emailKey, agg.phoneKey);
@@ -598,14 +639,20 @@ export class CommerceAttributionService {
         const ghlResult = await this.syncToGHL(merged);
         if (ghlResult.success) {
           contactsUpdated++;
-        } else if (!ghlResult.notFound) {
+        } else if (ghlResult.notFound) {
+          notFoundInGHL++;
+        } else {
           errors++;
+          console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
         }
       } catch (error: any) {
         errors++;
+        console.error(`[CommerceAttribution] Error processing ${key}: ${error.message}`);
         await this.logError("customer", key, "CUSTOMER_UPDATE_FAILED", error.message);
       }
     }
+
+    console.log(`[CommerceAttribution] Incremental sync complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced, ${notFoundInGHL} not found in GHL, ${errors} errors`);
 
     // Update last synced timestamp
     await getDb()
@@ -1238,6 +1285,28 @@ export class CommerceAttributionService {
       })
       .where(and(
         eq(commerceAttributionSyncRuns.id, runId),
+        eq(commerceAttributionSyncRuns.userId, this.userId)
+      ));
+  }
+
+  private async updateSyncRunProgress(stats: {
+    ordersProcessed: number;
+    customersUpdated: number;
+    contactsUpdated: number;
+    errors: number;
+  }): Promise<void> {
+    if (!this.runId) return;
+    
+    await getDb()
+      .update(commerceAttributionSyncRuns)
+      .set({
+        ordersProcessed: stats.ordersProcessed,
+        customersUpdated: stats.customersUpdated,
+        contactsUpdated: stats.contactsUpdated,
+        errorCount: stats.errors,
+      })
+      .where(and(
+        eq(commerceAttributionSyncRuns.id, this.runId),
         eq(commerceAttributionSyncRuns.userId, this.userId)
       ));
   }

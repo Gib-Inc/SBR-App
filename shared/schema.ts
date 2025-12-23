@@ -2396,6 +2396,7 @@ export const commerceAttributionSyncRuns = pgTable("commerce_attribution_sync_ru
   status: text("status").notNull().default("running"), // running, success, partial, failed
   startedAt: timestamp("started_at").notNull().default(sql`now()`),
   finishedAt: timestamp("finished_at"),
+  totalOrders: integer("total_orders").notNull().default(0),
   ordersProcessed: integer("orders_processed").notNull().default(0),
   customersUpdated: integer("customers_updated").notNull().default(0),
   contactsUpdated: integer("contacts_updated").notNull().default(0),

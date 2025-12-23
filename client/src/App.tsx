@@ -20,6 +20,7 @@ import { User, LogOut } from "lucide-react";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { ScanProvider } from "@/contexts/scan-context";
 import { ScanButton } from "@/components/scan-button";
+import { SyncProgressPanel } from "@/components/sync-progress-panel";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
@@ -139,6 +140,7 @@ export default function App() {
             <AuthProvider>
               <ScanProvider>
                 <AuthenticatedApp />
+                <SyncProgressPanel />
               </ScanProvider>
             </AuthProvider>
           </Route>

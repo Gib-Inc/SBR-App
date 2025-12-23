@@ -488,6 +488,18 @@ export class CommerceAttributionService {
       return { ordersProcessed: 0, customersUpdated: 0, contactsUpdated: 0, errors: 0 };
     }
 
+    // Aggregate by customer first so we can set total for progress tracking
+    const aggregations = await this.aggregateOrders(orders);
+    const totalCustomers = aggregations.size;
+
+    // Set totalOrders (using customer count for progress) on the sync run for progress tracking
+    if (this.runId) {
+      await getDb()
+        .update(commerceAttributionSyncRuns)
+        .set({ totalOrders: totalCustomers })
+        .where(eq(commerceAttributionSyncRuns.id, this.runId));
+    }
+
     // Check if we got historical orders (older than 60 days)
     const sixtyDaysAgo = new Date();
     sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
@@ -502,19 +514,13 @@ export class CommerceAttributionService {
       );
     }
 
-    console.log(`[CommerceAttribution] Fetched ${orders.length} orders`);
-
-    // Aggregate by customer
-    const aggregations = await this.aggregateOrders(orders);
-
-    console.log(`[CommerceAttribution] Aggregated ${aggregations.size} unique customers`);
+    console.log(`[CommerceAttribution] Fetched ${orders.length} orders, aggregated to ${totalCustomers} customers`);
 
     // Update customer records and sync to GHL
     let customersUpdated = 0;
     let contactsUpdated = 0;
     let notFoundInGHL = 0;
     let errors = 0;
-    const totalCustomers = aggregations.size;
     let processed = 0;
 
     console.log(`[CommerceAttribution] Starting GHL sync for ${totalCustomers} customers...`);
@@ -522,14 +528,14 @@ export class CommerceAttributionService {
     for (const [key, agg] of aggregations) {
       processed++;
       
-      // Log progress every 50 customers
-      if (processed % 50 === 0 || processed === totalCustomers) {
+      // Log progress every 25 customers (more frequent for smoother UI updates)
+      if (processed % 25 === 0 || processed === totalCustomers) {
         console.log(`[CommerceAttribution] GHL sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
         
-        // Update sync run stats incrementally
+        // Update sync run stats incrementally - use processed count for progress
         if (this.runId) {
           await this.updateSyncRunProgress({
-            ordersProcessed: orders.length,
+            ordersProcessed: processed,
             customersUpdated,
             contactsUpdated,
             errors,
@@ -562,7 +568,7 @@ export class CommerceAttributionService {
     console.log(`[CommerceAttribution] Backfill complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced, ${notFoundInGHL} not found in GHL, ${errors} errors`);
 
     return {
-      ordersProcessed: orders.length,
+      ordersProcessed: totalCustomers,
       customersUpdated,
       contactsUpdated,
       errors,
@@ -618,6 +624,14 @@ export class CommerceAttributionService {
     const totalCustomers = aggregations.size;
     let processed = 0;
 
+    // Set totalOrders for progress tracking
+    if (this.runId) {
+      await getDb()
+        .update(commerceAttributionSyncRuns)
+        .set({ totalOrders: totalCustomers })
+        .where(eq(commerceAttributionSyncRuns.id, this.runId));
+    }
+
     console.log(`[CommerceAttribution] Starting incremental GHL sync for ${totalCustomers} customers...`);
 
     for (const [key, agg] of aggregations) {
@@ -626,6 +640,16 @@ export class CommerceAttributionService {
       // Log progress every 25 customers for incremental
       if (processed % 25 === 0 || processed === totalCustomers) {
         console.log(`[CommerceAttribution] Incremental sync progress: ${processed}/${totalCustomers} (${contactsUpdated} synced, ${notFoundInGHL} not found, ${errors} errors)`);
+        
+        // Update sync run stats incrementally
+        if (this.runId) {
+          await this.updateSyncRunProgress({
+            ordersProcessed: processed,
+            customersUpdated,
+            contactsUpdated,
+            errors,
+          });
+        }
       }
 
       try {
@@ -661,7 +685,7 @@ export class CommerceAttributionService {
       .where(eq(commerceAttributionSyncState.userId, this.userId));
 
     return {
-      ordersProcessed: orders.length,
+      ordersProcessed: totalCustomers,
       customersUpdated,
       contactsUpdated,
       errors,

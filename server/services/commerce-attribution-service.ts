@@ -40,6 +40,15 @@ const getDb = () => {
   return cachedDb;
 };
 
+// Batch processing configuration
+const GHL_BATCH_SIZE = 15; // Process 15 contacts at a time
+const GHL_BATCH_DELAY_MS = 500; // 500ms delay between batches
+const GHL_RETRY_DELAY_MS = 2000; // 2 seconds initial retry delay
+const GHL_MAX_RETRIES = 3; // Max retries for rate limit errors
+
+// Helper function for delays
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // GHL Custom Field IDs from the prompt
 const GHL_FIELD_IDS = {
   originalPurchaseSource: "euuEYInRjyPm54FMsGRl",
@@ -536,70 +545,15 @@ export class CommerceAttributionService {
 
     console.log(`[CommerceAttribution] Fetched ${orders.length} orders, aggregated to ${totalCustomers} customers`);
 
-    // Update customer records and sync to GHL
-    let customersUpdated = 0;
-    let contactsUpdated = 0;
-    let contactsCreated = 0;
-    let contactsMatched = 0;
-    let errors = 0;
-    let processed = 0;
+    // Convert aggregations to array for batch processing
+    const aggregationArray = Array.from(aggregations.entries());
+    
+    // Process in batches with rate limiting
+    const result = await this.processAggregationsInBatches(aggregationArray, totalCustomers);
 
-    console.log(`[CommerceAttribution] Starting GHL sync for ${totalCustomers} customers...`);
+    console.log(`[CommerceAttribution] Backfill complete: ${result.customersUpdated} customers updated, ${result.contactsUpdated} GHL contacts synced (${result.contactsMatched} matched, ${result.contactsCreated} created), ${result.errors} errors`);
 
-    for (const [key, agg] of aggregations) {
-      processed++;
-      
-      // Log progress every 25 customers (more frequent for smoother UI updates)
-      if (processed % 25 === 0 || processed === totalCustomers) {
-        console.log(`[CommerceAttribution] GHL sync progress: ${processed}/${totalCustomers} (${contactsMatched} matched, ${contactsCreated} created, ${errors} errors)`);
-        
-        // Update sync run stats incrementally - use processed count for progress
-        if (this.runId) {
-          await this.updateSyncRunProgress({
-            ordersProcessed: processed,
-            customersUpdated,
-            contactsUpdated,
-            contactsMatched,
-            contactsCreated,
-            errors,
-          });
-        }
-      }
-
-      try {
-        await this.upsertCustomerAttribution(agg);
-        customersUpdated++;
-
-        // Sync to GHL - will either match existing contact or create new
-        const ghlResult = await this.syncToGHL(agg);
-        if (ghlResult.success) {
-          contactsUpdated++;
-          if (ghlResult.created) {
-            contactsCreated++;
-          } else {
-            contactsMatched++;
-          }
-        } else {
-          errors++;
-          console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
-        }
-      } catch (error: any) {
-        errors++;
-        console.error(`[CommerceAttribution] Error processing ${key}: ${error.message}`);
-        await this.logError("customer", key, "CUSTOMER_UPDATE_FAILED", error.message);
-      }
-    }
-
-    console.log(`[CommerceAttribution] Backfill complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced (${contactsMatched} matched, ${contactsCreated} created), ${errors} errors`);
-
-    return {
-      ordersProcessed: totalCustomers,
-      customersUpdated,
-      contactsUpdated,
-      contactsMatched,
-      contactsCreated,
-      errors,
-    };
+    return result;
   }
 
   /**
@@ -642,17 +596,9 @@ export class CommerceAttributionService {
       if (phoneKey) impactedCustomerKeys.add(`phone:${phoneKey}`);
     }
 
-    // For each impacted customer, fetch ALL their orders and re-aggregate
-    let customersUpdated = 0;
-    let contactsUpdated = 0;
-    let contactsCreated = 0;
-    let contactsMatched = 0;
-    let errors = 0;
-
     // For simplicity, just aggregate the new orders (full re-aggregation would require fetching all orders again)
     const aggregations = await this.aggregateOrders(orders);
     const totalCustomers = aggregations.size;
-    let processed = 0;
 
     // Set totalOrders for progress tracking
     if (this.runId) {
@@ -662,62 +608,113 @@ export class CommerceAttributionService {
         .where(eq(commerceAttributionSyncRuns.id, this.runId));
     }
 
-    console.log(`[CommerceAttribution] Starting incremental GHL sync for ${totalCustomers} customers...`);
+    // Convert aggregations to array for batch processing
+    const aggregationArray = Array.from(aggregations.entries());
+    
+    // Process in batches with rate limiting (incremental mode merges with existing data)
+    const result = await this.processAggregationsInBatches(aggregationArray, totalCustomers, true);
 
-    for (const [key, agg] of aggregations) {
-      processed++;
-
-      // Log progress every 25 customers for incremental
-      if (processed % 25 === 0 || processed === totalCustomers) {
-        console.log(`[CommerceAttribution] Incremental sync progress: ${processed}/${totalCustomers} (${contactsMatched} matched, ${contactsCreated} created, ${errors} errors)`);
-        
-        // Update sync run stats incrementally
-        if (this.runId) {
-          await this.updateSyncRunProgress({
-            ordersProcessed: processed,
-            customersUpdated,
-            contactsUpdated,
-            contactsMatched,
-            contactsCreated,
-            errors,
-          });
-        }
-      }
-
-      try {
-        // Merge with existing customer data
-        const existing = await this.getExistingCustomer(agg.emailKey, agg.phoneKey);
-        const merged = this.mergeAggregations(existing, agg);
-
-        await this.upsertCustomerAttribution(merged);
-        customersUpdated++;
-
-        const ghlResult = await this.syncToGHL(merged);
-        if (ghlResult.success) {
-          contactsUpdated++;
-          if (ghlResult.created) {
-            contactsCreated++;
-          } else {
-            contactsMatched++;
-          }
-        } else {
-          errors++;
-          console.log(`[CommerceAttribution] GHL sync failed for ${key}: ${ghlResult.error || 'Unknown error'}`);
-        }
-      } catch (error: any) {
-        errors++;
-        console.error(`[CommerceAttribution] Error processing ${key}: ${error.message}`);
-        await this.logError("customer", key, "CUSTOMER_UPDATE_FAILED", error.message);
-      }
-    }
-
-    console.log(`[CommerceAttribution] Incremental sync complete: ${customersUpdated} customers updated, ${contactsUpdated} GHL contacts synced (${contactsMatched} matched, ${contactsCreated} created), ${errors} errors`);
+    console.log(`[CommerceAttribution] Incremental sync complete: ${result.customersUpdated} customers updated, ${result.contactsUpdated} GHL contacts synced (${result.contactsMatched} matched, ${result.contactsCreated} created), ${result.errors} errors`);
 
     // Update last synced timestamp
     await getDb()
       .update(commerceAttributionSyncState)
       .set({ lastSyncedAt: new Date() })
       .where(eq(commerceAttributionSyncState.userId, this.userId));
+
+    return result;
+  }
+
+  /**
+   * Process aggregations in batches with rate limiting for GHL API
+   * Handles retries for rate limit errors and logs all failures
+   */
+  private async processAggregationsInBatches(
+    aggregationArray: [string, AttributionAggregation][],
+    totalCustomers: number,
+    isIncremental: boolean = false
+  ): Promise<{
+    ordersProcessed: number;
+    customersUpdated: number;
+    contactsUpdated: number;
+    contactsMatched: number;
+    contactsCreated: number;
+    errors: number;
+  }> {
+    let customersUpdated = 0;
+    let contactsUpdated = 0;
+    let contactsCreated = 0;
+    let contactsMatched = 0;
+    let errors = 0;
+    let processed = 0;
+
+    const totalBatches = Math.ceil(aggregationArray.length / GHL_BATCH_SIZE);
+    console.log(`[CommerceAttribution] Starting ${isIncremental ? 'incremental' : 'backfill'} GHL sync: ${totalCustomers} customers in ${totalBatches} batches of ${GHL_BATCH_SIZE}`);
+
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const batchStart = batchIndex * GHL_BATCH_SIZE;
+      const batchEnd = Math.min(batchStart + GHL_BATCH_SIZE, aggregationArray.length);
+      const batch = aggregationArray.slice(batchStart, batchEnd);
+
+      console.log(`[CommerceAttribution] Processing batch ${batchIndex + 1}/${totalBatches} (${batch.length} contacts)...`);
+
+      // Process each item in the batch
+      for (const [key, agg] of batch) {
+        processed++;
+
+        try {
+          // For incremental syncs, merge with existing customer data
+          let aggregationToSync = agg;
+          if (isIncremental) {
+            const existing = await this.getExistingCustomer(agg.emailKey, agg.phoneKey);
+            aggregationToSync = this.mergeAggregations(existing, agg);
+          }
+
+          // Save to our database first
+          await this.upsertCustomerAttribution(aggregationToSync);
+          customersUpdated++;
+
+          // Sync to GHL with retry logic for rate limits
+          const ghlResult = await this.syncToGHLWithRetry(aggregationToSync, key);
+          
+          if (ghlResult.success) {
+            contactsUpdated++;
+            if (ghlResult.created) {
+              contactsCreated++;
+            } else {
+              contactsMatched++;
+            }
+          } else {
+            errors++;
+            // Log detailed error to database
+            await this.logError("ghl", key, "GHL_SYNC_FAILED", ghlResult.error || "Unknown error");
+          }
+        } catch (error: any) {
+          errors++;
+          console.error(`[CommerceAttribution] Error processing ${key}: ${error.message}`);
+          await this.logError("customer", key, "CUSTOMER_UPDATE_FAILED", error.message);
+        }
+      }
+
+      // Update progress after each batch
+      console.log(`[CommerceAttribution] Batch ${batchIndex + 1}/${totalBatches} complete: ${processed}/${totalCustomers} processed (${contactsMatched} matched, ${contactsCreated} created, ${errors} errors)`);
+      
+      if (this.runId) {
+        await this.updateSyncRunProgress({
+          ordersProcessed: processed,
+          customersUpdated,
+          contactsUpdated,
+          contactsMatched,
+          contactsCreated,
+          errors,
+        });
+      }
+
+      // Add delay between batches to respect GHL rate limits (skip on last batch)
+      if (batchIndex < totalBatches - 1) {
+        await delay(GHL_BATCH_DELAY_MS);
+      }
+    }
 
     return {
       ordersProcessed: totalCustomers,
@@ -727,6 +724,39 @@ export class CommerceAttributionService {
       contactsCreated,
       errors,
     };
+  }
+
+  /**
+   * Sync to GHL with retry logic for rate limit errors
+   */
+  private async syncToGHLWithRetry(
+    agg: AttributionAggregation,
+    key: string
+  ): Promise<{ success: boolean; created?: boolean; error?: string }> {
+    let lastError: string = "";
+    
+    for (let attempt = 0; attempt < GHL_MAX_RETRIES; attempt++) {
+      const result = await this.syncToGHL(agg);
+      
+      if (result.success) {
+        return result;
+      }
+
+      // Check if it's a rate limit error (429)
+      if (result.error?.includes("429") || result.error?.includes("rate limit") || result.error?.includes("Too Many Requests")) {
+        const retryDelay = GHL_RETRY_DELAY_MS * Math.pow(2, attempt); // Exponential backoff
+        console.log(`[CommerceAttribution] Rate limited on ${key}, waiting ${retryDelay}ms before retry ${attempt + 1}/${GHL_MAX_RETRIES}`);
+        await delay(retryDelay);
+        lastError = result.error || "Rate limited";
+        continue;
+      }
+
+      // Non-rate-limit error, don't retry
+      return result;
+    }
+
+    // All retries exhausted
+    return { success: false, error: `Rate limit exceeded after ${GHL_MAX_RETRIES} retries: ${lastError}` };
   }
 
   /**
@@ -1123,6 +1153,11 @@ export class CommerceAttributionService {
       // Try to find and verify GHL contact with smart matching
       const matchResult = await this.findAndVerifyGHLContact(agg);
 
+      // Check for error response (includes rate limit errors with HTTP status)
+      if ("error" in matchResult) {
+        return { success: false, error: matchResult.error };
+      }
+
       let contactId: string;
       let wasCreated = false;
       let matchMethod: string | undefined;
@@ -1141,8 +1176,12 @@ export class CommerceAttributionService {
         // No match found - create new contact
         const newContact = await this.createGHLContact(agg, customFields, tagsToAdd);
         
-        if (!newContact || !newContact.id) {
-          return { success: false, error: "Failed to create new GHL contact" };
+        if ("error" in newContact) {
+          return { success: false, error: newContact.error };
+        }
+        
+        if (!newContact.id) {
+          return { success: false, error: "Failed to create new GHL contact - no ID returned" };
         }
         
         contactId = newContact.id;
@@ -1175,10 +1214,12 @@ export class CommerceAttributionService {
    * 1. Search by full name first, verify with email/phone
    * 2. If no name match, fallback to direct email/phone search
    * 3. Only create new contact if no match found
+   * 
+   * Returns error field with HTTP status for rate limit handling
    */
   private async findAndVerifyGHLContact(
     agg: AttributionAggregation
-  ): Promise<{ id: string; matched: boolean; matchMethod?: string } | { id: null; shouldCreate: boolean }> {
+  ): Promise<{ id: string; matched: boolean; matchMethod?: string } | { id: null; shouldCreate: boolean } | { error: string }> {
     const fullName = `${agg.firstName || ""} ${agg.lastName || ""}`.trim();
     const aggEmail = agg.emailKey?.toLowerCase().trim();
     const aggPhone = agg.phoneKey;
@@ -1197,25 +1238,28 @@ export class CommerceAttributionService {
           }
         );
 
-        if (nameResponse.ok) {
-          const nameData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await nameResponse.json();
-          const nameContacts = nameData.contacts || [];
+        if (!nameResponse.ok) {
+          const errorText = await nameResponse.text();
+          return { error: `GHL API error ${nameResponse.status}: ${errorText}` };
+        }
 
-          // Check each contact found by name search - if email/phone matches, it's the same person
-          // (name search returns fuzzy matches, so we verify with email/phone)
-          for (const contact of nameContacts) {
-            const contactEmail = contact.email?.toLowerCase().trim();
-            const contactPhone = this.normalizePhone(contact.phone);
+        const nameData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await nameResponse.json();
+        const nameContacts = nameData.contacts || [];
 
-            // Email matches - accept even if name formatting differs
-            if (aggEmail && contactEmail && aggEmail === contactEmail) {
-              return { id: contact.id, matched: true, matchMethod: "name-search+email" };
-            }
+        // Check each contact found by name search - if email/phone matches, it's the same person
+        // (name search returns fuzzy matches, so we verify with email/phone)
+        for (const contact of nameContacts) {
+          const contactEmail = contact.email?.toLowerCase().trim();
+          const contactPhone = this.normalizePhone(contact.phone);
 
-            // Phone matches - accept even if name formatting differs
-            if (aggPhone && contactPhone && aggPhone === contactPhone) {
-              return { id: contact.id, matched: true, matchMethod: "name-search+phone" };
-            }
+          // Email matches - accept even if name formatting differs
+          if (aggEmail && contactEmail && aggEmail === contactEmail) {
+            return { id: contact.id, matched: true, matchMethod: "name-search+email" };
+          }
+
+          // Phone matches - accept even if name formatting differs
+          if (aggPhone && contactPhone && aggPhone === contactPhone) {
+            return { id: contact.id, matched: true, matchMethod: "name-search+phone" };
           }
         }
       }
@@ -1233,17 +1277,20 @@ export class CommerceAttributionService {
           }
         );
 
-        if (emailResponse.ok) {
-          const emailData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await emailResponse.json();
-          const emailContacts = emailData.contacts || [];
+        if (!emailResponse.ok) {
+          const errorText = await emailResponse.text();
+          return { error: `GHL API error ${emailResponse.status}: ${errorText}` };
+        }
 
-          for (const contact of emailContacts) {
-            const contactEmail = contact.email?.toLowerCase().trim();
-            
-            // Direct email match - update existing contact even if name differs
-            if (contactEmail && aggEmail === contactEmail) {
-              return { id: contact.id, matched: true, matchMethod: "email (direct)" };
-            }
+        const emailData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await emailResponse.json();
+        const emailContacts = emailData.contacts || [];
+
+        for (const contact of emailContacts) {
+          const contactEmail = contact.email?.toLowerCase().trim();
+          
+          // Direct email match - update existing contact even if name differs
+          if (contactEmail && aggEmail === contactEmail) {
+            return { id: contact.id, matched: true, matchMethod: "email (direct)" };
           }
         }
       }
@@ -1261,26 +1308,29 @@ export class CommerceAttributionService {
           }
         );
 
-        if (phoneResponse.ok) {
-          const phoneData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await phoneResponse.json();
-          const phoneContacts = phoneData.contacts || [];
+        if (!phoneResponse.ok) {
+          const errorText = await phoneResponse.text();
+          return { error: `GHL API error ${phoneResponse.status}: ${errorText}` };
+        }
 
-          for (const contact of phoneContacts) {
-            const contactPhone = this.normalizePhone(contact.phone);
-            
-            // Direct phone match - update existing contact even if name differs
-            if (contactPhone && aggPhone === contactPhone) {
-              return { id: contact.id, matched: true, matchMethod: "phone (direct)" };
-            }
+        const phoneData: { contacts?: Array<{ id: string; email?: string; phone?: string; firstName?: string; lastName?: string }> } = await phoneResponse.json();
+        const phoneContacts = phoneData.contacts || [];
+
+        for (const contact of phoneContacts) {
+          const contactPhone = this.normalizePhone(contact.phone);
+          
+          // Direct phone match - update existing contact even if name differs
+          if (contactPhone && aggPhone === contactPhone) {
+            return { id: contact.id, matched: true, matchMethod: "phone (direct)" };
           }
         }
       }
 
       // STEP 4: No match found anywhere - should create new contact
       return { id: null, shouldCreate: true };
-    } catch (error) {
-      console.error("[CommerceAttribution] GHL contact search error:", error);
-      return { id: null, shouldCreate: true };
+    } catch (error: any) {
+      console.error("[CommerceAttribution] GHL contact search error:", error.message);
+      return { error: error.message };
     }
   }
 
@@ -1291,7 +1341,7 @@ export class CommerceAttributionService {
     agg: AttributionAggregation,
     customFields: Array<{ id: string; value: any }>,
     tags: string[]
-  ): Promise<{ id: string } | null> {
+  ): Promise<{ id: string } | { error: string }> {
     try {
       // Add the special tag for contacts created by this sync
       const allTags = [...tags, "new contact from app sync"];
@@ -1327,14 +1377,17 @@ export class CommerceAttributionService {
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[CommerceAttribution] Failed to create GHL contact: ${response.status} - ${errorText}`);
-        return null;
+        return { error: `GHL create contact error ${response.status}: ${errorText}` };
       }
 
       const result = await response.json();
-      return { id: result.contact?.id };
-    } catch (error) {
-      console.error("[CommerceAttribution] Error creating GHL contact:", error);
-      return null;
+      if (!result.contact?.id) {
+        return { error: "GHL create contact returned no ID" };
+      }
+      return { id: result.contact.id };
+    } catch (error: any) {
+      console.error("[CommerceAttribution] Error creating GHL contact:", error.message);
+      return { error: error.message };
     }
   }
 

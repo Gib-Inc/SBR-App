@@ -380,6 +380,8 @@ export class CommerceAttributionService {
         ordersProcessed: 0,
         customersUpdated: 0,
         contactsUpdated: 0,
+        contactsMatched: 0,
+        contactsCreated: 0,
         errors: 1,
       });
     }
@@ -429,7 +431,7 @@ export class CommerceAttributionService {
 
       console.log(`[CommerceAttribution] Starting ${mode} sync for user ${this.userId}`);
 
-      let stats: { ordersProcessed: number; customersUpdated: number; contactsUpdated: number; errors: number };
+      let stats: { ordersProcessed: number; customersUpdated: number; contactsUpdated: number; contactsMatched: number; contactsCreated: number; errors: number };
 
       if (mode === CommerceAttributionSyncMode.BACKFILL) {
         stats = await this.runBackfill();
@@ -463,6 +465,8 @@ export class CommerceAttributionService {
           ordersProcessed: 0,
           customersUpdated: 0,
           contactsUpdated: 0,
+          contactsMatched: 0,
+          contactsCreated: 0,
           errors: 1,
         });
         await this.logError("api", null, "SYNC_FAILED", error.message);
@@ -484,6 +488,8 @@ export class CommerceAttributionService {
     ordersProcessed: number;
     customersUpdated: number;
     contactsUpdated: number;
+    contactsMatched: number;
+    contactsCreated: number;
     errors: number;
   }> {
     console.log("[CommerceAttribution] Starting backfill...");
@@ -499,7 +505,7 @@ export class CommerceAttributionService {
 
     if (orders.length === 0) {
       console.log("[CommerceAttribution] No orders found");
-      return { ordersProcessed: 0, customersUpdated: 0, contactsUpdated: 0, errors: 0 };
+      return { ordersProcessed: 0, customersUpdated: 0, contactsUpdated: 0, contactsMatched: 0, contactsCreated: 0, errors: 0 };
     }
 
     // Aggregate by customer first so we can set total for progress tracking
@@ -553,6 +559,8 @@ export class CommerceAttributionService {
             ordersProcessed: processed,
             customersUpdated,
             contactsUpdated,
+            contactsMatched,
+            contactsCreated,
             errors,
           });
         }
@@ -588,6 +596,8 @@ export class CommerceAttributionService {
       ordersProcessed: totalCustomers,
       customersUpdated,
       contactsUpdated,
+      contactsMatched,
+      contactsCreated,
       errors,
     };
   }
@@ -601,6 +611,8 @@ export class CommerceAttributionService {
     ordersProcessed: number;
     customersUpdated: number;
     contactsUpdated: number;
+    contactsMatched: number;
+    contactsCreated: number;
     errors: number;
   }> {
     console.log("[CommerceAttribution] Starting incremental sync...");
@@ -614,7 +626,7 @@ export class CommerceAttributionService {
         .update(commerceAttributionSyncState)
         .set({ lastSyncedAt: new Date() })
         .where(eq(commerceAttributionSyncState.userId, this.userId));
-      return { ordersProcessed: 0, customersUpdated: 0, contactsUpdated: 0, errors: 0 };
+      return { ordersProcessed: 0, customersUpdated: 0, contactsUpdated: 0, contactsMatched: 0, contactsCreated: 0, errors: 0 };
     }
 
     console.log(`[CommerceAttribution] Fetched ${orders.length} new orders`);
@@ -665,6 +677,8 @@ export class CommerceAttributionService {
             ordersProcessed: processed,
             customersUpdated,
             contactsUpdated,
+            contactsMatched,
+            contactsCreated,
             errors,
           });
         }
@@ -709,6 +723,8 @@ export class CommerceAttributionService {
       ordersProcessed: totalCustomers,
       customersUpdated,
       contactsUpdated,
+      contactsMatched,
+      contactsCreated,
       errors,
     };
   }
@@ -1476,6 +1492,8 @@ export class CommerceAttributionService {
       ordersProcessed: number;
       customersUpdated: number;
       contactsUpdated: number;
+      contactsMatched: number;
+      contactsCreated: number;
       errors: number;
     }
   ): Promise<void> {
@@ -1487,6 +1505,8 @@ export class CommerceAttributionService {
         ordersProcessed: stats.ordersProcessed,
         customersUpdated: stats.customersUpdated,
         contactsUpdated: stats.contactsUpdated,
+        contactsMatched: stats.contactsMatched,
+        contactsCreated: stats.contactsCreated,
         errorCount: stats.errors,
       })
       .where(and(
@@ -1499,6 +1519,8 @@ export class CommerceAttributionService {
     ordersProcessed: number;
     customersUpdated: number;
     contactsUpdated: number;
+    contactsMatched: number;
+    contactsCreated: number;
     errors: number;
   }): Promise<void> {
     if (!this.runId) return;
@@ -1509,6 +1531,8 @@ export class CommerceAttributionService {
         ordersProcessed: stats.ordersProcessed,
         customersUpdated: stats.customersUpdated,
         contactsUpdated: stats.contactsUpdated,
+        contactsMatched: stats.contactsMatched,
+        contactsCreated: stats.contactsCreated,
         errorCount: stats.errors,
       })
       .where(and(

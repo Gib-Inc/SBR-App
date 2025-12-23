@@ -2400,6 +2400,8 @@ export const commerceAttributionSyncRuns = pgTable("commerce_attribution_sync_ru
   ordersProcessed: integer("orders_processed").notNull().default(0),
   customersUpdated: integer("customers_updated").notNull().default(0),
   contactsUpdated: integer("contacts_updated").notNull().default(0),
+  contactsMatched: integer("contacts_matched").notNull().default(0),
+  contactsCreated: integer("contacts_created").notNull().default(0),
   unknownContacts: integer("unknown_contacts").notNull().default(0),
   conflicts: integer("conflicts").notNull().default(0),
   errorCount: integer("error_count").notNull().default(0),

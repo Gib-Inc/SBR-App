@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X, RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
+import { X, RefreshCw, CheckCircle2, AlertCircle, ShoppingBag, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,8 @@ interface SyncRun {
   ordersProcessed: number;
   customersUpdated: number;
   contactsUpdated: number;
+  contactsMatched: number;
+  contactsCreated: number;
   unknownContacts: number;
   errorCount: number;
 }
@@ -29,28 +31,28 @@ interface SyncStatusResponse {
 }
 
 function CircularProgress({ percentage }: { percentage: number }) {
-  const radius = 20;
+  const radius = 16;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (percentage / 100) * circumference;
 
   return (
-    <div className="relative w-12 h-12 flex items-center justify-center">
-      <svg className="transform -rotate-90 w-12 h-12">
+    <div className="relative w-10 h-10 flex items-center justify-center">
+      <svg className="transform -rotate-90 w-10 h-10">
         <circle
-          cx="24"
-          cy="24"
+          cx="20"
+          cy="20"
           r={radius}
           stroke="currentColor"
-          strokeWidth="4"
+          strokeWidth="3"
           fill="none"
           className="text-muted-foreground/20"
         />
         <circle
-          cx="24"
-          cy="24"
+          cx="20"
+          cy="20"
           r={radius}
           stroke="currentColor"
-          strokeWidth="4"
+          strokeWidth="3"
           fill="none"
           strokeLinecap="round"
           className="text-primary transition-all duration-300"
@@ -60,7 +62,7 @@ function CircularProgress({ percentage }: { percentage: number }) {
           }}
         />
       </svg>
-      <span className="absolute text-xs font-medium">{Math.round(percentage)}%</span>
+      <span className="absolute text-[10px] font-semibold">{Math.round(percentage)}%</span>
     </div>
   );
 }
@@ -126,6 +128,10 @@ export function SyncProgressPanel() {
     return null;
   }
 
+  const contactsMatched = currentRun.contactsMatched || 0;
+  const contactsCreated = currentRun.contactsCreated || 0;
+  const ghlTotal = contactsMatched + contactsCreated;
+
   return (
     <div
       className={cn(
@@ -135,18 +141,31 @@ export function SyncProgressPanel() {
       data-testid="sync-progress-panel"
     >
       <div className="flex items-center justify-between p-3 border-b">
-        <div className="flex items-center gap-2">
-          {isRunning && <RefreshCw className="h-4 w-4 animate-spin text-primary" />}
-          {isComplete && <CheckCircle2 className="h-4 w-4 text-green-500" />}
-          {isFailed && <AlertCircle className="h-4 w-4 text-destructive" />}
-          <span className="font-medium text-sm">
-            {isRunning ? "Attribution Sync" : isComplete ? "Sync Complete" : "Sync Failed"}
-          </span>
+        <div className="flex items-center gap-3">
+          {isRunning ? (
+            <CircularProgress percentage={percentage} />
+          ) : isComplete ? (
+            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-green-500/10">
+              <CheckCircle2 className="h-5 w-5 text-green-500" />
+            </div>
+          ) : (
+            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-destructive/10">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+            </div>
+          )}
+          <div>
+            <span className="font-medium text-sm block">
+              Attribution Sync
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {isRunning ? "In progress..." : isComplete ? "Complete" : "Failed"}
+            </span>
+          </div>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6"
+          className="h-7 w-7"
           onClick={handleDismiss}
           data-testid="button-dismiss-sync"
         >
@@ -154,46 +173,43 @@ export function SyncProgressPanel() {
         </Button>
       </div>
 
-      <div className="p-4">
-        <div className="flex items-center gap-4">
-          {isRunning ? (
-            <CircularProgress percentage={percentage} />
-          ) : (
-            <div className="w-12 h-12 flex items-center justify-center">
-              {isComplete ? (
-                <CheckCircle2 className="h-8 w-8 text-green-500" />
-              ) : (
-                <AlertCircle className="h-8 w-8 text-destructive" />
-              )}
-            </div>
-          )}
-
+      <div className="p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
+            <ShoppingBag className="h-4 w-4 text-blue-500" />
+          </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-1">
-              <span className="text-2xl font-bold tabular-nums">
-                {ordersProcessed.toLocaleString()}
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Shopify</span>
+              <span className="text-sm text-muted-foreground">
+                {ordersProcessed.toLocaleString()} / {totalOrders.toLocaleString()}
               </span>
-              {totalOrders > 0 && (
-                <span className="text-muted-foreground text-sm">
-                  / {totalOrders.toLocaleString()} customers
-                </span>
-              )}
             </div>
+            <span className="text-xs text-muted-foreground">
+              Gathering orders & customer data
+            </span>
+          </div>
+        </div>
 
-            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
-              <span>{currentRun.contactsUpdated} synced to GHL</span>
-              {currentRun.unknownContacts > 0 && (
-                <span>{currentRun.unknownContacts} not in GHL</span>
-              )}
-              {currentRun.errorCount > 0 && (
-                <span className="text-destructive">{currentRun.errorCount} errors</span>
-              )}
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-orange-500/10 flex items-center justify-center shrink-0">
+            <Users className="h-4 w-4 text-orange-500" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">GoHighLevel</span>
+              <span className="text-sm text-muted-foreground">
+                {ghlTotal.toLocaleString()} synced
+              </span>
             </div>
+            <span className="text-xs text-muted-foreground">
+              {contactsMatched} matched, {contactsCreated} created
+            </span>
           </div>
         </div>
 
         {isRunning && totalOrders > 0 && (
-          <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
+          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
             <div
               className="h-full bg-primary transition-all duration-300 rounded-full"
               style={{ width: `${percentage}%` }}

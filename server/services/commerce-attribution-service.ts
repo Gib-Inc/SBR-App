@@ -1210,6 +1210,19 @@ export class CommerceAttributionService {
   }
 
   /**
+   * Sanitize a string for use in GHL API search queries.
+   * Removes non-ASCII characters that cause ByteString encoding errors.
+   */
+  private sanitizeForSearch(str: string): string {
+    // Remove non-ASCII characters (anything > 127) and replace with space
+    // Then collapse multiple spaces and trim
+    return str
+      .replace(/[^\x00-\x7F]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
    * Find and verify GHL contact with smart matching:
    * 1. Search by full name first, verify with email/phone
    * 2. If no name match, fallback to direct email/phone search
@@ -1220,7 +1233,8 @@ export class CommerceAttributionService {
   private async findAndVerifyGHLContact(
     agg: AttributionAggregation
   ): Promise<{ id: string; matched: boolean; matchMethod?: string } | { id: null; shouldCreate: boolean } | { error: string }> {
-    const fullName = `${agg.firstName || ""} ${agg.lastName || ""}`.trim();
+    const rawFullName = `${agg.firstName || ""} ${agg.lastName || ""}`.trim();
+    const fullName = this.sanitizeForSearch(rawFullName);
     const aggEmail = agg.emailKey?.toLowerCase().trim();
     const aggPhone = agg.phoneKey;
 
@@ -1266,8 +1280,9 @@ export class CommerceAttributionService {
 
       // STEP 2: Fallback - search directly by email if available
       if (aggEmail) {
+        const sanitizedEmail = this.sanitizeForSearch(aggEmail);
         const emailResponse: Response = await fetch(
-          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(aggEmail)}&limit=5`,
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(sanitizedEmail)}&limit=5`,
           {
             headers: {
               Authorization: `Bearer ${this.ghlApiKey}`,
@@ -1297,8 +1312,9 @@ export class CommerceAttributionService {
 
       // STEP 3: Fallback - search directly by phone if available
       if (aggPhone) {
+        const sanitizedPhone = this.sanitizeForSearch(aggPhone);
         const phoneResponse: Response = await fetch(
-          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(aggPhone)}&limit=5`,
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&query=${encodeURIComponent(sanitizedPhone)}&limit=5`,
           {
             headers: {
               Authorization: `Bearer ${this.ghlApiKey}`,

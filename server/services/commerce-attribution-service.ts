@@ -60,16 +60,16 @@ const GHL_FIELD_IDS = {
   lifetimeValue: "GLkj2CwqASl0lPgnB3YM",
 };
 
-// GHL Tag IDs from the prompt
-const GHL_TAG_IDS = {
-  srcFirstAmazon: "T6ZSk1QJVMVic0aeeYDO",
-  srcFirstShopify: "h7wDFKmSw83LaXQ18flg",
-  srcFirstUnknown: "6xB0AtCzlQpicv7MmBHh",
-  srcLatestAmazon: "RNNReOFEKclM6KeiYfeq",
-  srcLatestShopify: "y7REy3Fua1RmEHsbIsWQ",
-  srcLatestUnknown: "W2im5PmmInK8u1hmZ0bg",
-  buyerMultiple: "Usy0iBWEJsWSQ3eYHYeT",
-  buyerOnce: "I7D6zT7GpQOcWeMLpWht",
+// GHL Tag NAMES (not IDs - the GHL API tags field expects tag names, not IDs)
+const GHL_TAG_NAMES = {
+  srcFirstAmazon: "srcFirstAmazon",
+  srcFirstShopify: "srcFirstShopify",
+  srcFirstUnknown: "srcFirstUnknown",
+  srcLatestAmazon: "srcLatestAmazon",
+  srcLatestShopify: "srcLatestShopify",
+  srcLatestUnknown: "srcLatestUnknown",
+  buyerMultiple: "buyerMultiple",
+  buyerOnce: "buyerOnce",
 };
 
 // Default source classification patterns
@@ -409,6 +409,124 @@ export class CommerceAttributionService {
         errors: 1,
       });
     }
+  }
+
+  /**
+   * Clean up incorrectly added tag ID tags from GHL contacts
+   * These are tags where the tag name looks like a GHL ID (alphanumeric ~20 chars)
+   */
+  async cleanupWrongTags(): Promise<{ cleaned: number; errors: number }> {
+    // Initialize first to get GHL credentials
+    const initResult = await this.initialize();
+    if (!initResult.success) {
+      throw new Error(initResult.error || "Failed to initialize");
+    }
+
+    // The wrong tag IDs that were incorrectly used as tag names
+    const wrongTagIds = [
+      "T6ZSk1QJVMVic0aeeYDO",
+      "h7wDFKmSw83LaXQ18flg", 
+      "6xB0AtCzlQpicv7MmBHh",
+      "RNNReOFEKclM6KeiYfeq",
+      "y7REy3Fua1RmEHsbIsWQ",
+      "W2im5PmmInK8u1hmZ0bg",
+      "Usy0iBWEJsWSQ3eYHYeT",
+      "I7D6zT7GpQOcWeMLpWht",
+    ];
+    
+    // Also match any lowercase variants
+    const wrongTagSet = new Set([
+      ...wrongTagIds,
+      ...wrongTagIds.map(t => t.toLowerCase()),
+    ]);
+
+    let cleaned = 0;
+    let errors = 0;
+    let page = 1;
+    const pageSize = 100;
+
+    console.log("[CommerceAttribution] Starting cleanup of wrong tag IDs...");
+
+    while (true) {
+      try {
+        // Get contacts from GHL
+        const response = await fetch(
+          `https://services.leadconnectorhq.com/contacts/?locationId=${this.ghlLocationId}&limit=${pageSize}&skip=${(page - 1) * pageSize}`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.ghlApiKey}`,
+              Version: "2021-07-28",
+            },
+          }
+        );
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            console.log("[CommerceAttribution] Rate limited, waiting 5 seconds...");
+            await delay(5000);
+            continue;
+          }
+          throw new Error(`GHL API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const contacts = data.contacts || [];
+
+        if (contacts.length === 0) break;
+
+        for (const contact of contacts) {
+          const tags = contact.tags || [];
+          const wrongTags = tags.filter((t: string) => wrongTagSet.has(t));
+
+          if (wrongTags.length > 0) {
+            // Remove wrong tags
+            const cleanedTags = tags.filter((t: string) => !wrongTagSet.has(t));
+            
+            try {
+              const updateResponse = await fetch(
+                `https://services.leadconnectorhq.com/contacts/${contact.id}`,
+                {
+                  method: "PUT",
+                  headers: {
+                    Authorization: `Bearer ${this.ghlApiKey}`,
+                    "Content-Type": "application/json",
+                    Version: "2021-07-28",
+                  },
+                  body: JSON.stringify({ tags: cleanedTags }),
+                }
+              );
+
+              if (updateResponse.ok) {
+                cleaned++;
+                console.log(`[CommerceAttribution] Cleaned ${wrongTags.length} wrong tags from contact ${contact.id}`);
+              } else if (updateResponse.status === 429) {
+                console.log("[CommerceAttribution] Rate limited during update, waiting 2 seconds...");
+                await delay(2000);
+                errors++;
+              } else {
+                errors++;
+              }
+            } catch (err) {
+              errors++;
+            }
+
+            // Small delay between updates
+            await delay(100);
+          }
+        }
+
+        page++;
+        await delay(500); // Delay between pages
+
+      } catch (err: any) {
+        console.error("[CommerceAttribution] Cleanup error:", err.message);
+        errors++;
+        break;
+      }
+    }
+
+    console.log(`[CommerceAttribution] Cleanup complete: ${cleaned} contacts cleaned, ${errors} errors`);
+    return { cleaned, errors };
   }
 
   /**
@@ -947,27 +1065,29 @@ export class CommerceAttributionService {
     const appTitle = channelInfo?.app?.title?.toLowerCase() || "";
     const tags = order.tags.map((t) => t.toLowerCase());
 
-    // Check channel handle
-    if (channelHandle === "web" || channelName.includes("online store")) {
-      return CommerceSource.SHOPIFY;
-    }
-
-    // Check for Amazon indicators
+    // IMPORTANT: Check for Amazon indicators FIRST (higher priority than Shopify)
+    // Amazon orders via Codisto have appTitle like "Amazon by Codisto"
     if (
       channelHandle.includes("amazon") ||
       channelName.includes("amazon") ||
-      appTitle.includes("amazon")
+      appTitle.includes("amazon") ||
+      appTitle.includes("codisto")
     ) {
       return CommerceSource.AMAZON;
     }
 
-    // Check tags for Amazon
+    // Check tags for Amazon (highest priority - explicit tagging)
     if (
       tags.some(
-        (t) => t === "amzn" || t === "amazon" || t.includes("amzn orders")
+        (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon")
       )
     ) {
       return CommerceSource.AMAZON;
+    }
+
+    // Check for Shopify web orders (only after ruling out Amazon)
+    if (channelHandle === "web" || channelName.includes("online store")) {
+      return CommerceSource.SHOPIFY;
     }
 
     // If channel handle is present but not recognized, it's likely a marketplace
@@ -975,7 +1095,7 @@ export class CommerceAttributionService {
       return CommerceSource.UNKNOWN;
     }
 
-    // Default to Shopify for web orders, unknown otherwise
+    // Default to unknown
     return CommerceSource.UNKNOWN;
   }
 
@@ -1134,35 +1254,35 @@ export class CommerceAttributionService {
 
       // First source tags
       if (agg.firstSource === CommerceSource.AMAZON) {
-        tagsToAdd.push(GHL_TAG_IDS.srcFirstAmazon);
-        tagsToRemove.push(GHL_TAG_IDS.srcFirstShopify, GHL_TAG_IDS.srcFirstUnknown);
+        tagsToAdd.push(GHL_TAG_NAMES.srcFirstAmazon);
+        tagsToRemove.push(GHL_TAG_NAMES.srcFirstShopify, GHL_TAG_NAMES.srcFirstUnknown);
       } else if (agg.firstSource === CommerceSource.SHOPIFY) {
-        tagsToAdd.push(GHL_TAG_IDS.srcFirstShopify);
-        tagsToRemove.push(GHL_TAG_IDS.srcFirstAmazon, GHL_TAG_IDS.srcFirstUnknown);
+        tagsToAdd.push(GHL_TAG_NAMES.srcFirstShopify);
+        tagsToRemove.push(GHL_TAG_NAMES.srcFirstAmazon, GHL_TAG_NAMES.srcFirstUnknown);
       } else {
-        tagsToAdd.push(GHL_TAG_IDS.srcFirstUnknown);
-        tagsToRemove.push(GHL_TAG_IDS.srcFirstAmazon, GHL_TAG_IDS.srcFirstShopify);
+        tagsToAdd.push(GHL_TAG_NAMES.srcFirstUnknown);
+        tagsToRemove.push(GHL_TAG_NAMES.srcFirstAmazon, GHL_TAG_NAMES.srcFirstShopify);
       }
 
       // Latest source tags
       if (agg.lastSource === CommerceSource.AMAZON) {
-        tagsToAdd.push(GHL_TAG_IDS.srcLatestAmazon);
-        tagsToRemove.push(GHL_TAG_IDS.srcLatestShopify, GHL_TAG_IDS.srcLatestUnknown);
+        tagsToAdd.push(GHL_TAG_NAMES.srcLatestAmazon);
+        tagsToRemove.push(GHL_TAG_NAMES.srcLatestShopify, GHL_TAG_NAMES.srcLatestUnknown);
       } else if (agg.lastSource === CommerceSource.SHOPIFY) {
-        tagsToAdd.push(GHL_TAG_IDS.srcLatestShopify);
-        tagsToRemove.push(GHL_TAG_IDS.srcLatestAmazon, GHL_TAG_IDS.srcLatestUnknown);
+        tagsToAdd.push(GHL_TAG_NAMES.srcLatestShopify);
+        tagsToRemove.push(GHL_TAG_NAMES.srcLatestAmazon, GHL_TAG_NAMES.srcLatestUnknown);
       } else {
-        tagsToAdd.push(GHL_TAG_IDS.srcLatestUnknown);
-        tagsToRemove.push(GHL_TAG_IDS.srcLatestAmazon, GHL_TAG_IDS.srcLatestShopify);
+        tagsToAdd.push(GHL_TAG_NAMES.srcLatestUnknown);
+        tagsToRemove.push(GHL_TAG_NAMES.srcLatestAmazon, GHL_TAG_NAMES.srcLatestShopify);
       }
 
       // Buyer frequency tags
       if (agg.purchaseCount >= 2) {
-        tagsToAdd.push(GHL_TAG_IDS.buyerMultiple);
-        tagsToRemove.push(GHL_TAG_IDS.buyerOnce);
+        tagsToAdd.push(GHL_TAG_NAMES.buyerMultiple);
+        tagsToRemove.push(GHL_TAG_NAMES.buyerOnce);
       } else {
-        tagsToAdd.push(GHL_TAG_IDS.buyerOnce);
-        tagsToRemove.push(GHL_TAG_IDS.buyerMultiple);
+        tagsToAdd.push(GHL_TAG_NAMES.buyerOnce);
+        tagsToRemove.push(GHL_TAG_NAMES.buyerMultiple);
       }
 
       // Try to find and verify GHL contact with smart matching

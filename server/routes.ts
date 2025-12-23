@@ -5813,6 +5813,30 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Cleanup wrong tag IDs from GHL contacts
+  app.post("/api/integrations/shopify/commerce-attribution/cleanup-tags", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      const result = await service.cleanupWrongTags();
+      
+      res.json({ 
+        success: true, 
+        message: `Cleanup complete: ${result.cleaned} contacts cleaned, ${result.errors} errors`,
+        ...result
+      });
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Cleanup error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to cleanup tags" 
+      });
+    }
+  });
+
   // Amazon - Test Connection
   app.post("/api/integrations/amazon/test", requireAuth, async (req: Request, res: Response) => {
     try {

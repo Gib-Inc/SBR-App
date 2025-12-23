@@ -101,6 +101,7 @@ query GetOrders($cursor: String, $first: Int!) {
         createdAt
         email
         sourceIdentifier
+        sourceName
         app {
           name
           id
@@ -155,6 +156,7 @@ interface ShopifyGraphQLOrder {
   createdAt: string;
   email?: string;
   sourceIdentifier?: string;
+  sourceName?: string;
   app?: {
     name?: string;
     id?: string;
@@ -1092,26 +1094,35 @@ export class CommerceAttributionService {
    * Classify order source (amazon, shopify, unknown)
    * Uses multiple detection methods in priority order for maximum accuracy
    * 
-   * PRIORITY ORDER:
-   * 1. sourceIdentifier pattern (Amazon order ID format) - MOST RELIABLE
-   * 2. app.name contains "amazon" or "codisto"
-   * 3. channelInformation.app.title contains "amazon" or "codisto"  
-   * 4. channelHandle/channelName contains "amazon"
-   * 5. Tags contain literal "amzn" or "amazon" text (NO pattern matching - causes false positives)
-   * 6. channelHandle is "web" or channelName contains "online store" → Shopify
-   * 7. Otherwise → Unknown
+   * PRIORITY ORDER (based on empirical testing):
+   * 1. sourceName contains "amazon" → AMAZON (GOLD STANDARD - CS Amazon Sync sets "Amazon", others may use variants)
+   * 2. app.name contains "amazon" or "codisto" → AMAZON
+   * 3. channelInformation.app.title contains "amazon" or "codisto" → AMAZON
+   * 4. channelHandle/channelName contains "amazon" → AMAZON
+   * 5. sourceIdentifier matches Amazon order ID pattern (###-#######-#######) → AMAZON (fallback for legacy connectors)
+   * 6. Tags contain literal "amzn" or "amazon" text (only if NOT definitely Shopify) → AMAZON
+   * 7. sourceName = "web" or "shopify_draft_order" → SHOPIFY
+   * 8. app.name = "Online Store" or "Draft Orders" → SHOPIFY
+   * 9. channelHandle = "web" or channelName = "Online Store" → SHOPIFY
+   * 10. Otherwise → Unknown
+   * 
+   * NOTE: Tag pattern matching (###-#######-#######) is NOT used on tags due to false positives.
+   * sourceIdentifier is safe to pattern match as it's system-controlled, not user-editable.
    */
   private classifyOrderSource(order: ShopifyGraphQLOrder): string {
+    const sourceName = order.sourceName?.toLowerCase() || "";
+    const topLevelAppName = order.app?.name?.toLowerCase() || "";
     const channelInfo = order.channelInformation;
     const channelHandle = channelInfo?.channelDefinition?.handle?.toLowerCase() || "";
     const channelName = channelInfo?.channelDefinition?.channelName?.toLowerCase() || "";
     const channelAppTitle = channelInfo?.app?.title?.toLowerCase() || "";
-    const topLevelAppName = order.app?.name?.toLowerCase() || "";
     const sourceIdentifier = order.sourceIdentifier || "";
     const tags = order.tags.map((t) => t.toLowerCase());
 
     // KNOWN SHOPIFY INDICATORS - if these match, it's definitely Shopify
     const isDefinitelyShopify = 
+      sourceName === "web" ||
+      sourceName === "shopify_draft_order" ||
       topLevelAppName === "online store" ||
       topLevelAppName === "draft orders" ||
       topLevelAppName === "shopify pos" ||
@@ -1119,13 +1130,12 @@ export class CommerceAttributionService {
       channelHandle === "web" ||
       channelName === "online store";
 
-    // 1. MOST RELIABLE: Check sourceIdentifier for Amazon order ID pattern (###-#######-#######)
-    // This is the Amazon order ID that integration apps set when creating orders
-    if (sourceIdentifier && AMAZON_ORDER_ID_PATTERN.test(sourceIdentifier)) {
+    // 1. GOLD STANDARD: sourceName contains "amazon" (CS Amazon Sync = "Amazon", others may vary)
+    if (sourceName.includes("amazon")) {
       return CommerceSource.AMAZON;
     }
 
-    // 2. Check top-level app.name for Amazon/Codisto (set by the creating app)
+    // 2. Check app.name for Amazon/Codisto indicators
     if (
       topLevelAppName.includes("amazon") ||
       topLevelAppName.includes("codisto")
@@ -1149,27 +1159,25 @@ export class CommerceAttributionService {
       return CommerceSource.AMAZON;
     }
 
-    // 5. Check tags for Amazon indicators (ONLY literal text - NO pattern matching)
-    // Pattern matching on tags causes false positives (phone numbers, other IDs may match)
+    // 5. Check sourceIdentifier for Amazon order ID pattern (###-#######-#######)
+    // This is safe to pattern match as it's system-controlled, not user-editable
+    if (sourceIdentifier && AMAZON_ORDER_ID_PATTERN.test(sourceIdentifier)) {
+      return CommerceSource.AMAZON;
+    }
+
+    // 6. Check tags for Amazon indicators (EXACT MATCHES ONLY to prevent false positives)
+    // Tags like "Amazon Prime" or "amazon_gift" on Shopify orders would cause misclassification
     // ONLY check tags if we haven't already identified this as definitely Shopify
     if (!isDefinitelyShopify) {
-      if (
-        tags.some(
-          (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon")
-        )
-      ) {
+      // Exact match only - tags must be exactly "amzn" or "amazon" (case-insensitive)
+      if (tags.some((t) => t === "amzn" || t === "amazon")) {
         return CommerceSource.AMAZON;
       }
     }
 
-    // 6. Check for Shopify web orders
-    if (isDefinitelyShopify || channelHandle === "web" || channelName.includes("online store")) {
+    // 7-9. Check for Shopify indicators
+    if (isDefinitelyShopify) {
       return CommerceSource.SHOPIFY;
-    }
-
-    // 7. If channel handle is present but not recognized, it's likely a marketplace
-    if (channelHandle && channelHandle !== "web") {
-      return CommerceSource.UNKNOWN;
     }
 
     // Default to unknown
@@ -1220,15 +1228,15 @@ export class CommerceAttributionService {
         sourceCounts.amazon++;
         if (amazonSamples.length < 5) {
           // Show what indicator triggered Amazon classification
-          const sourceId = order.sourceIdentifier || '';
+          const srcName = order.sourceName || '';
           const appName = order.app?.name || '';
           const channelAppTitle = order.channelInformation?.app?.title || '';
           let trigger = 'unknown';
-          if (sourceId && AMAZON_ORDER_ID_PATTERN.test(sourceId)) trigger = 'sourceId';
+          if (srcName.toLowerCase() === 'amazon') trigger = 'sourceName';
           else if (appName.toLowerCase().includes('amazon') || appName.toLowerCase().includes('codisto')) trigger = 'app.name';
           else if (channelAppTitle.toLowerCase().includes('amazon') || channelAppTitle.toLowerCase().includes('codisto')) trigger = 'channelApp';
           else trigger = 'tags/channel';
-          amazonSamples.push(`${order.name} [${trigger}] sourceId:${sourceId || 'none'} app:${appName || 'none'}`);
+          amazonSamples.push(`${order.name} [${trigger}] sourceName:${srcName || 'none'} app:${appName || 'none'}`);
         }
       } else if (source === CommerceSource.SHOPIFY) {
         sourceCounts.shopify++;

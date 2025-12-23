@@ -85,6 +85,8 @@ const DEFAULT_PATTERNS = [
 ];
 
 // Shopify GraphQL order query for attribution data
+// IMPORTANT: sourceIdentifier contains external order IDs (e.g., Amazon order IDs like 111-1234567-1234567)
+// This is the most reliable way to identify Amazon orders
 const ORDERS_GRAPHQL_QUERY = `
 query GetOrders($cursor: String, $first: Int!) {
   orders(first: $first, after: $cursor, sortKey: CREATED_AT, reverse: false) {
@@ -98,6 +100,11 @@ query GetOrders($cursor: String, $first: Int!) {
         name
         createdAt
         email
+        sourceIdentifier
+        app {
+          name
+          id
+        }
         totalPriceSet {
           shopMoney {
             amount
@@ -139,11 +146,19 @@ query GetOrders($cursor: String, $first: Int!) {
 }
 `;
 
+// Amazon order ID pattern: 3 digits, dash, 7 digits, dash, 7 digits (e.g., 111-1234567-1234567)
+const AMAZON_ORDER_ID_PATTERN = /^\d{3}-\d{7}-\d{7}$/;
+
 interface ShopifyGraphQLOrder {
   id: string;
   name: string;
   createdAt: string;
   email?: string;
+  sourceIdentifier?: string;
+  app?: {
+    name?: string;
+    id?: string;
+  };
   totalPriceSet?: {
     shopMoney?: {
       amount: string;
@@ -985,6 +1000,11 @@ export class CommerceAttributionService {
               name
               createdAt
               email
+              sourceIdentifier
+              app {
+                name
+                id
+              }
               totalPriceSet {
                 shopMoney {
                   amount
@@ -1070,40 +1090,62 @@ export class CommerceAttributionService {
 
   /**
    * Classify order source (amazon, shopify, unknown)
+   * Uses multiple detection methods in priority order for maximum accuracy
    */
   private classifyOrderSource(order: ShopifyGraphQLOrder): string {
     const channelInfo = order.channelInformation;
     const channelHandle = channelInfo?.channelDefinition?.handle?.toLowerCase() || "";
     const channelName = channelInfo?.channelDefinition?.channelName?.toLowerCase() || "";
-    const appTitle = channelInfo?.app?.title?.toLowerCase() || "";
+    const channelAppTitle = channelInfo?.app?.title?.toLowerCase() || "";
+    const topLevelAppName = order.app?.name?.toLowerCase() || "";
+    const sourceIdentifier = order.sourceIdentifier || "";
     const tags = order.tags.map((t) => t.toLowerCase());
 
-    // IMPORTANT: Check for Amazon indicators FIRST (higher priority than Shopify)
-    // Amazon orders via Codisto have appTitle like "Amazon by Codisto"
+    // 1. MOST RELIABLE: Check sourceIdentifier for Amazon order ID pattern (###-#######-#######)
+    // This is the Amazon order ID that integration apps set when creating orders
+    if (sourceIdentifier && AMAZON_ORDER_ID_PATTERN.test(sourceIdentifier)) {
+      return CommerceSource.AMAZON;
+    }
+
+    // 2. Check top-level app.name for Amazon/Codisto (set by the creating app)
     if (
-      channelHandle.includes("amazon") ||
-      channelName.includes("amazon") ||
-      appTitle.includes("amazon") ||
-      appTitle.includes("codisto")
+      topLevelAppName.includes("amazon") ||
+      topLevelAppName.includes("codisto")
     ) {
       return CommerceSource.AMAZON;
     }
 
-    // Check tags for Amazon (highest priority - explicit tagging)
+    // 3. Check channelInformation.app.title for Amazon/Codisto
+    if (
+      channelAppTitle.includes("amazon") ||
+      channelAppTitle.includes("codisto")
+    ) {
+      return CommerceSource.AMAZON;
+    }
+
+    // 4. Check channel handle/name for Amazon
+    if (
+      channelHandle.includes("amazon") ||
+      channelName.includes("amazon")
+    ) {
+      return CommerceSource.AMAZON;
+    }
+
+    // 5. Check tags for Amazon indicators (amzn, amazon, or Amazon order ID patterns)
     if (
       tags.some(
-        (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon")
+        (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon") || AMAZON_ORDER_ID_PATTERN.test(t)
       )
     ) {
       return CommerceSource.AMAZON;
     }
 
-    // Check for Shopify web orders (only after ruling out Amazon)
+    // 6. Check for Shopify web orders (only after ruling out Amazon)
     if (channelHandle === "web" || channelName.includes("online store")) {
       return CommerceSource.SHOPIFY;
     }
 
-    // If channel handle is present but not recognized, it's likely a marketplace
+    // 7. If channel handle is present but not recognized, it's likely a marketplace
     if (channelHandle && channelHandle !== "web") {
       return CommerceSource.UNKNOWN;
     }
@@ -1119,6 +1161,10 @@ export class CommerceAttributionService {
     orders: ShopifyGraphQLOrder[]
   ): Promise<Map<string, AttributionAggregation>> {
     const aggregations = new Map<string, AttributionAggregation>();
+    
+    // Debug: Count sources for logging
+    const sourceCounts = { amazon: 0, shopify: 0, unknown: 0 };
+    let amazonSamples: string[] = [];
 
     for (const order of orders) {
       // Skip cancelled/voided orders
@@ -1146,6 +1192,19 @@ export class CommerceAttributionService {
       // Use email as primary key, fallback to phone
       const customerKey = emailKey || phoneKey!;
       const source = this.classifyOrderSource(order);
+      
+      // Track source counts for logging
+      if (source === CommerceSource.AMAZON) {
+        sourceCounts.amazon++;
+        if (amazonSamples.length < 5) {
+          amazonSamples.push(`${order.name} (sourceId: ${order.sourceIdentifier || 'none'}, app: ${order.app?.name || 'none'})`);
+        }
+      } else if (source === CommerceSource.SHOPIFY) {
+        sourceCounts.shopify++;
+      } else {
+        sourceCounts.unknown++;
+      }
+      
       const orderAt = new Date(order.createdAt);
       const orderId = order.id.replace("gid://shopify/Order/", "");
       const amount = order.totalPriceSet?.shopMoney?.amount
@@ -1197,6 +1256,12 @@ export class CommerceAttributionService {
         }
         existing.sourcesSet = Array.from(sources).sort().join(",");
       }
+    }
+    
+    // Log source classification summary
+    console.log(`[CommerceAttribution] Source classification: Amazon=${sourceCounts.amazon}, Shopify=${sourceCounts.shopify}, Unknown=${sourceCounts.unknown}`);
+    if (amazonSamples.length > 0) {
+      console.log(`[CommerceAttribution] Amazon order samples: ${amazonSamples.join('; ')}`);
     }
 
     return aggregations;

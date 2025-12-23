@@ -1091,6 +1091,15 @@ export class CommerceAttributionService {
   /**
    * Classify order source (amazon, shopify, unknown)
    * Uses multiple detection methods in priority order for maximum accuracy
+   * 
+   * PRIORITY ORDER:
+   * 1. sourceIdentifier pattern (Amazon order ID format) - MOST RELIABLE
+   * 2. app.name contains "amazon" or "codisto"
+   * 3. channelInformation.app.title contains "amazon" or "codisto"  
+   * 4. channelHandle/channelName contains "amazon"
+   * 5. Tags contain literal "amzn" or "amazon" text (NO pattern matching - causes false positives)
+   * 6. channelHandle is "web" or channelName contains "online store" → Shopify
+   * 7. Otherwise → Unknown
    */
   private classifyOrderSource(order: ShopifyGraphQLOrder): string {
     const channelInfo = order.channelInformation;
@@ -1100,6 +1109,15 @@ export class CommerceAttributionService {
     const topLevelAppName = order.app?.name?.toLowerCase() || "";
     const sourceIdentifier = order.sourceIdentifier || "";
     const tags = order.tags.map((t) => t.toLowerCase());
+
+    // KNOWN SHOPIFY INDICATORS - if these match, it's definitely Shopify
+    const isDefinitelyShopify = 
+      topLevelAppName === "online store" ||
+      topLevelAppName === "draft orders" ||
+      topLevelAppName === "shopify pos" ||
+      topLevelAppName === "point of sale" ||
+      channelHandle === "web" ||
+      channelName === "online store";
 
     // 1. MOST RELIABLE: Check sourceIdentifier for Amazon order ID pattern (###-#######-#######)
     // This is the Amazon order ID that integration apps set when creating orders
@@ -1131,17 +1149,21 @@ export class CommerceAttributionService {
       return CommerceSource.AMAZON;
     }
 
-    // 5. Check tags for Amazon indicators (amzn, amazon, or Amazon order ID patterns)
-    if (
-      tags.some(
-        (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon") || AMAZON_ORDER_ID_PATTERN.test(t)
-      )
-    ) {
-      return CommerceSource.AMAZON;
+    // 5. Check tags for Amazon indicators (ONLY literal text - NO pattern matching)
+    // Pattern matching on tags causes false positives (phone numbers, other IDs may match)
+    // ONLY check tags if we haven't already identified this as definitely Shopify
+    if (!isDefinitelyShopify) {
+      if (
+        tags.some(
+          (t) => t === "amzn" || t === "amazon" || t.includes("amzn") || t.includes("amazon")
+        )
+      ) {
+        return CommerceSource.AMAZON;
+      }
     }
 
-    // 6. Check for Shopify web orders (only after ruling out Amazon)
-    if (channelHandle === "web" || channelName.includes("online store")) {
+    // 6. Check for Shopify web orders
+    if (isDefinitelyShopify || channelHandle === "web" || channelName.includes("online store")) {
       return CommerceSource.SHOPIFY;
     }
 
@@ -1197,7 +1219,16 @@ export class CommerceAttributionService {
       if (source === CommerceSource.AMAZON) {
         sourceCounts.amazon++;
         if (amazonSamples.length < 5) {
-          amazonSamples.push(`${order.name} (sourceId: ${order.sourceIdentifier || 'none'}, app: ${order.app?.name || 'none'})`);
+          // Show what indicator triggered Amazon classification
+          const sourceId = order.sourceIdentifier || '';
+          const appName = order.app?.name || '';
+          const channelAppTitle = order.channelInformation?.app?.title || '';
+          let trigger = 'unknown';
+          if (sourceId && AMAZON_ORDER_ID_PATTERN.test(sourceId)) trigger = 'sourceId';
+          else if (appName.toLowerCase().includes('amazon') || appName.toLowerCase().includes('codisto')) trigger = 'app.name';
+          else if (channelAppTitle.toLowerCase().includes('amazon') || channelAppTitle.toLowerCase().includes('codisto')) trigger = 'channelApp';
+          else trigger = 'tags/channel';
+          amazonSamples.push(`${order.name} [${trigger}] sourceId:${sourceId || 'none'} app:${appName || 'none'}`);
         }
       } else if (source === CommerceSource.SHOPIFY) {
         sourceCounts.shopify++;

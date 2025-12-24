@@ -681,22 +681,32 @@ export class CommerceAttributionService {
     }
 
     // Aggregate by customer first so we can set total for progress tracking
-    const aggregations = await this.aggregateOrders(orders);
+    const { aggregations, stats } = await this.aggregateOrders(orders);
     const totalCustomers = aggregations.size;
 
     // Set totalOrders (using customer count for progress) on the sync run for progress tracking
+    // Also store aggregation stats in summaryJson for UI display
     if (this.runId) {
       await getDb()
         .update(commerceAttributionSyncRuns)
-        .set({ totalOrders: totalCustomers })
+        .set({ 
+          totalOrders: totalCustomers,
+          summaryJson: {
+            totalOrdersFetched: stats.totalOrders,
+            uniqueCustomers: totalCustomers,
+            skippedNoContact: stats.skippedNoContact,
+            skippedCancelledRefunded: stats.skippedCancelledRefunded,
+            oldestOrderDate: stats.oldestOrderDate?.toISOString() || null,
+            newestOrderDate: stats.newestOrderDate?.toISOString() || null,
+          },
+        })
         .where(eq(commerceAttributionSyncRuns.id, this.runId));
     }
 
     // Check if we got historical orders (older than 60 days)
     const sixtyDaysAgo = new Date();
     sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-    const oldestOrder = orders[0]; // Orders are sorted oldest first
-    if (new Date(oldestOrder.createdAt) > sixtyDaysAgo && orders.length > 100) {
+    if (stats.oldestOrderDate && stats.oldestOrderDate > sixtyDaysAgo && orders.length > 100) {
       // If we have many orders but none older than 60 days, we might be missing read_all_orders scope
       await this.logError(
         "api",
@@ -706,7 +716,11 @@ export class CommerceAttributionService {
       );
     }
 
-    console.log(`[CommerceAttribution] Fetched ${orders.length} orders, aggregated to ${totalCustomers} customers`);
+    console.log(`[CommerceAttribution] Fetched ${stats.totalOrders} orders, aggregated to ${totalCustomers} customers`);
+    console.log(`[CommerceAttribution] Skipped: ${stats.skippedNoContact} no email/phone, ${stats.skippedCancelledRefunded} cancelled/refunded`);
+    if (stats.oldestOrderDate && stats.newestOrderDate) {
+      console.log(`[CommerceAttribution] Order date range: ${stats.oldestOrderDate.toISOString().split('T')[0]} to ${stats.newestOrderDate.toISOString().split('T')[0]}`);
+    }
 
     // Convert aggregations to array for batch processing
     const aggregationArray = Array.from(aggregations.entries());
@@ -760,7 +774,7 @@ export class CommerceAttributionService {
     }
 
     // For simplicity, just aggregate the new orders (full re-aggregation would require fetching all orders again)
-    const aggregations = await this.aggregateOrders(orders);
+    const { aggregations } = await this.aggregateOrders(orders);
     const totalCustomers = aggregations.size;
 
     // Set totalOrders for progress tracking
@@ -953,23 +967,23 @@ export class CommerceAttributionService {
           throw new Error(`Shopify GraphQL error: ${response.status} - ${errorText}`);
         }
 
-        const data = await response.json();
+        const data: { errors?: any[]; data?: { orders?: { edges: { node: ShopifyGraphQLOrder }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } } = await response.json();
 
         if (data.errors) {
           throw new Error(`Shopify GraphQL errors: ${JSON.stringify(data.errors)}`);
         }
 
-        const orders = data.data?.orders;
-        if (!orders) {
+        const ordersData = data.data?.orders;
+        if (!ordersData) {
           throw new Error("No orders data in response");
         }
 
-        for (const edge of orders.edges) {
+        for (const edge of ordersData.edges) {
           allOrders.push(edge.node);
         }
 
-        hasNextPage = orders.pageInfo.hasNextPage;
-        cursor = orders.pageInfo.endCursor;
+        hasNextPage = ordersData.pageInfo.hasNextPage;
+        cursor = ordersData.pageInfo.endCursor;
 
         console.log(`[CommerceAttribution] Fetched ${allOrders.length} orders so far...`);
 
@@ -1072,17 +1086,17 @@ export class CommerceAttributionService {
         throw new Error(`Shopify GraphQL error: ${response.status}`);
       }
 
-      const data = await response.json();
-      const orders = data.data?.orders;
+      const data: { data?: { orders?: { edges: { node: ShopifyGraphQLOrder }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } } = await response.json();
+      const ordersData = data.data?.orders;
 
-      if (!orders) break;
+      if (!ordersData) break;
 
-      for (const edge of orders.edges) {
+      for (const edge of ordersData.edges) {
         allOrders.push(edge.node);
       }
 
-      hasNextPage = orders.pageInfo.hasNextPage;
-      cursor = orders.pageInfo.endCursor;
+      hasNextPage = ordersData.pageInfo.hasNextPage;
+      cursor = ordersData.pageInfo.endCursor;
 
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -1102,8 +1116,8 @@ export class CommerceAttributionService {
    * 5. sourceIdentifier matches Amazon order ID pattern (###-#######-#######) → AMAZON (fallback for legacy connectors)
    * 6. Tags contain literal "amzn" or "amazon" text (only if NOT definitely Shopify) → AMAZON
    * 7. sourceName = "web" or "shopify_draft_order" → SHOPIFY
-   * 8. app.name = "Online Store" or "Draft Orders" → SHOPIFY
-   * 9. channelHandle = "web" or channelName = "Online Store" → SHOPIFY
+   * 8. app.name = "Online Store" or "Draft Orders" or "Buy Button" → SHOPIFY
+   * 9. channelHandle = "web" or channelName = "Online Store" or "Buy Button" → SHOPIFY
    * 10. Otherwise → Unknown
    * 
    * NOTE: Tag pattern matching (###-#######-#######) is NOT used on tags due to false positives.
@@ -1127,8 +1141,12 @@ export class CommerceAttributionService {
       topLevelAppName === "draft orders" ||
       topLevelAppName === "shopify pos" ||
       topLevelAppName === "point of sale" ||
+      topLevelAppName === "buy button" ||
+      topLevelAppName.includes("buy button") ||
       channelHandle === "web" ||
-      channelName === "online store";
+      channelName === "online store" ||
+      channelName === "buy button" ||
+      channelAppTitle.includes("buy button");
 
     // 1. GOLD STANDARD: sourceName contains "amazon" (CS Amazon Sync = "Amazon", others may vary)
     if (sourceName.includes("amazon")) {
@@ -1186,22 +1204,49 @@ export class CommerceAttributionService {
 
   /**
    * Aggregate orders by customer
+   * Returns aggregation map plus stats about skipped orders and date range
    */
   private async aggregateOrders(
     orders: ShopifyGraphQLOrder[]
-  ): Promise<Map<string, AttributionAggregation>> {
+  ): Promise<{
+    aggregations: Map<string, AttributionAggregation>;
+    stats: {
+      totalOrders: number;
+      skippedNoContact: number;
+      skippedCancelledRefunded: number;
+      oldestOrderDate: Date | null;
+      newestOrderDate: Date | null;
+    };
+  }> {
     const aggregations = new Map<string, AttributionAggregation>();
     
     // Debug: Count sources for logging
     const sourceCounts = { amazon: 0, shopify: 0, unknown: 0 };
     let amazonSamples: string[] = [];
+    
+    // Stats tracking
+    let skippedNoContact = 0;
+    let skippedCancelledRefunded = 0;
+    let oldestOrderDate: Date | null = null;
+    let newestOrderDate: Date | null = null;
 
     for (const order of orders) {
+      const orderDate = new Date(order.createdAt);
+      
+      // Track date range for all orders (before filtering)
+      if (!oldestOrderDate || orderDate < oldestOrderDate) {
+        oldestOrderDate = orderDate;
+      }
+      if (!newestOrderDate || orderDate > newestOrderDate) {
+        newestOrderDate = orderDate;
+      }
+      
       // Skip cancelled/voided orders
       if (
         order.displayFinancialStatus === "VOIDED" ||
         order.displayFinancialStatus === "REFUNDED"
       ) {
+        skippedCancelledRefunded++;
         continue;
       }
 
@@ -1216,6 +1261,7 @@ export class CommerceAttributionService {
 
       if (!emailKey && !phoneKey) {
         // Can't aggregate without identity
+        skippedNoContact++;
         continue;
       }
 
@@ -1302,8 +1348,23 @@ export class CommerceAttributionService {
     if (amazonSamples.length > 0) {
       console.log(`[CommerceAttribution] Amazon order samples: ${amazonSamples.join('; ')}`);
     }
+    
+    // Log skipped orders and date range
+    console.log(`[CommerceAttribution] Orders skipped: ${skippedNoContact} missing email/phone, ${skippedCancelledRefunded} cancelled/refunded`);
+    if (oldestOrderDate && newestOrderDate) {
+      console.log(`[CommerceAttribution] Date range: ${oldestOrderDate.toISOString().split('T')[0]} to ${newestOrderDate.toISOString().split('T')[0]}`);
+    }
 
-    return aggregations;
+    return {
+      aggregations,
+      stats: {
+        totalOrders: orders.length,
+        skippedNoContact,
+        skippedCancelledRefunded,
+        oldestOrderDate,
+        newestOrderDate,
+      },
+    };
   }
 
   /**

@@ -1,8 +1,17 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { X, RefreshCw, CheckCircle2, AlertCircle, ShoppingBag, Users } from "lucide-react";
+import { X, RefreshCw, CheckCircle2, AlertCircle, ShoppingBag, Users, Calendar, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+interface SyncSummary {
+  totalOrdersFetched?: number;
+  uniqueCustomers?: number;
+  skippedNoContact?: number;
+  skippedCancelledRefunded?: number;
+  oldestOrderDate?: string | null;
+  newestOrderDate?: string | null;
+}
 
 interface SyncRun {
   id: string;
@@ -18,6 +27,7 @@ interface SyncRun {
   contactsCreated: number;
   unknownContacts: number;
   errorCount: number;
+  summaryJson?: SyncSummary | null;
 }
 
 interface SyncStatus {
@@ -214,6 +224,41 @@ export function SyncProgressPanel() {
               className="h-full bg-primary transition-all duration-300 rounded-full"
               style={{ width: `${percentage}%` }}
             />
+          </div>
+        )}
+
+        {/* Show summary stats when complete */}
+        {isComplete && currentRun.summaryJson && (
+          <div className="mt-3 pt-3 border-t space-y-2">
+            {/* Date range */}
+            {currentRun.summaryJson.oldestOrderDate && currentRun.summaryJson.newestOrderDate && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Calendar className="h-3 w-3" />
+                <span>
+                  Orders from {new Date(currentRun.summaryJson.oldestOrderDate).toLocaleDateString()} to {new Date(currentRun.summaryJson.newestOrderDate).toLocaleDateString()}
+                </span>
+              </div>
+            )}
+            
+            {/* Total orders fetched */}
+            {currentRun.summaryJson.totalOrdersFetched && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <ShoppingBag className="h-3 w-3" />
+                <span>
+                  {currentRun.summaryJson.totalOrdersFetched.toLocaleString()} orders → {currentRun.summaryJson.uniqueCustomers?.toLocaleString() || 0} unique customers
+                </span>
+              </div>
+            )}
+
+            {/* Skipped orders */}
+            {((currentRun.summaryJson.skippedNoContact || 0) > 0 || (currentRun.summaryJson.skippedCancelledRefunded || 0) > 0) && (
+              <div className="flex items-center gap-2 text-xs text-amber-600">
+                <AlertTriangle className="h-3 w-3" />
+                <span>
+                  Skipped: {currentRun.summaryJson.skippedNoContact || 0} no email/phone, {currentRun.summaryJson.skippedCancelledRefunded || 0} cancelled
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

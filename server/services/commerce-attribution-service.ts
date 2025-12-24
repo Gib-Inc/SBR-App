@@ -654,23 +654,137 @@ export class CommerceAttributionService {
   }
 
   /**
-   * Run backfill - fetch ALL historical orders
+   * Resume an interrupted sync - picks up where it left off
+   * Uses ghlLastSyncAt on customers to skip already-synced ones
    */
-  private async runBackfill(): Promise<{
+  async resumeSync(runIdToResume: string): Promise<{
+    success: boolean;
+    runId?: string;
+    message: string;
+    stats?: {
+      ordersProcessed: number;
+      customersUpdated: number;
+      contactsUpdated: number;
+      errors: number;
+      skippedAlreadySynced?: number;
+    };
+  }> {
+    // Check if sync is already running
+    const lockResult = await this.acquireLock();
+    if (!lockResult.acquired) {
+      return {
+        success: false,
+        message: lockResult.message || "Sync already running",
+      };
+    }
+
+    try {
+      // Verify the run to resume exists and is resumable (interrupted/failed status)
+      const [originalRun] = await getDb()
+        .select()
+        .from(commerceAttributionSyncRuns)
+        .where(and(
+          eq(commerceAttributionSyncRuns.id, runIdToResume),
+          eq(commerceAttributionSyncRuns.userId, this.userId)
+        ));
+
+      if (!originalRun) {
+        return {
+          success: false,
+          message: "Sync run not found",
+        };
+      }
+
+      // Only allow resuming running or failed syncs (not completed ones)
+      if (originalRun.status === CommerceAttributionSyncStatus.SUCCESS) {
+        return {
+          success: false,
+          message: "Cannot resume a completed sync",
+        };
+      }
+
+      // Create a new sync run for the resume
+      const run = await this.createSyncRun(CommerceAttributionSyncMode.BACKFILL);
+      this.runId = run.id;
+
+      console.log(`[CommerceAttribution] Resuming sync from run ${runIdToResume}`);
+
+      // Run backfill with resume mode
+      const stats = await this.runBackfill(runIdToResume);
+
+      // Mark run as complete
+      const status = stats.errors > 0 ? CommerceAttributionSyncStatus.PARTIAL : CommerceAttributionSyncStatus.SUCCESS;
+      await this.updateSyncRun(run.id, status, stats);
+
+      // Mark original run as superseded by updating its status
+      await getDb()
+        .update(commerceAttributionSyncRuns)
+        .set({ 
+          status: "resumed",
+          summaryJson: {
+            ...((originalRun.summaryJson as Record<string, any>) || {}),
+            resumedBy: run.id,
+          }
+        })
+        .where(eq(commerceAttributionSyncRuns.id, runIdToResume));
+
+      // Mark backfill complete
+      await this.markBackfillComplete();
+
+      console.log(`[CommerceAttribution] Resume complete: ${stats.customersUpdated} customers, ${stats.contactsUpdated} contacts (${stats.skippedAlreadySynced || 0} skipped)`);
+
+      return {
+        success: true,
+        runId: run.id,
+        message: `Resume sync completed successfully (skipped ${stats.skippedAlreadySynced || 0} already synced)`,
+        stats,
+      };
+    } catch (error: any) {
+      console.error(`[CommerceAttribution] Resume sync failed:`, error);
+
+      if (this.runId) {
+        await this.updateSyncRun(this.runId, CommerceAttributionSyncStatus.FAILED, {
+          ordersProcessed: 0,
+          customersUpdated: 0,
+          contactsUpdated: 0,
+          contactsMatched: 0,
+          contactsCreated: 0,
+          errors: 1,
+        });
+        await this.logError("api", null, "RESUME_SYNC_FAILED", error.message);
+      }
+
+      return {
+        success: false,
+        message: error.message || "Resume sync failed",
+      };
+    } finally {
+      await this.releaseLock();
+    }
+  }
+
+  /**
+   * Run backfill - fetch ALL historical orders
+   * @param resumeFromRunId - If provided, resumes from an interrupted sync run
+   */
+  private async runBackfill(resumeFromRunId?: string): Promise<{
     ordersProcessed: number;
     customersUpdated: number;
     contactsUpdated: number;
     contactsMatched: number;
     contactsCreated: number;
     errors: number;
+    skippedAlreadySynced?: number;
   }> {
     console.log("[CommerceAttribution] Starting backfill...");
 
-    // Mark backfill started
-    await getDb()
-      .update(commerceAttributionSyncState)
-      .set({ lastBackfillStartedAt: new Date() })
-      .where(eq(commerceAttributionSyncState.userId, this.userId));
+    // Mark backfill started (only if not resuming)
+    if (!resumeFromRunId) {
+      await getDb()
+        .update(commerceAttributionSyncState)
+        .set({ lastBackfillStartedAt: new Date() })
+        .where(eq(commerceAttributionSyncState.userId, this.userId));
+    }
 
     // Fetch all orders via GraphQL with pagination
     const orders = await this.fetchAllOrders();
@@ -725,8 +839,22 @@ export class CommerceAttributionService {
     // Convert aggregations to array for batch processing
     const aggregationArray = Array.from(aggregations.entries());
     
-    // Process in batches with rate limiting
-    const result = await this.processAggregationsInBatches(aggregationArray, totalCustomers);
+    // If resuming, get the original run's start time to filter already-synced customers
+    let resumeFromTime: Date | null = null;
+    let alreadySyncedCount = 0;
+    if (resumeFromRunId) {
+      const [originalRun] = await getDb()
+        .select()
+        .from(commerceAttributionSyncRuns)
+        .where(eq(commerceAttributionSyncRuns.id, resumeFromRunId));
+      if (originalRun) {
+        resumeFromTime = originalRun.startedAt;
+        console.log(`[CommerceAttribution] Resuming from run ${resumeFromRunId}, started at ${resumeFromTime.toISOString()}`);
+      }
+    }
+    
+    // Process in batches with rate limiting (pass resume time to skip already-synced)
+    const result = await this.processAggregationsInBatches(aggregationArray, totalCustomers, false, resumeFromTime);
 
     console.log(`[CommerceAttribution] Backfill complete: ${result.customersUpdated} customers updated, ${result.contactsUpdated} GHL contacts synced (${result.contactsMatched} matched, ${result.contactsCreated} created), ${result.errors} errors`);
 
@@ -805,11 +933,13 @@ export class CommerceAttributionService {
   /**
    * Process aggregations in batches with rate limiting for GHL API
    * Handles retries for rate limit errors and logs all failures
+   * @param resumeFromTime - If provided, skip customers already synced after this time
    */
   private async processAggregationsInBatches(
     aggregationArray: [string, AttributionAggregation][],
     totalCustomers: number,
-    isIncremental: boolean = false
+    isIncremental: boolean = false,
+    resumeFromTime: Date | null = null
   ): Promise<{
     ordersProcessed: number;
     customersUpdated: number;
@@ -817,6 +947,7 @@ export class CommerceAttributionService {
     contactsMatched: number;
     contactsCreated: number;
     errors: number;
+    skippedAlreadySynced: number;
   }> {
     let customersUpdated = 0;
     let contactsUpdated = 0;
@@ -824,9 +955,11 @@ export class CommerceAttributionService {
     let contactsMatched = 0;
     let errors = 0;
     let processed = 0;
+    let skippedAlreadySynced = 0;
 
     const totalBatches = Math.ceil(aggregationArray.length / GHL_BATCH_SIZE);
-    console.log(`[CommerceAttribution] Starting ${isIncremental ? 'incremental' : 'backfill'} GHL sync: ${totalCustomers} customers in ${totalBatches} batches of ${GHL_BATCH_SIZE}`);
+    const resumeMode = resumeFromTime ? ` (resuming from ${resumeFromTime.toISOString()})` : '';
+    console.log(`[CommerceAttribution] Starting ${isIncremental ? 'incremental' : 'backfill'} GHL sync${resumeMode}: ${totalCustomers} customers in ${totalBatches} batches of ${GHL_BATCH_SIZE}`);
 
     for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
       const batchStart = batchIndex * GHL_BATCH_SIZE;
@@ -840,6 +973,18 @@ export class CommerceAttributionService {
         processed++;
 
         try {
+          // Check if we should skip this customer (already synced during this run period)
+          if (resumeFromTime) {
+            const existing = await this.getExistingCustomer(agg.emailKey, agg.phoneKey);
+            if (existing?.ghlLastSyncAt && existing.ghlLastSyncAt >= resumeFromTime) {
+              skippedAlreadySynced++;
+              customersUpdated++; // Count as updated since it was synced in original run
+              contactsMatched++; // Count as matched since we already synced it
+              contactsUpdated++;
+              continue; // Skip - already synced in this run
+            }
+          }
+
           // For incremental syncs, merge with existing customer data
           let aggregationToSync = agg;
           if (isIncremental) {
@@ -893,6 +1038,11 @@ export class CommerceAttributionService {
       }
     }
 
+    // Log resume stats if applicable
+    if (skippedAlreadySynced > 0) {
+      console.log(`[CommerceAttribution] Resume mode: skipped ${skippedAlreadySynced} already-synced customers`);
+    }
+
     return {
       ordersProcessed: totalCustomers,
       customersUpdated,
@@ -900,6 +1050,7 @@ export class CommerceAttributionService {
       contactsMatched,
       contactsCreated,
       errors,
+      skippedAlreadySynced,
     };
   }
 

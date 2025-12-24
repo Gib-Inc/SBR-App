@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { X, RefreshCw, CheckCircle2, AlertCircle, ShoppingBag, Users, Calendar, AlertTriangle } from "lucide-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { X, RefreshCw, CheckCircle2, AlertCircle, ShoppingBag, Users, Calendar, AlertTriangle, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface SyncSummary {
   totalOrdersFetched?: number;
@@ -38,6 +40,7 @@ interface SyncStatusResponse {
   success: boolean;
   status: SyncStatus | null;
   recentRuns: SyncRun[];
+  resumableRunId?: string | null;
 }
 
 function CircularProgress({ percentage }: { percentage: number }) {
@@ -82,6 +85,7 @@ export function SyncProgressPanel() {
   const [wasRunning, setWasRunning] = useState(false);
   const [isDismissed, setIsDismissed] = useState(false);
   const [completedRunId, setCompletedRunId] = useState<string | null>(null);
+  const { toast } = useToast();
 
   const { data, isError } = useQuery<SyncStatusResponse>({
     queryKey: ["/api/integrations/shopify/commerce-attribution/status"],
@@ -89,10 +93,41 @@ export function SyncProgressPanel() {
     staleTime: 1000,
   });
 
+  const resumeMutation = useMutation({
+    mutationFn: async (runId: string) => {
+      const res = await apiRequest("POST", "/api/integrations/shopify/commerce-attribution/resume", { runId });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({
+          title: "Sync Resumed",
+          description: data.message,
+        });
+        queryClient.invalidateQueries({ queryKey: ["/api/integrations/shopify/commerce-attribution/status"] });
+      } else {
+        toast({
+          title: "Resume Failed",
+          description: data.message,
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Resume Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const currentRun = data?.recentRuns?.[0];
   const isRunning = data?.status?.isRunning ?? false;
   const isComplete = currentRun?.status === "success" || currentRun?.status === "partial";
   const isFailed = currentRun?.status === "failed";
+  const isResumable = !!data?.resumableRunId && !isRunning;
+  const isInterrupted = currentRun?.status === "running" && !isRunning;
 
   useEffect(() => {
     if (isRunning && !wasRunning) {
@@ -118,7 +153,11 @@ export function SyncProgressPanel() {
       setIsVisible(true);
       setIsDismissed(false);
     }
-  }, [currentRun?.id]);
+    // Also show panel if there's a resumable interrupted sync
+    if (isResumable && !isDismissed) {
+      setIsVisible(true);
+    }
+  }, [currentRun?.id, isResumable, isDismissed]);
 
   const handleDismiss = () => {
     setIsDismissed(true);
@@ -134,7 +173,7 @@ export function SyncProgressPanel() {
   const percentage = totalOrders > 0 ? (ordersProcessed / totalOrders) * 100 : 0;
   const showProgress = isRunning || (completedRunId === currentRun.id);
 
-  if (!showProgress && !isComplete && !isFailed) {
+  if (!showProgress && !isComplete && !isFailed && !isResumable) {
     return null;
   }
 
@@ -158,6 +197,10 @@ export function SyncProgressPanel() {
             <div className="w-10 h-10 flex items-center justify-center rounded-full bg-green-500/10">
               <CheckCircle2 className="h-5 w-5 text-green-500" />
             </div>
+          ) : isResumable ? (
+            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-amber-500/10">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+            </div>
           ) : (
             <div className="w-10 h-10 flex items-center justify-center rounded-full bg-destructive/10">
               <AlertCircle className="h-5 w-5 text-destructive" />
@@ -168,7 +211,7 @@ export function SyncProgressPanel() {
               Attribution Sync
             </span>
             <span className="text-xs text-muted-foreground">
-              {isRunning ? "In progress..." : isComplete ? "Complete" : "Failed"}
+              {isRunning ? "In progress..." : isComplete ? "Complete" : isResumable ? "Interrupted" : "Failed"}
             </span>
           </div>
         </div>
@@ -259,6 +302,30 @@ export function SyncProgressPanel() {
                 </span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Resume button for interrupted syncs */}
+        {isResumable && data?.resumableRunId && (
+          <div className="mt-3 pt-3 border-t">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs text-muted-foreground">
+                {ordersProcessed.toLocaleString()} of {totalOrders.toLocaleString()} synced
+              </div>
+              <Button
+                size="sm"
+                onClick={() => resumeMutation.mutate(data.resumableRunId!)}
+                disabled={resumeMutation.isPending}
+                data-testid="button-resume-sync"
+              >
+                {resumeMutation.isPending ? (
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Play className="h-3 w-3 mr-1" />
+                )}
+                Resume
+              </Button>
+            </div>
           </div>
         )}
       </div>

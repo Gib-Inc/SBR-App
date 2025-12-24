@@ -5751,10 +5751,25 @@ TOTAL: $${subtotal.toFixed(2)}
       const status = await service.getSyncStatus();
       const recentRuns = await service.getRecentSyncRuns(5);
       
+      // Check if the most recent run is resumable (running but not currently locked, or failed)
+      let resumableRunId: string | null = null;
+      if (recentRuns.length > 0) {
+        const mostRecent = recentRuns[0];
+        // A run is resumable if it's in running/failed state and not currently executing
+        if (
+          (mostRecent.status === 'running' || mostRecent.status === 'failed') &&
+          !status?.isRunning &&
+          mostRecent.ordersProcessed < (mostRecent.totalOrders || 0)
+        ) {
+          resumableRunId = mostRecent.id;
+        }
+      }
+      
       res.json({
         success: true,
         status,
-        recentRuns
+        recentRuns,
+        resumableRunId
       });
     } catch (error: any) {
       console.error('[CommerceAttribution] Status error:', error);
@@ -5809,6 +5824,43 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ 
         success: false,
         message: error.message || "Failed to cancel sync" 
+      });
+    }
+  });
+
+  // Resume an interrupted sync (picks up where it left off)
+  app.post("/api/integrations/shopify/commerce-attribution/resume", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { runId } = req.body;
+      
+      if (!runId) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "runId is required to resume a sync" 
+        });
+      }
+      
+      const { CommerceAttributionService } = await import("./services/commerce-attribution-service");
+      const service = new CommerceAttributionService(userId);
+      
+      // Initialize and verify configurations
+      const initResult = await service.initialize();
+      if (!initResult.success) {
+        return res.status(400).json({ 
+          success: false, 
+          message: initResult.error || "Failed to initialize commerce attribution service" 
+        });
+      }
+      
+      const result = await service.resumeSync(runId);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error('[CommerceAttribution] Resume error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Failed to resume sync" 
       });
     }
   });

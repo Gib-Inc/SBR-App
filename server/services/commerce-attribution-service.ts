@@ -1988,7 +1988,15 @@ export class CommerceAttributionService {
     }
 
     if (existing.isRunning) {
-      return { acquired: false, message: "Sync already running" };
+      // Check if this is a stale lock by examining the most recent run
+      const isStale = await this.isLockStale();
+      if (isStale) {
+        console.log(`[CommerceAttribution] Clearing stale lock for user ${this.userId}`);
+        // Clear the stale lock, then re-acquire
+        await this.releaseLock();
+      } else {
+        return { acquired: false, message: "Sync already running" };
+      }
     }
 
     await getDb()
@@ -1997,6 +2005,55 @@ export class CommerceAttributionService {
       .where(eq(commerceAttributionSyncState.userId, this.userId));
 
     return { acquired: true };
+  }
+
+  private async isLockStale(): Promise<boolean> {
+    const STALE_LOCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+    
+    // Get the most recent sync run for this user
+    const [mostRecent] = await getDb()
+      .select()
+      .from(commerceAttributionSyncRuns)
+      .where(eq(commerceAttributionSyncRuns.userId, this.userId))
+      .orderBy(desc(commerceAttributionSyncRuns.startedAt))
+      .limit(1);
+    
+    if (!mostRecent) {
+      // No runs but lock is held - stale
+      return true;
+    }
+    
+    // Case 1: Run is marked 'failed' but lock is still true - clearly stale
+    if (mostRecent.status === 'failed') {
+      return true;
+    }
+    
+    // Case 2: Run has finishedAt but lock still true - stale
+    if (mostRecent.finishedAt) {
+      return true;
+    }
+    
+    // Case 3: Run is 'running' - check when progress was last made
+    if (mostRecent.status === 'running' && !mostRecent.finishedAt) {
+      const now = Date.now();
+      
+      // Use lastProgressAt if available, otherwise fall back to startedAt
+      const lastActivityTime = mostRecent.lastProgressAt 
+        ? new Date(mostRecent.lastProgressAt).getTime()
+        : new Date(mostRecent.startedAt).getTime();
+      
+      const timeSinceActivityMs = now - lastActivityTime;
+      
+      // If there's been progress in the last 5 minutes, the sync is still running
+      if (timeSinceActivityMs < STALE_LOCK_THRESHOLD_MS) {
+        return false;
+      }
+      
+      // No recent progress - stale
+      return true;
+    }
+    
+    return false;
   }
 
   private async releaseLock(): Promise<void> {
@@ -2067,6 +2124,7 @@ export class CommerceAttributionService {
         contactsMatched: stats.contactsMatched,
         contactsCreated: stats.contactsCreated,
         errorCount: stats.errors,
+        lastProgressAt: new Date(), // Update progress timestamp for stale lock detection
       })
       .where(and(
         eq(commerceAttributionSyncRuns.id, this.runId),

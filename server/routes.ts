@@ -5751,23 +5751,58 @@ TOTAL: $${subtotal.toFixed(2)}
       const status = await service.getSyncStatus();
       const recentRuns = await service.getRecentSyncRuns(5);
       
-      // Check if the most recent run is resumable (running but not currently locked, or failed)
+      // Detect stale locks: if isRunning is true but no sync is actually active
+      let effectivelyRunning = status?.isRunning ?? false;
+      const STALE_LOCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+      
+      if (effectivelyRunning && recentRuns.length > 0) {
+        const mostRecent = recentRuns[0];
+        
+        // Case 1: Run is marked 'failed' but lock is still true - clearly stale
+        if (mostRecent.status === 'failed') {
+          console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} is failed but lock still held`);
+          effectivelyRunning = false;
+        }
+        // Case 2: Run is 'running' but started >5 min ago - likely crashed
+        else if (mostRecent.status === 'running' && !mostRecent.finishedAt) {
+          const runStartedAt = new Date(mostRecent.startedAt).getTime();
+          const now = Date.now();
+          const runAgeMs = now - runStartedAt;
+          
+          // If the run started more than 5 min ago and is still "running" in DB,
+          // it's likely a stale lock from a server crash
+          if (runAgeMs > STALE_LOCK_THRESHOLD_MS) {
+            console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} started ${Math.round(runAgeMs / 60000)} min ago`);
+            effectivelyRunning = false;
+          }
+        }
+        // Case 3: Run has finishedAt but lock still true - stale
+        else if (mostRecent.finishedAt) {
+          console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} already finished`);
+          effectivelyRunning = false;
+        }
+      }
+      
+      // Check if the most recent run is resumable
       let resumableRunId: string | null = null;
       if (recentRuns.length > 0) {
         const mostRecent = recentRuns[0];
         // A run is resumable if it's in running/failed state and not currently executing
         if (
           (mostRecent.status === 'running' || mostRecent.status === 'failed') &&
-          !status?.isRunning &&
+          !effectivelyRunning &&
           mostRecent.ordersProcessed < (mostRecent.totalOrders || 0)
         ) {
           resumableRunId = mostRecent.id;
         }
       }
       
+      // Return the effective running state (accounts for stale locks)
+      const effectiveStatus = status ? { ...status, isRunning: effectivelyRunning } : null;
+      
       res.json({
         success: true,
-        status,
+        status: effectiveStatus,
         recentRuns,
         resumableRunId
       });

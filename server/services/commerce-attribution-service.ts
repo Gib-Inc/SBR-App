@@ -2070,6 +2070,7 @@ export class CommerceAttributionService {
         userId: this.userId,
         mode,
         status: CommerceAttributionSyncStatus.RUNNING,
+        lastProgressAt: new Date(), // Initialize to now so stale detection works from the start
       })
       .returning();
     return run;

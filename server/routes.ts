@@ -5763,16 +5763,20 @@ TOTAL: $${subtotal.toFixed(2)}
           console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} is failed but lock still held`);
           effectivelyRunning = false;
         }
-        // Case 2: Run is 'running' but started >5 min ago - likely crashed
+        // Case 2: Run is 'running' but no progress in >5 min - likely crashed
         else if (mostRecent.status === 'running' && !mostRecent.finishedAt) {
-          const runStartedAt = new Date(mostRecent.startedAt).getTime();
           const now = Date.now();
-          const runAgeMs = now - runStartedAt;
           
-          // If the run started more than 5 min ago and is still "running" in DB,
-          // it's likely a stale lock from a server crash
-          if (runAgeMs > STALE_LOCK_THRESHOLD_MS) {
-            console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} started ${Math.round(runAgeMs / 60000)} min ago`);
+          // Use lastProgressAt if available, otherwise fall back to startedAt
+          const lastActivityTime = (mostRecent as any).lastProgressAt 
+            ? new Date((mostRecent as any).lastProgressAt).getTime()
+            : new Date(mostRecent.startedAt).getTime();
+          
+          const timeSinceActivityMs = now - lastActivityTime;
+          
+          // If no progress in more than 5 min, it's likely a stale lock from a server crash
+          if (timeSinceActivityMs > STALE_LOCK_THRESHOLD_MS) {
+            console.log(`[CommerceAttribution] Detected stale lock - run ${mostRecent.id} no progress for ${Math.round(timeSinceActivityMs / 60000)} min`);
             effectivelyRunning = false;
           }
         }

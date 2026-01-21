@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is a full-stack inventory management web application designed for manufacturing companies. It provides comprehensive tracking of component and finished product inventory, integrates with various external services for order management, and includes features like barcode scanning, Bill of Materials (BOM) management, and LLM-powered forecasting. The system aims to streamline inventory operations, predict stockouts, monitor production capacity, and automate ordering processes with AI-assisted recommendations.
+This project is a full-stack inventory management web application for manufacturing companies. It tracks component and finished product inventory, integrates with external services for order management, and features barcode scanning, Bill of Materials (BOM) management, and LLM-powered forecasting. The system aims to streamline inventory operations, predict stockouts, monitor production capacity, and automate ordering with AI-assisted recommendations, ultimately enhancing efficiency and reducing operational costs for manufacturing businesses.
 
 ## User Preferences
 
@@ -13,15 +13,14 @@ Preferred communication style: Simple, everyday language.
 ### Frontend
 
 *   **Frameworks**: React with TypeScript, Wouter, TanStack Query.
-*   **UI/UX**: Radix UI primitives, shadcn/ui, Tailwind CSS, inspired by Carbon Design System.
-*   **Design**: IBM Plex Sans typography, light/dark mode, responsive layouts.
-*   **Key Pages**: Dashboard, Products (catalog, BOM builder), Barcodes, Settings (authentication, LLM config).
+*   **UI/UX**: Radix UI primitives, shadcn/ui, Tailwind CSS, inspired by Carbon Design System. IBM Plex Sans typography, light/dark mode, responsive layouts.
+*   **Key Pages**: Dashboard, Products, Barcodes, Settings.
 
 ### Backend
 
 *   **Framework**: Node.js with Express and TypeScript.
 *   **Database ORM**: Drizzle ORM.
-*   **Authentication**: Session-based with `connect-pg-simple`, `bcrypt`.
+*   **Authentication**: Session-based.
 *   **API**: RESTful endpoints.
 *   **Core Services**: LLMService, BarcodeService, ShopifyClient, AmazonClient, ExtensivClient, GoHighLevelClient, QuickBooksClient, PhantomBusterClient, Storage Layer.
 
@@ -29,130 +28,24 @@ Preferred communication style: Simple, everyday language.
 
 *   **Database**: PostgreSQL (Neon serverless driver), Drizzle Kit for migrations.
 *   **Core Entities**: Users, Items, Bins, Inventory, BOMs, Suppliers, Sales & Purchase Orders, Integration configurations, System Logs, Returns.
-*   **Key Relationships**: Products to BOM, Items to Inventory, Orders to Items.
 
 ### Features & Design Decisions
 
-*   **Inventory Tracking**: Dual-warehouse model with strict data source ownership:
-    *   `hildaleQty`: Buffer stock at Hildale production warehouse (NOT sellable)
-    *   `pivotQty`: Sellable stock at Pivot 3PL (AUTHORITATIVE from Extensiv)
-    *   `availableForSaleQty`: Working sellable field (from Shopify sync temporarily, cascades from pivotQty when Extensiv is primary)
-    *   **DATA SOURCE OWNERSHIP** (strict separation):
-        *   **Extensiv** → ONLY updates `pivotQty`, cascades delta to `availableForSaleQty`
-        *   **Shopify Sync** → ONLY updates `availableForSaleQty` (temporary until Extensiv connected)
-        *   **Production Builds** → ONLY updates `hildaleQty`
-    *   **ABSOLUTE RULE**: Sales orders ONLY impact `availableForSaleQty`, NEVER `pivotQty` or `hildaleQty`
-    *   `hildaleQty` changes only from: production builds, Hildale→Pivot transfers, manual adjustments
-    *   `TRANSFER` event type moves stock from Hildale → Pivot (makes it sellable)
-    *   Robust `InventoryMovement` system tracking all changes via `InventoryTransaction`
-    *   **Shopify Inventory Sync Sunset**: Configurable sunset date (`shopifyInventorySunsetDate` in AI Agent Rules) - Shopify sync stops on this date
-*   **Forecasting & Planning**: Constraint-based planning for stockout prediction and production capacity, LLM-powered multi-period forecasting for reorder recommendations.
-*   **AI Batch Recommendation System**: Centralized batch processing for all LLM-powered inventory recommendations:
-    *   Scheduled batch runs at 10:00 AM and 3:00 PM Mountain time (America/Denver)
-    *   Critical trigger detection with 15-minute debounce for SKUs crossing into critical state
-    *   Order timing decision: `ORDER_TODAY` (daysUntilStockout - leadTime <= 3 days) vs `SAFE_UNTIL_TOMORROW`
-    *   Batch logs tracked in `ai_batch_logs` table with status, metrics, and LLM response times
-    *   Deterministic fallback when LLM is unavailable
-    *   Mutex to prevent overlapping batch runs
-    *   Manual batch trigger via `/api/ai-batch/run` endpoint
+*   **Inventory Tracking**: Dual-warehouse model (`hildaleQty` for production, `pivotQty` for 3PL sellable stock) with strict data source ownership rules to prevent data inconsistencies. `availableForSaleQty` is the working sellable field, derived from `pivotQty` or Shopify sync. All movements are tracked via `InventoryTransaction`.
+*   **Forecasting & Planning**: Constraint-based stockout prediction and production capacity planning. LLM-powered multi-period forecasting for reorder recommendations.
+*   **AI Batch Recommendation System**: Scheduled batch processing for LLM-powered inventory recommendations, detecting critical stock levels and determining optimal order timing. Includes deterministic fallback for LLM unavailability.
 *   **Order Management**: Multi-channel order synchronization (Shopify, Amazon) with duplicate prevention and SKU mapping.
-*   **Purchase Order (PO) System**:
-    *   LLM-powered PO creation wizard with GoHighLevel integration.
-    *   State machine for PO lifecycle management (DRAFT, APPROVAL_PENDING, APPROVED, SENT, PARTIAL_RECEIVED, RECEIVED, CLOSED).
-    *   Detailed PO receipt tracking and PDF export.
-    *   Supplier acknowledgement system with public links and email status tracking via SendGrid webhooks.
-    *   Auto-suggestion of purchase costs from supplier pages using regex and LLMs.
-*   **Returns Management**:
-    *   Comprehensive return lifecycle with RMA generation and state machine.
-    *   Shippo integration for return label generation.
-    *   GoHighLevel integration for refund opportunity sync.
-    *   QuickBooks Credit Memo creation for accounting via `/api/returns/:id/post-to-quickbooks`.
-*   **GHL AI Agent Custom Actions**:
-    *   Endpoint: `POST /api/ghl/custom-actions/create-return-label`
-    *   Request format: `{ orderNumber, contactId, channel?, customerName? }`
-    *   Response format: `{ success, messageForAgent, trackingNumber, labelUrl, carrier, serviceLevel }`
-    *   `channel` field: "CALL" for voice, SMS for messaging - determines SMS template formatting
-    *   **Eligibility rules**: Order must be DELIVERED status and within 30-day return window
-    *   **Return reuse**: Existing pending returns are reused with carrier estimate in response
-    *   **Sales Order transition**: Automatically updates to PENDING_REFUND status on success
-    *   **GHL Opportunities**: Creates "Processing Refund" opportunity on success
-    *   **Safety rails**: 10 error scenarios create "Needs Attention" opportunities with detailed notes
-    *   **Shippo env vars**: Primary `SHIPPO_DEFAULT_FROM_*`, fallback to `RETURN_TO_*` and `SHIPPO_WAREHOUSE_*`
-    *   **Authentication**: X-GHL-Secret header validated against GHL_WEBHOOK_SECRET env var or integration config
-*   **GHL Agent API** (External API for GoHighLevel Agent access):
-    *   Base URL: `/api/ghl-agent`
-    *   **Authentication**: Bearer token via `Authorization: Bearer YOUR_API_KEY` header
-    *   **Environment Variable**: `GHL_AGENT_API_KEY` secret required for authentication
-    *   **Available Endpoints**:
-        *   `POST /inventory/reorder-status` - Get products below reorder threshold
-        *   `POST /orders/lookup` - Find order by order number (request: `{ order_number }`)
-        *   `POST /orders/search` - Search orders by customer name (request: `{ name }`)
-        *   `POST /refunds/calculate` - Calculate refund amount based on policy (request: `{ order_number }`)
-        *   `POST /refunds/process` - Process confirmed refund (request: `{ order_number, confirmed: true }`)
-        *   `POST /po/create` - Create purchase order (request: `{ supplier_name, items?, auto_generate? }`)
-        *   `POST /tasks/create` - Create task in GHL (request: `{ assigned_to, task_description, due_date?, priority? }`)
-        *   `GET /status` - Check API operational status
-    *   **Settings UI**: Available under Settings > GHL Agent API tab with base URL, API key status, and endpoint reference
-*   **Daily Sales Snapshots** (for LLM trend analysis):
-    *   Aggregated daily totals stored in `daily_sales_snapshots` table.
-    *   Metrics: totalRevenue, totalOrders, totalUnits, totalRefunds, netRevenue.
-    *   Channel breakdown (Shopify, Amazon, direct) stored as JSONB.
-    *   Trend metrics: day-over-day, week-over-week, month-over-month, year-over-year percentage changes.
-    *   Rolling averages: 7-day and 30-day moving averages.
-    *   API endpoints: `/api/daily-sales-snapshots`, `/api/daily-sales-snapshots/years`, `/api/daily-sales-snapshots/:date`.
-*   **Integrations**:
-    *   **AI Agent Rules**: Per-user settings for automation (e.g., auto-send critical POs, two-way inventory sync with Shopify/Amazon, safety buffers).
-    *   **Sync Mode Confirmation Modals**: All four data sources (GHL, Amazon, Extensiv, QuickBooks) have confirmation modals with safe vs. align modes:
-        *   **GHL**: "Update" (safe, import/update only) vs "Align" (archives orphaned GHL opportunities)
-        *   **Amazon**: "Import" (safe, import/update only) vs "Align" (archives removed orders + pushes inventory if 2-way enabled)
-        *   **Extensiv**: "Compare" (read-only discrepancy logging) vs "Align" (applies adjustments to Pivot Qty)
-        *   **QuickBooks**: "Append" (add new/update existing) vs "Rebuild" (clears and repopulates date range)
-    *   **Shopify Two-Way Sync**: Pushes inventory levels to Shopify, respecting safety buffers.
-    *   **Amazon Two-Way Sync**: Pushes inventory levels to Amazon, with region selection and sync mode display.
-    *   **Extensiv Two-Way Integration**: Pulls inventory, pushes orders, and informs fulfillment routing decisions based on inventory thresholds (Hildale vs. Pivot Extensiv).
-    *   **GoHighLevel**: Simplified configuration for CRM and messaging.
-    *   **Webhooks**: Shopify webhooks for real-time order processing; SendGrid webhooks for email status.
-    *   **Shopify Reconciliation**: Periodic sync runs Tuesday & Thursday at 9:00 AM MT to catch missed webhook orders:
-        *   Syncs last 7 days of orders (max 500 per run)
-        *   Prevents concurrent runs with mutex
-        *   Logs to AI Agent Logs via SHOPIFY_RECONCILIATION log type
-        *   Manual trigger available via `/api/shopify/reconciliation/trigger`
-        *   Status check via `/api/shopify/reconciliation/status`
-    *   **Automatic GHL Sync**: Sales orders from Shopify are automatically synced to GoHighLevel as opportunities:
-        *   Triggered immediately after order creation (both webhook and reconciliation paths)
-        *   Uses idempotent upsert with `sales-order-{id}` external key
-        *   Non-blocking: GHL sync errors don't prevent order creation
-        *   Tracks `ghlSynced` count in reconciliation logs
-    *   **Commerce Attribution Sync**: Tracks customer purchase sources (Amazon/Shopify) and syncs to GHL:
-        *   Analyzes Shopify orders via GraphQL to classify source (Amazon, Shopify, or Unknown)
-        *   Uses channel_handle, channel_display, app_title, and order tags for classification
-        *   Aggregates per-customer: first/latest source, purchase count, lifetime value, first/last purchase dates
-        *   Syncs to GHL custom fields: originalPurchaseSource, latestPurchaseSource, allPurchaseSources, purchaseCount, firstPurchaseDate, lastPurchaseDate, lifetimeValue
-        *   Syncs to GHL tags: srcFirstAmazon, srcFirstShopify, srcLatestAmazon, srcLatestShopify, buyerMultiple, buyerOnce
-        *   Supports backfill (historical) and incremental sync modes
-        *   Database tables: `commerce_attribution_customers`, `commerce_attribution_sync_state`, `commerce_attribution_sync_runs`, `commerce_attribution_sync_errors`, `commerce_attribution_patterns`
-        *   API endpoints: `POST /api/integrations/shopify/commerce-attribution/sync`, `GET /api/integrations/shopify/commerce-attribution/status`, `GET /api/integrations/shopify/commerce-attribution/customers`
-        *   UI: Attribution button on Shopify card in AI Agent > Data Sources tab
-*   **Product Identification**: Supports UPC/GTIN for finished products, enhancing marketplace identification and cross-channel matching.
-*   **SKU Mapping Wizard**: Centralized interface for mapping internal SKUs to external platform SKUs (e.g., Shopify, Extensiv) with auto-matching capabilities.
-*   **Label Printing**: Customizable label printing with support for various dimensions, layouts, and saved format presets.
-*   **System Logs**: Unified logging for integration events and mismatches (e.g., SKU_MISMATCH, API_ERRORS).
-*   **Integration Health**: Automated monitoring of API keys and tokens with status classification (OK, WARNING, CRITICAL).
-*   **QuickBooks Automatic Token Refresh**:
-    *   Proactive token refresh runs every 45 minutes (access tokens expire in ~60 min)
-    *   Refresh tokens are rotated automatically (expire in ~100 days)
-    *   Creates GHL "Needs Attention" opportunity when token refresh fails, alerting team to reconnect
-    *   Manual refresh available via `/api/quickbooks/refresh-tokens`
-    *   Status check via `/api/quickbooks/token-refresh-status`
-    *   Enables fully autonomous operation without daily sign-ins
-*   **System of Record**: This application is the system of record for inventory quantities, while other platforms serve specific functions (e.g., Shopify/Amazon for orders, QuickBooks for finance).
-*   **Production Security**:
-    *   **Single-User Mode**: In production (`NODE_ENV=production`), defaults to single-user enforcement (set `SINGLE_USER_MODE=false` to disable)
-    *   **PRIMARY_ADMIN_EMAIL**: Required env var for automatic single-user enforcement on startup; without it, enforcement is skipped to prevent data loss
-    *   **Registration Disabled**: New user registration blocked in production unless `ALLOW_REGISTRATION=true`
-    *   **Login Rate Limiting**: 5 attempts per 15 minutes per IP, returns 429 on exceed
-    *   **Admin Endpoints**: `POST /api/admin/enforce-single-user` (requires auth, keeps current session user), `GET /api/admin/user-count` (requires auth)
-    *   **Safe Enforcement**: Never deletes users unless keeper is explicitly identified; returns 409 error if keeper cannot be resolved
+*   **Purchase Order (PO) System**: LLM-powered PO creation wizard, state machine for PO lifecycle management, detailed receipt tracking, supplier acknowledgment, and auto-suggestion of purchase costs.
+*   **Returns Management**: Comprehensive return lifecycle with RMA generation, Shippo integration for labels, GoHighLevel integration for refund opportunities, and QuickBooks Credit Memo creation.
+*   **GHL AI Agent Custom Actions**: API endpoints for GoHighLevel to initiate returns, create labels, and manage tasks, with built-in eligibility rules, error handling, and GHL opportunity creation.
+*   **GHL Agent API**: External API providing authenticated access for GoHighLevel agents to inventory reorder status, order lookup, refund calculations, return initiation, PO creation, and task creation.
+*   **Daily Sales Snapshots**: Aggregated daily sales data with trend metrics and rolling averages for LLM analysis.
+*   **Integrations**: Configurable per-user AI Agent Rules for automation. Sync mode confirmation modals for GHL, Amazon, Extensiv, and QuickBooks with "safe" vs. "align" options. Includes Shopify/Amazon two-way inventory sync, Extensiv 3PL integration, GoHighLevel CRM integration, and webhooks for real-time updates (Shopify, SendGrid).
+*   **Commerce Attribution Sync**: Tracks customer purchase sources (Amazon/Shopify) and syncs attribution data (first/latest source, purchase count, lifetime value) to GoHighLevel custom fields and tags.
+*   **SKU Mapping Wizard**: Centralized interface for mapping internal SKUs to external platform SKUs.
+*   **QuickBooks Automatic Token Refresh**: Proactive token refresh with GHL "Needs Attention" opportunity creation on failure, ensuring continuous operation.
+*   **System of Record**: This application serves as the primary system of record for inventory quantities.
+*   **Production Security**: Enforces single-user mode, disables new user registration, implements login rate limiting, and provides secure admin endpoints.
 
 ## External Dependencies
 

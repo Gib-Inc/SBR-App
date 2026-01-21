@@ -3,10 +3,11 @@ import { z } from "zod";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "@shared/schema";
-import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
+import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, returnItems, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
 import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
 import { GoHighLevelClient } from "../services/gohighlevel-client";
 import { storage } from "../storage";
+import { returnsService } from "../services/returns-service";
 
 const GHL_AGENT_API_KEY_ENV = "GHL_AGENT_API_KEY";
 
@@ -667,6 +668,135 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
     }
   });
   
+  const initiateReturnSchema = z.object({
+    order_number: z.string().min(1, "Order number is required"),
+  });
+
+  router.post("/returns/initiate", async (req: Request, res: Response) => {
+    try {
+      const parseResult = initiateReturnSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          status: "error",
+          message: parseResult.error.errors.map(e => e.message).join(", "),
+          error_code: "VALIDATION_ERROR"
+        });
+      }
+      
+      const { order_number } = parseResult.data;
+      const db = getDb();
+      
+      const matchingOrders = await db
+        .select()
+        .from(salesOrders)
+        .where(
+          or(
+            eq(salesOrders.externalOrderId, order_number),
+            ilike(salesOrders.externalOrderId, `%${order_number}%`)
+          )
+        )
+        .limit(1);
+      
+      if (matchingOrders.length === 0) {
+        return res.status(404).json({
+          status: "error",
+          message: `Order ${order_number} not found`,
+          error_code: "ORDER_NOT_FOUND"
+        });
+      }
+      
+      const order = matchingOrders[0];
+      
+      const orderLines = await db
+        .select()
+        .from(salesOrderLines)
+        .where(eq(salesOrderLines.salesOrderId, order.id));
+      
+      const itemsForReturn = orderLines.map((line: SalesOrderLine) => ({
+        sku: line.sku,
+        productName: line.productName || line.sku,
+        quantity: line.qtyOrdered,
+        unitPrice: line.unitPrice || undefined,
+        orderLineId: line.id,
+      }));
+      
+      if (itemsForReturn.length === 0) {
+        return res.status(400).json({
+          status: "error",
+          message: "Order has no line items to return",
+          error_code: "NO_ITEMS"
+        });
+      }
+      
+      const hasAddress = order.shipToStreet || order.shipToCity;
+      const customerAddress = hasAddress ? {
+        street1: order.shipToStreet || '',
+        city: order.shipToCity || '',
+        state: order.shipToState || '',
+        zip: order.shipToZip || '',
+        country: order.shipToCountry || 'US',
+      } : null;
+      const addressString = hasAddress 
+        ? `${order.shipToStreet || ''}, ${order.shipToCity || ''} ${order.shipToState || ''} ${order.shipToZip || ''}`
+        : 'Address not available';
+      
+      const result = await returnsService.requestReturn({
+        orderId: order.id,
+        externalOrderId: order.externalOrderId || order_number,
+        channel: order.channel || 'Shopify',
+        customerName: order.customerName || 'Customer',
+        customerEmail: order.customerEmail || undefined,
+        customerPhone: order.customerPhone || undefined,
+        items: itemsForReturn,
+        desiredResolution: 'REFUND',
+        shippingAddress: customerAddress,
+        source: 'GHL_AGENT_API',
+      });
+      
+      if (!result.success) {
+        return res.status(500).json({
+          status: "error",
+          message: result.error || "Failed to initiate return",
+          error_code: "RETURN_FAILED"
+        });
+      }
+      
+      const returnAddress = process.env.SHIPPO_DEFAULT_FROM_ADDRESS || 
+                            process.env.RETURN_TO_ADDRESS || 
+                            "1020 W Utah Ave, Hildale UT 84784";
+      
+      const estimatedArrival = new Date();
+      estimatedArrival.setDate(estimatedArrival.getDate() + 7);
+      const estimatedArrivalStr = estimatedArrival.toISOString().split('T')[0];
+      
+      return res.json({
+        status: "success",
+        return_id: result.rmaNumber || result.returnId,
+        order_number: order.externalOrderId || order_number,
+        customer_name: order.customerName || 'Customer',
+        customer_email: order.customerEmail || null,
+        customer_phone: order.customerPhone || null,
+        customer_address: addressString,
+        return_address: returnAddress,
+        order_source: order.channel || 'Shopify',
+        return_tracking: result.trackingNumber || null,
+        return_label_url: result.labelUrl || null,
+        items: itemsForReturn.map(item => ({
+          product_name: item.productName,
+          quantity: item.quantity,
+          sku: item.sku
+        })),
+        estimated_arrival: estimatedArrivalStr,
+        message: result.labelUrl 
+          ? "Return initiated successfully. Label ready to send."
+          : "Return initiated successfully. Label generation pending."
+      });
+      
+    } catch (error) {
+      return handleError(res, error);
+    }
+  });
+
   router.get("/status", async (req: Request, res: Response) => {
     return res.json({
       status: "success",
@@ -678,6 +808,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
         "POST /orders/search",
         "POST /refunds/calculate",
         "POST /refunds/process",
+        "POST /returns/initiate",
         "POST /po/create",
         "POST /tasks/create"
       ]

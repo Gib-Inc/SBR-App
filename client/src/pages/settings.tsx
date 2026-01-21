@@ -798,6 +798,13 @@ function GhlAgentApiSettings() {
       description: "Create a task in GoHighLevel",
       request: '{ "assigned_to": "John", "task_description": "Follow up", "priority": "high" }',
       response: '{ "task_id": "TASK-12345", "created_in_ghl": true }'
+    },
+    {
+      method: "POST",
+      path: "/returns/initiate",
+      description: "Initiate a return for an order with label generation",
+      request: '{ "order_number": "12345" }',
+      response: '{ "status": "success", "return_id": "RET-2025-001234", "order_number": "12345", "customer_name": "Sarah Miller", "return_tracking": "1Z999BB9876543210", "return_label_url": "https://...", "items": [...], "estimated_arrival": "2025-01-28" }'
     }
   ];
   

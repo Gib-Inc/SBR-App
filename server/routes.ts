@@ -67,6 +67,7 @@ import { InventoryMovement } from "./services/inventory-movement";
 import { logService } from "./services/log-service";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
+import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
 
 const SALT_ROUNDS = 10;
 
@@ -417,6 +418,11 @@ async function calculateWidgetTrend(widget: any, storage: any): Promise<{ direct
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // ============================================================================
+  // GHL AGENT API (External API for GoHighLevel Agent access)
+  // ============================================================================
+  registerGhlAgentApiRoutes(app);
+
   // ============================================================================
   // AUTHENTICATION
   // ============================================================================
@@ -3886,6 +3892,11 @@ TOTAL: $${subtotal.toFixed(2)}
       console.error("Settings update error:", error);
       res.status(400).json({ error: error.message || "Invalid settings data" });
     }
+  });
+
+  app.get("/api/settings/ghl-agent-api-key-status", requireAuth, async (req: Request, res: Response) => {
+    const configured = !!process.env.GHL_AGENT_API_KEY;
+    res.json({ configured });
   });
 
   // ============================================================================

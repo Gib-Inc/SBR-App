@@ -1,0 +1,239 @@
+REPLIT API ENDPOINTS SPECIFICATION
+BASE URL: https://[your-replit-app].repl.co/api
+
+ENDPOINT 1: Get Inventory Reorder Status
+Path: POST /api/inventory/reorder-status
+What it does: Returns all products that are below their reorder threshold and need to be ordered.
+Request Body: None required (or can include {})
+Response:
+json{
+  "status": "success",
+  "items_need_ordering": [
+    {
+      "product_name": "Push Model 1.0",
+      "current_quantity": 5,
+      "reorder_threshold": 10,
+      "suggested_order_quantity": 20
+    },
+    {
+      "product_name": "Foam Roller 12in",
+      "current_quantity": 2,
+      "reorder_threshold": 20,
+      "suggested_order_quantity": 50
+    }
+  ],
+  "total_items_low": 2
+}
+
+ENDPOINT 2: Look Up Order by Order Number
+Path: POST /api/orders/lookup
+What it does: Finds a specific order by order number and returns all order details.
+Request Body:
+json{
+  "order_number": "12345"
+}
+Response:
+json{
+  "status": "success",
+  "order": {
+    "order_number": "12345",
+    "customer_name": "Sarah Miller",
+    "customer_email": "sarah@email.com",
+    "order_date": "2024-10-14",
+    "items": [
+      {
+        "product_name": "Push Model 1.0",
+        "quantity": 1,
+        "price": 349.99
+      }
+    ],
+    "order_total": 349.99,
+    "shipping_status": "delivered",
+    "tracking_number": "1Z999AA1234567890",
+    "delivery_date": "2024-10-18",
+    "is_refundable": true,
+    "days_since_delivery": 95
+  }
+}
+Error Response (if not found):
+json{
+  "status": "error",
+  "message": "Order not found"
+}
+
+ENDPOINT 3: Search Orders by Customer Name
+Path: POST /api/orders/search
+What it does: Searches for all orders matching a customer name (partial match allowed).
+Request Body:
+json{
+  "name": "Sarah"
+}
+Response:
+json{
+  "status": "success",
+  "matches": [
+    {
+      "order_number": "12345",
+      "customer_name": "Sarah Miller",
+      "order_date": "2024-10-14",
+      "items_summary": "1x Push Model 1.0",
+      "order_total": 349.99,
+      "status": "delivered"
+    },
+    {
+      "order_number": "12389",
+      "customer_name": "Sarah Johnson",
+      "order_date": "2024-11-02",
+      "items_summary": "1x Push Model 2.0",
+      "order_total": 449.99,
+      "status": "shipped"
+    }
+  ],
+  "total_matches": 2
+}
+Error Response (if no matches):
+json{
+  "status": "error",
+  "message": "No orders found for that name"
+}
+
+ENDPOINT 4: Calculate Refund Amount
+Path: POST /api/refunds/calculate
+What it does: Calculates the refundable amount based on the refund policy formula:
+
+Refund = Total Received - Shipping Cost - Label Cost ($1) - Damaged Stock (10% per item)
+
+Request Body:
+json{
+  "order_number": "12345"
+}
+Response:
+json{
+  "status": "success",
+  "order_number": "12345",
+  "original_total": 349.99,
+  "amount_received": 349.99,
+  "shipping_cost": 15.50,
+  "label_cost": 1.00,
+  "damaged_items": [
+    {
+      "item": "Push Model 1.0 - Foam Roller",
+      "damage_fee": 3.50
+    },
+    {
+      "item": "Push Model 1.0 - Screen",
+      "damage_fee": 1.50
+    }
+  ],
+  "total_damaged_fees": 5.00,
+  "refund_amount": 327.49,
+  "calculation": "349.99 - 15.50 - 1.00 - 5.00 = 327.49",
+  "refundable": true,
+  "reason": "Within 30 day policy"
+}
+If NOT refundable:
+json{
+  "status": "success",
+  "refundable": false,
+  "reason": "Order is 95 days old, outside 30-day refund window",
+  "refund_amount": 0
+}
+
+ENDPOINT 5: Process Refund
+Path: POST /api/refunds/process
+What it does: Actually processes the refund after customer confirms they want to proceed.
+Request Body:
+json{
+  "order_number": "12345",
+  "confirmed": true
+}
+Response:
+json{
+  "status": "success",
+  "order_number": "12345",
+  "refund_amount": 327.49,
+  "refund_id": "REF-2025-001234",
+  "message": "Refund processed successfully",
+  "customer_email": "sarah@email.com",
+  "expected_return_days": "3-5 business days"
+}
+
+ENDPOINT 6: Create Purchase Order
+Path: POST /api/po/create
+What it does: Creates a purchase order for items that need to be reordered and sends it to the specified supplier.
+Request Body:
+json{
+  "supplier_name": "ABC Foam Supplies",
+  "items": [
+    {
+      "product_name": "Foam Roller 12in",
+      "quantity": 50
+    },
+    {
+      "product_name": "Conveyor Screen",
+      "quantity": 30
+    }
+  ]
+}
+Alternative (if boss says "send POs for what we need"):
+json{
+  "auto_generate": true,
+  "supplier_name": "ABC Foam Supplies"
+}
+(This version automatically includes all items below reorder threshold)
+Response:
+json{
+  "status": "success",
+  "po_number": "PO-2025-0089",
+  "supplier_name": "ABC Foam Supplies",
+  "supplier_email": "orders@abcfoam.com",
+  "items": [
+    {
+      "product_name": "Foam Roller 12in",
+      "quantity": 50,
+      "unit_cost": 5.50,
+      "line_total": 275.00
+    }
+  ],
+  "po_total": 275.00,
+  "email_sent": true,
+  "created_date": "2025-01-21"
+}
+
+ENDPOINT 7: Create Task in GHL
+Path: POST /api/tasks/create
+What it does: Creates a task in GoHighLevel and assigns it to a specific user.
+Request Body:
+json{
+  "assigned_to": "John",
+  "task_description": "Follow up with customer on their refund",
+  "due_date": "2025-01-23",
+  "priority": "high"
+}
+Response:
+json{
+  "status": "success",
+  "task_id": "TASK-12345",
+  "assigned_to": "John",
+  "task_description": "Follow up with customer on their refund",
+  "due_date": "2025-01-23",
+  "created_in_ghl": true
+}
+```
+
+---
+
+## **AUTHENTICATION**
+
+All endpoints should require an API key in the headers:
+```
+Authorization: Bearer YOUR_SECRET_API_KEY
+Content-Type: application/json
+
+ERROR HANDLING
+All endpoints should return consistent error responses:
+json{
+  "status": "error",
+  "message": "Detailed error message here",
+  "error_code": "INVALID_ORDER"
+}

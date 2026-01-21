@@ -79,6 +79,20 @@ Preferred communication style: Simple, everyday language.
     *   **Safety rails**: 10 error scenarios create "Needs Attention" opportunities with detailed notes
     *   **Shippo env vars**: Primary `SHIPPO_DEFAULT_FROM_*`, fallback to `RETURN_TO_*` and `SHIPPO_WAREHOUSE_*`
     *   **Authentication**: X-GHL-Secret header validated against GHL_WEBHOOK_SECRET env var or integration config
+*   **GHL Agent API** (External API for GoHighLevel Agent access):
+    *   Base URL: `/api/ghl-agent`
+    *   **Authentication**: Bearer token via `Authorization: Bearer YOUR_API_KEY` header
+    *   **Environment Variable**: `GHL_AGENT_API_KEY` secret required for authentication
+    *   **Available Endpoints**:
+        *   `POST /inventory/reorder-status` - Get products below reorder threshold
+        *   `POST /orders/lookup` - Find order by order number (request: `{ order_number }`)
+        *   `POST /orders/search` - Search orders by customer name (request: `{ name }`)
+        *   `POST /refunds/calculate` - Calculate refund amount based on policy (request: `{ order_number }`)
+        *   `POST /refunds/process` - Process confirmed refund (request: `{ order_number, confirmed: true }`)
+        *   `POST /po/create` - Create purchase order (request: `{ supplier_name, items?, auto_generate? }`)
+        *   `POST /tasks/create` - Create task in GHL (request: `{ assigned_to, task_description, due_date?, priority? }`)
+        *   `GET /status` - Check API operational status
+    *   **Settings UI**: Available under Settings > GHL Agent API tab with base URL, API key status, and endpoint reference
 *   **Daily Sales Snapshots** (for LLM trend analysis):
     *   Aggregated daily totals stored in `daily_sales_snapshots` table.
     *   Metrics: totalRevenue, totalOrders, totalUnits, totalRefunds, netRevenue.

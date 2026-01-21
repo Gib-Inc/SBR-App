@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info } from "lucide-react";
+import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -37,6 +37,10 @@ export default function Settings() {
             <Barcode className="mr-2 h-4 w-4" />
             Barcode Settings
           </TabsTrigger>
+          <TabsTrigger value="ghl-api" data-testid="tab-ghl-api">
+            <Bot className="mr-2 h-4 w-4" />
+            GHL Agent API
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="space-y-4">
@@ -49,6 +53,10 @@ export default function Settings() {
 
         <TabsContent value="barcode" className="space-y-4">
           <BarcodeSettingsTab />
+        </TabsContent>
+
+        <TabsContent value="ghl-api" className="space-y-4">
+          <GhlAgentApiSettings />
         </TabsContent>
       </Tabs>
     </div>
@@ -714,6 +722,227 @@ function BarcodeSettingsTab() {
                 />
                 <Badge variant="secondary">Read-only</Badge>
               </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function GhlAgentApiSettings() {
+  const { toast } = useToast();
+  const [showApiKey, setShowApiKey] = useState(false);
+  
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const apiBaseUrl = `${baseUrl}/api/ghl-agent`;
+  
+  const { data: apiKeyStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/settings/ghl-agent-api-key-status"],
+  });
+  
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast({
+      title: "Copied",
+      description: `${label} copied to clipboard`,
+    });
+  };
+  
+  const endpoints = [
+    {
+      method: "POST",
+      path: "/inventory/reorder-status",
+      description: "Get all products below their reorder threshold",
+      request: "{}",
+      response: '{ "items_need_ordering": [...], "total_items_low": 2 }'
+    },
+    {
+      method: "POST",
+      path: "/orders/lookup",
+      description: "Find a specific order by order number",
+      request: '{ "order_number": "12345" }',
+      response: '{ "order": { "order_number", "customer_name", "items", ... } }'
+    },
+    {
+      method: "POST",
+      path: "/orders/search",
+      description: "Search orders by customer name (partial match)",
+      request: '{ "name": "Sarah" }',
+      response: '{ "matches": [...], "total_matches": 2 }'
+    },
+    {
+      method: "POST",
+      path: "/refunds/calculate",
+      description: "Calculate refund amount based on policy",
+      request: '{ "order_number": "12345" }',
+      response: '{ "refundable": true, "refund_amount": 327.49, ... }'
+    },
+    {
+      method: "POST",
+      path: "/refunds/process",
+      description: "Process a confirmed refund",
+      request: '{ "order_number": "12345", "confirmed": true }',
+      response: '{ "refund_id": "REF-2025-001234", "refund_amount": 327.49 }'
+    },
+    {
+      method: "POST",
+      path: "/po/create",
+      description: "Create a purchase order",
+      request: '{ "supplier_name": "ABC Supplies", "auto_generate": true }',
+      response: '{ "po_number": "PO-2025-0089", "po_total": 275.00 }'
+    },
+    {
+      method: "POST",
+      path: "/tasks/create",
+      description: "Create a task in GoHighLevel",
+      request: '{ "assigned_to": "John", "task_description": "Follow up", "priority": "high" }',
+      response: '{ "task_id": "TASK-12345", "created_in_ghl": true }'
+    }
+  ];
+  
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bot className="h-5 w-5" />
+            GHL Agent API Configuration
+          </CardTitle>
+          <CardDescription>
+            Connect your GoHighLevel AI Agent to this inventory system using these API endpoints.
+            Your agent can read inventory data, look up orders, process refunds, and create purchase orders.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>API Base URL</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  value={apiBaseUrl}
+                  readOnly
+                  className="font-mono text-sm"
+                  data-testid="input-api-base-url"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => copyToClipboard(apiBaseUrl, "API Base URL")}
+                  data-testid="button-copy-base-url"
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Use this as the base URL when configuring your GHL Agent's custom actions
+              </p>
+            </div>
+            
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Key className="h-4 w-4" />
+                API Key Status
+              </Label>
+              <div className="flex items-center gap-2">
+                {apiKeyStatus?.configured ? (
+                  <Badge variant="default" className="flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Configured
+                  </Badge>
+                ) : (
+                  <Badge variant="destructive" className="flex items-center gap-1">
+                    <XCircle className="h-3 w-3" />
+                    Not Configured
+                  </Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Set the <code className="bg-muted px-1 rounded">GHL_AGENT_API_KEY</code> secret in your environment to enable API access.
+                Use this same key as the Bearer token in your GHL Agent configuration.
+              </p>
+            </div>
+            
+            <div className="rounded-lg border p-4 bg-muted/30">
+              <h4 className="font-medium mb-2">Authentication Header</h4>
+              <code className="text-sm bg-background px-2 py-1 rounded block">
+                Authorization: Bearer YOUR_API_KEY
+              </code>
+              <p className="text-xs text-muted-foreground mt-2">
+                Include this header in all API requests from your GHL Agent
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      
+      <Card>
+        <CardHeader>
+          <CardTitle>Available Endpoints</CardTitle>
+          <CardDescription>
+            Reference for all API endpoints your GHL Agent can use
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {endpoints.map((endpoint, index) => (
+              <div key={index} className="border rounded-lg p-4 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Badge variant="outline" className="font-mono">
+                    {endpoint.method}
+                  </Badge>
+                  <code className="text-sm font-mono">{endpoint.path}</code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => copyToClipboard(`${apiBaseUrl}${endpoint.path}`, "Endpoint URL")}
+                    data-testid={`button-copy-endpoint-${index}`}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-sm text-muted-foreground">{endpoint.description}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="font-medium">Request:</span>
+                    <code className="block bg-muted p-1 rounded mt-1 overflow-x-auto">
+                      {endpoint.request}
+                    </code>
+                  </div>
+                  <div>
+                    <span className="font-medium">Response:</span>
+                    <code className="block bg-muted p-1 rounded mt-1 overflow-x-auto">
+                      {endpoint.response}
+                    </code>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      
+      <Card>
+        <CardHeader>
+          <CardTitle>Error Handling</CardTitle>
+          <CardDescription>
+            All endpoints return consistent error responses
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            <code className="block bg-muted p-3 rounded text-sm overflow-x-auto">
+{`{
+  "status": "error",
+  "message": "Detailed error message",
+  "error_code": "INVALID_ORDER"
+}`}
+            </code>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <Badge variant="outline">401 - UNAUTHORIZED</Badge>
+              <Badge variant="outline">403 - FORBIDDEN</Badge>
+              <Badge variant="outline">404 - NOT_FOUND</Badge>
+              <Badge variant="outline">500 - INTERNAL_ERROR</Badge>
             </div>
           </div>
         </CardContent>

@@ -3907,7 +3907,7 @@ TOTAL: $${subtotal.toFixed(2)}
 
   app.post("/api/settings/ghl-agent-api-key/generate", requireAuth, async (req: Request, res: Response) => {
     try {
-      const rawKey = `ghl_${crypto.randomBytes(24).toString('hex')}`;
+      const rawKey = `rep_${crypto.randomBytes(24).toString('hex')}`;
       const keyHash = await bcrypt.hash(rawKey, 10);
       const keyPrefix = rawKey.substring(0, 12) + '...';
       

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "@shared/schema";
-import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, returnItems, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
+import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, supplierItems, returnItems, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
 import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
 import { GoHighLevelClient } from "../services/gohighlevel-client";
 import { storage } from "../storage";
@@ -458,13 +458,13 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   });
   
   const poCreateSchema = z.object({
-    supplier_name: z.string().min(1),
+    supplier_name: z.string().min(1).optional(),
     items: z.array(z.object({
       product_name: z.string().optional(),
       sku: z.string().optional(),
       quantity: z.number().int().positive()
     })).optional(),
-    auto_generate: z.boolean().optional()
+    auto_generate: z.boolean().default(true)
   });
   
   router.post("/po/create", async (req: Request, res: Response) => {
@@ -473,140 +473,247 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
-          message: "supplier_name is required",
-          error_code: "INVALID_REQUEST"
+          message: parsed.error.errors.map(e => e.message).join(", "),
+          error_code: "VALIDATION_ERROR"
         });
       }
       
       const { supplier_name, items: requestedItems, auto_generate } = parsed.data;
       const db = getDb();
       
-      const supplierResults = await db
-        .select()
-        .from(suppliers)
-        .where(ilike(suppliers.name, `%${supplier_name}%`))
-        .limit(1);
-      
-      if (supplierResults.length === 0) {
-        return res.status(404).json({
+      if (!auto_generate && !requestedItems?.length) {
+        return res.status(400).json({
           status: "error",
-          message: `Supplier "${supplier_name}" not found`,
-          error_code: "SUPPLIER_NOT_FOUND"
+          message: "Either auto_generate must be true or items array must be provided",
+          error_code: "AMBIGUOUS_REQUEST"
         });
       }
       
-      const supplier = supplierResults[0];
+      const lowStockItems = await db
+        .select()
+        .from(items)
+        .where(
+          and(
+            eq(items.type, "finished_product"),
+            lt(items.availableForSaleQty, items.minStock)
+          )
+        );
       
-      let itemsToOrder: { sku: string; productName: string; quantity: number; unitCost: number }[] = [];
+      if (lowStockItems.length === 0) {
+        return res.status(400).json({
+          status: "error",
+          message: "No items below reorder threshold",
+          error_code: "NO_LOW_STOCK_ITEMS"
+        });
+      }
       
-      if (auto_generate) {
-        const lowStockItems = await db
+      const allSupplierItems = await db.select().from(supplierItems);
+      
+      const itemSupplierMap = new Map<string, string[]>();
+      for (const si of allSupplierItems) {
+        if (!itemSupplierMap.has(si.itemId)) {
+          itemSupplierMap.set(si.itemId, []);
+        }
+        itemSupplierMap.get(si.itemId)!.push(si.supplierId);
+      }
+      
+      const allSuppliers = await db.select().from(suppliers);
+      const supplierMap = new Map(allSuppliers.map(s => [s.id, s]));
+      
+      if (supplier_name) {
+        const supplierResults = await db
           .select()
-          .from(items)
-          .where(
-            and(
-              eq(items.type, "finished_product"),
-              lt(items.availableForSaleQty, items.minStock)
-            )
-          );
+          .from(suppliers)
+          .where(ilike(suppliers.name, `%${supplier_name}%`))
+          .limit(1);
         
-        itemsToOrder = lowStockItems.map((item: Item) => ({
+        if (supplierResults.length === 0) {
+          return res.status(404).json({
+            status: "error",
+            message: `Supplier "${supplier_name}" not found`,
+            error_code: "SUPPLIER_NOT_FOUND"
+          });
+        }
+        
+        const supplier = supplierResults[0];
+        
+        const supplierLowStockItems = lowStockItems.filter((item: Item) => {
+          const itemSuppliers = itemSupplierMap.get(item.id) || [];
+          return itemSuppliers.includes(supplier.id);
+        });
+        
+        if (supplierLowStockItems.length === 0) {
+          return res.status(400).json({
+            status: "error",
+            message: `No low stock items found for supplier "${supplier.name}"`,
+            error_code: "NO_ITEMS_FOR_SUPPLIER"
+          });
+        }
+        
+        const itemsToOrder = supplierLowStockItems.map((item: Item) => ({
           sku: item.sku,
           productName: item.name,
           quantity: Math.max(item.minStock * 2 - item.availableForSaleQty, item.minStock),
           unitCost: item.defaultPurchaseCost || 0
         }));
-      } else if (requestedItems && requestedItems.length > 0) {
-        for (const reqItem of requestedItems) {
-          const searchTerm = reqItem.sku || reqItem.product_name;
-          if (!searchTerm) continue;
-          
-          const foundItems = await db
+        
+        const poTotal = itemsToOrder.reduce((sum: number, item) => sum + (item.unitCost * item.quantity), 0);
+        const poNumber = `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-4)}`;
+        
+        const [newPO] = await db
+          .insert(purchaseOrders)
+          .values({
+            supplierId: supplier.id,
+            poNumber,
+            status: "DRAFT",
+            currency: "USD",
+            total: poTotal,
+            subtotal: poTotal
+          })
+          .returning();
+        
+        for (const item of itemsToOrder) {
+          const foundItem = await db
             .select()
             .from(items)
-            .where(
-              or(
-                eq(items.sku, searchTerm),
-                ilike(items.name, `%${searchTerm}%`)
-              )
-            )
+            .where(eq(items.sku, item.sku))
             .limit(1);
           
-          if (foundItems.length > 0) {
-            const item = foundItems[0];
-            itemsToOrder.push({
-              sku: item.sku,
-              productName: item.name,
-              quantity: reqItem.quantity,
-              unitCost: item.defaultPurchaseCost || 0
-            });
+          if (foundItem.length > 0) {
+            await db
+              .insert(purchaseOrderLines)
+              .values({
+                purchaseOrderId: newPO.id,
+                itemId: foundItem[0].id,
+                sku: item.sku,
+                itemName: item.productName,
+                qtyOrdered: item.quantity,
+                unitCost: item.unitCost,
+                qtyReceived: 0,
+                lineTotal: item.unitCost * item.quantity
+              });
           }
         }
-      }
-      
-      if (itemsToOrder.length === 0) {
-        return res.status(400).json({
-          status: "error",
-          message: "No items to order. Provide items array or use auto_generate: true",
-          error_code: "NO_ITEMS"
+        
+        return res.json({
+          status: "success",
+          po_count: 1,
+          purchase_orders: [{
+            po_number: poNumber,
+            po_id: newPO.id,
+            supplier_name: supplier.name,
+            supplier_email: supplier.email,
+            items: itemsToOrder.map((item) => ({
+              product_name: item.productName,
+              sku: item.sku,
+              quantity: item.quantity,
+              unit_cost: item.unitCost,
+              line_total: item.unitCost * item.quantity
+            })),
+            po_total: Math.round(poTotal * 100) / 100,
+            email_sent: false,
+            created_date: new Date().toISOString().split("T")[0]
+          }]
+        });
+        
+      } else {
+        const itemsBySupplier = new Map<string, Item[]>();
+        
+        for (const item of lowStockItems) {
+          const supplierIds = itemSupplierMap.get(item.id) || [];
+          if (supplierIds.length > 0) {
+            const primarySupplierId = supplierIds[0];
+            if (!itemsBySupplier.has(primarySupplierId)) {
+              itemsBySupplier.set(primarySupplierId, []);
+            }
+            itemsBySupplier.get(primarySupplierId)!.push(item);
+          }
+        }
+        
+        if (itemsBySupplier.size === 0) {
+          return res.status(400).json({
+            status: "error",
+            message: "No items have assigned suppliers. Please configure supplier-item relationships first.",
+            error_code: "NO_SUPPLIER_MAPPINGS"
+          });
+        }
+        
+        const createdPOs: any[] = [];
+        
+        for (const [supplierId, supplierItemsList] of Array.from(itemsBySupplier.entries())) {
+          const supplier = supplierMap.get(supplierId);
+          if (!supplier) continue;
+          
+          const itemsToOrder = supplierItemsList.map((item: Item) => ({
+            sku: item.sku,
+            productName: item.name,
+            quantity: Math.max(item.minStock * 2 - item.availableForSaleQty, item.minStock),
+            unitCost: item.defaultPurchaseCost || 0
+          }));
+          
+          type OrderItem = { sku: string; productName: string; quantity: number; unitCost: number };
+          const poTotal = itemsToOrder.reduce((sum: number, item: OrderItem) => sum + (item.unitCost * item.quantity), 0);
+          const poNumber = `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-4)}-${supplier.name.substring(0, 3).toUpperCase()}`;
+          
+          const [newPO] = await db
+            .insert(purchaseOrders)
+            .values({
+              supplierId: supplier.id,
+              poNumber,
+              status: "DRAFT",
+              currency: "USD",
+              total: poTotal,
+              subtotal: poTotal
+            })
+            .returning();
+          
+          for (const item of itemsToOrder) {
+            const foundItem = await db
+              .select()
+              .from(items)
+              .where(eq(items.sku, item.sku))
+              .limit(1);
+            
+            if (foundItem.length > 0) {
+              await db
+                .insert(purchaseOrderLines)
+                .values({
+                  purchaseOrderId: newPO.id,
+                  itemId: foundItem[0].id,
+                  sku: item.sku,
+                  itemName: item.productName,
+                  qtyOrdered: item.quantity,
+                  unitCost: item.unitCost,
+                  qtyReceived: 0,
+                  lineTotal: item.unitCost * item.quantity
+                });
+            }
+          }
+          
+          createdPOs.push({
+            po_number: poNumber,
+            po_id: newPO.id,
+            supplier_name: supplier.name,
+            supplier_email: supplier.email,
+            items: itemsToOrder.map((item) => ({
+              product_name: item.productName,
+              sku: item.sku,
+              quantity: item.quantity,
+              unit_cost: item.unitCost,
+              line_total: item.unitCost * item.quantity
+            })),
+            po_total: Math.round(poTotal * 100) / 100,
+            email_sent: false,
+            created_date: new Date().toISOString().split("T")[0]
+          });
+        }
+        
+        return res.json({
+          status: "success",
+          po_count: createdPOs.length,
+          purchase_orders: createdPOs
         });
       }
-      
-      const poTotal = itemsToOrder.reduce((sum: number, item) => sum + (item.unitCost * item.quantity), 0);
-      const poNumber = `PO-${new Date().getFullYear()}-${String(Date.now()).slice(-4)}`;
-      
-      const [newPO] = await db
-        .insert(purchaseOrders)
-        .values({
-          supplierId: supplier.id,
-          poNumber,
-          status: "DRAFT",
-          currency: "USD",
-          total: poTotal,
-          subtotal: poTotal
-        })
-        .returning();
-      
-      for (const item of itemsToOrder) {
-        const foundItem = await db
-          .select()
-          .from(items)
-          .where(eq(items.sku, item.sku))
-          .limit(1);
-        
-        if (foundItem.length > 0) {
-          await db
-            .insert(purchaseOrderLines)
-            .values({
-              purchaseOrderId: newPO.id,
-              itemId: foundItem[0].id,
-              sku: item.sku,
-              itemName: item.productName,
-              qtyOrdered: item.quantity,
-              unitCost: item.unitCost,
-              qtyReceived: 0,
-              lineTotal: item.unitCost * item.quantity
-            });
-        }
-      }
-      
-      return res.json({
-        status: "success",
-        po_number: poNumber,
-        po_id: newPO.id,
-        supplier_name: supplier.name,
-        supplier_email: supplier.email,
-        items: itemsToOrder.map((item) => ({
-          product_name: item.productName,
-          sku: item.sku,
-          quantity: item.quantity,
-          unit_cost: item.unitCost,
-          line_total: item.unitCost * item.quantity
-        })),
-        po_total: Math.round(poTotal * 100) / 100,
-        email_sent: false,
-        created_date: new Date().toISOString().split("T")[0]
-      });
     } catch (error) {
       return handleError(res, error);
     }

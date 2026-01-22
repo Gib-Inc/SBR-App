@@ -3895,8 +3895,49 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   app.get("/api/settings/ghl-agent-api-key-status", requireAuth, async (req: Request, res: Response) => {
-    const configured = !!process.env.GHL_AGENT_API_KEY;
-    res.json({ configured });
+    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
+    const configured = !!(process.env.GHL_AGENT_API_KEY || dbKey?.isActive);
+    res.json({ 
+      configured,
+      keyPrefix: dbKey?.keyPrefix || null,
+      hasDbKey: !!dbKey,
+      lastUsedAt: dbKey?.lastUsedAt || null,
+    });
+  });
+
+  app.post("/api/settings/ghl-agent-api-key/generate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const rawKey = `ghl_${crypto.randomBytes(24).toString('hex')}`;
+      const keyHash = await bcrypt.hash(rawKey, 10);
+      const keyPrefix = rawKey.substring(0, 12) + '...';
+      
+      await storage.createApiKey({
+        name: 'GHL_AGENT_API_KEY',
+        keyHash,
+        keyPrefix,
+        isActive: true,
+      });
+      
+      res.json({ 
+        success: true,
+        apiKey: rawKey,
+        keyPrefix,
+        message: 'API key generated. Copy it now - it won\'t be shown again.'
+      });
+    } catch (error: any) {
+      console.error('[API Key] Generation error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.delete("/api/settings/ghl-agent-api-key", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const deleted = await storage.deleteApiKeyByName('GHL_AGENT_API_KEY');
+      res.json({ success: true, deleted });
+    } catch (error: any) {
+      console.error('[API Key] Deletion error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
   });
 
   // ============================================================================

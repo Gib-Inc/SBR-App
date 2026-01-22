@@ -113,6 +113,8 @@ import {
   type InsertNotification,
   type UserTablePreferences,
   type InsertUserTablePreferences,
+  type ApiKey,
+  type InsertApiKey,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -592,6 +594,12 @@ export interface IStorage {
   // User Table Preferences
   getTablePreferences(userId: string, tableId: string): Promise<UserTablePreferences | undefined>;
   upsertTablePreferences(prefs: InsertUserTablePreferences): Promise<UserTablePreferences>;
+
+  // API Keys
+  getApiKeyByName(name: string): Promise<ApiKey | undefined>;
+  createApiKey(apiKey: InsertApiKey): Promise<ApiKey>;
+  updateApiKeyLastUsed(id: string): Promise<void>;
+  deleteApiKeyByName(name: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -3732,6 +3740,20 @@ export class MemStorage implements IStorage {
 
   async upsertTablePreferences(prefs: InsertUserTablePreferences): Promise<UserTablePreferences> {
     return { ...prefs, id: randomUUID(), updatedAt: new Date() } as UserTablePreferences;
+  }
+
+  // API Keys (stub implementations for MemStorage)
+  async getApiKeyByName(name: string): Promise<ApiKey | undefined> {
+    return undefined;
+  }
+  async createApiKey(apiKey: InsertApiKey): Promise<ApiKey> {
+    return { ...apiKey, id: randomUUID(), createdAt: new Date(), updatedAt: new Date(), lastUsedAt: null } as ApiKey;
+  }
+  async updateApiKeyLastUsed(id: string): Promise<void> {
+    return;
+  }
+  async deleteApiKeyByName(name: string): Promise<boolean> {
+    return false;
   }
 }
 
@@ -6914,6 +6936,48 @@ export class PostgresStorage implements IStorage {
       }).returning();
       return result[0];
     }
+  }
+
+  // API Keys
+  async getApiKeyByName(name: string): Promise<ApiKey | undefined> {
+    const results = await this.db.select().from(schema.apiKeys)
+      .where(eq(schema.apiKeys.name, name));
+    return results[0];
+  }
+
+  async createApiKey(apiKey: InsertApiKey): Promise<ApiKey> {
+    const existing = await this.getApiKeyByName(apiKey.name);
+    if (existing) {
+      const result = await this.db.update(schema.apiKeys)
+        .set({ 
+          keyHash: apiKey.keyHash,
+          keyPrefix: apiKey.keyPrefix,
+          isActive: apiKey.isActive ?? true,
+          updatedAt: new Date()
+        })
+        .where(eq(schema.apiKeys.id, existing.id))
+        .returning();
+      return result[0];
+    }
+    const id = randomUUID();
+    const result = await this.db.insert(schema.apiKeys).values({
+      ...apiKey,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async updateApiKeyLastUsed(id: string): Promise<void> {
+    await this.db.update(schema.apiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(schema.apiKeys.id, id));
+  }
+
+  async deleteApiKeyByName(name: string): Promise<boolean> {
+    const result = await this.db.delete(schema.apiKeys)
+      .where(eq(schema.apiKeys.name, name))
+      .returning();
+    return result.length > 0;
   }
 }
 

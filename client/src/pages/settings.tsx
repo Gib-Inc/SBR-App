@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key } from "lucide-react";
+import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -733,12 +733,49 @@ function BarcodeSettingsTab() {
 function GhlAgentApiSettings() {
   const { toast } = useToast();
   const [showApiKey, setShowApiKey] = useState(false);
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const apiBaseUrl = `${baseUrl}/api/ghl-agent`;
   
-  const { data: apiKeyStatus } = useQuery<{ configured: boolean }>({
+  const { data: apiKeyStatus, refetch: refetchStatus } = useQuery<{ 
+    configured: boolean;
+    keyPrefix: string | null;
+    hasDbKey: boolean;
+    lastUsedAt: string | null;
+  }>({
     queryKey: ["/api/settings/ghl-agent-api-key-status"],
+  });
+  
+  const generateKeyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/ghl-agent-api-key/generate");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        setGeneratedKey(data.apiKey);
+        setShowApiKey(true);
+        refetchStatus();
+        toast({
+          title: "API Key Generated",
+          description: "Copy your key now - it won't be shown again!",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: data.error || "Failed to generate key",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
   
   const copyToClipboard = (text: string, label: string) => {
@@ -846,28 +883,104 @@ function GhlAgentApiSettings() {
               </p>
             </div>
             
-            <div className="space-y-2">
+            <div className="space-y-4">
               <Label className="flex items-center gap-2">
                 <Key className="h-4 w-4" />
-                API Key Status
+                API Key
               </Label>
-              <div className="flex items-center gap-2">
-                {apiKeyStatus?.configured ? (
-                  <Badge variant="default" className="flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" />
-                    Configured
-                  </Badge>
-                ) : (
-                  <Badge variant="destructive" className="flex items-center gap-1">
+              
+              {generatedKey ? (
+                <div className="rounded-lg border border-primary p-4 bg-primary/5 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="default" className="flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Key Generated
+                    </Badge>
+                    <span className="text-sm text-destructive font-medium">Copy now - won't be shown again!</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={showApiKey ? generatedKey : generatedKey.replace(/./g, '•')}
+                      readOnly
+                      className="font-mono text-sm"
+                      data-testid="input-generated-api-key"
+                    />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      data-testid="button-toggle-key-visibility"
+                    >
+                      {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="icon"
+                      onClick={() => copyToClipboard(generatedKey, "API Key")}
+                      data-testid="button-copy-generated-key"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ) : apiKeyStatus?.hasDbKey ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="default" className="flex items-center gap-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Active
+                    </Badge>
+                    <code className="text-sm font-mono bg-muted px-2 py-1 rounded">{apiKeyStatus.keyPrefix}</code>
+                    {apiKeyStatus.lastUsedAt && (
+                      <span className="text-xs text-muted-foreground">
+                        Last used: {new Date(apiKeyStatus.lastUsedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => generateKeyMutation.mutate()}
+                    disabled={generateKeyMutation.isPending}
+                    data-testid="button-regenerate-api-key"
+                  >
+                    {generateKeyMutation.isPending ? (
+                      <>Generating...</>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Regenerate Key
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Regenerating will invalidate the current key. You'll need to update your GHL Agent configuration.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <Badge variant="destructive" className="flex items-center gap-1 w-fit">
                     <XCircle className="h-3 w-3" />
                     Not Configured
                   </Badge>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Set the <code className="bg-muted px-1 rounded">GHL_AGENT_API_KEY</code> secret in your environment to enable API access.
-                Use this same key as the Bearer token in your GHL Agent configuration.
-              </p>
+                  <Button
+                    onClick={() => generateKeyMutation.mutate()}
+                    disabled={generateKeyMutation.isPending}
+                    data-testid="button-generate-api-key"
+                  >
+                    {generateKeyMutation.isPending ? (
+                      <>Generating...</>
+                    ) : (
+                      <>
+                        <Key className="h-4 w-4 mr-2" />
+                        Generate API Key
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Generate a secure API key to allow your GHL Agent to access this system.
+                  </p>
+                </div>
+              )}
             </div>
             
             <div className="rounded-lg border p-4 bg-muted/30">

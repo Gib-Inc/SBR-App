@@ -2460,3 +2460,28 @@ export const insertCommerceAttributionPatternSchema = createInsertSchema(commerc
 });
 export type InsertCommerceAttributionPattern = z.infer<typeof insertCommerceAttributionPatternSchema>;
 export type CommerceAttributionPattern = typeof commerceAttributionPatterns.$inferSelect;
+
+// ============================================================================
+// API KEYS (for external integrations like GHL Agent API)
+// ============================================================================
+
+export const apiKeys = pgTable("api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(), // e.g., 'GHL_AGENT_API_KEY'
+  keyHash: text("key_hash").notNull(), // Hashed version for validation
+  keyPrefix: text("key_prefix").notNull(), // First 8 chars for display (e.g., "ghl_abc1...")
+  isActive: boolean("is_active").notNull().default(true),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  nameIdx: uniqueIndex("api_keys_name_idx").on(table.name),
+}));
+
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({ 
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type ApiKey = typeof apiKeys.$inferSelect;

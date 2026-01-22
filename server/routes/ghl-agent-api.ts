@@ -8,6 +8,7 @@ import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
 import { GoHighLevelClient } from "../services/gohighlevel-client";
 import { storage } from "../storage";
 import { returnsService } from "../services/returns-service";
+import bcrypt from "bcrypt";
 
 const GHL_AGENT_API_KEY_ENV = "GHL_AGENT_API_KEY";
 
@@ -23,7 +24,7 @@ const getDb = () => {
   return cachedDb;
 };
 
-function requireGhlAgentAuth(req: Request, res: Response, next: NextFunction) {
+async function requireGhlAgentAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -35,26 +36,42 @@ function requireGhlAgentAuth(req: Request, res: Response, next: NextFunction) {
   }
   
   const token = authHeader.substring(7);
-  const expectedKey = process.env[GHL_AGENT_API_KEY_ENV];
   
-  if (!expectedKey) {
-    console.error("[GHL Agent API] GHL_AGENT_API_KEY not configured");
-    return res.status(500).json({
-      status: "error",
-      message: "API not configured. Contact administrator.",
-      error_code: "NOT_CONFIGURED"
-    });
+  const envKey = process.env[GHL_AGENT_API_KEY_ENV];
+  if (envKey && token === envKey) {
+    return next();
   }
   
-  if (token !== expectedKey) {
-    return res.status(403).json({
-      status: "error",
-      message: "Invalid API key",
-      error_code: "FORBIDDEN"
-    });
+  try {
+    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
+    if (dbKey?.isActive) {
+      const isValid = await bcrypt.compare(token, dbKey.keyHash);
+      if (isValid) {
+        storage.updateApiKeyLastUsed(dbKey.id).catch(console.error);
+        return next();
+      }
+    }
+  } catch (error) {
+    console.error("[GHL Agent API] DB key check error:", error);
   }
   
-  next();
+  if (!envKey) {
+    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
+    if (!dbKey?.isActive) {
+      console.error("[GHL Agent API] No API key configured");
+      return res.status(500).json({
+        status: "error",
+        message: "API not configured. Generate an API key in Settings.",
+        error_code: "NOT_CONFIGURED"
+      });
+    }
+  }
+  
+  return res.status(403).json({
+    status: "error",
+    message: "Invalid API key",
+    error_code: "FORBIDDEN"
+  });
 }
 
 function handleError(res: Response, error: unknown, errorCode: string = "INTERNAL_ERROR") {

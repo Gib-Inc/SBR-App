@@ -1,0 +1,168 @@
+For the POST /api/returns/initiate endpoint ONLY:
+
+IMPORTANT: This automatic email sending should ONLY happen when this specific endpoint is called. Do not add automatic emails to any other endpoints.
+
+After successfully creating the return (order_number, return_id, return_label_url, return_tracking, etc.), automatically send an email to the customer using SendGrid.
+
+SENDGRID SETUP:
+
+1. Install SendGrid package if not already installed:
+   npm install @sendgrid/mail
+
+2. Use the existing SendGrid API key from environment variables (you already have my credentials)
+
+3. Import and configure:
+   const sgMail = require('@sendgrid/mail');
+   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+
+4. Send email code:
+   const msg = {
+     to: customer_email,
+     from: 'returns@stickerburrroller.com', // Use verified sender
+     subject: `Your Return Shipping Label - Order #${order_number}`,
+     html: emailBodyHTML
+   };
+   
+   try {
+     await sgMail.send(msg);
+     console.log('Return label email sent to:', customer_email);
+   } catch (error) {
+     console.error('Email sending failed:', error);
+     // Don't fail the return creation if email fails
+   }
+
+EMAIL CONTENT:
+
+Subject: "Your Return Shipping Label - Order #[order_number]"
+
+HTML Body:
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #2c5530; color: white; padding: 20px; text-align: center; }
+    .content { padding: 20px; background-color: #f9f9f9; }
+    .details { background-color: white; padding: 15px; margin: 15px 0; border-left: 4px solid #2c5530; }
+    .button { background-color: #2c5530; color: white; padding: 12px 24px; text-decoration: none; display: inline-block; margin: 15px 0; border-radius: 4px; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
+    ul { padding-left: 20px; }
+    ol { padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Return Initiated</h1>
+    </div>
+    <div class="content">
+      <p>Hi [customer_name],</p>
+      
+      <p>Your return has been initiated for Order #[order_number].</p>
+      
+      <div class="details">
+        <h3>Return Details:</h3>
+        <ul>
+          <li><strong>Return ID:</strong> [return_id]</li>
+          <li><strong>Items:</strong> [items_list]</li>
+          <li><strong>Return Tracking:</strong> [return_tracking]</li>
+        </ul>
+      </div>
+      
+      <h3>Shipping Instructions:</h3>
+      <ol>
+        <li>Download and print your return label below</li>
+        <li>Securely package your item(s)</li>
+        <li>Attach the return label to the outside of the package</li>
+        <li>Drop off at any UPS location</li>
+      </ol>
+      
+      <a href="[return_label_url]" class="button">Download Return Label</a>
+      
+      <div class="details">
+        <h3>Return Address:</h3>
+        <p>
+          Sticker Burr Roller<br>
+          1020 W Utah Ave<br>
+          Hildale, UT 84784
+        </p>
+      </div>
+      
+      <p>Once your return arrives at our warehouse (typically 5-7 business days), we'll assess the condition and email you the results with your final refund amount within 1-2 business days.</p>
+      
+      <p>Questions? Reply to this email or call us at <strong>(435) 632-4441</strong>.</p>
+      
+      <p>Thank you for choosing Sticker Burr Roller!</p>
+      
+      <p><em>The SBR Team</em></p>
+    </div>
+    <div class="footer">
+      <p>Sticker Burr Roller | 1020 W Utah Ave, Hildale, UT 84784</p>
+      <p>© 2025 Sticker Burr Roller. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>
+
+Replace the bracketed values with actual data from the return:
+- [customer_name] - from order lookup (use first name if available, otherwise full name)
+- [order_number] - from request parameter
+- [return_id] - generated return ID
+- [items_list] - formatted list of returned items (e.g., "1x Push Model 1.0")
+- [return_tracking] - UPS tracking number for the return shipment
+- [return_label_url] - Direct URL to the downloadable return label PDF
+
+IMPORTANT REQUIREMENTS:
+
+1. ONLY trigger email sending from the /api/returns/initiate endpoint - no other endpoints should auto-send emails
+2. Send email AFTER successfully creating the return in your system, not before
+3. If email sending fails, still return success for the return creation - just log the error
+4. The from address must be verified in SendGrid (use returns@stickerburrroller.com or whatever you have verified)
+5. Add proper error handling with try-catch around the email sending
+6. Log all email sends with timestamp and recipient for debugging
+7. Do not block the API response waiting for email - send async if possible
+
+RESPONSE FORMAT:
+
+Return the same response format as before, but add an email_sent field:
+
+Success with email sent:
+{
+  "status": "success",
+  "return_id": "RET-2025-001234",
+  "order_number": "12345",
+  "customer_name": "Sarah Miller",
+  "customer_email": "sarah@email.com",
+  "customer_phone": "(555) 123-4567",
+  "customer_address": "123 Main St, Anytown, ST 12345",
+  "return_address": "1020 W Utah Ave, Hildale UT 84784",
+  "order_source": "Shopify",
+  "return_tracking": "1Z999BB9876543210",
+  "return_label_url": "https://shippo.com/label/xyz123.pdf",
+  "items": [
+    {
+      "product_name": "Push Model 1.0",
+      "quantity": 1,
+      "sku": "SBR-PUSH-10"
+    }
+  ],
+  "estimated_arrival": "2025-01-28",
+  "email_sent": true,
+  "message": "Return initiated successfully. Return label email sent to customer."
+}
+
+If email fails (but return still created):
+{
+  ...same fields...
+  "email_sent": false,
+  "message": "Return initiated successfully. Email sending failed - customer should be contacted manually with return label."
+}
+
+TESTING:
+After implementing, test by calling the endpoint and verify:
+1. Return is created in your system
+2. Email is sent via SendGrid
+3. Email contains all correct information
+4. Return label URL is clickable and works
+5. Response includes email_sent status

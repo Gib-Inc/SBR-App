@@ -9,6 +9,7 @@ import { GoHighLevelClient } from "../services/gohighlevel-client";
 import { storage } from "../storage";
 import { returnsService } from "../services/returns-service";
 import bcrypt from "bcrypt";
+import sgMail from "@sendgrid/mail";
 
 const GHL_AGENT_API_KEY_ENV = "GHL_AGENT_API_KEY";
 
@@ -893,27 +894,132 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       estimatedArrival.setDate(estimatedArrival.getDate() + 7);
       const estimatedArrivalStr = estimatedArrival.toISOString().split('T')[0];
       
+      const returnId = result.rmaNumber || result.returnId;
+      const customerName = order.customerName || 'Customer';
+      const customerEmail = order.customerEmail;
+      const returnTracking = result.trackingNumber || 'Pending';
+      const returnLabelUrl = result.labelUrl;
+      
+      const itemsList = itemsForReturn.map(item => `${item.quantity}x ${item.productName}`).join(', ');
+      
+      let emailSent = false;
+      
+      if (customerEmail && process.env.SENDGRID_API_KEY) {
+        try {
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          
+          const emailHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background-color: #2c5530; color: white; padding: 20px; text-align: center; }
+    .content { padding: 20px; background-color: #f9f9f9; }
+    .details { background-color: white; padding: 15px; margin: 15px 0; border-left: 4px solid #2c5530; }
+    .button { background-color: #2c5530; color: white; padding: 12px 24px; text-decoration: none; display: inline-block; margin: 15px 0; border-radius: 4px; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #666; }
+    ul { padding-left: 20px; }
+    ol { padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Return Initiated</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${customerName.split(' ')[0]},</p>
+      
+      <p>Your return has been initiated for Order #${order.externalOrderId || order_number}.</p>
+      
+      <div class="details">
+        <h3>Return Details:</h3>
+        <ul>
+          <li><strong>Return ID:</strong> ${returnId}</li>
+          <li><strong>Items:</strong> ${itemsList}</li>
+          <li><strong>Return Tracking:</strong> ${returnTracking}</li>
+        </ul>
+      </div>
+      
+      <h3>Shipping Instructions:</h3>
+      <ol>
+        <li>Download and print your return label below</li>
+        <li>Securely package your item(s)</li>
+        <li>Attach the return label to the outside of the package</li>
+        <li>Drop off at any UPS location</li>
+      </ol>
+      
+      ${returnLabelUrl ? `<a href="${returnLabelUrl}" class="button">Download Return Label</a>` : '<p><em>Return label will be sent separately once generated.</em></p>'}
+      
+      <div class="details">
+        <h3>Return Address:</h3>
+        <p>
+          Sticker Burr Roller<br>
+          1020 W Utah Ave<br>
+          Hildale, UT 84784
+        </p>
+      </div>
+      
+      <p>Once your return arrives at our warehouse (typically 5-7 business days), we'll assess the condition and email you the results with your final refund amount within 1-2 business days.</p>
+      
+      <p>Questions? Reply to this email or call us at <strong>(435) 632-4441</strong>.</p>
+      
+      <p>Thank you for choosing Sticker Burr Roller!</p>
+      
+      <p><em>The SBR Team</em></p>
+    </div>
+    <div class="footer">
+      <p>Sticker Burr Roller | 1020 W Utah Ave, Hildale, UT 84784</p>
+      <p>&copy; 2025 Sticker Burr Roller. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+          
+          const msg = {
+            to: customerEmail,
+            from: 'returns@stickerburrroller.com',
+            subject: `Your Return Shipping Label - Order #${order.externalOrderId || order_number}`,
+            html: emailHtml
+          };
+          
+          await sgMail.send(msg);
+          emailSent = true;
+          console.log(`[GHL Agent API] Return label email sent to: ${customerEmail} at ${new Date().toISOString()}`);
+        } catch (emailError: any) {
+          console.error(`[GHL Agent API] Email sending failed for ${customerEmail}:`, emailError?.message || emailError);
+        }
+      } else if (!customerEmail) {
+        console.log(`[GHL Agent API] No customer email available for return ${returnId}`);
+      } else if (!process.env.SENDGRID_API_KEY) {
+        console.log(`[GHL Agent API] SENDGRID_API_KEY not configured, skipping email for return ${returnId}`);
+      }
+      
       return res.json({
         status: "success",
-        return_id: result.rmaNumber || result.returnId,
+        return_id: returnId,
         order_number: order.externalOrderId || order_number,
-        customer_name: order.customerName || 'Customer',
-        customer_email: order.customerEmail || null,
+        customer_name: customerName,
+        customer_email: customerEmail || null,
         customer_phone: order.customerPhone || null,
         customer_address: addressString,
         return_address: returnAddress,
         order_source: order.channel || 'Shopify',
-        return_tracking: result.trackingNumber || null,
-        return_label_url: result.labelUrl || null,
+        return_tracking: returnTracking !== 'Pending' ? returnTracking : null,
+        return_label_url: returnLabelUrl || null,
         items: itemsForReturn.map(item => ({
           product_name: item.productName,
           quantity: item.quantity,
           sku: item.sku
         })),
         estimated_arrival: estimatedArrivalStr,
-        message: result.labelUrl 
-          ? "Return initiated successfully. Label ready to send."
-          : "Return initiated successfully. Label generation pending."
+        email_sent: emailSent,
+        message: emailSent 
+          ? "Return initiated successfully. Return label email sent to customer."
+          : returnLabelUrl 
+            ? "Return initiated successfully. Email sending failed - customer should be contacted manually with return label."
+            : "Return initiated successfully. Label generation pending."
       });
       
     } catch (error) {

@@ -6097,6 +6097,17 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // Process each order
       for (const orderData of normalizedOrders) {
+        // Extract shipping address fields from Amazon normalized order format
+        const shipToStreet = orderData.shippingAddress?.street1 
+          ? (orderData.shippingAddress.street2 
+            ? `${orderData.shippingAddress.street1}, ${orderData.shippingAddress.street2}` 
+            : orderData.shippingAddress.street1)
+          : undefined;
+        const shipToCity = orderData.shippingAddress?.city;
+        const shipToState = orderData.shippingAddress?.state;
+        const shipToZip = orderData.shippingAddress?.postalCode;
+        const shipToCountry = orderData.shippingAddress?.country;
+        
         try {
           // Check for existing order by externalOrderId + channel (use efficient lookup)
           const existingOrders = await storage.getSalesOrdersByExternalId(orderData.channel, orderData.externalOrderId);
@@ -6116,12 +6127,12 @@ TOTAL: $${subtotal.toFixed(2)}
               totalAmount: orderData.totalAmount,
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
-              // Shipping address fields (from Shopify or Amazon)
-              shipToStreet: orderData.shipToStreet,
-              shipToCity: orderData.shipToCity,
-              shipToState: orderData.shipToState,
-              shipToZip: orderData.shipToZip,
-              shipToCountry: orderData.shipToCountry,
+              // Shipping address fields (from Amazon shippingAddress object)
+              shipToStreet,
+              shipToCity,
+              shipToState,
+              shipToZip,
+              shipToCountry,
             });
             updatedCount++;
             
@@ -6185,12 +6196,12 @@ TOTAL: $${subtotal.toFixed(2)}
               currency: orderData.currency,
               rawPayload: orderData.rawPayload,
               fulfillmentSource,
-              // Shipping address fields
-              shipToStreet: orderData.shipToStreet,
-              shipToCity: orderData.shipToCity,
-              shipToState: orderData.shipToState,
-              shipToZip: orderData.shipToZip,
-              shipToCountry: orderData.shipToCountry,
+              // Shipping address fields (using extracted variables from Amazon format)
+              shipToStreet,
+              shipToCity,
+              shipToState,
+              shipToZip,
+              shipToCountry,
             });
 
             // Auto-link GHL contact on order creation (non-blocking)
@@ -6526,6 +6537,166 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ 
         success: false,
         message: error.message || "Integration sync failed" 
+      });
+    }
+  });
+
+  // Backfill Address Data for Existing Orders
+  // This endpoint re-syncs orders from Shopify and Amazon to update missing address data
+  app.post("/api/orders/backfill-addresses", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      let { channels = ['SHOPIFY', 'AMAZON'], daysBack = 365 } = req.body;
+      
+      // Validate input
+      if (!Array.isArray(channels)) {
+        channels = ['SHOPIFY', 'AMAZON'];
+      }
+      channels = channels.filter((c: string) => ['SHOPIFY', 'AMAZON'].includes(c));
+      if (channels.length === 0) {
+        return res.status(400).json({ success: false, message: "Invalid channels. Must include SHOPIFY or AMAZON." });
+      }
+      daysBack = Math.min(Math.max(1, Number(daysBack) || 365), 1095); // 1 to 3 years max
+      
+      let totalUpdated = 0;
+      let totalSkipped = 0;
+      const errors: string[] = [];
+      const channelsProcessed: string[] = [];
+      
+      // Process Shopify orders if requested
+      if (channels.includes('SHOPIFY')) {
+        try {
+          const shopifyConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+          if (!shopifyConfig?.apiKey || !shopifyConfig?.config) {
+            errors.push('Shopify: Integration not configured');
+          } else {
+            const configData = shopifyConfig.config as Record<string, any>;
+            const shopDomain = configData.shopDomain || configData.storeDomain;
+            const accessToken = shopifyConfig.apiKey;
+            
+            if (!shopDomain || !accessToken) {
+              errors.push('Shopify: Missing shop domain or access token');
+            } else {
+              channelsProcessed.push('SHOPIFY');
+              const { ShopifyClient } = await import("./services/shopify-client");
+              const client = new ShopifyClient(shopDomain, accessToken);
+              
+              console.log(`[Backfill] Fetching Shopify orders from last ${daysBack} days for address backfill...`);
+              const normalizedOrders = await client.syncRecentOrders(daysBack);
+              console.log(`[Backfill] Processing ${normalizedOrders.length} Shopify orders`);
+              
+              for (const orderData of normalizedOrders) {
+                try {
+                  const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', orderData.externalOrderId);
+                  const existingOrder = existingOrders[0];
+                  
+                  if (existingOrder && (!existingOrder.shipToStreet || !existingOrder.shipToCity)) {
+                    // Order exists but missing address - update it
+                    await storage.updateSalesOrder(existingOrder.id, {
+                      shipToStreet: orderData.shipToStreet,
+                      shipToCity: orderData.shipToCity,
+                      shipToState: orderData.shipToState,
+                      shipToZip: orderData.shipToZip,
+                      shipToCountry: orderData.shipToCountry,
+                    });
+                    totalUpdated++;
+                  } else {
+                    totalSkipped++;
+                  }
+                } catch (err: any) {
+                  errors.push(`Shopify ${orderData.externalOrderId}: ${err.message}`);
+                }
+              }
+            }
+          }
+        } catch (shopifyErr: any) {
+          errors.push(`Shopify sync error: ${shopifyErr.message}`);
+        }
+      }
+      
+      // Process Amazon orders if requested
+      if (channels.includes('AMAZON')) {
+        try {
+          const amazonConfig = await storage.getIntegrationConfig(userId, 'AMAZON');
+          if (!amazonConfig?.apiKey || !amazonConfig?.config) {
+            errors.push('Amazon: Integration not configured');
+          } else {
+            const configData = amazonConfig.config as Record<string, any>;
+            const sellerId = configData.sellerId;
+            const marketplaceIds = configData.marketplaceIds || [];
+            const marketplaceId = marketplaceIds[0];
+            const region = configData.region || 'NA';
+            const refreshToken = amazonConfig.apiKey;
+            const clientId = configData.clientId;
+            const clientSecret = configData.clientSecret;
+            
+            if (!sellerId || !marketplaceId || !refreshToken || !clientId || !clientSecret) {
+              errors.push('Amazon: Missing required credentials (sellerId, marketplaceId, refreshToken, clientId, or clientSecret)');
+            } else {
+              channelsProcessed.push('AMAZON');
+              const { AmazonClient } = await import("./services/amazon-client");
+              const client = new AmazonClient(sellerId, marketplaceId, refreshToken, clientId, clientSecret, region);
+              
+              console.log(`[Backfill] Fetching Amazon orders from last ${daysBack} days for address backfill...`);
+              const normalizedOrders = await client.syncRecentOrders(daysBack);
+              console.log(`[Backfill] Processing ${normalizedOrders.length} Amazon orders`);
+              
+              for (const orderData of normalizedOrders) {
+                try {
+                  const existingOrders = await storage.getSalesOrdersByExternalId('AMAZON', orderData.externalOrderId);
+                  const existingOrder = existingOrders[0];
+                  
+                  if (existingOrder && (!existingOrder.shipToStreet || !existingOrder.shipToCity)) {
+                    // Extract shipping address from Amazon normalized order format
+                    const shipToStreet = orderData.shippingAddress?.street1 
+                      ? (orderData.shippingAddress.street2 
+                        ? `${orderData.shippingAddress.street1}, ${orderData.shippingAddress.street2}` 
+                        : orderData.shippingAddress.street1)
+                      : undefined;
+                    
+                    if (shipToStreet) {
+                      await storage.updateSalesOrder(existingOrder.id, {
+                        shipToStreet,
+                        shipToCity: orderData.shippingAddress?.city,
+                        shipToState: orderData.shippingAddress?.state,
+                        shipToZip: orderData.shippingAddress?.postalCode,
+                        shipToCountry: orderData.shippingAddress?.country,
+                      });
+                      totalUpdated++;
+                    } else {
+                      totalSkipped++;
+                    }
+                  } else {
+                    totalSkipped++;
+                  }
+                } catch (err: any) {
+                  errors.push(`Amazon ${orderData.externalOrderId}: ${err.message}`);
+                }
+              }
+            }
+          }
+        } catch (amazonErr: any) {
+          errors.push(`Amazon sync error: ${amazonErr.message}`);
+        }
+      }
+      
+      console.log(`[Backfill] Completed: ${totalUpdated} orders updated, ${totalSkipped} skipped, ${errors.length} errors`);
+      
+      res.json({
+        success: true,
+        updated: totalUpdated,
+        skipped: totalSkipped,
+        channelsProcessed,
+        errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
+        message: channelsProcessed.length > 0 
+          ? `Updated addresses for ${totalUpdated} orders from ${channelsProcessed.join(', ')}`
+          : `No channels processed - check integration configuration`
+      });
+    } catch (error: any) {
+      console.error('[Backfill] Address backfill failed:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || "Address backfill failed"
       });
     }
   });

@@ -14874,16 +14874,11 @@ Generate only the email body text, no subject line.`;
       const isReplacement = skus.some(sku => sku.includes('net') || sku.includes('replacement'));
       const orderType = isReplacement ? 'replacement' : 'standard';
       
-      const webhookUrl = process.env.GHL_REVIEW_WORKFLOW_WEBHOOK_URL;
-      
-      if (!webhookUrl) {
-        console.warn("[GHL Review Trigger] GHL_REVIEW_WORKFLOW_WEBHOOK_URL not configured");
-        return res.status(500).json({ 
-          success: false, 
-          error: "GHL webhook URL not configured",
-          workflow_triggered: false 
-        });
-      }
+      // GHL Review Workflow URLs (both triggered on order delivery)
+      const GHL_WORKFLOWS = {
+        FIRST_TAKE_REVIEW: 'https://services.leadconnectorhq.com/hooks/07f120c4-fcc1-4aca-9557-19c93b7ea378/webhook',
+        REVIEW_REQUEST_REPLIT: 'https://services.leadconnectorhq.com/hooks/b4feb56f-1c35-466e-bcd8-2ddcdb40c9ed/webhook'
+      };
       
       const webhookPayload = {
         order_type: orderType,
@@ -14895,35 +14890,47 @@ Generate only the email body text, no subject line.`;
         delivery_date: delivery_date || new Date().toISOString()
       };
       
-      const webhookResponse = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(webhookPayload)
-      });
+      // Trigger both workflows in parallel
+      const [firstTakeResponse, replitResponse] = await Promise.all([
+        fetch(GHL_WORKFLOWS.FIRST_TAKE_REVIEW, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload)
+        }).catch(err => ({ ok: false, status: 0, error: err.message })),
+        fetch(GHL_WORKFLOWS.REVIEW_REQUEST_REPLIT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(webhookPayload)
+        }).catch(err => ({ ok: false, status: 0, error: err.message }))
+      ]);
       
-      const workflowTriggered = webhookResponse.ok;
+      const firstTakeTriggered = 'ok' in firstTakeResponse && firstTakeResponse.ok;
+      const replitTriggered = 'ok' in replitResponse && replitResponse.ok;
+      const bothTriggered = firstTakeTriggered && replitTriggered;
       
       await storage.createSystemLog({
         type: 'GHL_REVIEW_TRIGGER',
-        severity: workflowTriggered ? 'INFO' : 'WARNING',
-        message: workflowTriggered 
-          ? `Review workflow triggered for order ${order_id}` 
-          : `Failed to trigger review workflow for order ${order_id}`,
+        severity: bothTriggered ? 'INFO' : 'WARNING',
+        message: `Review workflows triggered for order ${order_id}: First Take=${firstTakeTriggered}, Replit=${replitTriggered}`,
         entityType: 'salesOrder',
         entityId: order.id,
         metadata: { 
-          orderType, 
-          webhookStatus: webhookResponse.status,
+          orderType,
+          firstTakeStatus: 'status' in firstTakeResponse ? firstTakeResponse.status : 0,
+          replitStatus: 'status' in replitResponse ? replitResponse.status : 0,
           deliveryDate: delivery_date
         }
       });
       
-      console.log(`[GHL Review Trigger] Order ${order_id} - type: ${orderType}, triggered: ${workflowTriggered}`);
+      console.log(`[GHL Review Trigger] Order ${order_id} - type: ${orderType}, First Take: ${firstTakeTriggered}, Replit: ${replitTriggered}`);
       
       res.json({
         success: true,
         order_type: orderType,
-        workflow_triggered: workflowTriggered
+        workflows_triggered: {
+          first_take_review: firstTakeTriggered,
+          review_request_replit: replitTriggered
+        }
       });
       
     } catch (error: any) {

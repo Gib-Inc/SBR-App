@@ -121,17 +121,28 @@ export class ShopifyClient {
 
   /**
    * Map Shopify order status to our internal status
-   * Flow: PURCHASED → PENDING → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
+   * Flow: ORDERED → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
    * 
    * Status meanings:
-   * - PURCHASED: Payment confirmed from Shopify
-   * - PENDING: Waiting at warehouse to be shipped (partial fulfillment or pending payment)
-   * - SHIPPED: Scanned into carrier system (fulfillment started)
+   * - ORDERED: Payment confirmed, awaiting shipment
+   * - SHIPPED: In transit or out for delivery (carrier has package)
    * - DELIVERED: Carrier confirmed delivery
    * - REFUNDED: Full refund completed
    * - CANCELLED: Order voided/cancelled
+   * 
+   * Shopify shipment_status values:
+   * - label_printed, label_purchased: Label created but not yet scanned
+   * - confirmed: Carrier confirmed pickup
+   * - in_transit: Package is moving through carrier network
+   * - out_for_delivery: Package is on delivery vehicle
+   * - delivered: Package delivered to recipient
+   * - attempted_delivery, failure: Delivery issues
    */
-  private mapStatus(financial_status: string, fulfillment_status: string | null, hasDeliveredAt: boolean = false): string {
+  private mapStatus(
+    financial_status: string, 
+    fulfillment_status: string | null, 
+    shipment_status: string | null
+  ): string {
     // If refunded, mark as REFUNDED (not CANCELLED)
     if (financial_status === 'refunded') {
       return 'REFUNDED';
@@ -142,18 +153,29 @@ export class ShopifyClient {
       return 'CANCELLED';
     }
 
-    // If delivered (has deliveredAt timestamp from carrier), mark as DELIVERED
-    if (hasDeliveredAt) {
+    // Check shipment_status for delivery tracking (matches Shopify exactly)
+    if (shipment_status === 'delivered') {
       return 'DELIVERED';
     }
 
-    // If fully fulfilled but not delivered yet, mark as SHIPPED
-    if (fulfillment_status === 'fulfilled') {
+    // in_transit or out_for_delivery means actively shipping → SHIPPED
+    if (shipment_status === 'in_transit' || shipment_status === 'out_for_delivery') {
       return 'SHIPPED';
     }
 
-    // If partially fulfilled, mark as SHIPPED (in transit)
-    if (fulfillment_status === 'partial') {
+    // confirmed means carrier has the package → SHIPPED
+    if (shipment_status === 'confirmed') {
+      return 'SHIPPED';
+    }
+
+    // attempted_delivery still means it's in the shipping process
+    if (shipment_status === 'attempted_delivery') {
+      return 'SHIPPED';
+    }
+
+    // If fulfilled but no shipment_status yet (label created but not scanned), still SHIPPED
+    // This handles cases where tracking hasn't updated yet
+    if (fulfillment_status === 'fulfilled' || fulfillment_status === 'partial') {
       return 'SHIPPED';
     }
 
@@ -183,14 +205,38 @@ export class ShopifyClient {
     const customerPhone = order.customer?.phone || order.phone;
     const externalCustomerId = order.customer?.id ? String(order.customer.id) : undefined;
 
-    // Extract actual delivery date from fulfillment data first (needed for mapStatus)
-    // Look for fulfillments with shipment_status = "delivered" and use their updated_at timestamp
+    // Extract shipment_status and delivery date from fulfillment data
+    // Priority: delivered > out_for_delivery > in_transit > confirmed > others
+    // This ensures we get the most accurate status across all fulfillments
     let deliveredAt: Date | undefined;
+    let shipmentStatus: string | null = null;
+    
     if (order.fulfillments && Array.isArray(order.fulfillments)) {
+      const statusPriority: Record<string, number> = {
+        'delivered': 5,
+        'out_for_delivery': 4,
+        'in_transit': 3,
+        'confirmed': 2,
+        'attempted_delivery': 1,
+        'label_printed': 0,
+        'label_purchased': 0,
+      };
+      
+      let highestPriority = -1;
+      
       for (const fulfillment of order.fulfillments) {
-        if (fulfillment.shipment_status === 'delivered' && fulfillment.updated_at) {
+        const status = fulfillment.shipment_status;
+        const priority = statusPriority[status] ?? -1;
+        
+        // Track highest priority status across all fulfillments
+        if (priority > highestPriority) {
+          highestPriority = priority;
+          shipmentStatus = status;
+        }
+        
+        // Extract delivery date if delivered
+        if (status === 'delivered' && fulfillment.updated_at) {
           const fulfillmentDate = new Date(fulfillment.updated_at);
-          // Use the latest delivery date if multiple fulfillments
           if (!deliveredAt || fulfillmentDate > deliveredAt) {
             deliveredAt = fulfillmentDate;
           }
@@ -198,7 +244,7 @@ export class ShopifyClient {
       }
     }
 
-    const status = this.mapStatus(order.financial_status, order.fulfillment_status, !!deliveredAt);
+    const status = this.mapStatus(order.financial_status, order.fulfillment_status, shipmentStatus);
 
     const lineItems = order.line_items.map(item => ({
       sku: item.sku || `SHOPIFY-${item.id}`,

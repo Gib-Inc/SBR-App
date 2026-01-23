@@ -142,15 +142,34 @@ export async function handleOrderCreated(
     // Extract shipping address from payload
     const shippingAddr = payload.shipping_address || {};
     
+    // Use shipment_status-aware status mapping for accurate delivery tracking
+    const orderStatus = mapShopifyOrderStatusWithTracking(
+      payload.financial_status, 
+      payload.fulfillment_status,
+      payload.fulfillments
+    );
+    
+    // Extract deliveredAt from fulfillments if delivered
+    let deliveredAt: Date | null = null;
+    if (orderStatus === 'DELIVERED' && payload.fulfillments) {
+      for (const f of payload.fulfillments) {
+        if (f.shipment_status === 'delivered' && f.updated_at) {
+          deliveredAt = new Date(f.updated_at);
+          break;
+        }
+      }
+    }
+    
     const salesOrder = await storage.createSalesOrder({
       externalOrderId: String(orderId),
       channel: 'SHOPIFY',
       customerName,
       customerEmail: payload.customer?.email || payload.email || null,
       customerPhone: payload.customer?.phone || payload.phone || null,
-      status: mapShopifyOrderStatus(payload.financial_status, payload.fulfillment_status),
+      status: orderStatus,
       orderDate: new Date(payload.created_at || Date.now()),
       expectedDeliveryDate: null,
+      deliveredAt,
       sourceUrl: `https://${context.shopDomain}/admin/orders/${orderId}`,
       totalAmount: payload.total_price ? parseFloat(payload.total_price) : 0,
       currency: payload.currency || 'USD',
@@ -311,19 +330,56 @@ export async function handleOrderUpdated(
     const existingOrder = existingOrders[0];
     
     if (existingOrder) {
-      const newStatus = mapShopifyOrderStatus(payload.financial_status, payload.fulfillment_status);
+      // Use shipment_status-aware status mapping
+      const newStatus = mapShopifyOrderStatusWithTracking(
+        payload.financial_status, 
+        payload.fulfillment_status,
+        payload.fulfillments
+      );
+      const previousStatus = existingOrder.status;
       
-      await storage.updateSalesOrder(existingOrder.id, {
-        status: newStatus,
-        rawPayload: payload,
-      });
+      // Status progression hierarchy (higher = more advanced)
+      const statusOrder: Record<string, number> = {
+        'DRAFT': 0,
+        'ORDERED': 1,
+        'SHIPPED': 2,
+        'DELIVERED': 3,
+        'CANCELLED': 4,  // Special case - can override anything
+        'REFUNDED': 5,   // Special case - can override anything
+      };
+      
+      // Guard against status downgrades (don't go backwards unless cancelled/refunded)
+      const previousRank = statusOrder[previousStatus] ?? 1;
+      const newRank = statusOrder[newStatus] ?? 1;
+      const shouldUpdate = newRank >= previousRank || newStatus === 'CANCELLED' || newStatus === 'REFUNDED';
+      
+      if (shouldUpdate) {
+        // Extract deliveredAt from fulfillments if becoming delivered
+        let deliveredAt: Date | undefined;
+        if (newStatus === 'DELIVERED' && previousStatus !== 'DELIVERED' && payload.fulfillments) {
+          for (const f of payload.fulfillments) {
+            if (f.shipment_status === 'delivered' && f.updated_at) {
+              deliveredAt = new Date(f.updated_at);
+              break;
+            }
+          }
+        }
+        
+        await storage.updateSalesOrder(existingOrder.id, {
+          status: newStatus,
+          ...(deliveredAt && { deliveredAt }),
+          rawPayload: payload,
+        });
 
-      console.log(`[Shopify Webhook] Updated order ${existingOrder.id} status to ${newStatus}`);
+        console.log(`[Shopify Webhook] Updated order ${existingOrder.id} status: ${previousStatus} -> ${newStatus}`);
+      } else {
+        console.log(`[Shopify Webhook] Skipped status downgrade for order ${existingOrder.id}: ${previousStatus} -> ${newStatus}`);
+      }
       
       return {
         success: true,
         message: `Order ${orderName} updated`,
-        data: { salesOrderId: existingOrder.id, newStatus },
+        data: { salesOrderId: existingOrder.id, newStatus, previousStatus },
       };
     } else {
       console.log(`[Shopify Webhook] Order ${orderId} not found locally, creating it`);
@@ -366,6 +422,38 @@ export async function handleOrderCancelled(
   }
 }
 
+/**
+ * Extract the highest priority shipment_status from order fulfillments
+ * Returns the most advanced tracking status across all fulfillments
+ */
+function extractBestShipmentStatus(fulfillments: any[] | undefined): string | null {
+  if (!fulfillments || !Array.isArray(fulfillments)) return null;
+  
+  const statusPriority: Record<string, number> = {
+    'delivered': 5,
+    'out_for_delivery': 4,
+    'in_transit': 3,
+    'confirmed': 2,
+    'attempted_delivery': 1,
+    'label_printed': 0,
+    'label_purchased': 0,
+  };
+  
+  let bestStatus: string | null = null;
+  let highestPriority = -1;
+  
+  for (const fulfillment of fulfillments) {
+    const status = fulfillment.shipment_status;
+    const priority = statusPriority[status] ?? -1;
+    if (priority > highestPriority) {
+      highestPriority = priority;
+      bestStatus = status;
+    }
+  }
+  
+  return bestStatus;
+}
+
 export async function handleOrderFulfilled(
   payload: ShopifyWebhookPayload,
   context: ShopifyWebhookContext,
@@ -381,13 +469,30 @@ export async function handleOrderFulfilled(
     const existingOrder = existingOrders[0];
     
     if (existingOrder) {
+      // Check actual shipment_status from fulfillments to determine status
+      // "Fulfilled" doesn't mean delivered - it means all items have been shipped
+      const shipmentStatus = extractBestShipmentStatus(payload.fulfillments);
+      const newStatus = mapShipmentStatusToOrderStatus(shipmentStatus);
+      
+      // Extract delivery date from fulfillment if delivered
+      let deliveredAt: Date | undefined;
+      if (shipmentStatus === 'delivered' && payload.fulfillments) {
+        for (const f of payload.fulfillments) {
+          if (f.shipment_status === 'delivered' && f.updated_at) {
+            deliveredAt = new Date(f.updated_at);
+            break;
+          }
+        }
+      }
+      
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'DELIVERED',
+        status: newStatus,
+        ...(deliveredAt && { deliveredAt }),
         rawPayload: payload,
       });
       
-      console.log(`[Shopify Webhook] Marked order ${existingOrder.id} as DELIVERED`);
-      return { success: true, message: `Order ${orderName} fulfilled` };
+      console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
+      return { success: true, message: `Order ${orderName} fulfilled, status: ${newStatus}` };
     }
     
     return { success: true, message: `Order ${orderId} not found locally` };
@@ -437,11 +542,27 @@ export async function handleOrderPartiallyFulfilled(
     const existingOrder = existingOrders[0];
     
     if (existingOrder) {
+      // Check actual shipment_status from fulfillments
+      const shipmentStatus = extractBestShipmentStatus(payload.fulfillments);
+      const newStatus = mapShipmentStatusToOrderStatus(shipmentStatus);
+      
+      // Extract delivery date if any fulfillment is delivered
+      let deliveredAt: Date | undefined;
+      if (shipmentStatus === 'delivered' && payload.fulfillments) {
+        for (const f of payload.fulfillments) {
+          if (f.shipment_status === 'delivered' && f.updated_at) {
+            deliveredAt = new Date(f.updated_at);
+            break;
+          }
+        }
+      }
+      
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'SHIPPED',
+        status: newStatus,
+        ...(deliveredAt && { deliveredAt }),
         rawPayload: payload,
       });
-      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as SHIPPED`);
+      console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
     }
     
     return { success: true, message: `Order ${orderId} partially fulfilled` };
@@ -726,6 +847,22 @@ export async function handleInventoryLevelDisconnect(
 
 // ============= FULFILLMENT HANDLERS =============
 
+/**
+ * Map Shopify shipment_status to internal order status
+ * Shopify values: label_printed, label_purchased, confirmed, in_transit, out_for_delivery, delivered, attempted_delivery, failure
+ */
+function mapShipmentStatusToOrderStatus(shipmentStatus: string | null | undefined): string {
+  if (shipmentStatus === 'delivered') {
+    return 'DELIVERED';
+  }
+  if (shipmentStatus === 'in_transit' || shipmentStatus === 'out_for_delivery' || 
+      shipmentStatus === 'confirmed' || shipmentStatus === 'attempted_delivery') {
+    return 'SHIPPED';
+  }
+  // For label_printed, label_purchased, or null - still SHIPPED (fulfillment exists)
+  return 'SHIPPED';
+}
+
 export async function handleFulfillmentCreated(
   payload: ShopifyWebhookPayload,
   context: ShopifyWebhookContext,
@@ -735,8 +872,10 @@ export async function handleFulfillmentCreated(
   const orderId = payload.order_id;
   const trackingNumber = payload.tracking_number;
   const trackingCompany = payload.tracking_company;
+  const shipmentStatus = payload.shipment_status;
   
   console.log(`[Shopify Webhook] fulfillments/create - Fulfillment ${fulfillmentId} for order ${orderId}`);
+  console.log(`  - Shipment status: ${shipmentStatus || 'not yet tracked'}`);
   if (trackingNumber) {
     console.log(`  - Tracking: ${trackingCompany || 'Unknown'} ${trackingNumber}`);
   }
@@ -749,18 +888,27 @@ export async function handleFulfillmentCreated(
     }
     
     if (existingOrder) {
-      const isFullyFulfilled = payload.line_items?.every((item: any) => item.fulfillable_quantity === 0);
+      // Map shipment_status to our order status (SHIPPED or DELIVERED)
+      const newStatus = mapShipmentStatusToOrderStatus(shipmentStatus);
+      
+      // Extract delivery date from fulfillment timestamp if status is delivered
+      const deliveredAt = shipmentStatus === 'delivered' && payload.updated_at 
+        ? new Date(payload.updated_at) 
+        : undefined;
       
       await storage.updateSalesOrder(existingOrder.id, {
-        status: isFullyFulfilled ? 'DELIVERED' : 'SHIPPED',
+        status: newStatus,
+        ...(deliveredAt && { deliveredAt }),
         rawPayload: { ...((existingOrder.rawPayload as any) || {}), lastFulfillment: payload },
       });
+      
+      console.log(`  - Updated order ${existingOrder.id} status to ${newStatus}`);
     }
     
     return { 
       success: true, 
-      message: `Fulfillment ${fulfillmentId} created`,
-      data: { fulfillmentId, orderId, trackingNumber },
+      message: `Fulfillment ${fulfillmentId} created, status: ${shipmentStatus || 'pending'}`,
+      data: { fulfillmentId, orderId, trackingNumber, shipmentStatus },
     };
   } catch (error: any) {
     console.error(`[Shopify Webhook] Error handling fulfillment:`, error);
@@ -774,14 +922,62 @@ export async function handleFulfillmentUpdated(
   userId: string
 ): Promise<WebhookHandlerResult> {
   const fulfillmentId = payload.id;
+  const orderId = payload.order_id;
   const status = payload.status;
+  const shipmentStatus = payload.shipment_status;
   
-  console.log(`[Shopify Webhook] fulfillments/update - Fulfillment ${fulfillmentId} status: ${status}`);
+  console.log(`[Shopify Webhook] fulfillments/update - Fulfillment ${fulfillmentId}`);
+  console.log(`  - Fulfillment status: ${status}, Shipment status: ${shipmentStatus || 'not tracked'}`);
   
-  return { 
-    success: true, 
-    message: `Fulfillment ${fulfillmentId} updated to ${status}`,
-  };
+  try {
+    // Find the order and update its status based on shipment_status
+    if (orderId) {
+      const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', String(orderId));
+      const existingOrder = existingOrders[0];
+      
+      if (existingOrder) {
+        const newStatus = mapShipmentStatusToOrderStatus(shipmentStatus);
+        const previousStatus = existingOrder.status;
+        
+        // Only update if status is changing or becoming more advanced
+        // Don't downgrade from DELIVERED to SHIPPED
+        if (previousStatus !== 'DELIVERED' || newStatus === 'DELIVERED') {
+          // Extract delivery date from fulfillment timestamp if status is delivered
+          const deliveredAt = shipmentStatus === 'delivered' && payload.updated_at 
+            ? new Date(payload.updated_at) 
+            : undefined;
+          
+          await storage.updateSalesOrder(existingOrder.id, {
+            status: newStatus,
+            ...(deliveredAt && { deliveredAt }),
+            rawPayload: { ...((existingOrder.rawPayload as any) || {}), lastFulfillment: payload },
+          });
+          
+          console.log(`  - Updated order ${existingOrder.id} status: ${previousStatus} -> ${newStatus}`);
+          
+          // Trigger GHL sync if delivered (for review request workflows)
+          if (newStatus === 'DELIVERED' && previousStatus !== 'DELIVERED') {
+            try {
+              const { triggerSalesOrderSync } = await import('../services/ghl-sync-triggers');
+              await triggerSalesOrderSync(existingOrder.id, userId, 'STATUS_CHANGE');
+              console.log(`  - Triggered GHL sync for delivery notification`);
+            } catch (syncErr: any) {
+              console.warn(`  - GHL sync failed (non-blocking):`, syncErr.message);
+            }
+          }
+        }
+      }
+    }
+    
+    return { 
+      success: true, 
+      message: `Fulfillment ${fulfillmentId} updated, shipment: ${shipmentStatus || 'pending'}`,
+      data: { fulfillmentId, orderId, shipmentStatus },
+    };
+  } catch (error: any) {
+    console.error(`[Shopify Webhook] Error handling fulfillment update:`, error);
+    return { success: false, message: error.message };
+  }
 }
 
 export async function handleFulfillmentOrderEvent(
@@ -830,22 +1026,47 @@ export async function handleCartUpdated(
 
 // ============= HELPER FUNCTIONS =============
 
-function mapShopifyOrderStatus(financialStatus: string | null, fulfillmentStatus: string | null): string {
+/**
+ * Map Shopify order status to internal status using shipment_status for delivery tracking
+ * This is the unified status mapper that respects Shopify's actual tracking status
+ */
+function mapShopifyOrderStatusWithTracking(
+  financialStatus: string | null, 
+  fulfillmentStatus: string | null,
+  fulfillments: any[] | undefined
+): string {
+  // Cancelled/refunded takes priority
   if (financialStatus === 'refunded' || financialStatus === 'voided') {
     return 'CANCELLED';
   }
-  if (fulfillmentStatus === 'fulfilled') {
+  
+  // Check actual shipment tracking status from fulfillments
+  const shipmentStatus = extractBestShipmentStatus(fulfillments);
+  
+  // Use shipment_status for accurate delivery tracking
+  if (shipmentStatus === 'delivered') {
     return 'DELIVERED';
   }
-  if (fulfillmentStatus === 'partial') {
+  if (shipmentStatus === 'in_transit' || shipmentStatus === 'out_for_delivery' || 
+      shipmentStatus === 'confirmed' || shipmentStatus === 'attempted_delivery') {
     return 'SHIPPED';
   }
+  
+  // If fulfilled/partial but no shipment_status yet, it's shipped (label created)
+  if (fulfillmentStatus === 'fulfilled' || fulfillmentStatus === 'partial') {
+    return 'SHIPPED';
+  }
+  
+  // Pending payment
   if (financialStatus === 'pending' || financialStatus === 'authorized') {
     return 'DRAFT';
   }
+  
+  // Paid but not fulfilled
   if (financialStatus === 'paid') {
     return 'ORDERED';
   }
+  
   return 'ORDERED';
 }
 

@@ -14,6 +14,22 @@ export interface ShopifyOrder {
   updated_at: string;
   total_price?: string;
   currency?: string;
+  // Channel/source detection fields (for Amazon vs Shopify classification)
+  source_name?: string; // "web", "Amazon", etc.
+  source_identifier?: string; // External order ID (Amazon format: ###-#######-#######)
+  tags?: string; // Comma-separated tags
+  app?: {
+    name?: string;
+  };
+  channel_information?: {
+    channel_definition?: {
+      handle?: string;
+      channel_name?: string;
+    };
+    app?: {
+      title?: string;
+    };
+  };
   customer?: {
     id?: string | number;
     first_name?: string;
@@ -37,6 +53,15 @@ export interface ShopifyOrder {
     name: string;
     quantity: number;
     price: string;
+  }>;
+  // Fulfillment tracking for delivery status
+  fulfillments?: Array<{
+    id: string | number;
+    status: string; // success, cancelled, error, failure
+    shipment_status: string | null; // in_transit, out_for_delivery, delivered, etc.
+    tracking_number?: string;
+    tracking_url?: string;
+    updated_at?: string;
   }>;
 }
 
@@ -194,6 +219,80 @@ export class ShopifyClient {
   }
 
   /**
+   * Classify order channel (AMAZON vs SHOPIFY) using Commerce Attribution logic
+   * Priority:
+   * 1. source_name contains "amazon" → AMAZON
+   * 2. app.name contains "amazon" or "codisto" → AMAZON
+   * 3. channel_information.app.title contains "amazon" or "codisto" → AMAZON
+   * 4. channel_definition.handle or channel_name contains "amazon" → AMAZON  
+   * 5. source_identifier matches Amazon order ID pattern (###-#######-#######) → AMAZON
+   * 6. Tags contain exact "amzn" or "amazon" (if not definitely Shopify) → AMAZON
+   * 7. Known Shopify indicators (web, Online Store, etc.) → SHOPIFY
+   * 8. Default → SHOPIFY (since orders come from Shopify API)
+   */
+  private classifyChannel(order: ShopifyOrder): string {
+    const sourceName = (order.source_name || '').toLowerCase();
+    const appName = (order.app?.name || '').toLowerCase();
+    const channelInfo = order.channel_information;
+    const channelHandle = (channelInfo?.channel_definition?.handle || '').toLowerCase();
+    const channelName = (channelInfo?.channel_definition?.channel_name || '').toLowerCase();
+    const channelAppTitle = (channelInfo?.app?.title || '').toLowerCase();
+    const sourceIdentifier = order.source_identifier || '';
+    const tags = (order.tags || '').toLowerCase().split(',').map(t => t.trim());
+
+    // Known Shopify indicators
+    const isDefinitelyShopify = 
+      sourceName === 'web' ||
+      sourceName === 'shopify_draft_order' ||
+      appName === 'online store' ||
+      appName === 'draft orders' ||
+      appName === 'shopify pos' ||
+      appName === 'point of sale' ||
+      appName === 'buy button' ||
+      appName.includes('buy button') ||
+      channelHandle === 'web' ||
+      channelName === 'online store' ||
+      channelName === 'buy button' ||
+      channelAppTitle.includes('buy button');
+
+    // 1. source_name contains "amazon"
+    if (sourceName.includes('amazon')) {
+      return 'AMAZON';
+    }
+
+    // 2. app.name contains "amazon" or "codisto"
+    if (appName.includes('amazon') || appName.includes('codisto')) {
+      return 'AMAZON';
+    }
+
+    // 3. channel_information.app.title contains "amazon" or "codisto"
+    if (channelAppTitle.includes('amazon') || channelAppTitle.includes('codisto')) {
+      return 'AMAZON';
+    }
+
+    // 4. channel handle/name contains "amazon"
+    if (channelHandle.includes('amazon') || channelName.includes('amazon')) {
+      return 'AMAZON';
+    }
+
+    // 5. source_identifier matches Amazon order ID pattern (###-#######-#######)
+    const amazonOrderIdPattern = /^\d{3}-\d{7}-\d{7}$/;
+    if (sourceIdentifier && amazonOrderIdPattern.test(sourceIdentifier)) {
+      return 'AMAZON';
+    }
+
+    // 6. Tags contain exact "amzn" or "amazon" (only if not definitely Shopify)
+    if (!isDefinitelyShopify) {
+      if (tags.some(t => t === 'amzn' || t === 'amazon')) {
+        return 'AMAZON';
+      }
+    }
+
+    // Default to SHOPIFY
+    return 'SHOPIFY';
+  }
+
+  /**
    * Normalize Shopify order to our SalesOrder schema
    */
   private normalizeOrder(order: ShopifyOrder): ShopifyNormalizedOrder {
@@ -226,7 +325,7 @@ export class ShopifyClient {
       
       for (const fulfillment of order.fulfillments) {
         const status = fulfillment.shipment_status;
-        const priority = statusPriority[status] ?? -1;
+        const priority = status ? (statusPriority[status] ?? -1) : -1;
         
         // Track highest priority status across all fulfillments
         if (priority > highestPriority) {
@@ -271,10 +370,13 @@ export class ShopifyClient {
         : shippingAddress.address1)
       : undefined;
 
+    // Classify channel using Commerce Attribution logic (Amazon vs Shopify)
+    const channel = this.classifyChannel(order);
+
     return {
       externalOrderId: String(order.id),
       externalCustomerId,
-      channel: 'SHOPIFY',
+      channel,
       customerName,
       customerEmail,
       customerPhone,

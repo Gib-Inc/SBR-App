@@ -1,0 +1,101 @@
+I need to add webhook endpoints to support a GHL Review Request Follow-Up workflow. This integrates with the existing Shopify order sync system.
+
+CONTEXT:
+- App is Node.js/Express with TypeScript
+- Uses Drizzle ORM with PostgreSQL
+- salesOrders table has: customerPhone, customerEmail, customerName, externalOrderId, channel, status, orderDate
+- salesOrderLines table has: productId, sku, qtyOrdered
+- items table has: sku, name, shopifyVariantId
+- Shopify orders already sync to salesOrders via webhooks
+
+NEW REQUIREMENTS:
+
+1. ADD NEW ENDPOINT: POST /api/ghl/review-trigger
+Purpose: Called when a Shopify order is marked as delivered/received. This fires a webhook to GHL to start the review workflow.
+
+Logic:
+- Accept: { order_id: string, delivery_date: string }
+- Look up the salesOrder by externalOrderId
+- Determine order_type:
+  - Check the SKUs in salesOrderLines
+  - If any SKU contains "net" or "replacement" (case insensitive), order_type = "replacement"
+  - Otherwise, order_type = "standard"
+- Fire webhook to GHL workflow trigger URL (store in environment: GHL_REVIEW_WORKFLOW_WEBHOOK_URL)
+- Webhook payload:
+  {
+    order_type: "standard" | "replacement",
+    contact_phone: salesOrder.customerPhone,
+    contact_email: salesOrder.customerEmail,
+    contact_name: salesOrder.customerName,
+    order_number: salesOrder.externalOrderId,
+    order_date: salesOrder.orderDate
+  }
+- Log the trigger in systemLogs table with type "GHL_REVIEW_TRIGGER"
+- Return: { success: true, order_type, workflow_triggered: true }
+
+
+2. ADD NEW ENDPOINT: POST /api/ghl/order-lookup
+Purpose: GHL calls this to get order details when a customer reports a product issue. Returns the roller size and Shopify variant ID for replacement.
+
+Logic:
+- Accept: { phone: string, email: string, contact_name: string }
+- Look up the most recent salesOrder matching phone OR email
+- Get the salesOrderLines for that order
+- Join with items table to get SKU and product details
+- Determine roller size from SKU or product name:
+  - If contains "12" → size = "12"
+  - If contains "18" → size = "18"  
+  - If contains "bigfoot" or "big foot" (case insensitive) → size = "bigfoot"
+- Look up the replacement net variant ID:
+  - Query items table for replacement net matching the size
+  - Get the shopifyVariantId field
+- Return:
+  {
+    roller_size: "12" | "18" | "bigfoot",
+    original_order_number: salesOrder.externalOrderId,
+    replacement_variant_id: items.shopifyVariantId,
+    original_order_date: salesOrder.orderDate,
+    customer_name: salesOrder.customerName
+  }
+- If no order found, return: { error: "No order found", roller_size: null }
+
+
+3. ADD NEW ENDPOINT: POST /api/ghl/order-status
+Purpose: GHL can check if a replacement order has been placed and shipped.
+
+Logic:
+- Accept: { phone: string, email: string, product_type: "replacement_net" }
+- Look up the most recent salesOrder matching phone OR email where SKU indicates a replacement net
+- Return:
+  {
+    order_exists: boolean,
+    order_status: salesOrder.status,
+    order_number: salesOrder.externalOrderId,
+    shipped: salesOrder.status === "FULFILLED" || salesOrder.extensivOrderStatus === "SHIPPED"
+  }
+
+
+4. ENVIRONMENT VARIABLES NEEDED:
+- GHL_REVIEW_WORKFLOW_WEBHOOK_URL: The GHL webhook URL that triggers the review workflow
+
+
+5. CREATE MAPPING TABLE (optional but recommended):
+Create a simple lookup for replacement net variant IDs:
+
+const REPLACEMENT_NET_VARIANTS = {
+  "12": "SHOPIFY_12_INCH_NET_VARIANT_ID",
+  "18": "SHOPIFY_18_INCH_NET_VARIANT_ID", 
+  "bigfoot": "SHOPIFY_BIGFOOT_NET_VARIANT_ID"
+};
+
+Or query the items table where sku LIKE '%net%' and match by size.
+
+
+IMPLEMENTATION NOTES:
+- All endpoints should have basic error handling and return appropriate HTTP status codes
+- Log all GHL-related API calls to systemLogs for debugging
+- Phone number matching should normalize formats (strip +1, dashes, spaces)
+- Email matching should be case-insensitive
+- If multiple orders exist, return the most recent one (order by orderDate DESC, LIMIT 1)
+
+Please implement these three endpoints in the existing Express routes file, following the patterns already established in the codebase for other integration endpoints.

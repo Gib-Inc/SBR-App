@@ -14836,6 +14836,308 @@ Generate only the email body text, no subject line.`;
   });
 
   // ============================================================================
+  // GHL REVIEW WORKFLOW ENDPOINTS
+  // ============================================================================
+  
+  // Helper function to normalize phone numbers for matching
+  const normalizePhone = (phone: string | null | undefined): string => {
+    if (!phone) return '';
+    return phone.replace(/[\s\-\(\)\+]/g, '').replace(/^1/, '');
+  };
+
+  // POST /api/ghl/review-trigger
+  // Called when a Shopify order is marked as delivered. Triggers GHL review workflow.
+  app.post("/api/ghl/review-trigger", async (req: Request, res: Response) => {
+    try {
+      const { order_id, delivery_date } = req.body;
+      
+      if (!order_id) {
+        return res.status(400).json({ success: false, error: "order_id is required" });
+      }
+      
+      const orders = await db.select()
+        .from(salesOrders)
+        .where(eq(salesOrders.externalOrderId, order_id))
+        .limit(1);
+      
+      if (orders.length === 0) {
+        return res.status(404).json({ success: false, error: "Order not found" });
+      }
+      
+      const order = orders[0];
+      
+      const orderLines = await db.select()
+        .from(salesOrderLines)
+        .where(eq(salesOrderLines.salesOrderId, order.id));
+      
+      const skus = orderLines.map(line => (line.sku || '').toLowerCase());
+      const isReplacement = skus.some(sku => sku.includes('net') || sku.includes('replacement'));
+      const orderType = isReplacement ? 'replacement' : 'standard';
+      
+      const webhookUrl = process.env.GHL_REVIEW_WORKFLOW_WEBHOOK_URL;
+      
+      if (!webhookUrl) {
+        console.warn("[GHL Review Trigger] GHL_REVIEW_WORKFLOW_WEBHOOK_URL not configured");
+        return res.status(500).json({ 
+          success: false, 
+          error: "GHL webhook URL not configured",
+          workflow_triggered: false 
+        });
+      }
+      
+      const webhookPayload = {
+        order_type: orderType,
+        contact_phone: order.customerPhone,
+        contact_email: order.customerEmail,
+        contact_name: order.customerName,
+        order_number: order.externalOrderId,
+        order_date: order.orderDate,
+        delivery_date: delivery_date || new Date().toISOString()
+      };
+      
+      const webhookResponse = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhookPayload)
+      });
+      
+      const workflowTriggered = webhookResponse.ok;
+      
+      await storage.createSystemLog({
+        type: 'GHL_REVIEW_TRIGGER',
+        severity: workflowTriggered ? 'INFO' : 'WARNING',
+        message: workflowTriggered 
+          ? `Review workflow triggered for order ${order_id}` 
+          : `Failed to trigger review workflow for order ${order_id}`,
+        entityType: 'salesOrder',
+        entityId: order.id,
+        metadata: { 
+          orderType, 
+          webhookStatus: webhookResponse.status,
+          deliveryDate: delivery_date
+        }
+      });
+      
+      console.log(`[GHL Review Trigger] Order ${order_id} - type: ${orderType}, triggered: ${workflowTriggered}`);
+      
+      res.json({
+        success: true,
+        order_type: orderType,
+        workflow_triggered: workflowTriggered
+      });
+      
+    } catch (error: any) {
+      console.error("[GHL Review Trigger] Error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/ghl/order-lookup
+  // GHL calls this to get order details when customer reports a product issue
+  app.post("/api/ghl/order-lookup", async (req: Request, res: Response) => {
+    try {
+      const { phone, email, contact_name } = req.body;
+      
+      if (!phone && !email) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Either phone or email is required",
+          roller_size: null 
+        });
+      }
+      
+      const normalizedPhone = normalizePhone(phone);
+      
+      const conditions = [];
+      if (email) {
+        conditions.push(ilike(salesOrders.customerEmail, email));
+      }
+      if (normalizedPhone) {
+        conditions.push(sql`REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${salesOrders.customerPhone}, ' ', ''), '-', ''), '(', ''), ')', ''), '+1', '') LIKE ${`%${normalizedPhone.slice(-10)}%`}`);
+      }
+      
+      const orders = await db.select()
+        .from(salesOrders)
+        .where(or(...conditions))
+        .orderBy(desc(salesOrders.orderDate))
+        .limit(1);
+      
+      if (orders.length === 0) {
+        await storage.createSystemLog({
+          type: 'GHL_ORDER_LOOKUP',
+          severity: 'INFO',
+          message: `No order found for phone: ${phone || 'N/A'}, email: ${email || 'N/A'}`,
+          entityType: 'salesOrder',
+          metadata: { phone, email, contact_name }
+        });
+        
+        return res.json({ 
+          success: false,
+          error: "No order found", 
+          roller_size: null 
+        });
+      }
+      
+      const order = orders[0];
+      
+      const orderLines = await db.select({
+        sku: salesOrderLines.sku,
+        productName: salesOrderLines.productName,
+        qtyOrdered: salesOrderLines.qtyOrdered
+      })
+        .from(salesOrderLines)
+        .where(eq(salesOrderLines.salesOrderId, order.id));
+      
+      let rollerSize: '12' | '18' | 'bigfoot' | null = null;
+      
+      for (const line of orderLines) {
+        const skuLower = (line.sku || '').toLowerCase();
+        const nameLower = (line.productName || '').toLowerCase();
+        const combined = skuLower + ' ' + nameLower;
+        
+        if (combined.includes('bigfoot') || combined.includes('big foot')) {
+          rollerSize = 'bigfoot';
+          break;
+        } else if (combined.includes('18')) {
+          rollerSize = '18';
+        } else if (combined.includes('12') && !rollerSize) {
+          rollerSize = '12';
+        }
+      }
+      
+      let replacementVariantId: string | null = null;
+      
+      if (rollerSize) {
+        const netItems = await db.select()
+          .from(items)
+          .where(ilike(items.sku, '%net%'))
+          .limit(10);
+        
+        for (const item of netItems) {
+          const skuLower = (item.sku || '').toLowerCase();
+          const nameLower = (item.name || '').toLowerCase();
+          const combined = skuLower + ' ' + nameLower;
+          
+          if (rollerSize === 'bigfoot' && (combined.includes('bigfoot') || combined.includes('big foot'))) {
+            replacementVariantId = item.shopifyVariantId || null;
+            break;
+          } else if (rollerSize === '18' && combined.includes('18')) {
+            replacementVariantId = item.shopifyVariantId || null;
+            break;
+          } else if (rollerSize === '12' && combined.includes('12')) {
+            replacementVariantId = item.shopifyVariantId || null;
+            break;
+          }
+        }
+      }
+      
+      await storage.createSystemLog({
+        type: 'GHL_ORDER_LOOKUP',
+        severity: 'INFO',
+        message: `Order lookup successful: ${order.externalOrderId}, size: ${rollerSize}`,
+        entityType: 'salesOrder',
+        entityId: order.id,
+        metadata: { rollerSize, replacementVariantId }
+      });
+      
+      res.json({
+        success: true,
+        roller_size: rollerSize,
+        original_order_number: order.externalOrderId,
+        replacement_variant_id: replacementVariantId,
+        original_order_date: order.orderDate,
+        customer_name: order.customerName
+      });
+      
+    } catch (error: any) {
+      console.error("[GHL Order Lookup] Error:", error);
+      res.status(500).json({ success: false, error: error.message, roller_size: null });
+    }
+  });
+
+  // POST /api/ghl/order-status
+  // GHL checks if a replacement order has been placed and shipped
+  app.post("/api/ghl/order-status", async (req: Request, res: Response) => {
+    try {
+      const { phone, email, product_type } = req.body;
+      
+      if (!phone && !email) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Either phone or email is required" 
+        });
+      }
+      
+      const normalizedPhone = normalizePhone(phone);
+      
+      const conditions = [];
+      if (email) {
+        conditions.push(ilike(salesOrders.customerEmail, email));
+      }
+      if (normalizedPhone) {
+        conditions.push(sql`REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${salesOrders.customerPhone}, ' ', ''), '-', ''), '(', ''), ')', ''), '+1', '') LIKE ${`%${normalizedPhone.slice(-10)}%`}`);
+      }
+      
+      const orders = await db.select()
+        .from(salesOrders)
+        .where(or(...conditions))
+        .orderBy(desc(salesOrders.orderDate));
+      
+      let matchingOrder = null;
+      
+      for (const order of orders) {
+        const orderLines = await db.select()
+          .from(salesOrderLines)
+          .where(eq(salesOrderLines.salesOrderId, order.id));
+        
+        const hasReplacementNet = orderLines.some(line => {
+          const skuLower = (line.sku || '').toLowerCase();
+          return skuLower.includes('net') || skuLower.includes('replacement');
+        });
+        
+        if (product_type === 'replacement_net' && hasReplacementNet) {
+          matchingOrder = order;
+          break;
+        }
+      }
+      
+      if (!matchingOrder) {
+        return res.json({
+          success: true,
+          order_exists: false,
+          order_status: null,
+          order_number: null,
+          shipped: false
+        });
+      }
+      
+      const isShipped = matchingOrder.status === 'FULFILLED' || 
+                        (matchingOrder as any).extensivOrderStatus === 'SHIPPED';
+      
+      await storage.createSystemLog({
+        type: 'GHL_ORDER_STATUS',
+        severity: 'INFO',
+        message: `Order status check: ${matchingOrder.externalOrderId}, shipped: ${isShipped}`,
+        entityType: 'salesOrder',
+        entityId: matchingOrder.id,
+        metadata: { product_type, status: matchingOrder.status }
+      });
+      
+      res.json({
+        success: true,
+        order_exists: true,
+        order_status: matchingOrder.status,
+        order_number: matchingOrder.externalOrderId,
+        shipped: isShipped
+      });
+      
+    } catch (error: any) {
+      console.error("[GHL Order Status] Error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // SALES ORDERS & BACKORDERS
   // ============================================================================
 

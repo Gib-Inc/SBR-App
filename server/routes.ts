@@ -15118,7 +15118,7 @@ Generate only the email body text, no subject line.`;
         });
       }
       
-      const isShipped = matchingOrder.status === 'FULFILLED' || 
+      const isShipped = matchingOrder.status === 'DELIVERED' || matchingOrder.status === 'SHIPPED' || matchingOrder.status === 'FULFILLED' || 
                         (matchingOrder as any).extensivOrderStatus === 'SHIPPED';
       
       await storage.createSystemLog({

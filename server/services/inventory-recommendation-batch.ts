@@ -387,7 +387,7 @@ export class InventoryRecommendationBatch {
     // Build backorder map
     const backorderMap = new Map<string, number>();
     for (const so of salesOrders) {
-      if (!so.isHistorical && so.status !== "FULFILLED" && so.status !== "CANCELLED") {
+      if (!so.isHistorical && so.status !== "FULFILLED" && so.status !== "DELIVERED" && so.status !== "CANCELLED") {
         // Would need to check SO lines for actual backorders
       }
     }

@@ -174,7 +174,7 @@ export class SalesOrderGHLSyncService {
     if (order.status === "CANCELLED") {
       return "lost";
     }
-    if (order.status === "FULFILLED" && order.returnStatus === "NONE") {
+    if ((order.status === "FULFILLED" || order.status === "DELIVERED") && order.returnStatus === "NONE") {
       return "won";
     }
     return "open";

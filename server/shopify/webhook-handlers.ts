@@ -382,11 +382,11 @@ export async function handleOrderFulfilled(
     
     if (existingOrder) {
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'FULFILLED',
+        status: 'DELIVERED',
         rawPayload: payload,
       });
       
-      console.log(`[Shopify Webhook] Marked order ${existingOrder.id} as FULFILLED`);
+      console.log(`[Shopify Webhook] Marked order ${existingOrder.id} as DELIVERED`);
       return { success: true, message: `Order ${orderName} fulfilled` };
     }
     
@@ -411,10 +411,10 @@ export async function handleOrderPaid(
     
     if (existingOrder && existingOrder.status === 'DRAFT') {
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'PURCHASED',
+        status: 'ORDERED',
         rawPayload: payload,
       });
-      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as PURCHASED after payment`);
+      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as ORDERED after payment`);
     }
     
     return { success: true, message: `Order ${orderId} payment recorded` };
@@ -438,10 +438,10 @@ export async function handleOrderPartiallyFulfilled(
     
     if (existingOrder) {
       await storage.updateSalesOrder(existingOrder.id, {
-        status: 'PARTIALLY_FULFILLED',
+        status: 'SHIPPED',
         rawPayload: payload,
       });
-      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as PARTIALLY_FULFILLED`);
+      console.log(`[Shopify Webhook] Order ${existingOrder.id} marked as SHIPPED`);
     }
     
     return { success: true, message: `Order ${orderId} partially fulfilled` };
@@ -752,7 +752,7 @@ export async function handleFulfillmentCreated(
       const isFullyFulfilled = payload.line_items?.every((item: any) => item.fulfillable_quantity === 0);
       
       await storage.updateSalesOrder(existingOrder.id, {
-        status: isFullyFulfilled ? 'FULFILLED' : 'PARTIALLY_FULFILLED',
+        status: isFullyFulfilled ? 'DELIVERED' : 'SHIPPED',
         rawPayload: { ...((existingOrder.rawPayload as any) || {}), lastFulfillment: payload },
       });
     }
@@ -835,18 +835,18 @@ function mapShopifyOrderStatus(financialStatus: string | null, fulfillmentStatus
     return 'CANCELLED';
   }
   if (fulfillmentStatus === 'fulfilled') {
-    return 'FULFILLED';
+    return 'DELIVERED';
   }
   if (fulfillmentStatus === 'partial') {
-    return 'PARTIALLY_FULFILLED';
+    return 'SHIPPED';
   }
   if (financialStatus === 'pending' || financialStatus === 'authorized') {
     return 'DRAFT';
   }
   if (financialStatus === 'paid') {
-    return 'PURCHASED';
+    return 'ORDERED';
   }
-  return 'PURCHASED';
+  return 'ORDERED';
 }
 
 // ============= TOPIC ROUTER =============

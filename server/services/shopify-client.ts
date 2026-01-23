@@ -152,23 +152,23 @@ export class ShopifyClient {
       return 'SHIPPED';
     }
 
-    // If partially fulfilled, mark as PENDING (warehouse processing)
+    // If partially fulfilled, mark as SHIPPED (in transit)
     if (fulfillment_status === 'partial') {
-      return 'PENDING';
+      return 'SHIPPED';
     }
 
-    // If pending payment or authorized, mark as PENDING (awaiting confirmation)
+    // If pending payment or authorized, mark as DRAFT (awaiting confirmation)
     if (financial_status === 'pending' || financial_status === 'authorized') {
-      return 'PENDING';
+      return 'DRAFT';
     }
 
-    // If paid but not fulfilled, mark as PURCHASED
+    // If paid but not fulfilled, mark as ORDERED
     if (financial_status === 'paid') {
-      return 'PURCHASED';
+      return 'ORDERED';
     }
 
-    // Default to PURCHASED for all other cases
-    return 'PURCHASED';
+    // Default to ORDERED for all other cases
+    return 'ORDERED';
   }
 
   /**

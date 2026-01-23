@@ -124,22 +124,22 @@ const CHANNEL_COLORS = {
 };
 
 const STATUS_VARIANTS: Record<string, "secondary" | "default" | "destructive"> = {
+  ORDERED: "default",
   PURCHASED: "default",
-  PENDING: "secondary",
   SHIPPED: "default",
   DELIVERED: "default",
   PENDING_REFUND: "default",
-  REFUNDED: "default",
+  REFUNDED: "destructive",
   CANCELLED: "destructive",
 };
 
 const STATUS_COLORS = {
+  ORDERED: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
   PURCHASED: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20",
-  PENDING: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/20",
   SHIPPED: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20",
   DELIVERED: "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20",
   PENDING_REFUND: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/20",
-  REFUNDED: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/20",
+  REFUNDED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
   CANCELLED: "bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20",
 };
 
@@ -521,18 +521,18 @@ export default function SalesOrders() {
   // State machine for order actions based on fulfilled quantities
   const hasAnyFulfilledQty = selectedOrder?.lines?.some(line => (line.qtyFulfilled ?? 0) > 0) ?? false;
 
-  // Ship / Mark Fulfilled: allowed only for PURCHASED/PENDING orders with no fulfilled items
+  // Ship / Mark Fulfilled: allowed only for ORDERED/PURCHASED orders with no fulfilled items
   const canShip = selectedOrder && 
-    ['PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
+    ['ORDERED', 'PURCHASED'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
   const canFulfill = selectedOrder && 
-    ['PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
+    ['ORDERED', 'PURCHASED'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
-  // Cancel: allowed only for pre-ship orders (DRAFT, PURCHASED, PENDING)
+  // Cancel: allowed only for pre-ship orders (DRAFT, ORDERED, PURCHASED)
   const canCancelFromDrawer = selectedOrder && 
-    ['DRAFT', 'PURCHASED', 'PENDING'].includes(selectedOrder.status) && 
+    ['DRAFT', 'ORDERED', 'PURCHASED'].includes(selectedOrder.status) && 
     !hasAnyFulfilledQty;
 
   // Create Return: allowed only if there are fulfilled items
@@ -904,7 +904,7 @@ export default function SalesOrders() {
                       : (activeTab === "history" ? "-" : "Pending");
                   
                   // Determine visible status - now matches database directly
-                  // Flow: DRAFT → PURCHASED → PENDING → SHIPPED → DELIVERED (+ PENDING_REFUND, REFUNDED, CANCELLED)
+                  // Flow: DRAFT → ORDERED → SHIPPED → DELIVERED (+ PENDING_REFUND, REFUNDED, CANCELLED)
                   const getVisibleStatus = () => {
                     // Check refund states first (override status if return in progress)
                     if (order.returnStatus === 'REFUNDED') {
@@ -916,22 +916,31 @@ export default function SalesOrders() {
                     if (returnInProgress) {
                       return 'PENDING_REFUND';
                     }
-                    // Otherwise use the database status directly
+                    // Map legacy statuses to new ones for display
+                    if (order.status === 'PURCHASED' || order.status === 'PENDING') {
+                      return 'ORDERED';
+                    }
+                    if (order.status === 'FULFILLED') {
+                      return 'DELIVERED';
+                    }
+                    if (order.status === 'PARTIALLY_FULFILLED') {
+                      return 'SHIPPED';
+                    }
                     return order.status;
                   };
                   const visibleStatus = getVisibleStatus();
                   
                   // Return eligibility: DELIVERED status + within 30-day window
                   // Fall back to orderDate if deliveredAt is not set (for historical orders)
-                  const isDelivered = order.status === 'DELIVERED' || visibleStatus === 'DELIVERED';
+                  const isDelivered = order.status === 'DELIVERED' || order.status === 'FULFILLED' || visibleStatus === 'DELIVERED';
                   const returnWindowStartDate = deliveredAt 
                     ? new Date(deliveredAt) 
                     : new Date(order.orderDate); // Fallback to order date
                   const isWithinReturnWindow = (new Date().getTime() - returnWindowStartDate.getTime()) <= 30 * 24 * 60 * 60 * 1000;
                   const canStartReturn = isDelivered && isWithinReturnWindow && (!order.returnStatus || order.returnStatus === 'NONE');
                   
-                  // Cancel eligibility: pre-ship states only (PURCHASED, PENDING)
-                  const canCancel = ['PURCHASED', 'PENDING'].includes(order.status) && activeTab === 'live';
+                  // Cancel eligibility: pre-ship states only (ORDERED, PURCHASED)
+                  const canCancel = ['ORDERED', 'PURCHASED'].includes(order.status) && activeTab === 'live';
                   
                   return (
                     <tr 

@@ -163,7 +163,7 @@ export class InventoryDecisionEngine {
       // Only count fulfilled orders within lookback period
       // Use updatedAt as proxy for fulfillment date since there's no fulfilledAt field
       const orderDate = new Date(order.updatedAt);
-      if (order.status !== 'FULFILLED' && order.status !== 'COMPLETED') continue;
+      if (order.status !== 'FULFILLED' && order.status !== 'DELIVERED' && order.status !== 'COMPLETED') continue;
       if (orderDate < cutoffDate) continue;
       
       const lines = salesOrderLines.get(order.id) || [];
@@ -378,7 +378,7 @@ export class InventoryDecisionEngine {
 
     // Count shipped
     for (const order of salesOrders) {
-      if (order.status !== 'FULFILLED' && order.status !== 'COMPLETED') continue;
+      if (order.status !== 'FULFILLED' && order.status !== 'DELIVERED' && order.status !== 'COMPLETED') continue;
       const lines = salesOrderLines.get(order.id) || [];
       for (const line of lines) {
         if (line.sku === itemSku) {
@@ -457,7 +457,7 @@ export class InventoryDecisionEngine {
     let backorderCount = 0;
 
     for (const order of salesOrders) {
-      if (order.status === 'CANCELLED' || order.status === 'FULFILLED' || order.status === 'COMPLETED') continue;
+      if (order.status === 'CANCELLED' || order.status === 'FULFILLED' || order.status === 'DELIVERED' || order.status === 'COMPLETED') continue;
       
       const lines = salesOrderLines.get(order.id) || [];
       for (const line of lines) {

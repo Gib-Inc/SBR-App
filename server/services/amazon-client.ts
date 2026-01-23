@@ -206,18 +206,18 @@ export class AmazonClient {
     }
 
     if (status === 'SHIPPED' || quantityShipped === quantityOrdered) {
-      return 'FULFILLED';
+      return 'DELIVERED';
     }
 
     if (quantityShipped > 0 && quantityShipped < quantityOrdered) {
-      return 'PARTIALLY_FULFILLED';
+      return 'SHIPPED';
     }
 
     if (status === 'PENDING' || status === 'UNSHIPPED') {
-      return 'PURCHASED';
+      return 'ORDERED';
     }
 
-    return 'PURCHASED';
+    return 'ORDERED';
   }
 
   /**

@@ -1484,7 +1484,7 @@ export const salesOrders = pgTable("sales_orders", {
   customerEmail: text("customer_email"),
   customerPhone: text("customer_phone"),
   ghlContactId: text("ghl_contact_id"), // GoHighLevel contact ID
-  status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'PURCHASED' | 'PENDING' | 'SHIPPED' | 'DELIVERED' | 'PENDING_REFUND' | 'REFUNDED' | 'CANCELLED'
+  status: text("status").notNull().default('DRAFT'), // 'DRAFT' | 'ORDERED' | 'SHIPPED' | 'DELIVERED' | 'PENDING_REFUND' | 'REFUNDED' | 'CANCELLED' (legacy: PURCHASED, PENDING, FULFILLED, PARTIALLY_FULFILLED)
   orderDate: timestamp("order_date").notNull().default(sql`now()`),
   requiredByDate: timestamp("required_by_date"),
   expectedDeliveryDate: timestamp("expected_delivery_date"), // Promised delivery date from Amazon/Shopify or computed

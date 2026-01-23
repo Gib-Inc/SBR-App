@@ -149,15 +149,16 @@ export function SyncProgressPanel() {
   }, [isRunning, wasRunning, currentRun, isDismissed]);
 
   useEffect(() => {
-    if (currentRun && currentRun.status === "running") {
+    // Only reset dismiss state if sync is actually running (not just status="running" from an interrupted run)
+    if (currentRun && currentRun.status === "running" && isRunning) {
       setIsVisible(true);
       setIsDismissed(false);
     }
-    // Also show panel if there's a resumable interrupted sync
+    // Also show panel if there's a resumable interrupted sync (but respect dismiss)
     if (isResumable && !isDismissed) {
       setIsVisible(true);
     }
-  }, [currentRun?.id, isResumable, isDismissed]);
+  }, [currentRun?.id, isResumable, isDismissed, isRunning]);
 
   const handleDismiss = () => {
     setIsDismissed(true);

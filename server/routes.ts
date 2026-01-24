@@ -1394,7 +1394,7 @@ TOTAL: $${subtotal.toFixed(2)}
         const orderDate = new Date(order.orderDate);
         if (orderDate.getFullYear() === currentYear) {
           const monthIdx = orderDate.getMonth(); // 0-11
-          const lines = await storage.getSalesOrderLinesBySalesOrderId(order.id);
+          const lines = await storage.getSalesOrderLines(order.id);
           for (const line of lines) {
             chartData[monthIdx].currentYearSales += line.qtyOrdered;
           }

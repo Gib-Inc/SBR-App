@@ -5571,6 +5571,20 @@ TOTAL: $${subtotal.toFixed(2)}
             const existingOrders = await storage.getSalesOrdersByExternalId('SHOPIFY', orderId);
             const existingOrder = existingOrders[0];
             
+            // Check if order ever shipped - if not, this is a cancellation, not a return
+            // Only create returns for orders that have shipped (SHIPPED or DELIVERED status)
+            const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+            if (existingOrder && !shippedStatuses.includes(existingOrder.status)) {
+              // Order never shipped - mark as CANCELLED and skip creating return
+              console.log(`[Shopify] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED`);
+              await storage.updateSalesOrder(existingOrder.id, { 
+                status: 'CANCELLED',
+                updatedAt: new Date(),
+              });
+              refundsSkipped++;
+              continue;
+            }
+            
             // Extract customer info
             const customerName = existingOrder?.customerName || 
               (refund.customer ? `${refund.customer.first_name || ''} ${refund.customer.last_name || ''}`.trim() : 'Shopify Customer') ||
@@ -5582,6 +5596,11 @@ TOTAL: $${subtotal.toFixed(2)}
             const totalRefundAmount = (refund.transactions || [])
               .filter((t: any) => t.kind === 'refund' && t.status === 'success')
               .reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0);
+            
+            // Extract shipping refund amount if present
+            const shippingRefundAmount = (refund.order_adjustments || [])
+              .filter((a: any) => a.kind === 'shipping_refund')
+              .reduce((sum: number, a: any) => sum + Math.abs(parseFloat(a.amount || 0)), 0);
             
             // Calculate total received (original order total from linked sales order)
             const totalReceived = existingOrder?.totalAmount || 0;
@@ -5619,9 +5638,9 @@ TOTAL: $${subtotal.toFixed(2)}
               archivedAt: null,
               // Populate financial fields for proper display
               totalReceived: totalReceived,
-              shippingCost: 0, // Unknown for synced refunds
+              shippingCost: shippingRefundAmount > 0 ? shippingRefundAmount : 0, // Shipping refund from Shopify
               labelFee: 0, // No label fee for synced refunds (already processed)
-              baseRefundAmount: totalRefundAmount,
+              baseRefundAmount: totalRefundAmount - shippingRefundAmount > 0 ? totalRefundAmount - shippingRefundAmount : totalRefundAmount,
               damageDeductionTotal: 0, // No damage assessment for synced refunds
               finalRefundAmount: totalRefundAmount,
             });

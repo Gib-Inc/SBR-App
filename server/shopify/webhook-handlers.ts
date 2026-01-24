@@ -649,6 +649,34 @@ export async function handleRefundCreated(
       existingOrder = existingOrders[0];
     }
     
+    // Check if order ever shipped - if not, this is a cancellation, not a return
+    // Only create returns for orders that have shipped (SHIPPED or DELIVERED status)
+    const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+    if (existingOrder && !shippedStatuses.includes(existingOrder.status)) {
+      // Order never shipped - mark as CANCELLED instead of creating a return
+      console.log(`[Shopify Webhook] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED instead of creating return`);
+      
+      await storage.updateSalesOrder(existingOrder.id, { 
+        status: 'CANCELLED',
+        updatedAt: new Date(),
+      });
+      
+      // Log the cancellation
+      await logService.logSystemEvent({
+        type: 'SHOPIFY_ORDER_CANCELLED',
+        entityType: 'SALES_ORDER',
+        entityId: existingOrder.id,
+        message: `Order ${existingOrder.externalOrderId} cancelled via Shopify refund (never shipped)`,
+        details: { refundId, orderId, originalStatus: existingOrder.status },
+      });
+      
+      return {
+        success: true,
+        message: `Order ${orderId} marked as CANCELLED (never shipped)`,
+        data: { refundId, orderId, action: 'cancelled' },
+      };
+    }
+    
     // Extract customer info from the original order or payload
     const customerName = existingOrder?.customerName || 
       (payload.customer ? `${payload.customer.first_name || ''} ${payload.customer.last_name || ''}`.trim() : 'Shopify Customer') ||
@@ -660,6 +688,11 @@ export async function handleRefundCreated(
     const totalRefundAmount = (payload.transactions || [])
       .filter((t: any) => t.kind === 'refund' && t.status === 'success')
       .reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0);
+    
+    // Extract shipping refund amount if present
+    const shippingRefundAmount = (payload.order_adjustments || [])
+      .filter((a: any) => a.kind === 'shipping_refund')
+      .reduce((sum: number, a: any) => sum + Math.abs(parseFloat(a.amount || 0)), 0);
     
     // Generate RMA number
     const rmaNumber = await storage.getNextRMANumber();
@@ -679,12 +712,16 @@ export async function handleRefundCreated(
       status: 'REFUNDED', // Terminal status - refund already happened in Shopify
       resolutionRequested: 'REFUND',
       resolutionFinal: 'REFUND',
-      resolutionNotes: `Refund processed via Shopify. Amount: $${totalRefundAmount.toFixed(2)}`,
+      resolutionNotes: `Refund processed via Shopify. Amount: $${totalRefundAmount.toFixed(2)}${shippingRefundAmount > 0 ? ` (incl. shipping: $${shippingRefundAmount.toFixed(2)})` : ''}`,
       reason: payload.note || 'Refund from Shopify',
       requestedAt: new Date(payload.created_at || Date.now()),
       refundedAt: new Date(payload.processed_at || payload.created_at || Date.now()),
       isHistorical: true, // Already complete, goes to history
       archivedAt: new Date(),
+      // Financial data from Shopify
+      finalRefundAmount: totalRefundAmount > 0 ? totalRefundAmount : null,
+      shippingCost: shippingRefundAmount > 0 ? shippingRefundAmount : null,
+      baseRefundAmount: totalRefundAmount - shippingRefundAmount > 0 ? totalRefundAmount - shippingRefundAmount : null,
     });
     
     console.log(`[Shopify Webhook] Created return request ${returnRequest.id} (RMA: ${rmaNumber}) for refund ${refundId}`);

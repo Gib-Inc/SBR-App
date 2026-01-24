@@ -5094,13 +5094,14 @@ TOTAL: $${subtotal.toFixed(2)}
       // Process each order
       for (const orderData of normalizedOrders) {
         try {
-          // Check for existing order by externalOrderId + channel (use efficient lookup)
-          const existingOrders = await storage.getSalesOrdersByExternalId(orderData.channel, orderData.externalOrderId);
-          const existingOrder = existingOrders[0];
+          // Check for existing order by externalOrderId only (ignores channel to prevent duplicates)
+          // This allows updating channel if it was incorrectly classified before
+          const existingOrder = await storage.getSalesOrderByExternalIdOnly(orderData.externalOrderId);
 
           if (existingOrder) {
-            // Update existing order with new fields including shipping address
+            // Update existing order with new fields including shipping address and channel
             await storage.updateSalesOrder(existingOrder.id, {
+              channel: orderData.channel, // Update channel to correct classification (Amazon vs Shopify)
               status: orderData.status,
               customerName: orderData.customerName,
               customerEmail: orderData.customerEmail,

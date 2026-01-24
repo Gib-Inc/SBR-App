@@ -6225,13 +6225,18 @@ TOTAL: $${subtotal.toFixed(2)}
                 shipToCountry: order.shipToCountry,
               });
               
-              // Create line items
+              // Create line items (skip items without SKU)
               for (const line of order.lineItems) {
+                if (!line.sku) {
+                  console.log(`[Full Order Sync] Skipping line item without SKU in order ${order.externalId}`);
+                  continue;
+                }
                 const item = await storage.getItemBySku(line.sku);
                 await storage.createSalesOrderLine({
                   salesOrderId: newOrder.id,
-                  itemId: item?.id,
-                  externalSku: line.sku,
+                  productId: item?.id,
+                  sku: line.sku,
+                  productName: line.name,
                   qtyOrdered: line.qtyOrdered,
                   unitPrice: line.unitPrice,
                 });

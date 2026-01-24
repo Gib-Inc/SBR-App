@@ -5152,44 +5152,46 @@ export default function AIAgent() {
                                   {syncingSource === source.id ? "Syncing..." : "Sync"}
                                 </Button>
                                 {source.id === "shopify" && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => setShowAttributionModal(true)}
-                                        disabled={!source.configured || syncingAttribution}
-                                        data-testid="button-attribution-sync"
-                                      >
-                                        <Users
-                                          className={`mr-2 h-4 w-4 ${syncingAttribution ? "animate-spin" : ""}`}
-                                        />
-                                        {syncingAttribution ? "Syncing..." : "Attribution"}
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>Sync customer purchase sources (Amazon/Shopify) to GHL</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={handleFullOrderSync}
-                                        disabled={!source.configured || syncingOrders}
-                                        data-testid="button-orders-sync"
-                                      >
-                                        <RefreshCw
-                                          className={`mr-2 h-4 w-4 ${syncingOrders ? "animate-spin" : ""}`}
-                                        />
-                                        {syncingOrders ? "Syncing..." : "Orders"}
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>Sync ALL orders from Shopify and update delivery statuses</p>
-                                    </TooltipContent>
-                                  </Tooltip>
+                                  <>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => setShowAttributionModal(true)}
+                                          disabled={!source.configured || syncingAttribution}
+                                          data-testid="button-attribution-sync"
+                                        >
+                                          <Users
+                                            className={`mr-2 h-4 w-4 ${syncingAttribution ? "animate-spin" : ""}`}
+                                          />
+                                          {syncingAttribution ? "Syncing..." : "Attribution"}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Sync customer purchase sources (Amazon/Shopify) to GHL</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={handleFullOrderSync}
+                                          disabled={!source.configured || syncingOrders}
+                                          data-testid="button-orders-sync"
+                                        >
+                                          <RefreshCw
+                                            className={`mr-2 h-4 w-4 ${syncingOrders ? "animate-spin" : ""}`}
+                                          />
+                                          {syncingOrders ? "Syncing..." : "Orders"}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Sync ALL orders from Shopify and update delivery statuses</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </>
                                 )}
                               </>
                             )}

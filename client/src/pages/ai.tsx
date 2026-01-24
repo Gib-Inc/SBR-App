@@ -4559,35 +4559,17 @@ export default function AIAgent() {
     }
   };
 
-  // Commerce Attribution Sync Handler - also triggers full order sync
+  // Commerce Attribution Sync Handler - only syncs customer purchase sources to GHL
   const handleAttributionSync = async () => {
     setShowAttributionModal(false);
     setSyncingAttribution(true);
     
     toast({
-      title: "Shopify sync started...",
-      description: "Syncing all orders and updating delivery statuses",
+      title: "Commerce Attribution sync started...",
+      description: attributionMode === "backfill" ? "Processing historical orders" : "Processing new orders",
     });
     
     try {
-      // First, sync ALL orders from Shopify to update delivery statuses
-      const orderSyncResponse = await apiRequest("POST", `/api/integrations/shopify/full-order-sync`);
-      const orderSyncResult = await orderSyncResponse.json();
-      
-      if (orderSyncResult.success) {
-        toast({
-          title: "Order sync completed",
-          description: `${orderSyncResult.ordersCreated || 0} created, ${orderSyncResult.ordersUpdated || 0} updated`,
-        });
-      } else {
-        toast({
-          title: "Order sync failed",
-          description: orderSyncResult.message || "See Logs for details",
-          variant: "destructive",
-        });
-      }
-      
-      // Then run commerce attribution sync
       const response = await apiRequest("POST", `/api/integrations/shopify/commerce-attribution/sync`, { 
         mode: attributionMode 
       });
@@ -4605,18 +4587,53 @@ export default function AIAgent() {
           variant: "destructive",
         });
       }
-      
-      // Invalidate sales orders query to refresh the page
-      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
-      
     } catch (error: any) {
       toast({
-        title: "Sync failed",
+        title: "Attribution sync failed",
         description: error.message || "See Logs for details",
         variant: "destructive",
       });
     } finally {
       setSyncingAttribution(false);
+    }
+  };
+
+  // Full Order Sync Handler - syncs ALL orders and updates delivery statuses
+  const [syncingOrders, setSyncingOrders] = useState(false);
+  const handleFullOrderSync = async () => {
+    setSyncingOrders(true);
+    
+    toast({
+      title: "Order sync started...",
+      description: "Syncing all orders from Shopify and updating delivery statuses",
+    });
+    
+    try {
+      const response = await apiRequest("POST", `/api/integrations/shopify/full-order-sync`);
+      const result = await response.json();
+      
+      if (result.success) {
+        toast({
+          title: "Order sync completed",
+          description: `${result.ordersCreated || 0} created, ${result.ordersUpdated || 0} updated`,
+        });
+        // Invalidate sales orders query to refresh
+        queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      } else {
+        toast({
+          title: "Order sync failed",
+          description: result.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Order sync failed",
+        description: error.message || "See Logs for details",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingOrders(false);
     }
   };
 
@@ -5147,11 +5164,30 @@ export default function AIAgent() {
                                         <Users
                                           className={`mr-2 h-4 w-4 ${syncingAttribution ? "animate-spin" : ""}`}
                                         />
-                                        {syncingAttribution ? "Syncing..." : "Sync"}
+                                        {syncingAttribution ? "Syncing..." : "Attribution"}
                                       </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>
                                       <p>Sync customer purchase sources (Amazon/Shopify) to GHL</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={handleFullOrderSync}
+                                        disabled={!source.configured || syncingOrders}
+                                        data-testid="button-orders-sync"
+                                      >
+                                        <RefreshCw
+                                          className={`mr-2 h-4 w-4 ${syncingOrders ? "animate-spin" : ""}`}
+                                        />
+                                        {syncingOrders ? "Syncing..." : "Orders"}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Sync ALL orders from Shopify and update delivery statuses</p>
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
@@ -5309,9 +5345,8 @@ export default function AIAgent() {
       <Dialog open={showAttributionModal} onOpenChange={setShowAttributionModal}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle data-testid="title-attribution-sync-options">Shopify Full Sync</DialogTitle>
+            <DialogTitle data-testid="title-attribution-sync-options">Commerce Attribution Sync</DialogTitle>
             <DialogDescription>
-              This will sync ALL orders from Shopify, update delivery statuses, and sync customer attribution data.
               Sync customer purchase sources from Shopify to GoHighLevel custom fields and tags.
             </DialogDescription>
           </DialogHeader>

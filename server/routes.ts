@@ -17188,7 +17188,7 @@ Generate only the email body text, no subject line.`;
       }
 
       // Require valid user ID - never use 'system' fallback for OAuth
-      const userId = req.user?.id;
+      const userId = req.session.userId;
       if (!userId) {
         console.error('[QuickBooks] Auth URL requested but no user ID in session');
         return res.status(401).json({ error: 'User not authenticated' });

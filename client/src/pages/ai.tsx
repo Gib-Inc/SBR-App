@@ -1442,11 +1442,11 @@ function QuickBooksDemandHistoryTab() {
             <Button 
               variant="outline" 
               className="mt-4"
-              onClick={() => navigate("/settings")}
+              onClick={() => navigate("/ai?tab=data-sources")}
               data-testid="button-open-integrations"
             >
               <Settings2 className="mr-2 h-4 w-4" />
-              Open Integrations
+              Open Data Sources
             </Button>
           </div>
         ) : !hasData && isFiltered ? (

@@ -114,20 +114,145 @@ export class ExtensivApiError extends Error {
   }
 }
 
+export interface ExtensivCredentials {
+  clientId: string;
+  clientSecret: string;
+  orgKey?: string;
+}
+
+interface TokenCache {
+  accessToken: string;
+  expiresAt: number;
+}
+
+// In-memory token cache (keyed by clientId)
+const tokenCache: Map<string, TokenCache> = new Map();
+
 export class ExtensivClient {
-  private apiKey: string;
+  private clientId: string;
+  private clientSecret: string;
+  private orgKey?: string;
   private baseUrl: string;
   private defaultWarehouseId?: string;
 
-  constructor(apiKey: string, baseUrl: string = 'https://api.skubana.com/v1', defaultWarehouseId?: string) {
-    this.apiKey = apiKey;
+  constructor(
+    credentials: ExtensivCredentials | string, 
+    baseUrl: string = 'https://api-hub.extensiv.com', 
+    defaultWarehouseId?: string
+  ) {
+    // Support legacy string API key for backward compatibility
+    if (typeof credentials === 'string') {
+      // Legacy mode: treat as pre-obtained bearer token
+      this.clientId = '';
+      this.clientSecret = credentials;
+      this.orgKey = undefined;
+    } else {
+      this.clientId = credentials.clientId;
+      this.clientSecret = credentials.clientSecret;
+      this.orgKey = credentials.orgKey;
+    }
     this.baseUrl = baseUrl;
     this.defaultWarehouseId = defaultWarehouseId;
   }
 
-  private getHeaders(): Record<string, string> {
+  /**
+   * Clear the cached token (call on auth failures)
+   */
+  public clearCachedToken(): void {
+    if (this.clientId) {
+      tokenCache.delete(this.clientId);
+      console.log(`[Extensiv] Cleared cached token for client ${this.clientId.substring(0, 4)}...`);
+    }
+  }
+
+  /**
+   * Get OAuth2 access token using client credentials
+   * Tokens are cached for 7 hours (expire at 8 hours)
+   */
+  private async getAccessToken(): Promise<string> {
+    // If using legacy mode (direct token), return it
+    if (!this.clientId && this.clientSecret) {
+      return this.clientSecret;
+    }
+
+    // Check cache first
+    const cached = tokenCache.get(this.clientId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.accessToken;
+    }
+
+    // Validate required credentials
+    if (!this.orgKey) {
+      throw new ExtensivApiError(
+        ExtensivErrorCode.AUTHENTICATION_FAILED,
+        'Organization Key (orgkey) is required for Extensiv OAuth2 authentication. Please add it in Settings.',
+        undefined
+      );
+    }
+
+    // Request new token from Extensiv Hub API
+    const authUrl = `${this.baseUrl}/auth/token/token`;
+    const basicAuth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+    
+    // Build query params - orgKey is required
+    const params = new URLSearchParams();
+    params.set('orgkey', this.orgKey);
+    
+    const fullUrl = `${authUrl}?${params.toString()}`;
+    
+    try {
+      const response = await fetch(fullUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Basic ${basicAuth}`,
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new ExtensivApiError(
+          ExtensivErrorCode.AUTHENTICATION_FAILED,
+          errorData?.message || `Token exchange failed: ${response.status} ${response.statusText}`,
+          response.status,
+          errorData
+        );
+      }
+
+      const data = await response.json();
+      const accessToken = data.access_token || data.token || data;
+      
+      if (!accessToken || typeof accessToken !== 'string') {
+        throw new ExtensivApiError(
+          ExtensivErrorCode.AUTHENTICATION_FAILED,
+          'Token response did not contain a valid access token',
+          response.status,
+          data
+        );
+      }
+
+      // Cache token for 7 hours (tokens expire at 8 hours)
+      const expiresAt = Date.now() + (7 * 60 * 60 * 1000);
+      tokenCache.set(this.clientId, { accessToken, expiresAt });
+      
+      console.log(`[Extensiv] Obtained new access token, expires in 7 hours`);
+      return accessToken;
+    } catch (error) {
+      if (error instanceof ExtensivApiError) throw error;
+      throw new ExtensivApiError(
+        ExtensivErrorCode.CONNECTION_FAILED,
+        `Failed to connect to Extensiv auth endpoint: ${(error as Error).message}`,
+        undefined,
+        error
+      );
+    }
+  }
+
+  private async getHeaders(): Promise<Record<string, string>> {
+    const accessToken = await this.getAccessToken();
     return {
-      'Authorization': `Bearer ${this.apiKey}`,
+      'Authorization': `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     };
   }
@@ -152,6 +277,12 @@ export class ExtensivClient {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const code = this.mapStatusCode(response.status);
+      
+      // Clear cached token on auth failures so retry will get a new token
+      if (response.status === 401 || response.status === 403) {
+        this.clearCachedToken();
+      }
+      
       throw new ExtensivApiError(
         code,
         errorData?.message || `Extensiv API error during ${operation}: ${response.status} ${response.statusText}`,
@@ -160,6 +291,32 @@ export class ExtensivClient {
       );
     }
     return response.json();
+  }
+
+  /**
+   * Execute an API request with automatic retry on auth failures
+   * Clears token cache and retries once if we get a 401/403
+   */
+  private async executeWithRetry<T>(
+    requestFn: () => Promise<T>,
+    operation: string
+  ): Promise<T> {
+    try {
+      return await requestFn();
+    } catch (error) {
+      if (error instanceof ExtensivApiError && 
+          (error.statusCode === 401 || error.statusCode === 403)) {
+        // Token was already cleared in handleResponse, retry once with fresh token
+        console.log(`[Extensiv] Auth failure during ${operation}, retrying with fresh token...`);
+        try {
+          return await requestFn();
+        } catch (retryError) {
+          console.error(`[Extensiv] Retry failed for ${operation}`);
+          throw retryError;
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -191,28 +348,30 @@ export class ExtensivClient {
    * Fetch all warehouses from Extensiv
    */
   async getWarehouses(): Promise<ExtensivWarehouse[]> {
-    try {
-      const response = await fetch(`${this.baseUrl}/warehouses`, {
-        headers: this.getHeaders(),
-      });
+    return this.executeWithRetry(async () => {
+      try {
+        const response = await fetch(`${this.baseUrl}/warehouses`, {
+          headers: await this.getHeaders(),
+        });
 
-      const data = await this.handleResponse(response, 'getWarehouses');
-      
-      // Handle different response formats
-      const warehouses = Array.isArray(data) ? data : (data.warehouses || data.data || []);
-      
-      return warehouses.map((w: any) => ({
-        id: String(w.id || w.warehouseId || w.warehouse_id),
-        name: w.name || w.warehouseName || w.warehouse_name || 'Unknown',
-        code: w.code || w.warehouseCode,
-      }));
-    } catch (error: any) {
-      if (error instanceof ExtensivApiError) throw error;
-      throw new ExtensivApiError(
-        ExtensivErrorCode.CONNECTION_FAILED,
-        `Failed to fetch warehouses: ${error.message}`
-      );
-    }
+        const data = await this.handleResponse(response, 'getWarehouses');
+        
+        // Handle different response formats
+        const warehouses = Array.isArray(data) ? data : (data.warehouses || data.data || []);
+        
+        return warehouses.map((w: any) => ({
+          id: String(w.id || w.warehouseId || w.warehouse_id),
+          name: w.name || w.warehouseName || w.warehouse_name || 'Unknown',
+          code: w.code || w.warehouseCode,
+        }));
+      } catch (error: any) {
+        if (error instanceof ExtensivApiError) throw error;
+        throw new ExtensivApiError(
+          ExtensivErrorCode.CONNECTION_FAILED,
+          `Failed to fetch warehouses: ${error.message}`
+        );
+      }
+    }, 'getWarehouses');
   }
 
   /**
@@ -222,34 +381,36 @@ export class ExtensivClient {
    * @param limit - Number of items per page (default: 100)
    */
   async getInventory(warehouseId: string, page: number = 1, limit: number = 100): Promise<ExtensivItem[]> {
-    try {
-      const url = `${this.baseUrl}/inventory?warehouseId=${warehouseId}&page=${page}&limit=${limit}`;
-      const response = await fetch(url, {
-        headers: this.getHeaders(),
-      });
+    return this.executeWithRetry(async () => {
+      try {
+        const url = `${this.baseUrl}/inventory?warehouseId=${warehouseId}&page=${page}&limit=${limit}`;
+        const response = await fetch(url, {
+          headers: await this.getHeaders(),
+        });
 
-      const data = await this.handleResponse(response, 'getInventory');
-      
-      // Handle different response formats
-      const items = Array.isArray(data) ? data : (data.items || data.inventory || data.data || []);
-      
-      return items.map((item: any) => ({
-        sku: item.sku || item.SKU || item.productSku || item.itemCode,
-        name: item.name || item.productName,
-        description: item.description,
-        quantity: Number(item.quantity || item.onHand || item.available || item.availableQuantity || 0),
-        warehouseId: String(item.warehouseId || warehouseId),
-        warehouseName: item.warehouseName,
-        upc: item.upc || item.UPC || item.barcode,
-        barcode: item.barcode || item.upc,
-      }));
-    } catch (error: any) {
-      if (error instanceof ExtensivApiError) throw error;
-      throw new ExtensivApiError(
-        ExtensivErrorCode.CONNECTION_FAILED,
-        `Failed to fetch inventory: ${error.message}`
-      );
-    }
+        const data = await this.handleResponse(response, 'getInventory');
+        
+        // Handle different response formats
+        const items = Array.isArray(data) ? data : (data.items || data.inventory || data.data || []);
+        
+        return items.map((item: any) => ({
+          sku: item.sku || item.SKU || item.productSku || item.itemCode,
+          name: item.name || item.productName,
+          description: item.description,
+          quantity: Number(item.quantity || item.onHand || item.available || item.availableQuantity || 0),
+          warehouseId: String(item.warehouseId || warehouseId),
+          warehouseName: item.warehouseName,
+          upc: item.upc || item.UPC || item.barcode,
+          barcode: item.barcode || item.upc,
+        }));
+      } catch (error: any) {
+        if (error instanceof ExtensivApiError) throw error;
+        throw new ExtensivApiError(
+          ExtensivErrorCode.CONNECTION_FAILED,
+          `Failed to fetch inventory: ${error.message}`
+        );
+      }
+    }, 'getInventory');
   }
 
   /**
@@ -373,7 +534,7 @@ export class ExtensivClient {
   async getOrderStatus(orderId: string): Promise<ExtensivOrderResponse> {
     try {
       const response = await fetch(`${this.baseUrl}/orders/${orderId}`, {
-        headers: this.getHeaders(),
+        headers: await this.getHeaders(),
       });
 
       const data = await this.handleResponse(response, 'getOrderStatus');
@@ -416,7 +577,7 @@ export class ExtensivClient {
       }
 
       const response = await fetch(url, {
-        headers: this.getHeaders(),
+        headers: await this.getHeaders(),
       });
 
       const data = await this.handleResponse(response, 'getActivity');

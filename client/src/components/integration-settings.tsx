@@ -77,8 +77,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   // Form state for different integration types
   const [apiKey, setApiKey] = useState("");
   const [pivotWarehouseId, setPivotWarehouseId] = useState("1");
-  const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://api.skubana.com/v1");
+  const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://api-hub.extensiv.com");
   const [extensivPushOrders, setExtensivPushOrders] = useState(false);
+  const [extensivClientId, setExtensivClientId] = useState("");
+  const [extensivClientSecret, setExtensivClientSecret] = useState("");
+  const [extensivOrgKey, setExtensivOrgKey] = useState("");
   
   // Shopify fields
   const [shopDomain, setShopDomain] = useState("");
@@ -220,8 +223,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       setApiKey("");
       if (integrationType === "EXTENSIV") {
         setPivotWarehouseId(config.config?.pivotWarehouseId || "1");
-        setExtensivBaseUrl(config.config?.baseUrl || "https://api.skubana.com/v1");
+        setExtensivBaseUrl(config.config?.baseUrl || "https://api-hub.extensiv.com");
         setExtensivPushOrders(config.config?.pushOrders || false);
+        setExtensivClientId(config.config?.clientId || "");
+        setExtensivClientSecret("");
+        setExtensivOrgKey(config.config?.orgKey || "");
       } else if (integrationType === "SHOPIFY") {
         setShopDomain(config.config?.shopDomain || "");
         setAccessToken("");
@@ -329,10 +335,16 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       let configData: any = {};
       
       if (integrationType === "EXTENSIV") {
+        // Validate OAuth2 credentials - orgKey is required when clientId is present
+        if (extensivClientId && !extensivOrgKey) {
+          throw new Error("Organization Key (orgkey) is required when using Client ID authentication");
+        }
         configData = { 
           pivotWarehouseId,
           baseUrl: extensivBaseUrl,
           pushOrders: extensivPushOrders,
+          clientId: extensivClientId,
+          orgKey: extensivOrgKey,
         };
       } else if (integrationType === "SHOPIFY") {
         configData = {
@@ -377,7 +389,8 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
 
       // Include credentials based on integration type
       if (integrationType === "EXTENSIV") {
-        if (apiKey) payload.apiKey = apiKey;
+        // Extensiv uses OAuth2 with client ID and secret
+        if (extensivClientSecret) payload.apiKey = extensivClientSecret;
       } else if (integrationType === "SHOPIFY") {
         if (accessToken) payload.apiKey = accessToken;
       } else if (integrationType === "AMAZON") {
@@ -441,7 +454,9 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
 
   const isFormValid = () => {
     if (integrationType === "EXTENSIV") {
-      return config?.apiKey || apiKey;
+      // For OAuth2, need clientId + secret + orgKey
+      const hasOAuthCreds = extensivClientId && extensivOrgKey && (config?.apiKey || extensivClientSecret);
+      return hasOAuthCreds || config?.apiKey;
     } else if (integrationType === "SHOPIFY") {
       return shopDomain && (config?.apiKey || accessToken);
     } else if (integrationType === "AMAZON") {
@@ -598,6 +613,18 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       : "Disabled"}
                 </span>
               </div>
+              {config.config?.clientId && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Client ID</span>
+                  <span className="text-sm font-mono">{maskApiKey(config.config.clientId)}</span>
+                </div>
+              )}
+              {config.config?.orgKey && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Org Key</span>
+                  <span className="text-sm font-mono">{config.config.orgKey}</span>
+                </div>
+              )}
               {config.config?.pivotWarehouseId && (
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Warehouse ID</span>
@@ -635,29 +662,47 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               {integrationType === "EXTENSIV" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="api-key" data-testid="label-api-key">
-                      Extensiv API Key
+                    <Label htmlFor="extensiv-client-id" data-testid="label-extensiv-client-id">
+                      Client ID
                     </Label>
                     <Input
-                      id="api-key"
-                      type="password"
-                      placeholder="Enter your Extensiv API key"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                      data-testid="input-api-key"
+                      id="extensiv-client-id"
+                      placeholder="Enter your Extensiv Client ID"
+                      value={extensivClientId}
+                      onChange={(e) => setExtensivClientId(e.target.value)}
+                      data-testid="input-extensiv-client-id"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="extensiv-base-url" data-testid="label-base-url">
-                      API Base URL
+                    <Label htmlFor="extensiv-client-secret" data-testid="label-extensiv-client-secret">
+                      Client Secret
                     </Label>
                     <Input
-                      id="extensiv-base-url"
-                      placeholder="https://api.skubana.com/v1"
-                      value={extensivBaseUrl}
-                      onChange={(e) => setExtensivBaseUrl(e.target.value)}
-                      data-testid="input-base-url"
+                      id="extensiv-client-secret"
+                      type="password"
+                      placeholder="Enter your Extensiv Client Secret"
+                      value={extensivClientSecret}
+                      onChange={(e) => setExtensivClientSecret(e.target.value)}
+                      data-testid="input-extensiv-client-secret"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Leave blank to keep existing secret.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="extensiv-org-key" data-testid="label-extensiv-org-key">
+                      Organization Key (orgkey)
+                    </Label>
+                    <Input
+                      id="extensiv-org-key"
+                      placeholder="Enter your Extensiv org key"
+                      value={extensivOrgKey}
+                      onChange={(e) => setExtensivOrgKey(e.target.value)}
+                      data-testid="input-extensiv-org-key"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Your Extensiv organization key, used for API token authentication.
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="warehouse-id" data-testid="label-warehouse-id">

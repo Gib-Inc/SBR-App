@@ -61,18 +61,38 @@ export class ExtensivInventorySyncService {
       
       if (config?.isEnabled && config.apiKey) {
         const configData = config.config as Record<string, any> || {};
+        const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+        
         this.credentials = {
           apiKey: config.apiKey,
-          baseUrl: configData.baseUrl || 'https://api.skubana.com/v1',
+          baseUrl,
           pivotWarehouseId: configData.pivotWarehouseId || '1',
           pushOrders: configData.pushOrders === true,
         };
-        this.client = new ExtensivClient(
-          this.credentials.apiKey, 
-          this.credentials.baseUrl,
-          this.credentials.pivotWarehouseId
-        );
-        console.log(`[ExtensivInventorySync] Initialized with IntegrationConfig for user ${userId}`);
+        
+        // Use new OAuth2 credentials format if clientId is present
+        // The apiKey field stores the clientSecret for backward compatibility
+        const clientId = configData.clientId;
+        const clientSecret = config.apiKey;
+        const orgKey = configData.orgKey;
+        
+        if (clientId) {
+          // New OAuth2 flow
+          this.client = new ExtensivClient(
+            { clientId, clientSecret, orgKey },
+            baseUrl,
+            this.credentials.pivotWarehouseId
+          );
+          console.log(`[ExtensivInventorySync] Initialized with OAuth2 credentials for user ${userId}`);
+        } else {
+          // Legacy mode: treat apiKey as bearer token
+          this.client = new ExtensivClient(
+            config.apiKey, 
+            baseUrl,
+            this.credentials.pivotWarehouseId
+          );
+          console.log(`[ExtensivInventorySync] Initialized with legacy API key for user ${userId}`);
+        }
         return this.isConfigured();
       }
       
@@ -81,7 +101,7 @@ export class ExtensivInventorySyncService {
       if (envKey) {
         this.credentials = {
           apiKey: envKey,
-          baseUrl: process.env.EXTENSIV_BASE_URL || 'https://api.skubana.com/v1',
+          baseUrl: process.env.EXTENSIV_BASE_URL || 'https://api-hub.extensiv.com',
           pivotWarehouseId: process.env.EXTENSIV_WAREHOUSE_ID || '1',
           pushOrders: process.env.EXTENSIV_PUSH_ORDERS === 'true',
         };

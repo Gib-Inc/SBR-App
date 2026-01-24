@@ -4329,8 +4329,15 @@ TOTAL: $${subtotal.toFixed(2)}
       if (extensivConfig?.apiKey) {
         try {
           const { ExtensivClient } = await import("./services/extensiv-client");
-          const baseUrl = extensivConfig.baseUrl || 'https://api.skubana.com/v1';
-          const extensivClient = new ExtensivClient(extensivConfig.apiKey, baseUrl);
+          const extensivConfigData = extensivConfig.config as Record<string, any> || {};
+          const baseUrl = extensivConfigData.baseUrl || 'https://api-hub.extensiv.com';
+          const clientId = extensivConfigData.clientId;
+          const clientSecret = extensivConfig.apiKey;
+          const orgKey = extensivConfigData.orgKey;
+          
+          const extensivClient = clientId 
+            ? new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl)
+            : new ExtensivClient(extensivConfig.apiKey, baseUrl);
           
           if (extensivSkus.length > 0) {
             const verifyResult = await extensivClient.verifySkus(extensivSkus);
@@ -4378,15 +4385,23 @@ TOTAL: $${subtotal.toFixed(2)}
       // Get API key from integration config or environment variable
       const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
       const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      const configData = config?.config as Record<string, any> || {};
       
       if (!apiKey) {
         return res.status(400).json({ 
           success: false,
-          message: "Extensiv API key not configured. Please add it in Settings or set EXTENSIV_API_KEY environment variable." 
+          message: "Extensiv credentials not configured. Please add Client ID and Client Secret in Settings." 
         });
       }
 
-      const client = new ExtensivClient(apiKey);
+      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+      const clientId = configData.clientId;
+      const clientSecret = apiKey;
+      const orgKey = configData.orgKey;
+      
+      const client = clientId
+        ? new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl)
+        : new ExtensivClient(apiKey, baseUrl);
       const result = await client.testConnection();
 
       // Update integration config status
@@ -4416,12 +4431,13 @@ TOTAL: $${subtotal.toFixed(2)}
       const syncMode = mode === "align" ? "align" : "compare"; // Default to "compare" (safer)
       console.log(`[Extensiv] Starting sync in ${syncMode.toUpperCase()} mode${zeroMissing ? ' (zero missing enabled)' : ''}`);
       
-      // Get API key from integration config or environment variable
+      // Get credentials from integration config or environment variable
       const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
       const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      const configData = config?.config as Record<string, any> || {};
       
       if (!apiKey) {
-        const message = "Extensiv API key not configured";
+        const message = "Extensiv credentials not configured";
         if (config) {
           await storage.updateIntegrationConfig(config.id, {
             lastSyncAt: new Date(),
@@ -4433,9 +4449,15 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       // Get Pivot warehouse ID from config or environment variable
-      const pivotWarehouseId = (config?.config as any)?.pivotWarehouseId || process.env.PIVOT_WAREHOUSE_ID || '1';
+      const pivotWarehouseId = configData.pivotWarehouseId || process.env.PIVOT_WAREHOUSE_ID || '1';
+      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+      const clientId = configData.clientId;
+      const clientSecret = apiKey;
+      const orgKey = configData.orgKey;
 
-      const client = new ExtensivClient(apiKey);
+      const client = clientId
+        ? new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl)
+        : new ExtensivClient(apiKey, baseUrl);
       
       // Set status to PENDING
       if (config) {
@@ -4643,20 +4665,27 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const userId = req.session.userId!;
       
-      // Get API key from integration config or environment variable
+      // Get credentials from integration config or environment variable
       const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
       const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
-      const pivotWarehouseId = (config?.config as any)?.pivotWarehouseId || '1';
-      const baseUrl = (config?.config as any)?.baseUrl || 'https://api.skubana.com/v1';
+      const configData = config?.config as Record<string, any> || {};
+      const pivotWarehouseId = configData.pivotWarehouseId || '1';
+      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
       
       if (!apiKey) {
         return res.status(400).json({ 
           success: false,
-          message: "Extensiv API key not configured. Please add it in Settings or set EXTENSIV_API_KEY environment variable." 
+          message: "Extensiv credentials not configured. Please add Client ID and Client Secret in Settings." 
         });
       }
 
-      const client = new ExtensivClient(apiKey, baseUrl);
+      const clientId = configData.clientId;
+      const clientSecret = apiKey;
+      const orgKey = configData.orgKey;
+
+      const client = clientId
+        ? new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl)
+        : new ExtensivClient(apiKey, baseUrl);
       const items = await client.getAllInventory(pivotWarehouseId);
       
       // Transform to consistent format for SKU mapping wizard

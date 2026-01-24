@@ -7,7 +7,7 @@ import { ShopifyWebhookPayload, ShopifyWebhookContext } from './webhooks-config'
 import { storage } from '../storage';
 import { logService } from '../services/log-service';
 import { InventoryMovement } from '../services/inventory-movement';
-import { triggerShortageAlertsForOrder } from '../services/ghl-stock-alert-service';
+import { triggerShortageAlertsForOrder, triggerHildaleFulfillmentAlert } from '../services/ghl-stock-alert-service';
 import { ShopifyInventorySyncService } from '../services/shopify-inventory-sync-service';
 
 export interface WebhookHandlerResult {
@@ -287,6 +287,25 @@ export async function handleOrderCreated(
           console.log(`[Shopify Webhook] GHL shortage alerts: ${successful}/${results.length} created for order ${orderName}`);
         })
         .catch(err => console.warn(`[Shopify Webhook] GHL shortage alert failed (non-blocking):`, err.message));
+    }
+    
+    // Trigger GHL "Needs Attention" alert if fulfillment source is HILDALE (Pivot has no stock)
+    if (fulfillmentSource === 'HILDALE') {
+      const lineItemSummary = lineItemsWithProducts.map(li => `${li.sku} x${li.qtyOrdered}`).join(', ');
+      triggerHildaleFulfillmentAlert(
+        storage,
+        salesOrder.id,
+        orderName,
+        lineItemSummary,
+        'HILDALE',
+        userId
+      )
+        .then(result => {
+          if (result.success) {
+            console.log(`[Shopify Webhook] GHL Hildale fulfillment alert created for order ${orderName}: ${result.opportunityId}`);
+          }
+        })
+        .catch(err => console.warn(`[Shopify Webhook] GHL Hildale alert failed (non-blocking):`, err.message));
     }
 
     triggerSalesOrderSync(userId, salesOrder.id, false)

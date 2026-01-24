@@ -13,6 +13,8 @@ export const GHL_CONFIG = {
     STOCK_14_21: "eea14324-ac58-4b95-a259-6762e1a3796b",
     STOCK_ORDER_NOW: "a62574d0-2d31-4de4-86dd-a9192cc30130",
     STALE_SYNC_ALERT: "22c1a9a6-8e24-43be-8d8b-a24b005ce4cb",
+    // NEEDS_ATTENTION is the same stage as STALE_SYNC_ALERT - used for fulfillment alerts (Hildale/Backordered)
+    NEEDS_ATTENTION: "22c1a9a6-8e24-43be-8d8b-a24b005ce4cb",
   },
 } as const;
 

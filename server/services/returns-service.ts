@@ -43,6 +43,8 @@ interface RequestReturnResult {
   labelUrl?: string;
   trackingNumber?: string;
   error?: string;
+  message?: string;
+  autoCancelled?: boolean;
 }
 
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
@@ -77,6 +79,30 @@ export class ReturnsService {
         }
       }
 
+      // Check if order has shipped - if not, auto-cancel instead of creating a return
+      // Orders that never shipped are cancellations, not returns
+      // Check actual shipment by looking at line items qtyShipped/qtyFulfilled
+      if (salesOrder) {
+        const orderLines = await storage.getSalesOrderLines(salesOrder.id);
+        const totalShipped = orderLines.reduce((sum, line) => sum + (line.qtyShipped || 0) + (line.qtyFulfilled || 0), 0);
+        const hasShipped = totalShipped > 0 || ['SHIPPED', 'DELIVERED'].includes(salesOrder.status);
+        
+        if (!hasShipped) {
+          console.log(`[ReturnsService] Order ${salesOrder.id} has not shipped (qtyShipped: ${totalShipped}, status: ${salesOrder.status}), auto-cancelling instead of creating return`);
+          
+          // Cancel the sales order instead of creating a return
+          await storage.updateSalesOrder(salesOrder.id, { status: 'CANCELLED' });
+          
+          return {
+            success: true,
+            status: 'AUTO_CANCELLED',
+            orderId: salesOrder.id,
+            message: `Order cancelled (item never shipped). Cancellation processed on Sales Orders page.`,
+            autoCancelled: true,
+          };
+        }
+      }
+
       const rmaNumber = await storage.getNextRMANumber();
 
       const resolution = (input.desiredResolution as any) || ReturnResolution.REFUND;
@@ -100,6 +126,7 @@ export class ReturnsService {
         requestedAt: new Date(),
         labelProvider: 'SHIPPO',
         initiatedVia: input.ghlContactId ? 'GHL_BOT' : 'MANUAL_UI',
+        totalReceived: salesOrder?.totalAmount || null,
       };
 
       const createdReturn = await storage.createReturnRequest(returnRequest);
@@ -340,7 +367,7 @@ export class ReturnsService {
     });
 
     try {
-      await returnGHLSyncService.syncReturnRefundTaskToGHL(returnId);
+      await returnGHLSyncService.syncReturnRefundToGHL(returnId);
     } catch (error: any) {
       console.error(`[ReturnsService] Failed to sync refund task to GHL:`, error.message);
     }
@@ -393,7 +420,7 @@ export class ReturnsService {
     }
 
     try {
-      await returnGHLSyncService.syncReturnRefundTaskToGHL(returnId);
+      await returnGHLSyncService.syncReturnRefundToGHL(returnId);
     } catch (error: any) {
       console.error(`[ReturnsService] Failed to update GHL refund status:`, error.message);
     }

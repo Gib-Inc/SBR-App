@@ -2222,8 +2222,16 @@ export class MemStorage implements IStorage {
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
     // Live = NOT in terminal states - use schema-defined terminal statuses for consistency
+    // Also filter out returns for orders that never shipped
+    const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+    
     return Array.from(this.returnRequests.values())
       .filter(r => !isReturnStatusTerminal(r.status))
+      .filter(ret => {
+        if (!ret.salesOrderId) return true;
+        const salesOrder = this.salesOrders.get(ret.salesOrderId);
+        return !salesOrder || shippedStatuses.includes(salesOrder.status);
+      })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -2242,7 +2250,16 @@ export class MemStorage implements IStorage {
     if (options?.channel) {
       returns = returns.filter(r => r.salesChannel === options.channel);
     }
-    return returns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    
+    // Filter out returns for orders that never shipped (these should have been cancellations)
+    const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+    const filteredReturns = returns.filter(ret => {
+      if (!ret.salesOrderId) return true; // No linked order - include
+      const salesOrder = this.salesOrders.get(ret.salesOrderId);
+      return !salesOrder || shippedStatuses.includes(salesOrder.status);
+    });
+    
+    return filteredReturns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {
@@ -5020,9 +5037,20 @@ export class PostgresStorage implements IStorage {
 
   async getLiveReturnRequests(): Promise<ReturnRequest[]> {
     // Live = NOT in terminal states - use schema-defined terminal statuses for consistency
-    return await this.db.select().from(schema.returnRequests)
+    // Also filter out returns for orders that never shipped
+    const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+    
+    const results = await this.db
+      .select({ returnRequest: schema.returnRequests, salesOrderStatus: schema.salesOrders.status })
+      .from(schema.returnRequests)
+      .leftJoin(schema.salesOrders, eq(schema.returnRequests.salesOrderId, schema.salesOrders.id))
       .where(notInArray(schema.returnRequests.status, [...TERMINAL_STATUSES.returnRequest]))
       .orderBy(desc(schema.returnRequests.createdAt));
+    
+    // Filter: include if no linked order OR order was shipped
+    return results
+      .filter(r => !r.salesOrderStatus || shippedStatuses.includes(r.salesOrderStatus))
+      .map(r => r.returnRequest);
   }
 
   async getHistoricalReturnRequests(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<ReturnRequest[]> {
@@ -5042,9 +5070,22 @@ export class PostgresStorage implements IStorage {
     if (options?.channel) {
       conditions.push(eq(schema.returnRequests.salesChannel, options.channel));
     }
-    return await this.db.select().from(schema.returnRequests)
+    
+    // Use LEFT JOIN with sales_orders to filter out returns for orders that never shipped
+    // Only include returns where: no linked order OR order status is SHIPPED/DELIVERED
+    const shippedStatuses = ['SHIPPED', 'DELIVERED'];
+    
+    const results = await this.db
+      .select({ returnRequest: schema.returnRequests, salesOrderStatus: schema.salesOrders.status })
+      .from(schema.returnRequests)
+      .leftJoin(schema.salesOrders, eq(schema.returnRequests.salesOrderId, schema.salesOrders.id))
       .where(and(...conditions))
       .orderBy(desc(schema.returnRequests.createdAt));
+    
+    // Filter: include if no linked order OR order was shipped
+    return results
+      .filter(r => !r.salesOrderStatus || shippedStatuses.includes(r.salesOrderStatus))
+      .map(r => r.returnRequest);
   }
 
   async getReturnRequest(id: string): Promise<ReturnRequest | undefined> {

@@ -96,7 +96,8 @@ export async function handleOrderCreated(
     const { FulfillmentDecisionService } = await import('../services/fulfillment-decision-service');
     const { triggerSalesOrderSync } = await import('../services/ghl-sync-triggers');
     
-    let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'HILDALE';
+    // Start optimistically with PIVOT_EXTENSIV - will downgrade to HILDALE if ANY item needs it
+    let fulfillmentSource: 'HILDALE' | 'PIVOT_EXTENSIV' = 'PIVOT_EXTENSIV';
     
     const lineItemsWithProducts: Array<{
       sku: string;
@@ -125,14 +126,19 @@ export async function handleOrderCreated(
           
           if (item) {
             const decision = await decisionService.decideSource(item, lineItem.quantity, userId);
-            if (decision.source === 'PIVOT_EXTENSIV') {
-              fulfillmentSource = 'PIVOT_EXTENSIV';
+            // If ANY item needs Hildale, the whole order is marked HILDALE (conservative approach)
+            if (decision.source === 'HILDALE') {
+              fulfillmentSource = 'HILDALE';
             }
+          } else {
+            // Unknown SKU - default to Hildale for safety
+            fulfillmentSource = 'HILDALE';
           }
         }
       }
     } catch (decisionError: any) {
       console.warn(`[Shopify Webhook] Fulfillment decision failed, defaulting to HILDALE:`, decisionError.message);
+      fulfillmentSource = 'HILDALE';
     }
 
     const customerName = payload.customer

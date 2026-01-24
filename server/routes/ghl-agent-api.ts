@@ -1027,6 +1027,109 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
     }
   });
 
+  /**
+   * Hildale Transfer Endpoint
+   * Allows GHL AI Agent to record shipments from Hildale to Pivot warehouse
+   * This deducts from hildaleQty and optionally increments availableForSaleQty
+   * 
+   * Example: "We shipped 12 x 12" rollers to pivot"
+   */
+  router.post("/inventory/hildale-transfer", async (req: Request, res: Response) => {
+    try {
+      // Note: This endpoint accepts structured JSON. The GHL AI Agent should 
+      // parse natural language requests (e.g., "shipped 12 x 12" rollers to pivot")
+      // and call this endpoint with extracted SKU and quantity values.
+      const transferSchema = z.object({
+        sku: z.string().min(1, "SKU is required"),
+        quantity: z.number().int().positive("Quantity must be a positive integer"),
+        notes: z.string().optional(),
+      });
+      
+      const parsed = transferSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          status: "error",
+          message: "Invalid request",
+          errors: parsed.error.errors.map(e => `${e.path.join(".")}: ${e.message}`),
+          error_code: "VALIDATION_ERROR"
+        });
+      }
+      
+      const { sku, quantity, notes } = parsed.data;
+      
+      // Find the item by SKU
+      const db = getDb();
+      const [item] = await db.select().from(items).where(eq(items.sku, sku)).limit(1);
+      
+      if (!item) {
+        return res.status(404).json({
+          status: "error",
+          message: `Product with SKU "${sku}" not found`,
+          error_code: "PRODUCT_NOT_FOUND"
+        });
+      }
+      
+      const currentHildaleQty = item.hildaleQty ?? 0;
+      const currentAvailableForSale = item.availableForSaleQty ?? 0;
+      
+      // Check if Hildale has enough stock
+      if (currentHildaleQty < quantity) {
+        return res.status(400).json({
+          status: "error",
+          message: `Insufficient stock at Hildale. Available: ${currentHildaleQty}, Requested: ${quantity}`,
+          error_code: "INSUFFICIENT_STOCK",
+          data: {
+            sku,
+            hildaleQty: currentHildaleQty,
+            requestedQty: quantity
+          }
+        });
+      }
+      
+      // Perform the transfer using InventoryMovement
+      const { InventoryMovement } = await import("../services/inventory-movement");
+      const inventoryMovement = new InventoryMovement(storage);
+      
+      // Get a user ID for the system transaction (use first user or system)
+      const users = await storage.getAllUsers();
+      const systemUserId = users[0]?.id || "system";
+      
+      await inventoryMovement.apply({
+        eventType: "TRANSFER",
+        itemId: item.id,
+        quantity: quantity,
+        location: "PIVOT",
+        source: "GHL_AGENT",
+        notes: notes || `GHL Agent transfer: ${quantity} units from Hildale to Pivot`,
+        userId: systemUserId,
+      });
+      
+      // Get updated item to confirm the change
+      const [updatedItem] = await db.select().from(items).where(eq(items.id, item.id)).limit(1);
+      
+      return res.json({
+        status: "success",
+        message: `Successfully transferred ${quantity} units of ${sku} from Hildale to Pivot`,
+        data: {
+          sku: item.sku,
+          productName: item.name,
+          quantityTransferred: quantity,
+          hildaleQty: {
+            before: currentHildaleQty,
+            after: updatedItem?.hildaleQty ?? 0
+          },
+          availableForSaleQty: {
+            before: currentAvailableForSale,
+            after: updatedItem?.availableForSaleQty ?? 0
+          }
+        }
+      });
+      
+    } catch (error) {
+      return handleError(res, error);
+    }
+  });
+
   router.get("/status", async (req: Request, res: Response) => {
     return res.json({
       status: "success",
@@ -1034,6 +1137,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       version: "1.0.0",
       endpoints: [
         "POST /inventory/reorder-status",
+        "POST /inventory/hildale-transfer",
         "POST /orders/lookup",
         "POST /orders/search",
         "POST /refunds/calculate",

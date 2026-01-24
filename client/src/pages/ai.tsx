@@ -4559,17 +4559,35 @@ export default function AIAgent() {
     }
   };
 
-  // Commerce Attribution Sync Handler
+  // Commerce Attribution Sync Handler - also triggers full order sync
   const handleAttributionSync = async () => {
     setShowAttributionModal(false);
     setSyncingAttribution(true);
     
     toast({
-      title: "Commerce Attribution sync started...",
-      description: attributionMode === "backfill" ? "Processing historical orders" : "Processing new orders",
+      title: "Shopify sync started...",
+      description: "Syncing all orders and updating delivery statuses",
     });
     
     try {
+      // First, sync ALL orders from Shopify to update delivery statuses
+      const orderSyncResponse = await apiRequest("POST", `/api/integrations/shopify/full-order-sync`);
+      const orderSyncResult = await orderSyncResponse.json();
+      
+      if (orderSyncResult.success) {
+        toast({
+          title: "Order sync completed",
+          description: `${orderSyncResult.ordersCreated || 0} created, ${orderSyncResult.ordersUpdated || 0} updated`,
+        });
+      } else {
+        toast({
+          title: "Order sync failed",
+          description: orderSyncResult.message || "See Logs for details",
+          variant: "destructive",
+        });
+      }
+      
+      // Then run commerce attribution sync
       const response = await apiRequest("POST", `/api/integrations/shopify/commerce-attribution/sync`, { 
         mode: attributionMode 
       });
@@ -4587,9 +4605,13 @@ export default function AIAgent() {
           variant: "destructive",
         });
       }
+      
+      // Invalidate sales orders query to refresh the page
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders"] });
+      
     } catch (error: any) {
       toast({
-        title: "Attribution sync failed",
+        title: "Sync failed",
         description: error.message || "See Logs for details",
         variant: "destructive",
       });
@@ -5125,7 +5147,7 @@ export default function AIAgent() {
                                         <Users
                                           className={`mr-2 h-4 w-4 ${syncingAttribution ? "animate-spin" : ""}`}
                                         />
-                                        {syncingAttribution ? "Syncing..." : "Attribution"}
+                                        {syncingAttribution ? "Syncing..." : "Sync"}
                                       </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>
@@ -5287,8 +5309,9 @@ export default function AIAgent() {
       <Dialog open={showAttributionModal} onOpenChange={setShowAttributionModal}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle data-testid="title-attribution-sync-options">Commerce Attribution Sync</DialogTitle>
+            <DialogTitle data-testid="title-attribution-sync-options">Shopify Full Sync</DialogTitle>
             <DialogDescription>
+              This will sync ALL orders from Shopify, update delivery statuses, and sync customer attribution data.
               Sync customer purchase sources from Shopify to GoHighLevel custom fields and tags.
             </DialogDescription>
           </DialogHeader>

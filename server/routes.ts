@@ -6029,6 +6029,111 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Full historical order sync - fetches ALL Shopify orders and updates delivery status
+  app.post("/api/integrations/shopify/full-order-sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Get Shopify config
+      const shopifyConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      if (!shopifyConfig || !shopifyConfig.config?.shopDomain || !shopifyConfig.config?.accessToken) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Shopify integration not configured" 
+        });
+      }
+      
+      const { ShopifyClient } = await import("./services/shopify-client");
+      const shopify = new ShopifyClient(
+        shopifyConfig.config.shopDomain,
+        shopifyConfig.config.accessToken
+      );
+      
+      let ordersCreated = 0;
+      let ordersUpdated = 0;
+      let errors = 0;
+      
+      console.log('[Full Order Sync] Starting full historical order sync...');
+      
+      // Process orders in batches to avoid memory issues
+      const result = await shopify.syncAllOrders(async (normalizedOrders, progress) => {
+        console.log(`[Full Order Sync] Processing batch: ${progress.fetched} orders (page ${progress.page})`);
+        
+        for (const order of normalizedOrders) {
+          try {
+            // Check if order exists by external ID
+            const existingOrder = await storage.getSalesOrderByExternalId(order.externalId);
+            
+            if (existingOrder) {
+              // Update existing order status (delivery status)
+              await storage.updateSalesOrder(existingOrder.id, {
+                status: order.status,
+                deliveredAt: order.deliveredAt,
+              });
+              ordersUpdated++;
+            } else {
+              // Create new order
+              const newOrder = await storage.createSalesOrder({
+                externalId: order.externalId,
+                externalOrderNumber: order.externalOrderNumber,
+                channel: order.channel,
+                status: order.status,
+                customerName: order.customerName,
+                customerEmail: order.customerEmail,
+                customerPhone: order.customerPhone,
+                orderDate: order.orderDate,
+                expectedDeliveryDate: order.expectedDeliveryDate,
+                deliveredAt: order.deliveredAt,
+                totalAmount: order.totalAmount,
+                currency: order.currency,
+                sourceUrl: order.sourceUrl,
+                shipToStreet: order.shipToStreet,
+                shipToCity: order.shipToCity,
+                shipToState: order.shipToState,
+                shipToZip: order.shipToZip,
+                shipToCountry: order.shipToCountry,
+              });
+              
+              // Create line items
+              for (const line of order.lineItems) {
+                const item = await storage.getItemBySKU(line.sku, userId, { createIfMissing: false });
+                await storage.createSalesOrderLine({
+                  salesOrderId: newOrder.id,
+                  itemId: item?.id,
+                  externalSku: line.sku,
+                  qtyOrdered: line.qtyOrdered,
+                  unitPrice: line.unitPrice,
+                });
+              }
+              ordersCreated++;
+            }
+          } catch (err: any) {
+            console.error(`[Full Order Sync] Error processing order ${order.externalId}:`, err.message);
+            errors++;
+          }
+        }
+      });
+      
+      console.log(`[Full Order Sync] Complete: ${ordersCreated} created, ${ordersUpdated} updated, ${errors} errors`);
+      
+      res.json({
+        success: true,
+        message: `Full sync complete: ${ordersCreated} orders created, ${ordersUpdated} orders updated`,
+        ordersCreated,
+        ordersUpdated,
+        totalFetched: result.totalFetched,
+        totalPages: result.totalPages,
+        errors
+      });
+    } catch (error: any) {
+      console.error('[Full Order Sync] Error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message || "Full order sync failed" 
+      });
+    }
+  });
+
   // Amazon - Test Connection
   app.post("/api/integrations/amazon/test", requireAuth, async (req: Request, res: Response) => {
     try {

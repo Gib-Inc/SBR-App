@@ -145,30 +145,23 @@ export class ShopifyClient {
   }
 
   /**
-   * Map Shopify order status to our internal status
+   * Map Shopify order status to our internal status using ONLY delivery status (shipment_status)
    * Flow: ORDERED → SHIPPED → DELIVERED (+ CANCELLED, PENDING_REFUND, REFUNDED)
    * 
    * Status meanings:
-   * - ORDERED: Payment confirmed, awaiting shipment
-   * - SHIPPED: In transit or out for delivery (carrier has package)
-   * - DELIVERED: Carrier confirmed delivery
+   * - ORDERED: No delivery status yet (awaiting shipment)
+   * - SHIPPED: Has delivery status but not delivered (in_transit, confirmed, out_for_delivery, etc.)
+   * - DELIVERED: Carrier confirmed delivery (shipment_status = 'delivered')
    * - REFUNDED: Full refund completed
    * - CANCELLED: Order voided/cancelled
    * 
-   * Shopify shipment_status values:
-   * - label_printed, label_purchased: Label created but not yet scanned
-   * - confirmed: Carrier confirmed pickup
-   * - in_transit: Package is moving through carrier network
-   * - out_for_delivery: Package is on delivery vehicle
-   * - delivered: Package delivered to recipient
-   * - attempted_delivery, failure: Delivery issues
+   * NOTE: We intentionally do NOT use fulfillment_status - only shipment_status (delivery status)
    */
   private mapStatus(
     financial_status: string, 
-    fulfillment_status: string | null, 
     shipment_status: string | null
   ): string {
-    // If refunded, mark as REFUNDED (not CANCELLED)
+    // If refunded, mark as REFUNDED
     if (financial_status === 'refunded') {
       return 'REFUNDED';
     }
@@ -178,43 +171,19 @@ export class ShopifyClient {
       return 'CANCELLED';
     }
 
-    // Check shipment_status for delivery tracking (matches Shopify exactly)
+    // Check delivery status (shipment_status) - this is the only field we use for ORDERED/SHIPPED/DELIVERED
     if (shipment_status === 'delivered') {
       return 'DELIVERED';
     }
 
-    // in_transit or out_for_delivery means actively shipping → SHIPPED
-    if (shipment_status === 'in_transit' || shipment_status === 'out_for_delivery') {
+    // Any other shipment_status value means it's in the shipping process → SHIPPED
+    // Values: in_transit, out_for_delivery, confirmed, attempted_delivery, label_printed, label_purchased, failure
+    if (shipment_status) {
       return 'SHIPPED';
     }
 
-    // confirmed means carrier has the package → SHIPPED
-    if (shipment_status === 'confirmed') {
-      return 'SHIPPED';
-    }
-
-    // attempted_delivery still means it's in the shipping process
-    if (shipment_status === 'attempted_delivery') {
-      return 'SHIPPED';
-    }
-
-    // If fulfilled but no shipment_status yet (label created but not scanned), still SHIPPED
-    // This handles cases where tracking hasn't updated yet
-    if (fulfillment_status === 'fulfilled' || fulfillment_status === 'partial') {
-      return 'SHIPPED';
-    }
-
-    // If pending payment or authorized, mark as DRAFT (awaiting confirmation)
-    if (financial_status === 'pending' || financial_status === 'authorized') {
-      return 'DRAFT';
-    }
-
-    // If paid but not fulfilled, mark as ORDERED
-    if (financial_status === 'paid') {
-      return 'ORDERED';
-    }
-
-    // Default to ORDERED for all other cases
+    // No shipment_status means not yet shipped → ORDERED
+    // (regardless of fulfillment_status or financial_status)
     return 'ORDERED';
   }
 
@@ -347,7 +316,7 @@ export class ShopifyClient {
       }
     }
 
-    const status = this.mapStatus(order.financial_status, order.fulfillment_status, shipmentStatus);
+    const status = this.mapStatus(order.financial_status, shipmentStatus);
 
     const lineItems = order.line_items.map(item => ({
       sku: item.sku || `SHOPIFY-${item.id}`,
@@ -691,6 +660,67 @@ export class ShopifyClient {
       return allOrders.map(order => this.normalizeOrder(order));
     } catch (error: any) {
       throw new Error(`Failed to fetch Shopify orders: ${error.message}`);
+    }
+  }
+
+  /**
+   * Fetch ALL historical orders from Shopify (for full sync)
+   * No date limit - fetches entire order history
+   * Uses callback to process orders in batches to avoid memory issues
+   */
+  async syncAllOrders(
+    onBatch: (orders: ShopifyNormalizedOrder[], progress: { fetched: number; page: number }) => Promise<void>,
+    maxOrders: number = 50000
+  ): Promise<{ totalFetched: number; totalPages: number }> {
+    try {
+      let pageCount = 0;
+      let totalFetched = 0;
+      const pageSize = 250; // Shopify max per page
+      
+      // First page URL - no date filter to get ALL orders
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/orders.json?status=any&limit=${pageSize}`;
+      
+      console.log(`[Shopify Full Sync] Starting full historical order sync (max: ${maxOrders})...`);
+      
+      while (nextPageUrl && totalFetched < maxOrders) {
+        const response = await fetch(nextPageUrl, {
+          headers: this.getHeaders(),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        const orders: ShopifyOrder[] = data.orders || [];
+        
+        pageCount++;
+        totalFetched += orders.length;
+        
+        // Normalize orders and call the batch callback
+        const normalizedOrders = orders.map(order => this.normalizeOrder(order));
+        await onBatch(normalizedOrders, { fetched: totalFetched, page: pageCount });
+
+        console.log(`[Shopify Full Sync] Page ${pageCount}: ${orders.length} orders (total: ${totalFetched})`);
+
+        // Check for next page
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+        
+        // Stop if no more pages or hit limit
+        if (!nextPageUrl || orders.length < pageSize || totalFetched >= maxOrders) {
+          break;
+        }
+        
+        // Rate limit protection - small delay between pages
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      console.log(`[Shopify Full Sync] Complete: ${totalFetched} orders across ${pageCount} page(s)`);
+      return { totalFetched, totalPages: pageCount };
+    } catch (error: any) {
+      throw new Error(`Failed to fetch all Shopify orders: ${error.message}`);
     }
   }
 

@@ -151,7 +151,9 @@ export class QuickBooksClient {
 
   // QuickBooks OAuth endpoints
   private static readonly TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
-  private static readonly API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
+  // Using sandbox URL for development - change to production URL when ready:
+  // private static readonly API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
+  private static readonly API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
 
   constructor(storage: IStorage, userId: string) {
     this.storage = storage;

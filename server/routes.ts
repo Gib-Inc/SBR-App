@@ -1358,6 +1358,107 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/ai/insights/demand-trend-chart - Get aggregated data for demand trend line chart
+  // Returns 6 data series: current year sales (from app), last 3 years sales (from QB), AI recommendations, PO quantities
+  app.get("/api/ai/insights/demand-trend-chart", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const currentYear = new Date().getFullYear();
+      const years = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      
+      // Initialize chart data structure - one entry per month
+      const chartData: Array<{
+        month: string;
+        monthNum: number;
+        currentYearSales: number;
+        lastYearSales: number;
+        twoYearsAgoSales: number;
+        threeYearsAgoSales: number;
+        aiRecommended: number;
+        poOrdered: number;
+      }> = monthNames.map((name, idx) => ({
+        month: name,
+        monthNum: idx + 1,
+        currentYearSales: 0,
+        lastYearSales: 0,
+        twoYearsAgoSales: 0,
+        threeYearsAgoSales: 0,
+        aiRecommended: 0,
+        poOrdered: 0,
+      }));
+
+      // 1. Get current year sales from app's salesOrderLines
+      const salesOrders = await storage.getSalesOrders({ isHistorical: false });
+      const allSalesOrders = [...salesOrders, ...(await storage.getSalesOrders({ isHistorical: true }))];
+      
+      for (const order of allSalesOrders) {
+        const orderDate = new Date(order.orderDate);
+        if (orderDate.getFullYear() === currentYear) {
+          const monthIdx = orderDate.getMonth(); // 0-11
+          const lines = await storage.getSalesOrderLinesBySalesOrderId(order.id);
+          for (const line of lines) {
+            chartData[monthIdx].currentYearSales += line.qtyOrdered;
+          }
+        }
+      }
+
+      // 2. Get historical years from QuickBooks demand history
+      const qbDemandHistory = await storage.getQuickbooksDemandHistoryItems({ pageSize: 10000 });
+      
+      for (const record of qbDemandHistory.items) {
+        const monthIdx = record.month - 1; // Convert 1-12 to 0-11
+        if (monthIdx >= 0 && monthIdx < 12) {
+          if (record.year === currentYear - 1) {
+            chartData[monthIdx].lastYearSales += record.netQty;
+          } else if (record.year === currentYear - 2) {
+            chartData[monthIdx].twoYearsAgoSales += record.netQty;
+          } else if (record.year === currentYear - 3) {
+            chartData[monthIdx].threeYearsAgoSales += record.netQty;
+          }
+        }
+      }
+
+      // 3. Get AI recommendations aggregated by month (from createdAt)
+      const recommendations = await storage.getAllAIRecommendations();
+      
+      for (const rec of recommendations) {
+        const recDate = new Date(rec.createdAt);
+        if (recDate.getFullYear() === currentYear) {
+          const monthIdx = recDate.getMonth();
+          chartData[monthIdx].aiRecommended += rec.recommendedQty || 0;
+        }
+      }
+
+      // 4. Get PO quantities aggregated by month (from orderDate)
+      const purchaseOrders = await storage.getAllPurchaseOrders();
+      
+      for (const po of purchaseOrders) {
+        const poDate = new Date(po.orderDate);
+        if (poDate.getFullYear() === currentYear && po.status !== 'CANCELLED') {
+          const monthIdx = poDate.getMonth();
+          const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+          for (const line of lines) {
+            chartData[monthIdx].poOrdered += line.qtyOrdered;
+          }
+        }
+      }
+
+      res.json({
+        chartData,
+        years: {
+          current: currentYear,
+          last: currentYear - 1,
+          twoYearsAgo: currentYear - 2,
+          threeYearsAgo: currentYear - 3,
+        },
+        lastUpdated: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("[Demand Trend Chart] Error fetching chart data:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch demand trend data" });
+    }
+  });
+
   // GET /api/ai/recommendations/:id/linked-pos - Get POs linked to a recommendation
   app.get("/api/ai/recommendations/:id/linked-pos", requireAuth, async (req: Request, res: Response) => {
     try {

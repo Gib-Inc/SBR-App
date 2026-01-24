@@ -25,6 +25,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { IntegrationSettings } from "@/components/integration-settings";
 import { CreatePOSheet } from "@/components/create-po-sheet";
 import { SkuMappingWizard } from "@/components/sku-mapping-wizard";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from "recharts";
 
 interface AIRules {
   velocityLookbackDays: number;
@@ -1137,32 +1138,30 @@ interface DailySalesResponse {
   count: number;
 }
 
+interface DemandTrendChartData {
+  month: string;
+  monthNum: number;
+  currentYearSales: number;
+  lastYearSales: number;
+  twoYearsAgoSales: number;
+  threeYearsAgoSales: number;
+  aiRecommended: number;
+  poOrdered: number;
+}
+
+interface DemandTrendChartResponse {
+  chartData: DemandTrendChartData[];
+  years: {
+    current: number;
+    last: number;
+    twoYearsAgo: number;
+    threeYearsAgo: number;
+  };
+  lastUpdated: string;
+}
+
 function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToDataSources: () => void }) {
-  const [, navigate] = useLocation();
-  const [search, setSearch] = useState("");
-  const [yearFilter, setYearFilter] = useState<string>("all");
-  const [monthFilter, setMonthFilter] = useState<string>("all");
-  const [page, setPage] = useState(1);
-  const pageSize = 25;
   const { toast } = useToast();
-  
-  const queryParams = new URLSearchParams();
-  if (search) queryParams.set("search", search);
-  if (yearFilter !== "all") queryParams.set("year", yearFilter);
-  if (monthFilter !== "all") queryParams.set("month", monthFilter);
-  queryParams.set("page", String(page));
-  queryParams.set("pageSize", String(pageSize));
-  
-  const { data, isLoading, isFetching, error } = useQuery<QBDemandHistoryResponse>({
-    queryKey: ["/api/ai/insights/qb-demand-history", search, yearFilter, monthFilter, page],
-    queryFn: async () => {
-      const response = await fetch(`/api/ai/insights/qb-demand-history?${queryParams.toString()}`, {
-        credentials: "include",
-      });
-      if (!response.ok) throw new Error("Failed to fetch demand history");
-      return response.json();
-    },
-  });
 
   // Daily sales snapshots for trend cards
   const { data: dailySalesData } = useQuery<DailySalesResponse>({
@@ -1197,6 +1196,20 @@ function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToD
     },
   });
 
+  // Demand trend chart data - auto-refreshes every 60 seconds for live updates
+  const { data: chartData, isLoading: chartLoading } = useQuery<DemandTrendChartResponse>({
+    queryKey: ["/api/ai/insights/demand-trend-chart"],
+    queryFn: async () => {
+      const response = await fetch("/api/ai/insights/demand-trend-chart", {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch chart data");
+      return response.json();
+    },
+    refetchInterval: 60000, // Refresh every 60 seconds for live updates
+    refetchOnWindowFocus: true, // Refresh when user returns to tab
+  });
+
   // Get today's snapshot
   const todayStr = new Date().toISOString().split('T')[0];
   const todaySnapshot = dailySalesData?.snapshots.find(s => s.date === todayStr);
@@ -1204,13 +1217,6 @@ function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToD
   yesterdayDate.setDate(yesterdayDate.getDate() - 1);
   const yesterdayStr = yesterdayDate.toISOString().split('T')[0];
   const yesterdaySnapshot = dailySalesData?.snapshots.find(s => s.date === yesterdayStr);
-
-  const monthNames = [
-    "", "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December"
-  ];
-
-  const shortMonthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-US", {
@@ -1237,11 +1243,6 @@ function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToD
     return date.toLocaleDateString();
   };
 
-  const hasData = data && data.items.length > 0;
-  const hasYears = data && data.years.length > 0;
-  const isFiltered = search || yearFilter !== "all" || monthFilter !== "all";
-  
-  const lastSyncedAt = data?.items?.[0]?.lastSyncedAt || data?.items?.[0]?.updatedAt;
   const hasDailySalesData = dailySalesData && dailySalesData.count > 0;
 
   const formatChange = (change: number | null | undefined) => {
@@ -1337,209 +1338,165 @@ function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToD
         </Card>
       </div>
 
-      {/* Original QuickBooks Demand History Card */}
+      {/* Demand Trend Chart - Year over Year Comparison */}
       <Card>
         <CardHeader className="pb-4">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
             <div>
               <CardTitle className="flex items-center gap-2">
-                <Database className="h-5 w-5" />
-                QuickBooks Demand History
+                <TrendingUp className="h-5 w-5" />
+                Demand Trend Analysis
               </CardTitle>
               <CardDescription>
-                Read-only historical demand imported from QuickBooks for forecasting.
+                Year-over-year sales comparison with AI recommendations and purchase order history.
               </CardDescription>
             </div>
-          {lastSyncedAt && (
-            <span className="text-xs text-muted-foreground whitespace-nowrap">
-              Last synced: {formatRelativeTime(lastSyncedAt)}
-            </span>
-          )}
-        </div>
-        
-        <div className="flex items-center gap-2 flex-wrap mt-4">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search by SKU or product..."
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              className="pl-8 w-56"
-              data-testid="input-qb-search"
-            />
+            {chartData?.lastUpdated && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">
+                Last updated: {formatRelativeTime(chartData.lastUpdated)}
+              </span>
+            )}
           </div>
-          <Select 
-            value={yearFilter} 
-            onValueChange={(v) => {
-              setYearFilter(v);
-              setPage(1);
-            }}
-          >
-            <SelectTrigger className="w-32" data-testid="select-qb-year">
-              <SelectValue placeholder="All years" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All years</SelectItem>
-              {hasYears && data.years.map(year => (
-                <SelectItem key={year} value={String(year)}>{year}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select 
-            value={monthFilter} 
-            onValueChange={(v) => {
-              setMonthFilter(v);
-              setPage(1);
-            }}
-          >
-            <SelectTrigger className="w-36" data-testid="select-qb-month">
-              <SelectValue placeholder="All months" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All months</SelectItem>
-              {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
-                <SelectItem key={m} value={String(m)}>{monthNames[m]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {isFetching && !isLoading && (
-            <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground" />
-          )}
-        </div>
-      </CardHeader>
+        </CardHeader>
 
-      <CardContent className="p-0">
-        {isLoading ? (
-          <div className="p-6">
-            <Skeleton className="h-64 w-full" />
-          </div>
-        ) : error ? (
-          <div className="h-32 flex items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <AlertTriangle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">Failed to load demand history</p>
+        <CardContent>
+          {chartLoading ? (
+            <div className="p-6">
+              <Skeleton className="h-80 w-full" />
+            </div>
+          ) : !chartData?.chartData ? (
+            <div className="py-16 text-center">
+              <Database className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+              <p className="text-lg font-medium text-foreground">No demand data available</p>
+              <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+                Connect QuickBooks and sync demand history to see year-over-year trends.
+              </p>
               <Button 
                 variant="outline" 
-                size="sm" 
-                className="mt-2"
-                onClick={() => window.location.reload()}
-                data-testid="button-qb-retry"
+                className="mt-4"
+                onClick={onNavigateToDataSources}
+                data-testid="button-open-integrations-chart"
               >
-                Retry
+                <Settings2 className="mr-2 h-4 w-4" />
+                Open Data Sources
               </Button>
             </div>
-          </div>
-        ) : !hasData && !isFiltered ? (
-          <div className="py-16 text-center">
-            <Database className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-            <p className="text-lg font-medium text-foreground">No QuickBooks demand history</p>
-            <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
-              Connect QuickBooks and run "Sync Demand Now" from the integrations page to populate demand history.
-            </p>
-            <Button 
-              variant="outline" 
-              className="mt-4"
-              onClick={onNavigateToDataSources}
-              data-testid="button-open-integrations"
-            >
-              <Settings2 className="mr-2 h-4 w-4" />
-              Open Data Sources
-            </Button>
-          </div>
-        ) : !hasData && isFiltered ? (
-          <div className="h-32 flex items-center justify-center text-muted-foreground">
-            <p>No data matches your filters. Try adjusting the search criteria.</p>
-          </div>
-        ) : (
-          <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
-            <table className="w-full table-auto">
-              <thead className="bg-muted sticky top-0 z-10">
-                <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Product</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
-                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Period</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Sold</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Returned</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Net Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Revenue</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Synced</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.items.map((item) => (
-                  <tr 
-                    key={item.id} 
-                    className="border-b last:border-b-0 hover-elevate h-12"
-                    data-testid={`row-qb-demand-${item.id}`}
-                  >
-                    <td className="p-3 align-middle whitespace-nowrap max-w-[200px] truncate" title={item.productName ?? ""}>
-                      <span className="font-medium">{item.productName ?? "-"}</span>
-                    </td>
-                    <td className="p-3 align-middle font-mono text-sm whitespace-nowrap">
-                      {item.sku}
-                    </td>
-                    <td className="p-3 align-middle text-center whitespace-nowrap">
-                      {shortMonthNames[item.month]} {item.year}
-                    </td>
-                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap text-green-600 dark:text-green-400">
-                      +{item.qtySold.toLocaleString()}
-                    </td>
-                    <td className="p-3 align-middle text-right font-medium whitespace-nowrap text-red-600 dark:text-red-400">
-                      {item.qtyReturned > 0 ? `-${item.qtyReturned.toLocaleString()}` : "0"}
-                    </td>
-                    <td className="p-3 align-middle text-right font-bold whitespace-nowrap">
-                      {item.netQty.toLocaleString()}
-                    </td>
-                    <td className="p-3 align-middle text-right whitespace-nowrap">
-                      {formatCurrency(item.revenue)}
-                    </td>
-                    <td className="p-3 align-middle text-right text-muted-foreground whitespace-nowrap text-xs">
-                      {formatRelativeTime(item.lastSyncedAt || item.updatedAt)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
+          ) : (
+            <div className="h-96" data-testid="demand-trend-chart">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData.chartData} margin={{ top: 20, right: 30, left: 20, bottom: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                  <XAxis 
+                    dataKey="month" 
+                    tick={{ fontSize: 12 }}
+                    className="text-muted-foreground"
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12 }}
+                    className="text-muted-foreground"
+                    tickFormatter={(value) => value.toLocaleString()}
+                  />
+                  <RechartsTooltip 
+                    contentStyle={{ 
+                      backgroundColor: 'hsl(var(--card))', 
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: '8px',
+                      padding: '12px'
+                    }}
+                    labelStyle={{ fontWeight: 'bold', marginBottom: '8px' }}
+                    formatter={(value: number, name: string) => [value.toLocaleString(), name]}
+                  />
+                  <Legend 
+                    wrapperStyle={{ paddingTop: '20px' }}
+                    formatter={(value) => <span className="text-sm">{value}</span>}
+                  />
+                  {/* Current year sales from app - primary line */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="currentYearSales" 
+                    name={`${chartData.years.current} Sales (Live)`}
+                    stroke="#3b82f6" 
+                    strokeWidth={3}
+                    dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
+                    activeDot={{ r: 6 }}
+                  />
+                  {/* Last year sales from QuickBooks */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="lastYearSales" 
+                    name={`${chartData.years.last} Sales (QB)`}
+                    stroke="#8b5cf6" 
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    dot={{ fill: '#8b5cf6', strokeWidth: 2, r: 3 }}
+                  />
+                  {/* 2 years ago sales from QuickBooks */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="twoYearsAgoSales" 
+                    name={`${chartData.years.twoYearsAgo} Sales (QB)`}
+                    stroke="#a855f7" 
+                    strokeWidth={2}
+                    strokeDasharray="3 3"
+                    dot={{ fill: '#a855f7', strokeWidth: 2, r: 3 }}
+                  />
+                  {/* 3 years ago sales from QuickBooks */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="threeYearsAgoSales" 
+                    name={`${chartData.years.threeYearsAgo} Sales (QB)`}
+                    stroke="#c084fc" 
+                    strokeWidth={1}
+                    strokeDasharray="2 2"
+                    dot={{ fill: '#c084fc', strokeWidth: 1, r: 2 }}
+                  />
+                  {/* AI Recommended quantities */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="aiRecommended" 
+                    name="AI Recommended"
+                    stroke="#22c55e" 
+                    strokeWidth={2}
+                    dot={{ fill: '#22c55e', strokeWidth: 2, r: 4 }}
+                  />
+                  {/* PO Ordered quantities */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="poOrdered" 
+                    name="PO Ordered"
+                    stroke="#f59e0b" 
+                    strokeWidth={2}
+                    dot={{ fill: '#f59e0b', strokeWidth: 2, r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </CardContent>
 
-      {hasData && data.totalPages > 1 && (
-        <CardFooter className="border-t pt-4 flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Showing {((page - 1) * pageSize) + 1} to {Math.min(page * pageSize, data.total)} of {data.total} records
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1 || isFetching}
-              data-testid="button-qb-prev-page"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Previous
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              Page {page} of {data.totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage(p => Math.min(data.totalPages, p + 1))}
-              disabled={page >= data.totalPages || isFetching}
-              data-testid="button-qb-next-page"
-            >
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </CardFooter>
-      )}
-    </Card>
+        {chartData?.chartData && (
+          <CardFooter className="border-t pt-4">
+            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-blue-500" />
+                <span>Current year = Live app data</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-purple-500" style={{ backgroundImage: 'repeating-linear-gradient(90deg, #8b5cf6 0, #8b5cf6 5px, transparent 5px, transparent 10px)' }} />
+                <span>Historical years = QuickBooks</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-green-500" />
+                <span>AI Recommendation = Suggested order capacity</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-amber-500" />
+                <span>PO Ordered = Actual purchase orders</span>
+              </div>
+            </div>
+          </CardFooter>
+        )}
+      </Card>
     </div>
   );
 }
@@ -4331,7 +4288,7 @@ export default function AIAgent() {
   const handleQuickBooksSync = async () => {
     setSyncingSource("quickbooks");
     try {
-      const result = await apiRequest("POST", "/api/quickbooks/sync-sales", { years: 3 });
+      const result = await apiRequest("POST", "/api/quickbooks/sync-demand-history", { years: 3 });
       refetchQbStatus();
       toast({
         title: "Sync Complete",

@@ -240,6 +240,9 @@ export class ShopifyClient {
     const sourceIdentifier = order.source_identifier || '';
     const tags = (order.tags || '').toLowerCase().split(',').map(t => t.trim());
 
+    // Debug logging to understand actual data from Shopify
+    console.log(`[Shopify Channel] Order #${order.order_number || order.id}: source_name="${order.source_name}", app="${order.app?.name}", tags="${order.tags}", source_identifier="${sourceIdentifier}", channel_info=${JSON.stringify(channelInfo || {})}`);
+
     // Known Shopify indicators
     const isDefinitelyShopify = 
       sourceName === 'web' ||
@@ -370,6 +373,9 @@ export class ShopifyClient {
         ? `${shippingAddress.address1}, ${shippingAddress.address2}` 
         : shippingAddress.address1)
       : undefined;
+
+    // Debug logging for shipping address
+    console.log(`[Shopify Addr] Order #${order.order_number || order.id}: has_shipping_address=${!!shippingAddress}, address1="${shippingAddress?.address1}", city="${shippingAddress?.city}", state="${shippingAddress?.province || shippingAddress?.province_code}"`);
 
     // Classify channel using Commerce Attribution logic (Amazon vs Shopify)
     const channel = this.classifyChannel(order);

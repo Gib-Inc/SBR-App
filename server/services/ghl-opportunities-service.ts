@@ -32,6 +32,19 @@ export class GHLOpportunitiesService {
   private apiKey: string | null = null;
   private systemContactId: string | null = null;
 
+  /**
+   * Sanitize string for URL/API use - removes non-ASCII characters that cause ByteString encoding errors.
+   * Characters like bullet points (•), special quotes, etc. break encodeURIComponent.
+   */
+  private sanitizeForApi(str: string | undefined): string {
+    if (!str) return '';
+    // Remove non-ASCII characters and control characters, keep basic punctuation
+    return str
+      .replace(/[^\x00-\x7F]/g, '') // Remove all non-ASCII
+      .replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
+      .trim();
+  }
+
   private getHeaders(): Record<string, string> {
     if (!this.apiKey) {
       throw new Error("GHL API key not configured");
@@ -347,14 +360,14 @@ export class GHLOpportunitiesService {
       return null;
     }
 
-    // Normalize inputs
-    const normalizedEmail = email?.toLowerCase().trim();
-    const normalizedPhone = this.normalizePhone(phone);
-    const normalizedName = name?.trim();
+    // Normalize and sanitize inputs to prevent ByteString encoding errors
+    const normalizedEmail = this.sanitizeForApi(email?.toLowerCase().trim());
+    const normalizedPhone = this.sanitizeForApi(this.normalizePhone(phone) || undefined);
+    const normalizedName = this.sanitizeForApi(name?.trim());
 
     try {
       // Search by email first, then phone, then name
-      const searchQueries = [normalizedEmail, normalizedPhone, normalizedName].filter(Boolean);
+      const searchQueries = [normalizedEmail, normalizedPhone, normalizedName].filter(q => q && q.length > 0);
       
       for (const query of searchQueries) {
         if (!query) continue;

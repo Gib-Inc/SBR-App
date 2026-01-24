@@ -4444,10 +4444,10 @@ export default function AIAgent() {
       });
       return;
     }
-    // Shopify - open SKU wizard directly
+    // Shopify - show full historical sync options modal
     if (source === "shopify") {
-      setSkuWizardSource("shopify");
-      setShowSkuMappingWizard(true);
+      setShopifySyncMode("merge");
+      setShowShopifySyncModal(true);
       return;
     }
     // GoHighLevel - show sync options modal
@@ -4495,12 +4495,13 @@ export default function AIAgent() {
     setSyncingSource("shopify");
     
     toast({
-      title: "Shopify sync started...",
-      description: shopifySyncMode === "merge" ? "Importing Shopify data" : "Replacing with Shopify data",
+      title: "Shopify full sync started...",
+      description: "Syncing all historical orders from Shopify. This may take a few minutes.",
     });
     
     try {
-      const response = await apiRequest("POST", `/api/integrations/shopify/sync`, { mode: shopifySyncMode });
+      // Call full historical order sync endpoint (not the 7-day merge sync)
+      const response = await apiRequest("POST", `/api/integrations/shopify/full-order-sync`, { mode: shopifySyncMode });
       const result = await response.json();
       
       queryClient.invalidateQueries({ queryKey: ["/api/integrations/health"] });
@@ -4510,18 +4511,10 @@ export default function AIAgent() {
       queryClient.invalidateQueries({ queryKey: ["/api/integration-configs/SHOPIFY"] });
       
       if (result.success) {
-        const refundsPart = result.refundsCreated > 0 ? `, ${result.refundsCreated} returns synced` : '';
-        if (shopifySyncMode === "merge") {
-          toast({
-            title: "Shopify sync completed",
-            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} orders updated${refundsPart}`,
-          });
-        } else {
-          toast({
-            title: "Shopify sync completed (Replace mode)",
-            description: `${result.createdOrders || 0} orders created, ${result.updatedOrders || 0} updated, ${result.ordersArchived || 0} removed${refundsPart}, ${result.inventoryMappingsCleared || 0} mappings cleared`,
-          });
-        }
+        toast({
+          title: "Shopify full sync completed",
+          description: `${result.ordersCreated || 0} orders created, ${result.ordersUpdated || 0} orders updated (${result.totalFetched || 0} total processed)`,
+        });
       } else {
         toast({
           title: "Shopify sync failed",
@@ -5179,17 +5172,25 @@ export default function AIAgent() {
         </DialogContent>
       </Dialog>
 
-      {/* Shopify Sync Options Modal */}
+      {/* Shopify Full Historical Sync Modal */}
       <Dialog open={showShopifySyncModal} onOpenChange={setShowShopifySyncModal}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle data-testid="title-shopify-sync-options">Shopify Sync Options</DialogTitle>
+            <DialogTitle data-testid="title-shopify-sync-options">Shopify Full Historical Sync</DialogTitle>
             <DialogDescription>
-              Choose how to reconcile Shopify with this inventory app.
+              Import all historical orders from Shopify. This may take several minutes depending on order volume.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-6 py-4">
-            <p className="text-sm font-medium">Do you want to remove any data that doesn't match Shopify?</p>
+            <div className="bg-muted/50 p-4 rounded-lg space-y-2">
+              <p className="text-sm font-medium">What this sync does:</p>
+              <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
+                <li>Fetches ALL orders from Shopify (not just recent ones)</li>
+                <li>Creates new orders that don't exist in this app</li>
+                <li>Updates delivery status for existing orders</li>
+                <li>Respects Shopify API rate limits (may take a few minutes)</li>
+              </ul>
+            </div>
             
             <RadioGroup 
               value={shopifySyncMode} 
@@ -5206,7 +5207,7 @@ export default function AIAgent() {
                     Import only (recommended)
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Import Shopify orders and inventory without deleting anything that only exists in this app.
+                    Import all Shopify orders without deleting anything that only exists in this app.
                   </p>
                 </div>
               </div>
@@ -5257,7 +5258,7 @@ export default function AIAgent() {
                 data-testid="button-start-shopify-sync"
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Start Sync
+                Start Full Sync
               </Button>
             </div>
           </div>

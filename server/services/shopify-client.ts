@@ -683,16 +683,35 @@ export class ShopifyClient {
       console.log(`[Shopify Full Sync] Starting full historical order sync (max: ${maxOrders})...`);
       
       while (nextPageUrl && totalFetched < maxOrders) {
-        const response = await fetch(nextPageUrl, {
-          headers: this.getHeaders(),
-        });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Shopify API error: ${response.status} ${response.statusText} - ${errorText}`);
+        let response: Response;
+        let retryCount = 0;
+        const maxRetries = 5;
+        
+        // Retry loop for rate limiting (429 errors)
+        while (retryCount < maxRetries) {
+          response = await fetch(nextPageUrl, {
+            headers: this.getHeaders(),
+          });
+          
+          // Handle rate limiting with exponential backoff
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After');
+            const waitTime = retryAfter ? parseFloat(retryAfter) * 1000 : Math.min(2000 * Math.pow(2, retryCount), 64000);
+            console.log(`[Shopify Full Sync] Rate limited. Waiting ${waitTime}ms before retry ${retryCount + 1}/${maxRetries}...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            retryCount++;
+            continue;
+          }
+          
+          break;
         }
 
-        const data = await response.json();
+        if (!response!.ok) {
+          const errorText = await response!.text();
+          throw new Error(`Shopify API error: ${response!.status} ${response!.statusText} - ${errorText}`);
+        }
+
+        const data = await response!.json();
         const orders: ShopifyOrder[] = data.orders || [];
         
         pageCount++;
@@ -703,9 +722,25 @@ export class ShopifyClient {
         await onBatch(normalizedOrders, { fetched: totalFetched, page: pageCount });
 
         console.log(`[Shopify Full Sync] Page ${pageCount}: ${orders.length} orders (total: ${totalFetched})`);
+        
+        // Check rate limit header and apply adaptive delay
+        // Shopify uses "X-Shopify-Shop-Api-Call-Limit: current/max" format (e.g., "32/40")
+        const rateLimitHeader = response!.headers.get('X-Shopify-Shop-Api-Call-Limit');
+        if (rateLimitHeader) {
+          const [current, max] = rateLimitHeader.split('/').map(Number);
+          if (current && max) {
+            // If bucket is more than 80% full, slow down
+            const usageRatio = current / max;
+            if (usageRatio >= 0.8) {
+              const delayMs = usageRatio >= 0.9 ? 1000 : 500;
+              console.log(`[Shopify Full Sync] Bucket at ${Math.round(usageRatio * 100)}% (${current}/${max}), adding ${delayMs}ms delay`);
+              await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+          }
+        }
 
         // Check for next page
-        const linkHeader = response.headers.get('Link');
+        const linkHeader = response!.headers.get('Link');
         nextPageUrl = this.extractNextLinkUrl(linkHeader);
         
         // Stop if no more pages or hit limit
@@ -713,8 +748,8 @@ export class ShopifyClient {
           break;
         }
         
-        // Rate limit protection - small delay between pages
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Base rate limit protection - small delay between pages to stay under 2 req/sec
+        await new Promise(resolve => setTimeout(resolve, 250));
       }
 
       console.log(`[Shopify Full Sync] Complete: ${totalFetched} orders across ${pageCount} page(s)`);

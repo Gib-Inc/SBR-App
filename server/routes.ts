@@ -16477,7 +16477,10 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId;
+      if (!userId) {
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
       const client = new QuickBooksClient(storage, userId);
       const status = await client.getConnectionStatus();
       
@@ -16494,7 +16497,7 @@ Generate only the email body text, no subject line.`;
   // GET /api/quickbooks/webhook-config - Get webhook configuration (masked token)
   app.get("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const auth = await storage.getQuickbooksAuthByUserId(userId);
       
       // Return masked token status (not the actual value)
@@ -16512,7 +16515,7 @@ Generate only the email body text, no subject line.`;
   // PATCH /api/quickbooks/webhook-config - Update webhook verifier token
   app.patch("/api/quickbooks/webhook-config", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const { webhookVerifierToken } = req.body;
       
       if (typeof webhookVerifierToken !== 'string') {
@@ -16622,7 +16625,7 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const client = new QuickBooksClient(storage, userId);
       const result = await client.testConnection();
       
@@ -16667,7 +16670,7 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const { years = 3 } = req.body;
       
       const client = new QuickBooksClient(storage, userId);
@@ -16691,7 +16694,7 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const { years = 3, mode = "append" } = req.body;
       const syncMode = mode === "rebuild" ? "rebuild" : "append"; // Default to "append" (safer)
       console.log(`[QuickBooks] Starting demand history sync in ${syncMode.toUpperCase()} mode for ${years} years`);
@@ -16887,7 +16890,7 @@ Generate only the email body text, no subject line.`;
       }
 
       const { id } = req.params;
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       
       // Get PO with lines
       const po = await storage.getPurchaseOrder(id);
@@ -17220,7 +17223,7 @@ Generate only the email body text, no subject line.`;
   // POST /api/quickbooks/disconnect - Disconnect QuickBooks
   app.post("/api/quickbooks/disconnect", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const auth = await storage.getQuickbooksAuth(userId);
       
       if (auth) {
@@ -17237,7 +17240,7 @@ Generate only the email body text, no subject line.`;
   // GET /api/quickbooks/items - Fetch items from QuickBooks for SKU mapping
   app.get("/api/quickbooks/items", requireAuth, async (req: Request, res: Response) => {
     try {
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const qbClient = new QuickBooksClient(storage, userId);
       const result = await qbClient.fetchItems();
       
@@ -17260,7 +17263,7 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ success: false, error: 'SKU is required' });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const qbClient = new QuickBooksClient(storage, userId);
       const result = await qbClient.lookupItemBySku(sku);
       
@@ -17286,7 +17289,7 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ success: false, error: 'Search term must be at least 2 characters' });
       }
 
-      const userId = req.user?.id || 'system';
+      const userId = req.session.userId || 'system';
       const qbClient = new QuickBooksClient(storage, userId);
       const result = await qbClient.searchItemsByName(searchTerm, searchLimit);
       

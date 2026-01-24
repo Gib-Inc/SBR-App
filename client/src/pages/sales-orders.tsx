@@ -996,8 +996,8 @@ export default function SalesOrders() {
                       </td>
                       <td className="px-2 align-middle text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
-                          {/* Open in Shopify Button */}
-                          {order.channel === 'SHOPIFY' && order.sourceUrl && (
+                          {/* Open in Shopify Button - all orders flow through Shopify */}
+                          {order.sourceUrl && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button

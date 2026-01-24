@@ -5099,7 +5099,22 @@ TOTAL: $${subtotal.toFixed(2)}
           const existingOrder = await storage.getSalesOrderByExternalIdOnly(orderData.externalOrderId);
 
           if (existingOrder) {
-            // Update existing order with new fields including shipping address and channel
+            // Check if any important fields actually changed
+            const hasChannelChange = existingOrder.channel !== orderData.channel;
+            const hasStatusChange = existingOrder.status !== orderData.status;
+            const hasAddressChange = existingOrder.shipToStreet !== orderData.shipToStreet || 
+                                     existingOrder.shipToCity !== orderData.shipToCity;
+            const hasAmountChange = existingOrder.totalAmount !== orderData.totalAmount;
+            
+            // Only count as updated if something meaningful changed
+            const hasRealChanges = hasChannelChange || hasStatusChange || hasAddressChange || hasAmountChange;
+            
+            // Debug: log what channel is being passed
+            if (hasChannelChange) {
+              console.log(`[Shopify Sync] Updating order ${orderData.externalOrderId}: existingChannel="${existingOrder.channel}" -> newChannel="${orderData.channel}"`);
+            }
+            
+            // Always update to keep data fresh (rawPayload, etc.), but only count if meaningful changes
             await storage.updateSalesOrder(existingOrder.id, {
               channel: orderData.channel, // Update channel to correct classification (Amazon vs Shopify)
               status: orderData.status,
@@ -5120,19 +5135,23 @@ TOTAL: $${subtotal.toFixed(2)}
               shipToZip: orderData.shipToZip,
               shipToCountry: orderData.shipToCountry,
             });
-            updatedCount++;
             
-            // Track updated record
-            syncedRecords.push({
-              id: orderData.externalOrderId,
-              orderNumber: orderData.externalOrderId,
-              customerName: orderData.customerName,
-              status: orderData.status,
-              totalAmount: orderData.totalAmount,
-              currency: orderData.currency,
-              itemCount: orderData.lineItems.length,
-              syncAction: 'updated',
-            });
+            // Only count as updated if there were real changes
+            if (hasRealChanges) {
+              updatedCount++;
+            
+              // Track updated record
+              syncedRecords.push({
+                id: orderData.externalOrderId,
+                orderNumber: orderData.externalOrderId,
+                customerName: orderData.customerName,
+                status: orderData.status,
+                totalAmount: orderData.totalAmount,
+                currency: orderData.currency,
+                itemCount: orderData.lineItems.length,
+                syncAction: 'updated',
+              });
+            }
           } else {
             // Determine fulfillment source using FulfillmentDecisionService
             // This decides whether to ship from Hildale or Pivot/Extensiv based on inventory thresholds

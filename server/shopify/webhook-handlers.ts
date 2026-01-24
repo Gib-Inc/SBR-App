@@ -652,23 +652,39 @@ export async function handleRefundCreated(
     // Check if order ever shipped - if not, this is a cancellation, not a return
     // Only create returns for orders that have shipped (SHIPPED or DELIVERED status)
     const shippedStatuses = ['SHIPPED', 'DELIVERED'];
-    if (existingOrder && !shippedStatuses.includes(existingOrder.status)) {
+    const terminalStatuses = ['CANCELLED', 'REFUNDED'];
+    
+    // If no existing order found locally, skip creating return - we can't verify shipment
+    if (!existingOrder) {
+      console.log(`[Shopify Webhook] Order ${orderId} not found locally - skipping return creation (cannot verify shipment)`);
+      return {
+        success: true,
+        message: `Order ${orderId} not found locally - skipped (cannot verify shipment)`,
+        data: { refundId, orderId, action: 'skipped_no_order' },
+      };
+    }
+    
+    if (!shippedStatuses.includes(existingOrder.status)) {
       // Order never shipped - mark as CANCELLED instead of creating a return
-      console.log(`[Shopify Webhook] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED instead of creating return`);
-      
-      await storage.updateSalesOrder(existingOrder.id, { 
-        status: 'CANCELLED',
-        updatedAt: new Date(),
-      });
-      
-      // Log the cancellation
-      await logService.logSystemEvent({
-        type: 'SHOPIFY_ORDER_CANCELLED',
-        entityType: 'SALES_ORDER',
-        entityId: existingOrder.id,
-        message: `Order ${existingOrder.externalOrderId} cancelled via Shopify refund (never shipped)`,
-        details: { refundId, orderId, originalStatus: existingOrder.status },
-      });
+      // But don't overwrite if already in a terminal status
+      if (!terminalStatuses.includes(existingOrder.status)) {
+        console.log(`[Shopify Webhook] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED`);
+        
+        await storage.updateSalesOrder(existingOrder.id, { 
+          status: 'CANCELLED',
+        });
+        
+        // Log the cancellation
+        await logService.logSystemEvent({
+          type: 'SHOPIFY_ORDER_CANCELLED',
+          entityType: 'SALES_ORDER',
+          entityId: existingOrder.id,
+          message: `Order ${existingOrder.externalOrderId} cancelled via Shopify refund (never shipped)`,
+          details: { refundId, orderId, originalStatus: existingOrder.status },
+        });
+      } else {
+        console.log(`[Shopify Webhook] Order ${orderId} already in terminal status ${existingOrder.status} - skipping status update`);
+      }
       
       return {
         success: true,
@@ -718,10 +734,10 @@ export async function handleRefundCreated(
       refundedAt: new Date(payload.processed_at || payload.created_at || Date.now()),
       isHistorical: true, // Already complete, goes to history
       archivedAt: new Date(),
-      // Financial data from Shopify
-      finalRefundAmount: totalRefundAmount > 0 ? totalRefundAmount : null,
-      shippingCost: shippingRefundAmount > 0 ? shippingRefundAmount : null,
-      baseRefundAmount: totalRefundAmount - shippingRefundAmount > 0 ? totalRefundAmount - shippingRefundAmount : null,
+      // Financial data from Shopify - always set numeric values to avoid nulls
+      finalRefundAmount: totalRefundAmount,
+      shippingCost: shippingRefundAmount,
+      baseRefundAmount: Math.max(0, totalRefundAmount - shippingRefundAmount),
     });
     
     console.log(`[Shopify Webhook] Created return request ${returnRequest.id} (RMA: ${rmaNumber}) for refund ${refundId}`);
@@ -1021,7 +1037,7 @@ export async function handleFulfillmentUpdated(
           if (newStatus === 'DELIVERED' && previousStatus !== 'DELIVERED') {
             try {
               const { triggerSalesOrderSync } = await import('../services/ghl-sync-triggers');
-              await triggerSalesOrderSync(existingOrder.id, userId, 'STATUS_CHANGE');
+              await triggerSalesOrderSync(userId, existingOrder.id, false);
               console.log(`  - Triggered GHL sync for delivery notification`);
             } catch (syncErr: any) {
               console.warn(`  - GHL sync failed (non-blocking):`, syncErr.message);

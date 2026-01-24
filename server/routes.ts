@@ -5574,13 +5574,24 @@ TOTAL: $${subtotal.toFixed(2)}
             // Check if order ever shipped - if not, this is a cancellation, not a return
             // Only create returns for orders that have shipped (SHIPPED or DELIVERED status)
             const shippedStatuses = ['SHIPPED', 'DELIVERED'];
-            if (existingOrder && !shippedStatuses.includes(existingOrder.status)) {
+            const terminalStatuses = ['CANCELLED', 'REFUNDED'];
+            
+            // If no existing order found locally, skip creating return - we can't verify shipment
+            if (!existingOrder) {
+              console.log(`[Shopify] Order ${orderId} not found locally - skipping return creation`);
+              refundsSkipped++;
+              continue;
+            }
+            
+            if (!shippedStatuses.includes(existingOrder.status)) {
               // Order never shipped - mark as CANCELLED and skip creating return
-              console.log(`[Shopify] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED`);
-              await storage.updateSalesOrder(existingOrder.id, { 
-                status: 'CANCELLED',
-                updatedAt: new Date(),
-              });
+              // But don't overwrite terminal statuses
+              if (!terminalStatuses.includes(existingOrder.status)) {
+                console.log(`[Shopify] Order ${orderId} status is ${existingOrder.status} (never shipped) - marking as CANCELLED`);
+                await storage.updateSalesOrder(existingOrder.id, { 
+                  status: 'CANCELLED',
+                });
+              }
               refundsSkipped++;
               continue;
             }
@@ -5636,11 +5647,11 @@ TOTAL: $${subtotal.toFixed(2)}
               refundedAt: null, // Set when warehouse confirms receipt
               isHistorical: false,
               archivedAt: null,
-              // Populate financial fields for proper display
+              // Populate financial fields for proper display - always numeric to avoid nulls
               totalReceived: totalReceived,
-              shippingCost: shippingRefundAmount > 0 ? shippingRefundAmount : 0, // Shipping refund from Shopify
+              shippingCost: shippingRefundAmount, // Shipping refund from Shopify
               labelFee: 0, // No label fee for synced refunds (already processed)
-              baseRefundAmount: totalRefundAmount - shippingRefundAmount > 0 ? totalRefundAmount - shippingRefundAmount : totalRefundAmount,
+              baseRefundAmount: Math.max(0, totalRefundAmount - shippingRefundAmount),
               damageDeductionTotal: 0, // No damage assessment for synced refunds
               finalRefundAmount: totalRefundAmount,
             });

@@ -17627,6 +17627,23 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Shopify Historical Backfill - sync more historical orders to update missing data (addresses, channels)
+  app.post("/api/shopify/reconciliation/backfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { daysBack = 60, maxOrders = 2000 } = req.body as { daysBack?: number; maxOrders?: number };
+      const { triggerHistoricalBackfill } = await import("./services/shopify-reconciliation-scheduler");
+      const result = await triggerHistoricalBackfill(daysBack, maxOrders);
+      res.json({
+        success: result.success,
+        message: `Historical backfill completed: ${result.ordersUpdated} orders updated with addresses/channels`,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error('[Shopify Reconciliation] Error triggering backfill:', error);
+      res.status(500).json({ error: error.message || 'Failed to trigger backfill' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -123,7 +123,7 @@ import {
 import { randomUUID } from "crypto";
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
-import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray } from "drizzle-orm";
+import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
 export interface IStorage {
@@ -2670,19 +2670,26 @@ export class MemStorage implements IStorage {
   }
 
   async getLiveSalesOrders(): Promise<SalesOrder[]> {
-    // Live orders: NOT yet delivered (deliveredAt is null)
+    // Live orders: NOT delivered (deliveredAt is null AND status is not 'DELIVERED')
     return Array.from(this.salesOrders.values())
-      .filter(order => !order.deliveredAt);
+      .filter(order => !order.deliveredAt && order.status !== 'DELIVERED');
   }
 
   async getHistoricalSalesOrders(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<SalesOrder[]> {
-    // Historical orders: ONLY delivered orders (deliveredAt is not null)
-    let orders = Array.from(this.salesOrders.values()).filter(o => o.deliveredAt != null);
+    // Historical orders: delivered (deliveredAt is not null OR status is 'DELIVERED')
+    let orders = Array.from(this.salesOrders.values())
+      .filter(o => o.deliveredAt != null || o.status === 'DELIVERED');
     if (options?.startDate) {
-      orders = orders.filter(o => o.deliveredAt && new Date(o.deliveredAt) >= options.startDate!);
+      orders = orders.filter(o => {
+        const dateToCheck = o.deliveredAt ? new Date(o.deliveredAt) : new Date(o.orderDate);
+        return dateToCheck >= options.startDate!;
+      });
     }
     if (options?.endDate) {
-      orders = orders.filter(o => o.deliveredAt && new Date(o.deliveredAt) <= options.endDate!);
+      orders = orders.filter(o => {
+        const dateToCheck = o.deliveredAt ? new Date(o.deliveredAt) : new Date(o.orderDate);
+        return dateToCheck <= options.endDate!;
+      });
     }
     if (options?.status) {
       orders = orders.filter(o => o.status === options.status);
@@ -5555,19 +5562,43 @@ export class PostgresStorage implements IStorage {
   }
 
   async getLiveSalesOrders(): Promise<SalesOrder[]> {
-    // Live orders: NOT yet delivered (deliveredAt is null)
+    // Live orders: NOT delivered (deliveredAt is null AND status is not 'DELIVERED')
+    // Orders are "live" when they haven't been delivered yet
     return await this.db.select().from(schema.salesOrders)
-      .where(isNull(schema.salesOrders.deliveredAt));
+      .where(and(
+        isNull(schema.salesOrders.deliveredAt),
+        not(eq(schema.salesOrders.status, 'DELIVERED'))
+      ));
   }
 
   async getHistoricalSalesOrders(options?: { startDate?: Date; endDate?: Date; status?: string; channel?: string }): Promise<SalesOrder[]> {
-    // Historical orders: ONLY delivered orders (deliveredAt is not null)
-    const conditions = [isNotNull(schema.salesOrders.deliveredAt)];
+    // Historical orders: delivered (deliveredAt is not null OR status is 'DELIVERED')
+    // This captures orders that are marked delivered but may not have the timestamp
+    const baseCondition = or(
+      isNotNull(schema.salesOrders.deliveredAt),
+      eq(schema.salesOrders.status, 'DELIVERED')
+    );
+    
+    const conditions = [baseCondition];
+    
+    // For date range, use deliveredAt if available, otherwise fall back to orderDate
     if (options?.startDate) {
-      conditions.push(gte(schema.salesOrders.deliveredAt, options.startDate));
+      conditions.push(or(
+        gte(schema.salesOrders.deliveredAt, options.startDate),
+        and(
+          isNull(schema.salesOrders.deliveredAt),
+          gte(schema.salesOrders.orderDate, options.startDate)
+        )
+      ));
     }
     if (options?.endDate) {
-      conditions.push(lte(schema.salesOrders.deliveredAt, options.endDate));
+      conditions.push(or(
+        lte(schema.salesOrders.deliveredAt, options.endDate),
+        and(
+          isNull(schema.salesOrders.deliveredAt),
+          lte(schema.salesOrders.orderDate, options.endDate)
+        )
+      ));
     }
     if (options?.status) {
       conditions.push(eq(schema.salesOrders.status, options.status));
@@ -5577,7 +5608,7 @@ export class PostgresStorage implements IStorage {
     }
     return await this.db.select().from(schema.salesOrders)
       .where(and(...conditions))
-      .orderBy(desc(schema.salesOrders.deliveredAt));
+      .orderBy(desc(schema.salesOrders.deliveredAt), desc(schema.salesOrders.orderDate));
   }
 
   async getSalesOrder(id: string): Promise<SalesOrder | undefined> {

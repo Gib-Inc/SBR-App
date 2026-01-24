@@ -129,8 +129,15 @@ function msUntilTarget(targetTime: Date): number {
 
 /**
  * Run the Shopify reconciliation sync
+ * @param reason - Reason for the sync (SCHEDULED, MANUAL, BACKFILL)
+ * @param daysBack - Number of days to look back (defaults to RECONCILIATION_DAYS_BACK = 7)
+ * @param maxOrders - Maximum orders to fetch (defaults to MAX_ORDERS_PER_SYNC = 500)
  */
-async function runReconciliation(reason: string = "SCHEDULED"): Promise<ReconciliationResult> {
+async function runReconciliation(
+  reason: string = "SCHEDULED",
+  daysBack: number = RECONCILIATION_DAYS_BACK,
+  maxOrders: number = MAX_ORDERS_PER_SYNC
+): Promise<ReconciliationResult> {
   const startTime = Date.now();
   const result: ReconciliationResult = {
     success: false,
@@ -152,7 +159,7 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
   }
   
   isRunning = true;
-  console.log(`[Shopify Reconciliation] Starting ${reason} reconciliation...`);
+  console.log(`[Shopify Reconciliation] Starting ${reason} reconciliation (${daysBack} days back, max ${maxOrders} orders)...`);
   
   try {
     const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
@@ -171,7 +178,7 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
         console.log(`[Shopify Reconciliation] Processing config ${config.id} (${shopDomain})...`);
         
         const client = new ShopifyClient(shopDomain, accessToken, apiVersion);
-        const orders = await client.syncRecentOrders(RECONCILIATION_DAYS_BACK, MAX_ORDERS_PER_SYNC);
+        const orders = await client.syncRecentOrders(daysBack, maxOrders);
         
         result.ordersProcessed += orders.length;
         
@@ -379,6 +386,19 @@ export function initializeShopifyReconciliationScheduler(): void {
 export async function triggerManualReconciliation(): Promise<ReconciliationResult> {
   console.log("[Shopify Reconciliation] Manual trigger requested");
   return await runReconciliation("MANUAL");
+}
+
+/**
+ * Trigger an extended backfill to update historical orders with missing data
+ * @param daysBack - Number of days to look back (default 60)
+ * @param maxOrders - Maximum orders to fetch (default 2000)
+ */
+export async function triggerHistoricalBackfill(
+  daysBack: number = 60,
+  maxOrders: number = 2000
+): Promise<ReconciliationResult> {
+  console.log(`[Shopify Reconciliation] Historical backfill requested (${daysBack} days, max ${maxOrders} orders)`);
+  return await runReconciliation("BACKFILL", daysBack, maxOrders);
 }
 
 /**

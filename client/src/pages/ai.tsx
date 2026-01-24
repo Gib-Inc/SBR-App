@@ -1137,7 +1137,7 @@ interface DailySalesResponse {
   count: number;
 }
 
-function QuickBooksDemandHistoryTab() {
+function QuickBooksDemandHistoryTab({ onNavigateToDataSources }: { onNavigateToDataSources: () => void }) {
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
   const [yearFilter, setYearFilter] = useState<string>("all");
@@ -1442,7 +1442,7 @@ function QuickBooksDemandHistoryTab() {
             <Button 
               variant="outline" 
               className="mt-4"
-              onClick={() => navigate("/ai?tab=data-sources")}
+              onClick={onNavigateToDataSources}
               data-testid="button-open-integrations"
             >
               <Settings2 className="mr-2 h-4 w-4" />
@@ -2711,7 +2711,7 @@ function OrderFeedbackTab() {
         </TabsList>
 
         <TabsContent value="qb-demand">
-          <QuickBooksDemandHistoryTab />
+          <QuickBooksDemandHistoryTab onNavigateToDataSources={() => setActiveTab("data-sources")} />
         </TabsContent>
 
         <TabsContent value="recommendations">
@@ -4142,6 +4142,30 @@ function LogsTab() {
 
 export default function AIAgent() {
   const { toast } = useToast();
+  
+  // Tab state - read from URL params for navigation support
+  const getInitialTab = () => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    return tab && ["order-feedback", "logs", "rules", "data-sources"].includes(tab) 
+      ? tab 
+      : "order-feedback";
+  };
+  const [activeTab, setActiveTab] = useState(getInitialTab);
+  
+  // Sync tab state when URL changes (e.g., from back/forward navigation)
+  useEffect(() => {
+    const handleUrlChange = () => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      if (tab && ["order-feedback", "logs", "rules", "data-sources"].includes(tab)) {
+        setActiveTab(tab);
+      }
+    };
+    window.addEventListener("popstate", handleUrlChange);
+    return () => window.removeEventListener("popstate", handleUrlChange);
+  }, []);
+  
   const [syncingSource, setSyncingSource] = useState<string | null>(null);
   const [syncingAttribution, setSyncingAttribution] = useState(false);
   const [openIntegration, setOpenIntegration] = useState<"EXTENSIV" | "SHOPIFY" | "AMAZON" | "GOHIGHLEVEL" | "SHIPPO" | null>(null);
@@ -4937,7 +4961,7 @@ export default function AIAgent() {
         </p>
       </div>
 
-      <Tabs defaultValue="order-feedback" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="order-feedback" data-testid="tab-order-feedback">
             Order Feedback

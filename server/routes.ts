@@ -6193,7 +6193,7 @@ TOTAL: $${subtotal.toFixed(2)}
         for (const order of normalizedOrders) {
           try {
             // Check if order exists by external ID
-            const existingOrder = await storage.getSalesOrderByExternalId(order.externalId);
+            const existingOrder = await storage.getSalesOrderByExternalIdOnly(order.externalId);
             
             if (existingOrder) {
               // Update existing order status (delivery status)

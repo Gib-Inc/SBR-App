@@ -1388,8 +1388,7 @@ TOTAL: $${subtotal.toFixed(2)}
       }));
 
       // 1. Get current year sales from app's salesOrderLines
-      const salesOrders = await storage.getSalesOrders({ isHistorical: false });
-      const allSalesOrders = [...salesOrders, ...(await storage.getSalesOrders({ isHistorical: true }))];
+      const allSalesOrders = await storage.getAllSalesOrders();
       
       for (const order of allSalesOrders) {
         const orderDate = new Date(order.orderDate);

@@ -177,14 +177,18 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
         
         for (const orderData of orders) {
           try {
-            const existingOrders = await storage.getSalesOrdersByExternalId(
-              orderData.channel,
-              orderData.externalOrderId
-            );
-            const existingOrder = existingOrders[0];
+            // Use external ID only lookup to find orders regardless of channel
+            // This allows updating channel when detection improves (SHOPIFY -> AMAZON)
+            const existingOrder = await storage.getSalesOrderByExternalIdOnly(orderData.externalOrderId);
             
             if (existingOrder) {
+              // Check if channel actually changed for logging
+              if (existingOrder.channel !== orderData.channel) {
+                console.log(`[Shopify Reconciliation] Updating channel for order ${orderData.externalOrderId}: ${existingOrder.channel} -> ${orderData.channel}`);
+              }
+              
               await storage.updateSalesOrder(existingOrder.id, {
+                channel: orderData.channel, // Update channel to correct classification (Amazon vs Shopify)
                 status: orderData.status,
                 customerName: orderData.customerName,
                 customerEmail: orderData.customerEmail,
@@ -195,11 +199,17 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
                 totalAmount: orderData.totalAmount,
                 currency: orderData.currency,
                 rawPayload: orderData.rawPayload,
+                // Shipping address fields
+                shipToStreet: orderData.shipToStreet,
+                shipToCity: orderData.shipToCity,
+                shipToState: orderData.shipToState,
+                shipToZip: orderData.shipToZip,
+                shipToCountry: orderData.shipToCountry,
               });
               result.ordersUpdated++;
             } else {
               const salesOrder = await storage.createSalesOrder({
-                channel: "SHOPIFY",
+                channel: orderData.channel, // Use detected channel (AMAZON or SHOPIFY)
                 externalOrderId: orderData.externalOrderId,
                 externalCustomerId: orderData.externalCustomerId,
                 customerName: orderData.customerName,
@@ -213,6 +223,12 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
                 currency: orderData.currency,
                 notes: `Imported via ${reason} reconciliation`,
                 rawPayload: orderData.rawPayload,
+                // Shipping address fields
+                shipToStreet: orderData.shipToStreet,
+                shipToCity: orderData.shipToCity,
+                shipToState: orderData.shipToState,
+                shipToZip: orderData.shipToZip,
+                shipToCountry: orderData.shipToCountry,
               });
               
               for (const lineItem of orderData.lineItems) {

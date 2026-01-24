@@ -2405,7 +2405,7 @@ function BatchDecisionsSection() {
   );
 }
 
-function OrderFeedbackTab() {
+function OrderFeedbackTab({ setActiveTab }: { setActiveTab: (tab: string) => void }) {
   const { toast } = useToast();
   const [feedbackSubTab, setFeedbackSubTab] = useState<string>("recommendations");
   const [statusFilter, setStatusFilter] = useState<string>("active");
@@ -5178,7 +5178,7 @@ export default function AIAgent() {
 
         {/* Order Feedback Tab (formerly Insights) */}
         <TabsContent value="order-feedback" className="space-y-4">
-          <OrderFeedbackTab />
+          <OrderFeedbackTab setActiveTab={setActiveTab} />
         </TabsContent>
 
         {/* Logs Tab */}

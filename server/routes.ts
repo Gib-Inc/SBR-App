@@ -6164,9 +6164,13 @@ TOTAL: $${subtotal.toFixed(2)}
     try {
       const userId = req.session.userId!;
       
-      // Get Shopify config
+      // Get Shopify config - accessToken is stored in apiKey field, shopDomain is in config object
       const shopifyConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
-      if (!shopifyConfig || !shopifyConfig.config?.shopDomain || !shopifyConfig.config?.accessToken) {
+      const shopDomain = (shopifyConfig?.config as any)?.shopDomain || process.env.SHOPIFY_SHOP_DOMAIN;
+      const accessToken = shopifyConfig?.apiKey || process.env.SHOPIFY_ACCESS_TOKEN;
+      const apiVersion = (shopifyConfig?.config as any)?.apiVersion || '2024-01';
+      
+      if (!shopDomain || !accessToken) {
         return res.status(400).json({ 
           success: false, 
           message: "Shopify integration not configured" 
@@ -6174,10 +6178,7 @@ TOTAL: $${subtotal.toFixed(2)}
       }
       
       const { ShopifyClient } = await import("./services/shopify-client");
-      const shopify = new ShopifyClient(
-        shopifyConfig.config.shopDomain,
-        shopifyConfig.config.accessToken
-      );
+      const shopify = new ShopifyClient(shopDomain, accessToken, apiVersion);
       
       let ordersCreated = 0;
       let ordersUpdated = 0;

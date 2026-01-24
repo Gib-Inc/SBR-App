@@ -281,9 +281,10 @@ export class ShopifyClient {
       return 'AMAZON';
     }
 
-    // 6. Tags contain exact "amzn" or "amazon" (only if not definitely Shopify)
+    // 6. Tags contain Amazon indicators (only if not definitely Shopify)
+    // Matches Commerce Attribution Service: exact "amzn", "amazon", or "amzn orders" tags
     if (!isDefinitelyShopify) {
-      if (tags.some(t => t === 'amzn' || t === 'amazon')) {
+      if (tags.some(t => t === 'amzn' || t === 'amazon' || t === 'amzn orders')) {
         return 'AMAZON';
       }
     }

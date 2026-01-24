@@ -42,6 +42,28 @@ class LogService {
     }
   }
 
+  async logIntegrationEvent(params: {
+    source: string;
+    action: string;
+    status: string;
+    message: string;
+    details?: Record<string, any>;
+  }): Promise<void> {
+    const severity = params.status === 'SUCCESS' ? SystemLogSeverity.INFO : 
+                     params.status === 'PARTIAL' ? SystemLogSeverity.WARNING : 
+                     SystemLogSeverity.ERROR;
+    
+    await this.logSystemEvent({
+      type: SystemLogType.INTEGRATION_SYNC,
+      entityType: 'INTEGRATION',
+      entityId: params.source,
+      severity,
+      code: params.action,
+      message: params.message,
+      details: { source: params.source, action: params.action, status: params.status, ...params.details },
+    });
+  }
+
   async logSkuMismatch(params: {
     source: string;
     orderId: string;

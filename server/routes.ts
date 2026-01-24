@@ -17011,8 +17011,19 @@ Generate only the email body text, no subject line.`;
         console.error('[QuickBooks] Failed to fetch company info:', e);
       }
 
-      // Parse user ID from state (format: userId or just use 'system')
-      const userId = (state as string) || 'system';
+      // Parse user ID from state - URL-decode it since we encoded it in auth-url
+      const rawState = state as string;
+      console.log('[QuickBooks] Callback received - state:', rawState, 'realmId:', realmId);
+      
+      if (!rawState || rawState === 'system') {
+        console.error('[QuickBooks] Invalid state parameter received:', rawState);
+        return res.redirect('/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
+      }
+      
+      // Decode the state to get the user ID
+      const userId = decodeURIComponent(rawState);
+      console.log('[QuickBooks] Decoded user ID from state:', userId);
+      
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
@@ -17116,8 +17127,19 @@ Generate only the email body text, no subject line.`;
         console.error('[QuickBooks] Failed to fetch company info:', e);
       }
 
-      // Parse user ID from state
-      const userId = (state as string) || 'system';
+      // Parse user ID from state - URL-decode it since we encoded it in auth-url
+      const rawState = state as string;
+      console.log('[QuickBooks] Alt callback received - state:', rawState, 'realmId:', realmId);
+      
+      if (!rawState || rawState === 'system') {
+        console.error('[QuickBooks] Invalid state parameter received:', rawState);
+        return res.redirect('/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
+      }
+      
+      // Decode the state to get the user ID
+      const userId = decodeURIComponent(rawState);
+      console.log('[QuickBooks] Decoded user ID from state:', userId);
+      
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
@@ -17165,11 +17187,21 @@ Generate only the email body text, no subject line.`;
         return res.status(400).json({ error: 'QuickBooks client ID not configured' });
       }
 
+      // Require valid user ID - never use 'system' fallback for OAuth
+      const userId = req.user?.id;
+      if (!userId) {
+        console.error('[QuickBooks] Auth URL requested but no user ID in session');
+        return res.status(401).json({ error: 'User not authenticated' });
+      }
+
       const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || 
         `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
       
       const scope = 'com.intuit.quickbooks.accounting';
-      const state = req.user?.id || 'system';
+      // URL-encode the state to handle any special characters
+      const state = encodeURIComponent(userId);
+      
+      console.log('[QuickBooks] Generating auth URL for user:', userId, 'redirect:', redirectUri);
       
       const authUrl = `https://appcenter.intuit.com/connect/oauth2?` +
         `client_id=${clientId}&` +

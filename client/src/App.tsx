@@ -33,6 +33,8 @@ import Login from "@/pages/login";
 import POAcknowledge from "@/pages/po-acknowledge";
 import Reports from "@/pages/reports";
 import NotFound from "@/pages/not-found";
+import LegalEULA from "@/pages/legal-eula";
+import LegalPrivacy from "@/pages/legal-privacy";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -136,6 +138,8 @@ export default function App() {
       <TooltipProvider>
         <Switch>
           <Route path="/po/acknowledge/:token" component={POAcknowledge} />
+          <Route path="/legal/eula" component={LegalEULA} />
+          <Route path="/legal/privacy" component={LegalPrivacy} />
           <Route>
             <AuthProvider>
               <ScanProvider>

@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield } from "lucide-react";
+import { Link } from "wouter";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -233,6 +234,39 @@ function AccountSettings() {
               {updateAccountMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Legal Documents
+          </CardTitle>
+          <CardDescription>
+            Review our terms of service and privacy practices
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Link href="/legal/eula">
+              <Button variant="outline" className="w-full sm:w-auto gap-2" data-testid="link-settings-eula">
+                <FileText className="h-4 w-4" />
+                End User License Agreement
+                <ExternalLink className="h-3 w-3" />
+              </Button>
+            </Link>
+            <Link href="/legal/privacy">
+              <Button variant="outline" className="w-full sm:w-auto gap-2" data-testid="link-settings-privacy">
+                <Shield className="h-4 w-4" />
+                Privacy Policy
+                <ExternalLink className="h-3 w-3" />
+              </Button>
+            </Link>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            These documents comply with Utah Consumer Privacy Act (UCPA) and Arizona state law requirements.
+          </p>
         </CardContent>
       </Card>
     </div>

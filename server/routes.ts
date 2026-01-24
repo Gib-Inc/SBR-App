@@ -6227,7 +6227,7 @@ TOTAL: $${subtotal.toFixed(2)}
               
               // Create line items
               for (const line of order.lineItems) {
-                const item = await storage.getItemBySKU(line.sku, userId, { createIfMissing: false });
+                const item = await storage.getItemBySku(line.sku);
                 await storage.createSalesOrderLine({
                   salesOrderId: newOrder.id,
                   itemId: item?.id,

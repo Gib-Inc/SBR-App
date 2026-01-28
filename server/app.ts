@@ -12,8 +12,26 @@ import pkg from "pg";
 const { Pool } = pkg;
 
 import { registerRoutes } from "./routes";
+import { 
+  strictCacheControlMiddleware, 
+  securityHeadersMiddleware,
+  initializeSecureLogging,
+  sanitizedErrorHandler,
+  redactSensitiveData
+} from "./middleware/intuit-security";
+import { intuitSecurityConfig, validateSecurityConfig } from "./config/intuit-security";
 
 const PgSession = connectPgSimple(session);
+
+initializeSecureLogging();
+
+const securityValidation = validateSecurityConfig();
+if (securityValidation.warnings.length > 0) {
+  securityValidation.warnings.forEach(w => console.warn(`[Intuit Security] Warning: ${w}`));
+}
+if (securityValidation.errors.length > 0) {
+  securityValidation.errors.forEach(e => console.error(`[Intuit Security] Error: ${e}`));
+}
 
 // Create a separate connection pool for session store
 const sessionPool = new Pool({
@@ -58,7 +76,11 @@ app.use(express.urlencoded({ extended: false }));
 // Serve uploaded damage photos statically
 app.use('/uploads', express.static('uploads'));
 
-// Session configuration
+// Intuit-compliant security headers middleware
+app.use(securityHeadersMiddleware);
+
+// Session configuration with Intuit-compliant secure cookie settings
+// IMPORTANT: Cookies are ALWAYS secure and httpOnly per Intuit requirements
 app.use(
   session({
     store: new PgSession({
@@ -70,13 +92,16 @@ app.use(
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === "production",
-      httpOnly: true,
-      sameSite: "lax",
+      secure: intuitSecurityConfig.cookieSettings.secure,
+      httpOnly: intuitSecurityConfig.cookieSettings.httpOnly,
+      sameSite: intuitSecurityConfig.cookieSettings.sameSite,
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     },
   })
 );
+
+// Intuit-compliant strict caching headers on authenticated routes
+app.use(strictCacheControlMiddleware);
 
 app.use((req, res, next) => {
   const start = Date.now();

@@ -6050,33 +6050,93 @@ export class PostgresStorage implements IStorage {
     return Number(result[0]?.count ?? 0);
   }
 
-  // QuickBooks Auth
+  // QuickBooks Auth with Intuit-compliant token decryption
   async getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null> {
+    const { decryptToken, isEncrypted } = await import('./utils/token-encryption');
+    
     const results = await this.db.select().from(schema.quickbooksAuth)
       .where(eq(schema.quickbooksAuth.userId, userId));
-    return results[0] || null;
+    
+    if (!results[0]) return null;
+    
+    const auth = results[0];
+    return {
+      ...auth,
+      accessToken: auth.accessToken && isEncrypted(auth.accessToken) 
+        ? decryptToken(auth.accessToken) 
+        : auth.accessToken,
+      refreshToken: auth.refreshToken && isEncrypted(auth.refreshToken) 
+        ? decryptToken(auth.refreshToken) 
+        : auth.refreshToken,
+      realmId: auth.realmId && isEncrypted(auth.realmId) 
+        ? decryptToken(auth.realmId) 
+        : auth.realmId,
+    };
   }
 
   async getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]> {
-    return await this.db.select().from(schema.quickbooksAuth)
+    const { decryptToken, isEncrypted } = await import('./utils/token-encryption');
+    
+    const results = await this.db.select().from(schema.quickbooksAuth)
       .where(eq(schema.quickbooksAuth.userId, userId));
+    
+    return results.map(auth => ({
+      ...auth,
+      accessToken: auth.accessToken && isEncrypted(auth.accessToken) 
+        ? decryptToken(auth.accessToken) 
+        : auth.accessToken,
+      refreshToken: auth.refreshToken && isEncrypted(auth.refreshToken) 
+        ? decryptToken(auth.refreshToken) 
+        : auth.refreshToken,
+      realmId: auth.realmId && isEncrypted(auth.realmId) 
+        ? decryptToken(auth.realmId) 
+        : auth.realmId,
+    }));
   }
 
   async createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth> {
+    const { encryptToken, isEncrypted } = await import('./utils/token-encryption');
+    
     const id = randomUUID();
     const now = new Date();
-    const result = await this.db.insert(schema.quickbooksAuth).values({
+    
+    const encryptedAuth = {
       ...auth,
+      accessToken: auth.accessToken && !isEncrypted(auth.accessToken) 
+        ? encryptToken(auth.accessToken) 
+        : auth.accessToken,
+      refreshToken: auth.refreshToken && !isEncrypted(auth.refreshToken) 
+        ? encryptToken(auth.refreshToken) 
+        : auth.refreshToken,
+      realmId: auth.realmId && !isEncrypted(auth.realmId) 
+        ? encryptToken(auth.realmId) 
+        : auth.realmId,
       id,
       createdAt: now,
       updatedAt: now,
-    }).returning();
+    };
+    
+    const result = await this.db.insert(schema.quickbooksAuth).values(encryptedAuth).returning();
     return result[0];
   }
 
   async updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null> {
+    const { encryptToken, isEncrypted } = await import('./utils/token-encryption');
+    
+    const encryptedAuth: Partial<InsertQuickbooksAuth> = { ...auth };
+    
+    if (auth.accessToken && !isEncrypted(auth.accessToken)) {
+      encryptedAuth.accessToken = encryptToken(auth.accessToken);
+    }
+    if (auth.refreshToken && !isEncrypted(auth.refreshToken)) {
+      encryptedAuth.refreshToken = encryptToken(auth.refreshToken);
+    }
+    if (auth.realmId && !isEncrypted(auth.realmId)) {
+      encryptedAuth.realmId = encryptToken(auth.realmId);
+    }
+    
     const result = await this.db.update(schema.quickbooksAuth)
-      .set({ ...auth, updatedAt: new Date() })
+      .set({ ...encryptedAuth, updatedAt: new Date() })
       .where(eq(schema.quickbooksAuth.id, id))
       .returning();
     return result[0] || null;
@@ -6089,7 +6149,22 @@ export class PostgresStorage implements IStorage {
   }
 
   async getAllQuickbooksAuths(): Promise<QuickbooksAuth[]> {
-    return await this.db.select().from(schema.quickbooksAuth);
+    const { decryptToken, isEncrypted } = await import('./utils/token-encryption');
+    
+    const results = await this.db.select().from(schema.quickbooksAuth);
+    
+    return results.map(auth => ({
+      ...auth,
+      accessToken: auth.accessToken && isEncrypted(auth.accessToken) 
+        ? decryptToken(auth.accessToken) 
+        : auth.accessToken,
+      refreshToken: auth.refreshToken && isEncrypted(auth.refreshToken) 
+        ? decryptToken(auth.refreshToken) 
+        : auth.refreshToken,
+      realmId: auth.realmId && isEncrypted(auth.realmId) 
+        ? decryptToken(auth.realmId) 
+        : auth.realmId,
+    }));
   }
 
   async updateQuickbooksWebhookToken(userId: string, token: string): Promise<boolean> {

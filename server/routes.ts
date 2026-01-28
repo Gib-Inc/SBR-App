@@ -17057,12 +17057,19 @@ Generate only the email body text, no subject line.`;
   });
 
   // OAuth callback route - handle QuickBooks OAuth redirect
+  // INTUIT COMPLIANCE: Uses pure 302 redirect with no HTML body to prevent Referer header token leakage
   app.get("/api/quickbooks/callback", async (req: Request, res: Response) => {
+    // Set Intuit-compliant security headers immediately
+    res.setHeader('Cache-Control', 'no-cache, no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    
     try {
       const { code, realmId, state } = req.query;
       
       if (!code || !realmId) {
-        return res.status(400).send('Missing required OAuth parameters');
+        // Pure 302 redirect with no HTML body
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=missing_params');
       }
 
       const clientId = process.env.QUICKBOOKS_CLIENT_ID;
@@ -17070,7 +17077,7 @@ Generate only the email body text, no subject line.`;
       const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
 
       if (!clientId || !clientSecret) {
-        return res.status(500).send('QuickBooks credentials not configured');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
       }
 
       // Exchange code for tokens
@@ -17088,9 +17095,8 @@ Generate only the email body text, no subject line.`;
       });
 
       if (!tokenResponse.ok) {
-        const errorText = await tokenResponse.text();
-        console.error('[QuickBooks] Token exchange failed:', errorText);
-        return res.status(400).send('Failed to exchange OAuth code for tokens');
+        console.error('[QuickBooks] Token exchange failed');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=token_exchange');
       }
 
       const tokens = await tokenResponse.json() as {
@@ -17117,21 +17123,20 @@ Generate only the email body text, no subject line.`;
           companyName = companyData.CompanyInfo?.CompanyName || companyName;
         }
       } catch (e) {
-        console.error('[QuickBooks] Failed to fetch company info:', e);
+        console.error('[QuickBooks] Failed to fetch company info');
       }
 
       // Parse user ID from state - URL-decode it since we encoded it in auth-url
       const rawState = state as string;
-      console.log('[QuickBooks] Callback received - state:', rawState, 'realmId:', realmId);
+      console.log('[QuickBooks] Callback received - processing OAuth flow');
       
       if (!rawState || rawState === 'system') {
-        console.error('[QuickBooks] Invalid state parameter received:', rawState);
-        return res.redirect('/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
+        console.error('[QuickBooks] Invalid state parameter received');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
       }
       
       // Decode the state to get the user ID
       const userId = decodeURIComponent(rawState);
-      console.log('[QuickBooks] Decoded user ID from state:', userId);
       
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
@@ -17163,22 +17168,28 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Redirect to AI Agent Data Sources page with success
-      console.log('[QuickBooks] OAuth successful for user:', userId, 'company:', companyName);
-      res.redirect('/ai?tab=data-sources&quickbooks=connected');
+      // Pure 302 redirect with no HTML body - Intuit compliance
+      console.log('[QuickBooks] OAuth successful - company:', companyName);
+      res.redirect(302, '/ai?tab=data-sources&quickbooks=connected');
     } catch (error: any) {
-      console.error('[QuickBooks] OAuth callback error:', error);
-      res.redirect('/ai?tab=data-sources&quickbooks=error');
+      console.error('[QuickBooks] OAuth callback error');
+      res.redirect(302, '/ai?tab=data-sources&quickbooks=error');
     }
   });
 
   // Alternative OAuth callback route - matches QuickBooks app redirect URI
+  // INTUIT COMPLIANCE: Uses pure 302 redirect with no HTML body to prevent Referer header token leakage
   app.get("/auth/qbo/callback", async (req: Request, res: Response) => {
+    // Set Intuit-compliant security headers immediately
+    res.setHeader('Cache-Control', 'no-cache, no-store');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    
     try {
       const { code, realmId, state } = req.query;
       
       if (!code || !realmId) {
-        return res.status(400).send('Missing required OAuth parameters');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=missing_params');
       }
 
       const clientId = process.env.QUICKBOOKS_CLIENT_ID;
@@ -17186,7 +17197,7 @@ Generate only the email body text, no subject line.`;
       const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/auth/qbo/callback`;
 
       if (!clientId || !clientSecret) {
-        return res.status(500).send('QuickBooks credentials not configured');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
       }
 
       // Exchange code for tokens
@@ -17204,9 +17215,8 @@ Generate only the email body text, no subject line.`;
       });
 
       if (!tokenResponse.ok) {
-        const errorText = await tokenResponse.text();
-        console.error('[QuickBooks] Token exchange failed:', errorText);
-        return res.status(400).send('Failed to exchange OAuth code for tokens');
+        console.error('[QuickBooks] Token exchange failed');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=token_exchange');
       }
 
       const tokens = await tokenResponse.json() as {
@@ -17233,21 +17243,20 @@ Generate only the email body text, no subject line.`;
           companyName = companyData.CompanyInfo?.CompanyName || companyName;
         }
       } catch (e) {
-        console.error('[QuickBooks] Failed to fetch company info:', e);
+        console.error('[QuickBooks] Failed to fetch company info');
       }
 
       // Parse user ID from state - URL-decode it since we encoded it in auth-url
       const rawState = state as string;
-      console.log('[QuickBooks] Alt callback received - state:', rawState, 'realmId:', realmId);
+      console.log('[QuickBooks] Alt callback received - processing OAuth flow');
       
       if (!rawState || rawState === 'system') {
-        console.error('[QuickBooks] Invalid state parameter received:', rawState);
-        return res.redirect('/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
+        console.error('[QuickBooks] Invalid state parameter received');
+        return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=invalid_state');
       }
       
       // Decode the state to get the user ID
       const userId = decodeURIComponent(rawState);
-      console.log('[QuickBooks] Decoded user ID from state:', userId);
       
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
@@ -17279,12 +17288,12 @@ Generate only the email body text, no subject line.`;
         });
       }
 
-      // Redirect to AI Agent Data Sources page with success
-      console.log('[QuickBooks] OAuth successful for user:', userId, 'company:', companyName);
-      res.redirect('/ai?tab=data-sources&quickbooks=connected');
+      // Pure 302 redirect with no HTML body - Intuit compliance
+      console.log('[QuickBooks] OAuth successful - company:', companyName);
+      res.redirect(302, '/ai?tab=data-sources&quickbooks=connected');
     } catch (error: any) {
-      console.error('[QuickBooks] OAuth callback error:', error);
-      res.redirect('/ai?tab=data-sources&quickbooks=error');
+      console.error('[QuickBooks] OAuth callback error');
+      res.redirect(302, '/ai?tab=data-sources&quickbooks=error');
     }
   });
 

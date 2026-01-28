@@ -17080,22 +17080,51 @@ Generate only the email body text, no subject line.`;
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
       }
 
-      // Exchange code for tokens
-      const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: code as string,
-          redirect_uri: redirectUri,
-        }),
-      });
+      // Get token endpoint from Discovery Document (Intuit compliance Question 5)
+      const { getTokenEndpoint } = await import('./services/intuit-discovery');
+      const tokenEndpoint = await getTokenEndpoint();
+      console.log('[QuickBooks] Using dynamic token endpoint from Discovery Document');
+      
+      // Exchange code for tokens with retry logic
+      let tokenResponse: Response | null = null;
+      let lastError: Error | null = null;
+      const MAX_RETRIES = 3;
+      
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          tokenResponse = await fetch(tokenEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+            },
+            body: new URLSearchParams({
+              grant_type: 'authorization_code',
+              code: code as string,
+              redirect_uri: redirectUri,
+            }),
+          });
+          
+          if (tokenResponse.ok) break;
+          
+          // Retry on 5xx errors
+          if (tokenResponse.status >= 500 && attempt < MAX_RETRIES) {
+            console.warn(`[QuickBooks] Token exchange attempt ${attempt} failed with ${tokenResponse.status}, retrying...`);
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+            continue;
+          }
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < MAX_RETRIES) {
+            console.warn(`[QuickBooks] Token exchange attempt ${attempt} failed: ${err.message}, retrying...`);
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+          }
+        }
+      }
 
-      if (!tokenResponse.ok) {
-        console.error('[QuickBooks] Token exchange failed');
+      if (!tokenResponse || !tokenResponse.ok) {
+        console.error('[QuickBooks] Token exchange failed after retries:', lastError?.message);
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=token_exchange');
       }
 
@@ -17200,22 +17229,51 @@ Generate only the email body text, no subject line.`;
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
       }
 
-      // Exchange code for tokens
-      const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: code as string,
-          redirect_uri: redirectUri,
-        }),
-      });
+      // Get token endpoint from Discovery Document (Intuit compliance Question 5)
+      const { getTokenEndpoint } = await import('./services/intuit-discovery');
+      const tokenEndpoint = await getTokenEndpoint();
+      console.log('[QuickBooks] Alt callback using dynamic token endpoint from Discovery Document');
+      
+      // Exchange code for tokens with retry logic
+      let tokenResponse: Response | null = null;
+      let lastError: Error | null = null;
+      const MAX_RETRIES = 3;
+      
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          tokenResponse = await fetch(tokenEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+            },
+            body: new URLSearchParams({
+              grant_type: 'authorization_code',
+              code: code as string,
+              redirect_uri: redirectUri,
+            }),
+          });
+          
+          if (tokenResponse.ok) break;
+          
+          // Retry on 5xx errors
+          if (tokenResponse.status >= 500 && attempt < MAX_RETRIES) {
+            console.warn(`[QuickBooks] Alt token exchange attempt ${attempt} failed with ${tokenResponse.status}, retrying...`);
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+            continue;
+          }
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < MAX_RETRIES) {
+            console.warn(`[QuickBooks] Alt token exchange attempt ${attempt} failed: ${err.message}, retrying...`);
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+          }
+        }
+      }
 
-      if (!tokenResponse.ok) {
-        console.error('[QuickBooks] Token exchange failed');
+      if (!tokenResponse || !tokenResponse.ok) {
+        console.error('[QuickBooks] Alt token exchange failed after retries:', lastError?.message);
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=token_exchange');
       }
 
@@ -17321,7 +17379,12 @@ Generate only the email body text, no subject line.`;
       
       console.log('[QuickBooks] Generating auth URL for user:', userId, 'redirect:', redirectUri);
       
-      const authUrl = `https://appcenter.intuit.com/connect/oauth2?` +
+      // Get authorization endpoint from Discovery Document (Intuit compliance Question 5)
+      const { getAuthorizationEndpoint } = await import('./services/intuit-discovery');
+      const authorizationEndpoint = await getAuthorizationEndpoint();
+      console.log('[QuickBooks] Using dynamic authorization endpoint from Discovery Document');
+      
+      const authUrl = `${authorizationEndpoint}?` +
         `client_id=${clientId}&` +
         `redirect_uri=${encodeURIComponent(redirectUri)}&` +
         `response_type=code&` +

@@ -72,20 +72,52 @@ async function refreshTokensForAuth(auth: {
   }
 
   try {
-    const response = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: auth.refreshToken,
-      }),
-    });
+    // Get token endpoint from Discovery Document (Intuit compliance)
+    const { getTokenEndpoint } = await import('./intuit-discovery');
+    const tokenEndpoint = await getTokenEndpoint();
+    
+    // Retry logic for token refresh
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 1000;
+    let response: Response | null = null;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        response = await fetch(tokenEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: auth.refreshToken,
+          }),
+        });
+        
+        if (response.ok) break;
+        
+        // Retry on 5xx errors or 429 rate limits
+        if ((response.status >= 500 || response.status === 429) && attempt < MAX_RETRIES) {
+          const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+          console.warn(`[QB Token Refresh] Attempt ${attempt} failed with ${response.status}, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        break;
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < MAX_RETRIES) {
+          const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+          console.warn(`[QB Token Refresh] Attempt ${attempt} failed: ${err.message}, retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
 
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (!response || !response.ok) {
+      const errorText = response ? await response.text() : lastError?.message;
       console.error(`[QB Token Refresh] Token refresh failed for ${auth.realmId}:`, errorText);
       
       // Mark as disconnected
@@ -97,7 +129,7 @@ async function refreshTokensForAuth(auth: {
         lastTokenCheckAt: new Date(),
       });
       
-      return { success: false, error: `Token refresh failed: ${response.status}` };
+      return { success: false, error: `Token refresh failed: ${response?.status || 'network error'}` };
     }
 
     const tokens = await response.json() as {

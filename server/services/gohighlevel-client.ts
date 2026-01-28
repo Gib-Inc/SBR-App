@@ -40,6 +40,10 @@ export class GoHighLevelClient {
   private baseUrl: string;
   private apiKey: string;
   private locationId: string;
+  
+  // Retry configuration
+  private static readonly MAX_RETRIES = 3;
+  private static readonly RETRY_DELAY_MS = 1000;
 
   constructor(baseUrl: string, apiKey: string, locationId: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -56,6 +60,67 @@ export class GoHighLevelClient {
   }
 
   /**
+   * Sleep helper for retry delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Execute a fetch request with retry logic for transient failures
+   * Retries on 5xx errors, 429 rate limits, and network errors
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    operation: string
+  ): Promise<Response> {
+    let lastError: Error | null = null;
+    let lastResponse: Response | null = null;
+    
+    for (let attempt = 1; attempt <= GoHighLevelClient.MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        
+        // Success or client error (4xx except 429) - don't retry
+        if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+          return response;
+        }
+        
+        // Retry on 5xx server errors or 429 rate limits
+        if ((response.status >= 500 || response.status === 429) && attempt < GoHighLevelClient.MAX_RETRIES) {
+          const retryAfter = response.headers.get('Retry-After');
+          const delay = retryAfter 
+            ? parseInt(retryAfter, 10) * 1000 
+            : GoHighLevelClient.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+          
+          console.warn(`[GoHighLevel] ${operation} attempt ${attempt} failed with ${response.status}, retrying in ${delay}ms...`);
+          await this.sleep(delay);
+          lastResponse = response;
+          continue;
+        }
+        
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < GoHighLevelClient.MAX_RETRIES) {
+          const delay = GoHighLevelClient.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+          console.warn(`[GoHighLevel] ${operation} attempt ${attempt} failed: ${err.message}, retrying in ${delay}ms...`);
+          await this.sleep(delay);
+        }
+      }
+    }
+    
+    // If we got a response but it wasn't successful, throw the last response
+    if (lastResponse) {
+      return lastResponse;
+    }
+    
+    // Network error - throw it
+    throw lastError || new Error(`${operation} failed after ${GoHighLevelClient.MAX_RETRIES} retries`);
+  }
+
+  /**
    * Test the API connection
    * Returns detailed error codes for specific failure scenarios
    */
@@ -66,9 +131,11 @@ export class GoHighLevelClient {
     locationName?: string;
   }> {
     try {
-      const response = await fetch(`${this.baseUrl}/locations/${this.locationId}`, {
-        headers: this.getHeaders(),
-      });
+      const response = await this.fetchWithRetry(
+        `${this.baseUrl}/locations/${this.locationId}`,
+        { headers: this.getHeaders() },
+        'testConnection'
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -173,11 +240,10 @@ export class GoHighLevelClient {
       }
 
       // Use the query parameter for V2 API contact search
-      const response = await fetch(
+      const response = await this.fetchWithRetry(
         `${this.baseUrl}/contacts/?locationId=${this.locationId}&query=${encodeURIComponent(searchValue)}&limit=1`,
-        {
-          headers: this.getHeaders(),
-        }
+        { headers: this.getHeaders() },
+        'getContactByPhoneOrEmail'
       );
 
       if (!response.ok) {
@@ -240,11 +306,15 @@ export class GoHighLevelClient {
         };
       }
 
-      const response = await fetch(`${this.baseUrl}/tasks`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(taskData),
-      });
+      const response = await this.fetchWithRetry(
+        `${this.baseUrl}/tasks`,
+        {
+          method: 'POST',
+          headers: this.getHeaders(),
+          body: JSON.stringify(taskData),
+        },
+        'createTask'
+      );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -298,16 +368,20 @@ export class GoHighLevelClient {
    */
   async sendSMS(contactId: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/conversations/messages`, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({
-          type: 'SMS',
-          contactId,
-          message,
-          locationId: this.locationId,
-        }),
-      });
+      const response = await this.fetchWithRetry(
+        `${this.baseUrl}/conversations/messages`,
+        {
+          method: 'POST',
+          headers: this.getHeaders(),
+          body: JSON.stringify({
+            type: 'SMS',
+            contactId,
+            message,
+            locationId: this.locationId,
+          }),
+        },
+        'sendSMS'
+      );
 
       if (!response.ok) {
         const errorText = await response.text();

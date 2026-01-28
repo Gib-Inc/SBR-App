@@ -148,17 +148,47 @@ export class QuickBooksClient {
   private baseUrl: string;
   private auth: QuickbooksAuth | null = null;
   private userId: string;
+  private cachedTokenEndpoint: string | null = null;
 
-  // QuickBooks OAuth endpoints
-  private static readonly TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
   // Using sandbox URL for development - change to production URL when ready:
   // private static readonly API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
   private static readonly API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
+  
+  // Retry configuration
+  private static readonly MAX_RETRIES = 3;
+  private static readonly RETRY_DELAY_MS = 1000;
 
   constructor(storage: IStorage, userId: string) {
     this.storage = storage;
     this.userId = userId;
     this.baseUrl = QuickBooksClient.API_BASE;
+  }
+
+  /**
+   * Get token endpoint from Intuit Discovery Document (compliance requirement)
+   * Caches the endpoint for performance
+   */
+  private async getTokenEndpoint(): Promise<string> {
+    if (this.cachedTokenEndpoint) {
+      return this.cachedTokenEndpoint;
+    }
+    
+    try {
+      const { getTokenEndpoint } = await import('./intuit-discovery');
+      this.cachedTokenEndpoint = await getTokenEndpoint();
+      return this.cachedTokenEndpoint;
+    } catch (error) {
+      console.error('[QuickBooks] Failed to get token endpoint from Discovery Document, using fallback');
+      // Fallback only if Discovery Document fetch fails completely
+      return 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+    }
+  }
+
+  /**
+   * Sleep helper for retry delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
@@ -200,7 +230,7 @@ export class QuickBooksClient {
   }
 
   /**
-   * Refresh OAuth tokens
+   * Refresh OAuth tokens with retry logic and Discovery Document compliance
    */
   private async refreshTokens(): Promise<boolean> {
     if (!this.auth) return false;
@@ -214,21 +244,50 @@ export class QuickBooksClient {
     }
 
     try {
-      const response = await fetch(QuickBooksClient.TOKEN_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: this.auth.refreshToken,
-        }),
-      });
+      // Get token endpoint from Discovery Document (Intuit compliance)
+      const tokenEndpoint = await this.getTokenEndpoint();
+      
+      // Retry logic for token refresh
+      let response: Response | null = null;
+      let lastError: Error | null = null;
+      
+      for (let attempt = 1; attempt <= QuickBooksClient.MAX_RETRIES; attempt++) {
+        try {
+          response = await fetch(tokenEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+            },
+            body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: this.auth.refreshToken,
+            }),
+          });
+          
+          if (response.ok) break;
+          
+          // Retry on 5xx errors or 429 rate limits
+          if ((response.status >= 500 || response.status === 429) && attempt < QuickBooksClient.MAX_RETRIES) {
+            const delay = QuickBooksClient.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+            console.warn(`[QuickBooks] Token refresh attempt ${attempt} failed with ${response.status}, retrying in ${delay}ms...`);
+            await this.sleep(delay);
+            continue;
+          }
+          break;
+        } catch (err: any) {
+          lastError = err;
+          if (attempt < QuickBooksClient.MAX_RETRIES) {
+            const delay = QuickBooksClient.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+            console.warn(`[QuickBooks] Token refresh attempt ${attempt} failed: ${err.message}, retrying in ${delay}ms...`);
+            await this.sleep(delay);
+          }
+        }
+      }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[QuickBooks] Token refresh failed:', errorText);
+      if (!response || !response.ok) {
+        const errorText = response ? await response.text() : lastError?.message;
+        console.error('[QuickBooks] Token refresh failed after retries:', errorText);
         await this.storage.updateQuickbooksAuth(this.auth.id, { isConnected: false });
         return false;
       }

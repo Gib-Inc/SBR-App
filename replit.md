@@ -46,6 +46,17 @@ Preferred communication style: Simple, everyday language.
 *   **QuickBooks Automatic Token Refresh**: Proactive token refresh with GHL "Needs Attention" opportunity creation on failure, ensuring continuous operation.
 *   **System of Record**: This application serves as the primary system of record for inventory quantities.
 *   **Production Security**: Enforces single-user mode, disables new user registration, implements login rate limiting, and provides secure admin endpoints.
+*   **Intuit Compliance Security**: AES-256-GCM token encryption, strict caching headers (`no-cache, no-store`), secure cookies (always `Secure`/`HttpOnly`), sanitized OAuth redirects (pure 302, no HTML body), and logging redaction for all sensitive data.
+
+## Pre-Production Checklist
+
+Before publishing to production, the following secrets must be configured:
+
+| Secret | Description | How to Generate |
+|--------|-------------|-----------------|
+| `QB_ENCRYPTION_KEY` | 64-char hex key for QuickBooks token encryption (Intuit compliance) | `openssl rand -hex 32` |
+
+**Note**: The app will refuse to start in production without `QB_ENCRYPTION_KEY`. This is required for Intuit app submission compliance.
 
 ## External Dependencies
 

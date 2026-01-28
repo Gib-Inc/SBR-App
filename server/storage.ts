@@ -474,6 +474,7 @@ export interface IStorage {
   createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth>;
   updateQuickbooksAuth(id: string, auth: Partial<InsertQuickbooksAuth>): Promise<QuickbooksAuth | null>;
   updateQuickbooksAuthHealthStatus(id: string, status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void>;
+  deleteQuickbooksAuthByUserId(userId: string): Promise<void>;
   updateQuickbooksWebhookToken(userId: string, token: string): Promise<boolean>;
   
   // Integration Configs health check support (supplements existing methods)
@@ -3154,6 +3155,10 @@ export class MemStorage implements IStorage {
   }
 
   async updateQuickbooksAuthHealthStatus(_id: string, _status: { lastTokenCheckAt?: Date; lastTokenCheckStatus?: string; lastAlertSentAt?: Date | null }): Promise<void> {
+    // Not supported in MemStorage
+  }
+
+  async deleteQuickbooksAuthByUserId(_userId: string): Promise<void> {
     // Not supported in MemStorage
   }
 
@@ -6146,6 +6151,12 @@ export class PostgresStorage implements IStorage {
     await this.db.update(schema.quickbooksAuth)
       .set({ ...status, updatedAt: new Date() })
       .where(eq(schema.quickbooksAuth.id, id));
+  }
+
+  async deleteQuickbooksAuthByUserId(userId: string): Promise<void> {
+    await this.db.delete(schema.quickbooksAuth)
+      .where(eq(schema.quickbooksAuth.userId, userId));
+    console.log(`[Storage] Deleted QuickBooks auth record for user ${userId}`);
   }
 
   async getAllQuickbooksAuths(): Promise<QuickbooksAuth[]> {

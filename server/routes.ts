@@ -17171,8 +17171,20 @@ Generate only the email body text, no subject line.`;
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
 
-      // Check if auth record exists
-      const existingAuth = await storage.getQuickbooksAuth(userId);
+      // Check if auth record exists - handle corrupted tokens gracefully
+      let existingAuth: Awaited<ReturnType<typeof storage.getQuickbooksAuth>> = null;
+      try {
+        existingAuth = await storage.getQuickbooksAuth(userId);
+      } catch (decryptError: any) {
+        // If decryption fails (e.g., encryption key changed), delete the old corrupted record
+        console.warn('[QuickBooks] Old auth record has corrupted tokens - will create fresh record');
+        try {
+          await storage.deleteQuickbooksAuthByUserId(userId);
+        } catch (deleteError) {
+          console.warn('[QuickBooks] Could not delete old auth record:', deleteError);
+        }
+        existingAuth = null;
+      }
       
       if (existingAuth) {
         await storage.updateQuickbooksAuth(existingAuth.id, {
@@ -17320,8 +17332,20 @@ Generate only the email body text, no subject line.`;
       const accessTokenExpiresAt = new Date(now.getTime() + tokens.expires_in * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + tokens.x_refresh_token_expires_in * 1000);
 
-      // Check if auth record exists
-      const existingAuth = await storage.getQuickbooksAuth(userId);
+      // Check if auth record exists - handle corrupted tokens gracefully
+      let existingAuth: Awaited<ReturnType<typeof storage.getQuickbooksAuth>> = null;
+      try {
+        existingAuth = await storage.getQuickbooksAuth(userId);
+      } catch (decryptError: any) {
+        // If decryption fails (e.g., encryption key changed), delete the old corrupted record
+        console.warn('[QuickBooks] Old auth record has corrupted tokens - will create fresh record');
+        try {
+          await storage.deleteQuickbooksAuthByUserId(userId);
+        } catch (deleteError) {
+          console.warn('[QuickBooks] Could not delete old auth record:', deleteError);
+        }
+        existingAuth = null;
+      }
       
       if (existingAuth) {
         await storage.updateQuickbooksAuth(existingAuth.id, {

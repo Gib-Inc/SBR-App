@@ -4487,10 +4487,28 @@ TOTAL: $${subtotal.toFixed(2)}
       const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
       const configData = config?.config as Record<string, any> || {};
       
+      // Enhanced debug logging
+      console.log(`[Extensiv Test] ========================================`);
+      console.log(`[Extensiv Test] Config exists: ${!!config}`);
+      console.log(`[Extensiv Test] API Key (clientSecret) present: ${!!apiKey}, length: ${apiKey?.length || 0}`);
+      console.log(`[Extensiv Test] Client ID present: ${!!configData.clientId}`);
+      console.log(`[Extensiv Test] Org Key present: ${!!configData.orgKey}`);
+      console.log(`[Extensiv Test] Full config data:`, JSON.stringify({
+        ...configData,
+        clientId: configData.clientId ? `${configData.clientId.substring(0, 8)}...` : 'MISSING',
+      }, null, 2));
+      console.log(`[Extensiv Test] ========================================`);
+      
       if (!apiKey) {
         return res.status(400).json({ 
           success: false,
-          message: "Extensiv credentials not configured. Please add Client ID and Client Secret in Settings." 
+          message: "Extensiv credentials not configured. Please add Client ID and Client Secret in Settings.",
+          debug: {
+            hasConfig: !!config,
+            hasApiKey: false,
+            hasClientId: !!configData.clientId,
+            hasOrgKey: !!configData.orgKey,
+          }
         });
       }
 

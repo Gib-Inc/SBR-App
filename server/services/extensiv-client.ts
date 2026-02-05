@@ -200,6 +200,18 @@ export class ExtensivClient {
     
     const fullUrl = `${authUrl}?${params.toString()}`;
     
+    // Debug logging for authentication troubleshooting
+    const maskedClientId = this.clientId ? `${this.clientId.substring(0, 8)}...${this.clientId.slice(-4)}` : 'MISSING';
+    const maskedSecret = this.clientSecret ? `${this.clientSecret.substring(0, 4)}...(${this.clientSecret.length} chars)` : 'MISSING';
+    console.log(`[Extensiv Auth Debug] ========================================`);
+    console.log(`[Extensiv Auth Debug] Auth URL: ${authUrl}`);
+    console.log(`[Extensiv Auth Debug] Full URL with params: ${fullUrl}`);
+    console.log(`[Extensiv Auth Debug] Client ID: ${maskedClientId}`);
+    console.log(`[Extensiv Auth Debug] Client Secret: ${maskedSecret}`);
+    console.log(`[Extensiv Auth Debug] Org Key: ${this.orgKey}`);
+    console.log(`[Extensiv Auth Debug] Basic Auth Header (base64 of clientId:clientSecret)`);
+    console.log(`[Extensiv Auth Debug] ========================================`);
+    
     try {
       const response = await fetch(fullUrl, {
         method: 'GET',
@@ -210,11 +222,20 @@ export class ExtensivClient {
         },
       });
 
+      console.log(`[Extensiv Auth Debug] Response status: ${response.status} ${response.statusText}`);
+      
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorText = await response.text();
+        let errorData: any = {};
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { rawResponse: errorText };
+        }
+        console.log(`[Extensiv Auth Debug] ERROR Response Body:`, JSON.stringify(errorData, null, 2));
         throw new ExtensivApiError(
           ExtensivErrorCode.AUTHENTICATION_FAILED,
-          errorData?.message || `Token exchange failed: ${response.status} ${response.statusText}`,
+          errorData?.message || errorData?.error || `Token exchange failed: ${response.status} ${response.statusText}`,
           response.status,
           errorData
         );

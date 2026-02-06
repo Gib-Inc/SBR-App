@@ -4540,6 +4540,86 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Extensiv/Pivot - Diagnostic endpoint to probe available API paths
+  app.post("/api/integrations/extensiv/diagnose", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+      const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
+      const configData = config?.config as Record<string, any> || {};
+
+      if (!apiKey) {
+        return res.status(400).json({ success: false, message: "Extensiv credentials not configured" });
+      }
+
+      const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+      const clientId = configData.clientId;
+      const clientSecret = apiKey;
+      const orgKey = configData.orgKey;
+
+      const client = clientId
+        ? new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl)
+        : new ExtensivClient(apiKey, baseUrl);
+
+      const warehouses = await client.getWarehouses();
+      const customerId = warehouses.length > 0 ? warehouses[0].id : 'unknown';
+
+      console.log(`[Extensiv Diag] Customer ID: ${customerId}, testing inventory endpoints...`);
+
+      const results: Array<{ path: string; status: number; ok: boolean; keys?: string[]; itemCount?: number; sample?: any }> = [];
+
+      const endpoints = [
+        `${baseUrl}/inventory/stocksummaries?customerid=${customerId}&pgnum=1&pgsiz=5`,
+        `${baseUrl}/inventory/stocksummaries?rql=CustomerIdentifier.Id==${customerId}&pgnum=1&pgsiz=5`,
+        `${baseUrl}/customers/${customerId}/stocksummaries?pgnum=1&pgsiz=5`,
+        `${baseUrl}/customers/${customerId}/stocksummaries?pager.Page=1&pager.PageSize=5`,
+        `${baseUrl}/customers/${customerId}/items?pgnum=1&pgsiz=5`,
+        `${baseUrl}/customers/${customerId}/items?pager.Page=1&pager.PageSize=5`,
+        `${baseUrl}/inventory?customerid=${customerId}&pgnum=1&pgsiz=5`,
+        `${baseUrl}/customers/${customerId}/stockdetails?pgnum=1&pgsiz=5`,
+      ];
+
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${await (client as any).getAccessToken()}`,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Accept': 'application/hal+json',
+        'Host': 'secure-wms.com',
+      };
+
+      for (const url of endpoints) {
+        try {
+          const resp = await fetch(url, { headers });
+          const text = await resp.text();
+          let parsed: any = null;
+          try { parsed = JSON.parse(text); } catch {}
+
+          const entry: any = { path: url.replace(baseUrl, ''), status: resp.status, ok: resp.ok };
+          if (parsed && resp.ok) {
+            entry.keys = Object.keys(parsed);
+            const items = parsed.Summaries || parsed.ResourceList || parsed._embedded?.item || [];
+            entry.itemCount = Array.isArray(items) ? items.length : 0;
+            if (Array.isArray(items) && items.length > 0) {
+              entry.sampleKeys = Object.keys(items[0]);
+              entry.sample = JSON.stringify(items[0]).substring(0, 300);
+            }
+          }
+          results.push(entry);
+        } catch (err: any) {
+          results.push({ path: url.replace(baseUrl, ''), status: 0, ok: false });
+        }
+      }
+
+      res.json({
+        success: true,
+        customerId,
+        customerName: warehouses[0]?.name,
+        endpointResults: results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   // Extensiv/Pivot - Sync finished inventory
   // Mode: "compare" (just compare, log discrepancies) or "align" (apply adjustments to Pivot Qty)
   app.post("/api/integrations/extensiv/sync", requireAuth, async (req: Request, res: Response) => {

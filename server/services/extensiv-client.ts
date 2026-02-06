@@ -265,7 +265,8 @@ export class ExtensivClient {
     const accessToken = await this.getAccessToken();
     return {
       'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Accept': 'application/json',
     };
   }
 
@@ -406,55 +407,30 @@ export class ExtensivClient {
   }
 
   /**
-   * Fetch inventory for a specific customer (warehouse) using stock summaries
-   * @param warehouseId - The customer ID in 3PL WMS
-   * @param page - Page number for pagination (default: 1)
-   * @param limit - Number of items per page (default: 100)
+   * Fetch stock summaries from Extensiv 3PL WMS
+   * 
+   * Endpoint: GET /inventory/stocksummaries (token is scoped to customer, no customer ID needed)
+   * Pagination: pgnum (page number), pgsiz (page size)
+   * Response: { TotalResults: N, Summaries: [{ItemIdentifier:{Sku,Id}, OnHand, Available, Allocated, FacilityId, ...}] }
    */
-  async getInventory(warehouseId: string, page: number = 1, limit: number = 100): Promise<ExtensivItem[]> {
+  async getInventory(warehouseId: string, page: number = 1, limit: number = 200): Promise<ExtensivItem[]> {
     return this.executeWithRetry(async () => {
       try {
-        // Use /customers/{id}/stock-summaries for aggregated inventory
-        const params = new URLSearchParams({
-          'pager.Page': String(page),
-          'pager.PageSize': String(limit),
-        });
-        const url = `${this.baseUrl}/customers/${warehouseId}/stock-summaries?${params.toString()}`;
+        const url = `${this.baseUrl}/inventory/stocksummaries?pgnum=${page}&pgsiz=${limit}`;
         console.log(`[Extensiv] Fetching stock summaries: ${url}`);
-        const response = await fetch(url, {
-          headers: await this.getHeaders(),
-        });
-
+        
+        const response = await fetch(url, { headers: await this.getHeaders() });
         const data = await this.handleResponse(response, 'getInventory');
         
-        // Handle ResourceList wrapper or direct array
-        const items = Array.isArray(data) 
-          ? data 
-          : (data.ResourceList || data.items || data.inventory || data.data || []);
+        const items = data.Summaries || data.ResourceList || [];
+        const totalResults = data.TotalResults || items.length;
         
-        console.log(`[Extensiv] Got ${items.length} stock summary items (page ${page})`);
-        if (items.length > 0) {
-          console.log(`[Extensiv] First item raw keys:`, Object.keys(items[0]));
-          const ro = items[0].ReadOnly || {};
-          if (Object.keys(ro).length > 0) {
-            console.log(`[Extensiv] First item ReadOnly keys:`, Object.keys(ro));
-          }
+        console.log(`[Extensiv] Got ${items.length} stock summary items (page ${page}, total: ${totalResults})`);
+        if (items.length > 0 && page === 1) {
+          console.log(`[Extensiv] Sample item: SKU=${items[0]?.ItemIdentifier?.Sku}, OnHand=${items[0]?.OnHand}, Available=${items[0]?.Available}, FacilityId=${items[0]?.FacilityId}`);
         }
         
-        return items.map((item: any) => {
-          const ro = item.ReadOnly || item.readOnly || {};
-          const itemId = item.itemIdentifier || item.ItemIdentifier || {};
-          return {
-            sku: itemId.sku || itemId.SKU || item.sku || item.SKU || ro.sku || '',
-            name: itemId.description || item.description || ro.description || '',
-            description: itemId.description || item.description || ro.description || '',
-            quantity: Number(ro.onHand || item.onHand || ro.onHandQty || item.onHandQty || item.availableQty || item.quantity || 0),
-            warehouseId: String(ro.facilityId || item.facilityId || warehouseId),
-            warehouseName: ro.facilityName || item.facilityName || '',
-            upc: itemId.upc || itemId.UPC || item.upc || ro.upc || '',
-            barcode: itemId.upc || itemId.UPC || item.barcode || ro.upc || '',
-          };
-        });
+        return items.map((item: any) => this.mapStockSummaryItem(item, warehouseId));
       } catch (error: any) {
         if (error instanceof ExtensivApiError) throw error;
         throw new ExtensivApiError(
@@ -466,18 +442,72 @@ export class ExtensivClient {
   }
 
   /**
-   * Fetch all inventory for a customer with pagination
+   * Map a stock summary item to our ExtensivItem format
+   * 
+   * Actual API response shape per item:
+   * {
+   *   ItemIdentifier: { Sku: "SKU: #501-ACC-1", Id: 3937 },
+   *   Qualifier: "",
+   *   TotalReceived: 22,
+   *   Allocated: 3,
+   *   Available: 19,
+   *   OnHold: 0,
+   *   OnHand: 19,
+   *   FacilityId: 2
+   * }
+   */
+  private mapStockSummaryItem(item: any, fallbackWarehouseId: string): ExtensivItem {
+    const itemId = item.ItemIdentifier || {};
+    
+    return {
+      sku: itemId.Sku || itemId.sku || item.Sku || item.sku || '',
+      name: itemId.Description || item.Description || '',
+      description: itemId.Description || item.Description || '',
+      quantity: Number(item.OnHand ?? item.onHand ?? item.Available ?? item.available ?? 0),
+      warehouseId: String(item.FacilityId || item.facilityId || fallbackWarehouseId),
+      warehouseName: '',
+      upc: '',
+      barcode: '',
+    };
+  }
+
+  /**
+   * Fetch item catalog from Extensiv for enriching stock data with UPC/descriptions
+   * Endpoint: GET /customers/{customerId}/items
+   */
+  async getItemCatalog(customerId: string): Promise<any[]> {
+    const allItems: any[] = [];
+    let page = 1;
+    const pageSize = 100; // API max is 100 for /customers/{id}/items
+    
+    while (true) {
+      const url = `${this.baseUrl}/customers/${customerId}/items?pgnum=${page}&pgsiz=${pageSize}`;
+      const response = await fetch(url, { headers: await this.getHeaders() });
+      const data = await this.handleResponse(response, 'getItemCatalog');
+      const items = data.ResourceList || [];
+      allItems.push(...items);
+      
+      if (items.length < pageSize) break;
+      page++;
+      if (page > 50) break;
+    }
+    
+    return allItems;
+  }
+
+  /**
+   * Fetch all inventory for a customer with pagination, enriched with item catalog data
    */
   async getAllInventory(warehouseId: string): Promise<ExtensivItem[]> {
     const allItems: ExtensivItem[] = [];
     let page = 1;
-    const limit = 100;
+    const pageSize = 200;
     
     while (true) {
-      const items = await this.getInventory(warehouseId, page, limit);
+      const items = await this.getInventory(warehouseId, page, pageSize);
       allItems.push(...items);
       
-      if (items.length < limit) {
+      if (items.length < pageSize) {
         break;
       }
       
@@ -487,6 +517,29 @@ export class ExtensivClient {
         console.warn('[Extensiv] Reached page limit (100 pages), stopping pagination');
         break;
       }
+    }
+    
+    // Enrich items with UPC/description from item catalog
+    try {
+      const catalogItems = await this.getItemCatalog(warehouseId);
+      const catalogMap = new Map<string, any>();
+      for (const ci of catalogItems) {
+        const sku = ci.Sku || ci.sku || '';
+        if (sku) catalogMap.set(sku, ci);
+      }
+      
+      for (const item of allItems) {
+        const catalog = catalogMap.get(item.sku);
+        if (catalog) {
+          item.name = catalog.Description || catalog.description || item.name;
+          item.description = catalog.Description || catalog.description || item.description;
+          item.upc = catalog.Upc || catalog.upc || catalog.UPC || item.upc;
+          item.barcode = item.upc;
+        }
+      }
+      console.log(`[Extensiv] Enriched ${allItems.length} items with catalog data (${catalogMap.size} catalog entries)`);
+    } catch (err: any) {
+      console.warn(`[Extensiv] Could not enrich items with catalog data: ${err.message}`);
     }
     
     console.log(`[Extensiv] Total inventory items fetched: ${allItems.length}`);

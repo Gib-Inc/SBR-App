@@ -4430,7 +4430,7 @@ TOTAL: $${subtotal.toFixed(2)}
         try {
           const { ExtensivClient } = await import("./services/extensiv-client");
           const extensivConfigData = extensivConfig.config as Record<string, any> || {};
-          const baseUrl = extensivConfigData.baseUrl || 'https://api-hub.extensiv.com';
+          const baseUrl = extensivConfigData.baseUrl || 'https://secure-wms.com';
           const clientId = extensivConfigData.clientId;
           const clientSecret = extensivConfig.apiKey;
           const orgKey = extensivConfigData.orgKey;
@@ -4512,7 +4512,7 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
-      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+      const baseUrl = configData.baseUrl || 'https://secure-wms.com';
       const clientId = configData.clientId;
       const clientSecret = apiKey;
       const orgKey = configData.orgKey;
@@ -4568,7 +4568,7 @@ TOTAL: $${subtotal.toFixed(2)}
 
       // Get Pivot warehouse ID from config or environment variable
       const pivotWarehouseId = configData.pivotWarehouseId || process.env.PIVOT_WAREHOUSE_ID || '1';
-      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+      const baseUrl = configData.baseUrl || 'https://secure-wms.com';
       const clientId = configData.clientId;
       const clientSecret = apiKey;
       const orgKey = configData.orgKey;
@@ -4788,7 +4788,7 @@ TOTAL: $${subtotal.toFixed(2)}
       const apiKey = config?.apiKey || process.env.EXTENSIV_API_KEY;
       const configData = config?.config as Record<string, any> || {};
       const pivotWarehouseId = configData.pivotWarehouseId || '1';
-      const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+      const baseUrl = configData.baseUrl || 'https://secure-wms.com';
       
       if (!apiKey) {
         return res.status(400).json({ 

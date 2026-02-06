@@ -61,7 +61,7 @@ export class ExtensivInventorySyncService {
       
       if (config?.isEnabled && config.apiKey) {
         const configData = config.config as Record<string, any> || {};
-        const baseUrl = configData.baseUrl || 'https://api-hub.extensiv.com';
+        const baseUrl = configData.baseUrl || 'https://secure-wms.com';
         
         this.credentials = {
           apiKey: config.apiKey,
@@ -101,7 +101,7 @@ export class ExtensivInventorySyncService {
       if (envKey) {
         this.credentials = {
           apiKey: envKey,
-          baseUrl: process.env.EXTENSIV_BASE_URL || 'https://api-hub.extensiv.com',
+          baseUrl: process.env.EXTENSIV_BASE_URL || 'https://secure-wms.com',
           pivotWarehouseId: process.env.EXTENSIV_WAREHOUSE_ID || '1',
           pushOrders: process.env.EXTENSIV_PUSH_ORDERS === 'true',
         };

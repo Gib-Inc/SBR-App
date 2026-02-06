@@ -137,7 +137,7 @@ export class ExtensivClient {
 
   constructor(
     credentials: ExtensivCredentials | string, 
-    baseUrl: string = 'https://api-hub.extensiv.com', 
+    baseUrl: string = 'https://secure-wms.com', 
     defaultWarehouseId?: string
   ) {
     // Support legacy string API key for backward compatibility
@@ -185,43 +185,23 @@ export class ExtensivClient {
     if (!this.orgKey) {
       throw new ExtensivApiError(
         ExtensivErrorCode.AUTHENTICATION_FAILED,
-        'Organization Key (orgkey) is required for Extensiv OAuth2 authentication. Please add it in Settings.',
+        'User Login (GUID) is required for Extensiv API authentication. Please add it in Settings.',
         undefined
       );
     }
 
-    // Request new token from Extensiv API
-    // Try Hub API first, then fall back to 3PL Warehouse Manager API
+    // Request token from 3PL Warehouse Manager API at secure-wms.com
     const basicAuth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
     
-    // Debug logging for authentication troubleshooting
     const maskedClientId = this.clientId ? `${this.clientId.substring(0, 8)}...${this.clientId.slice(-4)}` : 'MISSING';
     const maskedSecret = this.clientSecret ? `${this.clientSecret.substring(0, 4)}...(${this.clientSecret.length} chars)` : 'MISSING';
-    console.log(`[Extensiv Auth Debug] ========================================`);
-    console.log(`[Extensiv Auth Debug] Client ID: ${maskedClientId}`);
-    console.log(`[Extensiv Auth Debug] Client Secret: ${maskedSecret}`);
-    console.log(`[Extensiv Auth Debug] Org Key: ${this.orgKey}`);
-    console.log(`[Extensiv Auth Debug] ========================================`);
+    console.log(`[Extensiv Auth] Client ID: ${maskedClientId}, Secret: ${maskedSecret}, GUID: ${this.orgKey}`);
     
-    // Define auth endpoints to try in order
-    const authAttempts = [
-      // Attempt 1: Hub API with orgkey query param (GET)
-      {
-        name: 'Hub API (orgkey)',
-        url: `${this.baseUrl}/auth/token/token?orgkey=${encodeURIComponent(this.orgKey)}`,
-        method: 'GET' as const,
-        headers: {
-          'Authorization': `Basic ${basicAuth}`,
-          'Content-Type': 'application/json; charset=utf-8',
-          'Accept': 'application/json',
-        },
-        body: undefined as string | undefined,
-      },
-      // Attempt 2: 3PL Warehouse Manager API (POST with JSON body)
-      {
-        name: '3PL WMS API (secure-wms.com)',
-        url: 'https://secure-wms.com/AuthServer/api/Token',
-        method: 'POST' as const,
+    const authUrl = 'https://secure-wms.com/AuthServer/api/Token';
+    
+    try {
+      const response = await fetch(authUrl, {
+        method: 'POST',
         headers: {
           'Authorization': `Basic ${basicAuth}`,
           'Content-Type': 'application/json; charset=utf-8',
@@ -229,56 +209,13 @@ export class ExtensivClient {
         },
         body: JSON.stringify({
           grant_type: 'client_credentials',
-          tpl: this.orgKey, // Try orgkey as tpl identifier
+          user_login: this.orgKey,
         }),
-      },
-      // Attempt 3: Hub API with tplguid (alternative param name)
-      {
-        name: 'Hub API (tplguid)',
-        url: `${this.baseUrl}/auth/token/token?tplguid=${encodeURIComponent(this.orgKey)}`,
-        method: 'GET' as const,
-        headers: {
-          'Authorization': `Basic ${basicAuth}`,
-          'Content-Type': 'application/json; charset=utf-8',
-          'Accept': 'application/json',
-        },
-        body: undefined as string | undefined,
-      },
-    ];
-    
-    let lastError: Error | null = null;
-    
-    for (const attempt of authAttempts) {
-      console.log(`[Extensiv Auth Debug] Trying: ${attempt.name}`);
-      console.log(`[Extensiv Auth Debug] URL: ${attempt.url}`);
-      console.log(`[Extensiv Auth Debug] Method: ${attempt.method}`);
-      
-      try {
-        const response = await fetch(attempt.url, {
-          method: attempt.method,
-          headers: attempt.headers,
-          body: attempt.body,
-        });
+      });
 
-        console.log(`[Extensiv Auth Debug] Response status: ${response.status} ${response.statusText}`);
-        
-        if (response.ok) {
-          const data = await response.json();
-          const accessToken = data.access_token || data.token || data;
-          
-          if (accessToken && typeof accessToken === 'string') {
-            console.log(`[Extensiv Auth Debug] SUCCESS with ${attempt.name}`);
-            
-            // Cache token for 7 hours (tokens expire at 8 hours)
-            const expiresAt = Date.now() + (7 * 60 * 60 * 1000);
-            tokenCache.set(this.clientId, { accessToken, expiresAt });
-            
-            console.log(`[Extensiv] Obtained new access token via ${attempt.name}, expires in 7 hours`);
-            return accessToken;
-          }
-        }
-        
-        // Log error but continue to next attempt
+      console.log(`[Extensiv Auth] Response: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         let errorData: any = {};
         try {
@@ -286,21 +223,42 @@ export class ExtensivClient {
         } catch {
           errorData = { rawResponse: errorText };
         }
-        console.log(`[Extensiv Auth Debug] ${attempt.name} failed:`, JSON.stringify(errorData, null, 2));
-        lastError = new Error(`${attempt.name}: ${response.status} ${response.statusText} - ${errorData?.message || errorData?.error || 'Unknown error'}`);
-      } catch (fetchError: any) {
-        console.log(`[Extensiv Auth Debug] ${attempt.name} fetch error:`, fetchError.message);
-        lastError = fetchError;
+        console.log(`[Extensiv Auth] Error:`, JSON.stringify(errorData, null, 2));
+        throw new ExtensivApiError(
+          ExtensivErrorCode.AUTHENTICATION_FAILED,
+          errorData?.Message || errorData?.message || errorData?.error || `Token exchange failed: ${response.status} ${response.statusText}`,
+          response.status,
+          errorData
+        );
       }
+
+      const data = await response.json();
+      const accessToken = data.access_token;
+      
+      if (!accessToken || typeof accessToken !== 'string') {
+        throw new ExtensivApiError(
+          ExtensivErrorCode.AUTHENTICATION_FAILED,
+          'Token response did not contain a valid access_token',
+          response.status,
+          data
+        );
+      }
+      
+      // Cache token for 25 minutes (tokens typically expire at 30-60 minutes per Extensiv docs)
+      const expiresAt = Date.now() + (25 * 60 * 1000);
+      tokenCache.set(this.clientId, { accessToken, expiresAt });
+      
+      console.log(`[Extensiv] Obtained access token, cached for 25 minutes`);
+      return accessToken;
+    } catch (error) {
+      if (error instanceof ExtensivApiError) throw error;
+      throw new ExtensivApiError(
+        ExtensivErrorCode.CONNECTION_FAILED,
+        `Failed to connect to Extensiv auth server: ${(error as Error).message}`,
+        undefined,
+        error
+      );
     }
-    
-    // All attempts failed
-    throw new ExtensivApiError(
-      ExtensivErrorCode.AUTHENTICATION_FAILED,
-      `All authentication methods failed. Last error: ${lastError?.message || 'Unknown error'}. Please verify your Client ID, Client Secret, and Org Key are correct.`,
-      undefined,
-      { lastError: lastError?.message }
-    );
   }
 
   private async getHeaders(): Promise<Record<string, string>> {

@@ -77,7 +77,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   // Form state for different integration types
   const [apiKey, setApiKey] = useState("");
   const [pivotWarehouseId, setPivotWarehouseId] = useState("1");
-  const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://api-hub.extensiv.com");
+  const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://secure-wms.com");
   const [extensivPushOrders, setExtensivPushOrders] = useState(false);
   const [extensivClientId, setExtensivClientId] = useState("");
   const [extensivClientSecret, setExtensivClientSecret] = useState("");
@@ -223,7 +223,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       setApiKey("");
       if (integrationType === "EXTENSIV") {
         setPivotWarehouseId(config.config?.pivotWarehouseId || "1");
-        setExtensivBaseUrl(config.config?.baseUrl || "https://api-hub.extensiv.com");
+        setExtensivBaseUrl(config.config?.baseUrl || "https://secure-wms.com");
         setExtensivPushOrders(config.config?.pushOrders || false);
         setExtensivClientId(config.config?.clientId || "");
         setExtensivClientSecret("");
@@ -337,7 +337,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       if (integrationType === "EXTENSIV") {
         // Validate OAuth2 credentials - orgKey is required when clientId is present
         if (extensivClientId && !extensivOrgKey) {
-          throw new Error("Organization Key (orgkey) is required when using Client ID authentication");
+          throw new Error("User Login (GUID) is required when using Client ID authentication");
         }
         configData = { 
           pivotWarehouseId,
@@ -621,7 +621,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               )}
               {config.config?.orgKey && (
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Org Key</span>
+                  <span className="text-sm text-muted-foreground">User Login (GUID)</span>
                   <span className="text-sm font-mono">{config.config.orgKey}</span>
                 </div>
               )}
@@ -691,17 +691,17 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="extensiv-org-key" data-testid="label-extensiv-org-key">
-                      Organization Key (orgkey)
+                      User Login (GUID)
                     </Label>
                     <Input
                       id="extensiv-org-key"
-                      placeholder="Enter your Extensiv org key"
+                      placeholder="Enter the GUID provided by Extensiv"
                       value={extensivOrgKey}
                       onChange={(e) => setExtensivOrgKey(e.target.value)}
                       data-testid="input-extensiv-org-key"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Your Extensiv organization key, used for API token authentication.
+                      The GUID provided by your warehouse / Extensiv team for API authentication.
                     </p>
                   </div>
                   <div className="space-y-2">

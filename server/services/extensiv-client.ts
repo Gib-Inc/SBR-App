@@ -357,63 +357,79 @@ export class ExtensivClient {
   }
 
   /**
-   * Fetch all warehouses from Extensiv
+   * Fetch all customers (warehouses) from Extensiv 3PL WMS
+   * In 3PL WMS, "customers" represent the warehouse accounts
    */
   async getWarehouses(): Promise<ExtensivWarehouse[]> {
     return this.executeWithRetry(async () => {
       try {
-        const response = await fetch(`${this.baseUrl}/warehouses`, {
+        const response = await fetch(`${this.baseUrl}/customers`, {
           headers: await this.getHeaders(),
         });
 
         const data = await this.handleResponse(response, 'getWarehouses');
         
-        // Handle different response formats
-        const warehouses = Array.isArray(data) ? data : (data.warehouses || data.data || []);
+        // 3PL WMS returns an array of customer objects or a ResourceList wrapper
+        const customers = Array.isArray(data) 
+          ? data 
+          : (data.ResourceList || data.customers || data.data || []);
         
-        return warehouses.map((w: any) => ({
-          id: String(w.id || w.warehouseId || w.warehouse_id),
-          name: w.name || w.warehouseName || w.warehouse_name || 'Unknown',
-          code: w.code || w.warehouseCode,
+        console.log(`[Extensiv] Fetched ${customers.length} customer(s) from 3PL WMS`);
+        
+        return customers.map((c: any) => ({
+          id: String(c.customerID || c.customerId || c.customer_id || c.id),
+          name: c.companyName || c.name || c.customerName || 'Unknown',
+          code: c.externalId || c.code,
         }));
       } catch (error: any) {
         if (error instanceof ExtensivApiError) throw error;
         throw new ExtensivApiError(
           ExtensivErrorCode.CONNECTION_FAILED,
-          `Failed to fetch warehouses: ${error.message}`
+          `Failed to fetch customers/warehouses: ${error.message}`
         );
       }
     }, 'getWarehouses');
   }
 
   /**
-   * Fetch inventory for a specific warehouse
-   * @param warehouseId - The warehouse ID to fetch inventory for
+   * Fetch inventory for a specific customer (warehouse) using stock summaries
+   * @param warehouseId - The customer ID in 3PL WMS
    * @param page - Page number for pagination (default: 1)
    * @param limit - Number of items per page (default: 100)
    */
   async getInventory(warehouseId: string, page: number = 1, limit: number = 100): Promise<ExtensivItem[]> {
     return this.executeWithRetry(async () => {
       try {
-        const url = `${this.baseUrl}/inventory?warehouseId=${warehouseId}&page=${page}&limit=${limit}`;
+        // Use stock-summaries endpoint for aggregated inventory by customer
+        const params = new URLSearchParams({
+          customerid: warehouseId,
+          pgsiz: String(limit),
+          pgnum: String(page),
+        });
+        const url = `${this.baseUrl}/inventory?${params.toString()}`;
+        console.log(`[Extensiv] Fetching inventory: ${url}`);
         const response = await fetch(url, {
           headers: await this.getHeaders(),
         });
 
         const data = await this.handleResponse(response, 'getInventory');
         
-        // Handle different response formats
-        const items = Array.isArray(data) ? data : (data.items || data.inventory || data.data || []);
+        // Handle ResourceList wrapper or direct array
+        const items = Array.isArray(data) 
+          ? data 
+          : (data.ResourceList || data.items || data.inventory || data.data || []);
+        
+        console.log(`[Extensiv] Got ${items.length} inventory items (page ${page})`);
         
         return items.map((item: any) => ({
-          sku: item.sku || item.SKU || item.productSku || item.itemCode,
-          name: item.name || item.productName,
-          description: item.description,
-          quantity: Number(item.quantity || item.onHand || item.available || item.availableQuantity || 0),
-          warehouseId: String(item.warehouseId || warehouseId),
-          warehouseName: item.warehouseName,
-          upc: item.upc || item.UPC || item.barcode,
-          barcode: item.barcode || item.upc,
+          sku: item.itemIdentifier?.sku || item.sku || item.SKU || item.itemCode || '',
+          name: item.itemIdentifier?.description || item.description || item.name || item.productName || '',
+          description: item.itemIdentifier?.description || item.description || '',
+          quantity: Number(item.onHandQty || item.onHand || item.availableQty || item.quantity || item.available || 0),
+          warehouseId: String(item.facilityId || item.warehouseId || warehouseId),
+          warehouseName: item.facilityName || item.warehouseName || '',
+          upc: item.itemIdentifier?.upc || item.upc || item.UPC || '',
+          barcode: item.itemIdentifier?.upc || item.barcode || item.upc || '',
         }));
       } catch (error: any) {
         if (error instanceof ExtensivApiError) throw error;
@@ -426,7 +442,7 @@ export class ExtensivClient {
   }
 
   /**
-   * Fetch all inventory for a warehouse with pagination
+   * Fetch all inventory for a customer with pagination
    */
   async getAllInventory(warehouseId: string): Promise<ExtensivItem[]> {
     const allItems: ExtensivItem[] = [];
@@ -437,20 +453,19 @@ export class ExtensivClient {
       const items = await this.getInventory(warehouseId, page, limit);
       allItems.push(...items);
       
-      // If we got fewer items than the limit, we've reached the end
       if (items.length < limit) {
         break;
       }
       
       page++;
       
-      // Safety limit to prevent infinite loops
       if (page > 100) {
         console.warn('[Extensiv] Reached page limit (100 pages), stopping pagination');
         break;
       }
     }
     
+    console.log(`[Extensiv] Total inventory items fetched: ${allItems.length}`);
     return allItems;
   }
 

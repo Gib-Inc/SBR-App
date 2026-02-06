@@ -372,18 +372,27 @@ export class ExtensivClient {
 
         const data = await this.handleResponse(response, 'getWarehouses');
         
-        // 3PL WMS returns an array of customer objects or a ResourceList wrapper
+        // 3PL WMS returns an array of customer objects with nested ReadOnly fields
         const customers = Array.isArray(data) 
           ? data 
           : (data.ResourceList || data.customers || data.data || []);
         
         console.log(`[Extensiv] Fetched ${customers.length} customer(s) from 3PL WMS`);
+        if (customers.length > 0) {
+          console.log(`[Extensiv] First customer raw keys:`, Object.keys(customers[0]));
+          if (customers[0].ReadOnly) {
+            console.log(`[Extensiv] ReadOnly keys:`, Object.keys(customers[0].ReadOnly));
+          }
+        }
         
-        return customers.map((c: any) => ({
-          id: String(c.customerID || c.customerId || c.customer_id || c.id),
-          name: c.companyName || c.name || c.customerName || 'Unknown',
-          code: c.externalId || c.code,
-        }));
+        return customers.map((c: any) => {
+          // 3PL WMS nests the ID inside ReadOnly.customerId
+          const ro = c.ReadOnly || c.readOnly || {};
+          const id = ro.customerId || ro.customerID || c.customerID || c.customerId || c.customer_id || c.id;
+          const name = c.companyName || c.name || c.customerName || ro.companyName || 'Unknown';
+          const code = c.externalId || c.code || ro.externalId;
+          return { id: String(id), name, code };
+        });
       } catch (error: any) {
         if (error instanceof ExtensivApiError) throw error;
         throw new ExtensivApiError(
@@ -403,14 +412,13 @@ export class ExtensivClient {
   async getInventory(warehouseId: string, page: number = 1, limit: number = 100): Promise<ExtensivItem[]> {
     return this.executeWithRetry(async () => {
       try {
-        // Use stock-summaries endpoint for aggregated inventory by customer
+        // Use /customers/{id}/stock-summaries for aggregated inventory
         const params = new URLSearchParams({
-          customerid: warehouseId,
-          pgsiz: String(limit),
-          pgnum: String(page),
+          'pager.Page': String(page),
+          'pager.PageSize': String(limit),
         });
-        const url = `${this.baseUrl}/inventory?${params.toString()}`;
-        console.log(`[Extensiv] Fetching inventory: ${url}`);
+        const url = `${this.baseUrl}/customers/${warehouseId}/stock-summaries?${params.toString()}`;
+        console.log(`[Extensiv] Fetching stock summaries: ${url}`);
         const response = await fetch(url, {
           headers: await this.getHeaders(),
         });
@@ -422,18 +430,29 @@ export class ExtensivClient {
           ? data 
           : (data.ResourceList || data.items || data.inventory || data.data || []);
         
-        console.log(`[Extensiv] Got ${items.length} inventory items (page ${page})`);
+        console.log(`[Extensiv] Got ${items.length} stock summary items (page ${page})`);
+        if (items.length > 0) {
+          console.log(`[Extensiv] First item raw keys:`, Object.keys(items[0]));
+          const ro = items[0].ReadOnly || {};
+          if (Object.keys(ro).length > 0) {
+            console.log(`[Extensiv] First item ReadOnly keys:`, Object.keys(ro));
+          }
+        }
         
-        return items.map((item: any) => ({
-          sku: item.itemIdentifier?.sku || item.sku || item.SKU || item.itemCode || '',
-          name: item.itemIdentifier?.description || item.description || item.name || item.productName || '',
-          description: item.itemIdentifier?.description || item.description || '',
-          quantity: Number(item.onHandQty || item.onHand || item.availableQty || item.quantity || item.available || 0),
-          warehouseId: String(item.facilityId || item.warehouseId || warehouseId),
-          warehouseName: item.facilityName || item.warehouseName || '',
-          upc: item.itemIdentifier?.upc || item.upc || item.UPC || '',
-          barcode: item.itemIdentifier?.upc || item.barcode || item.upc || '',
-        }));
+        return items.map((item: any) => {
+          const ro = item.ReadOnly || item.readOnly || {};
+          const itemId = item.itemIdentifier || item.ItemIdentifier || {};
+          return {
+            sku: itemId.sku || itemId.SKU || item.sku || item.SKU || ro.sku || '',
+            name: itemId.description || item.description || ro.description || '',
+            description: itemId.description || item.description || ro.description || '',
+            quantity: Number(ro.onHand || item.onHand || ro.onHandQty || item.onHandQty || item.availableQty || item.quantity || 0),
+            warehouseId: String(ro.facilityId || item.facilityId || warehouseId),
+            warehouseName: ro.facilityName || item.facilityName || '',
+            upc: itemId.upc || itemId.UPC || item.upc || ro.upc || '',
+            barcode: itemId.upc || itemId.UPC || item.barcode || ro.upc || '',
+          };
+        });
       } catch (error: any) {
         if (error instanceof ExtensivApiError) throw error;
         throw new ExtensivApiError(

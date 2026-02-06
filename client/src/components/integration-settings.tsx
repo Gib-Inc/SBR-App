@@ -45,7 +45,7 @@ interface IntegrationSettingsProps {
 }
 
 const INTEGRATION_LABELS: Record<IntegrationType, string> = {
-  EXTENSIV: "Extensiv (Pivot Warehouse)",
+  EXTENSIV: "Extensiv (3PL Warehouse)",
   SHOPIFY: "Shopify",
   AMAZON: "Amazon Seller Central",
   GOHIGHLEVEL: "GoHighLevel",
@@ -381,7 +381,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
 
       const payload: any = {
         provider: integrationType,
-        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : integrationType === "GOHIGHLEVEL" ? "GoHighLevel" : integrationType === "PHANTOMBUSTER" ? "PhantomBuster" : integrationType === "SHIPPO" ? "Shippo" : "Pivot Warehouse",
+        accountName: integrationType === "SHOPIFY" ? shopDomain : integrationType === "AMAZON" ? sellerId : integrationType === "GOHIGHLEVEL" ? "GoHighLevel" : integrationType === "PHANTOMBUSTER" ? "PhantomBuster" : integrationType === "SHIPPO" ? "Shippo" : "Extensiv Warehouse",
         config: configData,
       };
 
@@ -569,7 +569,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                 <span className="text-sm font-medium">Inventory Locations</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Pivot (Pyvott - 3PL)</span>
+                <span className="text-sm text-muted-foreground">Extensiv (Pyvott - 3PL)</span>
                 <span className="text-sm font-mono">
                   {config.config?.pivotLocationId || config.config?.locationId || "Not configured"}
                 </span>
@@ -917,24 +917,24 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       <Alert data-testid="alert-legacy-location">
                         <AlertCircle className="h-4 w-4" />
                         <AlertDescription>
-                          We detected a legacy inventory location. It has been mapped to Pivot. You can add a separate Hildale location ID if needed.
+                          We detected a legacy inventory location. It has been mapped to Extensiv. You can add a separate Hildale location ID if needed.
                         </AlertDescription>
                       </Alert>
                     )}
                     
                     <div className="space-y-2">
                       <Label htmlFor="shopify-pivot-location-id" data-testid="label-shopify-pivot-location-id">
-                        Pivot Location ID (Pyvott – 3PL)
+                        Extensiv Location ID (Pyvott – 3PL)
                       </Label>
                       <Input
                         id="shopify-pivot-location-id"
-                        placeholder="Enter Pivot location ID (e.g., 12345678901)"
+                        placeholder="Enter Extensiv location ID (e.g., 12345678901)"
                         value={shopifyPivotLocationId}
                         onChange={(e) => setShopifyPivotLocationId(e.target.value)}
                         data-testid="input-shopify-pivot-location-id"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Customer orders ship from this 3PL location. Maps to Pivot Qty in BOM.
+                        Customer orders ship from this 3PL location. Maps to Extensiv Qty in BOM.
                       </p>
                     </div>
                     

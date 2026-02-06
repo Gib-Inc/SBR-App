@@ -622,6 +622,71 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
     );
   }, [extensivProducts, extensivSearchQuery]);
 
+  const unmappedExtensivProducts = useMemo(() => {
+    if (!extensivProducts?.products) return [];
+    const linkedExtensivSkus = new Set(
+      uniqueItems
+        .filter(item => item.extensivSku)
+        .map(item => item.extensivSku)
+    );
+    const internalSkus = new Set(uniqueItems.map(item => item.sku));
+    return extensivProducts.products.filter(p => 
+      !linkedExtensivSkus.has(p.sku) && !internalSkus.has(p.sku)
+    );
+  }, [extensivProducts, uniqueItems]);
+
+  const [showExtensivImportPrompt, setShowExtensivImportPrompt] = useState(false);
+  const [isImportingExtensiv, setIsImportingExtensiv] = useState(false);
+  const [extensivImportProgress, setExtensivImportProgress] = useState({ current: 0, total: 0 });
+
+  const importExtensivProductsMutation = useMutation({
+    mutationFn: async (products: ExtensivProduct[]) => {
+      const results = { imported: 0, skipped: 0, errors: 0 };
+      setExtensivImportProgress({ current: 0, total: products.length });
+      
+      for (let i = 0; i < products.length; i++) {
+        const product = products[i];
+        try {
+          await apiRequest("POST", "/api/items", {
+            name: product.name || product.sku,
+            sku: product.sku,
+            type: "finished_product",
+            upc: product.upc || null,
+            extensivSku: product.sku,
+            pivotQty: 0,
+            hildaleQty: 0,
+          });
+          results.imported++;
+        } catch (error: any) {
+          if (error.message?.includes("already exists") || error.message?.includes("duplicate")) {
+            results.skipped++;
+          } else {
+            results.errors++;
+          }
+        }
+        setExtensivImportProgress({ current: i + 1, total: products.length });
+      }
+      
+      return results;
+    },
+    onSuccess: (results) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      refetchExtensiv();
+      setShowExtensivImportPrompt(false);
+      toast({
+        title: "Import Complete",
+        description: `Imported ${results.imported} product${results.imported !== 1 ? 's' : ''}${results.skipped > 0 ? `, ${results.skipped} skipped` : ''}${results.errors > 0 ? `, ${results.errors} errors` : ''}`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Import Failed",
+        description: error.message || "Failed to import products",
+      });
+    },
+  });
+
   // === QUICKBOOKS TAB LOGIC ===
   interface QuickBooksItem {
     id: string;
@@ -1082,6 +1147,17 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
                 Apply All Suggested
               </Button>
             )}
+            {unmappedExtensivProducts.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowExtensivImportPrompt(true)}
+                data-testid="button-import-extensiv"
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Import {unmappedExtensivProducts.length} New
+              </Button>
+            )}
             <Button 
               variant="outline" 
               size="sm" 
@@ -1096,7 +1172,65 @@ export function SkuMappingWizard({ isOpen, onClose, source = null, onCompleteSyn
 
         <div className="text-xs text-muted-foreground">
           {extensivProducts.totalProducts} items in Extensiv (Warehouse: {extensivProducts.warehouseId})
+          {unmappedExtensivProducts.length > 0 && (
+            <span className="ml-2 text-orange-500">
+              ({unmappedExtensivProducts.length} not yet in your inventory)
+            </span>
+          )}
         </div>
+
+        {showExtensivImportPrompt && (
+          <Card className="border-blue-200 dark:border-blue-800">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Package className="h-5 w-5 text-blue-500" />
+                <span className="font-medium">Import Extensiv Products</span>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {unmappedExtensivProducts.length} products from Extensiv are not in your inventory yet. 
+                Import them to track their stock levels.
+              </p>
+              {importExtensivProductsMutation.isPending && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Importing...</span>
+                    <span>{extensivImportProgress.current}/{extensivImportProgress.total}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-muted overflow-hidden">
+                    <div 
+                      className="h-full bg-blue-500 transition-all duration-300" 
+                      style={{ width: `${extensivImportProgress.total > 0 ? (extensivImportProgress.current / extensivImportProgress.total * 100) : 0}%` }} 
+                    />
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => importExtensivProductsMutation.mutate(unmappedExtensivProducts)}
+                  disabled={importExtensivProductsMutation.isPending}
+                  data-testid="button-confirm-import-extensiv"
+                >
+                  {importExtensivProductsMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-1" />
+                  )}
+                  Import All ({unmappedExtensivProducts.length})
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShowExtensivImportPrompt(false)}
+                  disabled={importExtensivProductsMutation.isPending}
+                  data-testid="button-cancel-import-extensiv"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <ScrollArea className="h-[400px] pr-4">
           <div className="space-y-2">

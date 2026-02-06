@@ -62,7 +62,7 @@ const PROVIDER_LABELS: Record<HealthCheckProvider, string> = {
   QUICKBOOKS: "QuickBooks Online",
   META_ADS: "Meta Ads",
   GOOGLE_ADS: "Google Ads",
-  EXTENSIV: "Extensiv (Pivot)",
+  EXTENSIV: "Extensiv",
   SHOPIFY: "Shopify",
   AMAZON: "Amazon Seller Central",
   GOHIGHLEVEL: "GoHighLevel",

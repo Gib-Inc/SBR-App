@@ -95,7 +95,7 @@ export default function IntegrationsPage() {
       } else {
         const response = await apiRequest("POST", "/api/integration-configs", {
           provider: "EXTENSIV",
-          accountName: "Pivot Warehouse",
+          accountName: "Extensiv Warehouse",
           apiKey,
           config: {},
         });
@@ -192,11 +192,11 @@ export default function IntegrationsPage() {
             <div className="flex items-start justify-between">
               <div>
                 <CardTitle className="flex items-center gap-2" data-testid="heading-extensiv">
-                  Extensiv (Pivot Warehouse)
+                  Extensiv (3PL Warehouse)
                   <StatusIcon className={`h-5 w-5 ${statusInfo.color}`} />
                 </CardTitle>
                 <CardDescription data-testid="text-extensiv-description">
-                  Pivot warehouse inventory will be aligned to Extensiv. Hildale remains managed locally.
+                  Extensiv warehouse inventory will be synced automatically. Hildale remains managed locally.
                 </CardDescription>
               </div>
               <Badge variant={statusInfo.variant} data-testid={`badge-status-${statusInfo.label.toLowerCase().replace(/\s+/g, '-')}`}>

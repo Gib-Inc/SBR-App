@@ -510,7 +510,7 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Pivot Qty Column (only for finished products) - Extensiv mirror */}
+      {/* Extensiv Column (only for finished products) - Extensiv mirror */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
           {editingField === "pivotQty" ? (
@@ -1409,9 +1409,9 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
                   <p className="text-xs text-muted-foreground">Initial stock at manufacturing site</p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="pivot-qty">Pivot Qty</Label>
+                  <Label htmlFor="extensiv-qty">Extensiv Qty</Label>
                   <Input
-                    id="pivot-qty"
+                    id="extensiv-qty"
                     type="number"
                     value={pivotQty}
                     onChange={(e) => setPivotQty(e.target.value)}
@@ -1584,7 +1584,7 @@ function InventoryChangeReasonDialog({
 
   const delta = newValue - oldValue;
   const deltaDisplay = delta > 0 ? `+${delta}` : `${delta}`;
-  const fieldLabel = field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Pivot" : field === "currentStock" ? "Stock" : field;
+  const fieldLabel = field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Extensiv" : field === "currentStock" ? "Stock" : field;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1915,7 +1915,7 @@ export default function BOM() {
       onSuccess();
       toast({
         title: "Inventory Updated",
-        description: `${item.name} ${field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Pivot" : "Stock"} quantity updated to ${newValue}`,
+        description: `${item.name} ${field === "hildaleQty" ? "Hildale" : field === "pivotQty" ? "Extensiv" : "Stock"} quantity updated to ${newValue}`,
       });
     } catch (error) {
       onError();
@@ -2170,7 +2170,7 @@ export default function BOM() {
                   )}
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Forecast</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Hildale Qty</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Pivot Qty</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Extensiv</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Available for Sale</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Days to Stockout</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorders</th>

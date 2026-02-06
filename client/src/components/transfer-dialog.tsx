@@ -285,7 +285,7 @@ export function TransferDialog({ isOpen, onClose, item, bulkMode = false }: Tran
               <div className="mt-2 flex items-center gap-2 text-sm">
                 <span>Hildale: {item.hildaleQty ?? 0}</span>
                 <span className="text-muted-foreground">|</span>
-                <span>Pivot: {item.pivotQty ?? 0}</span>
+                <span>Extensiv: {item.pivotQty ?? 0}</span>
               </div>
             </div>
           )}
@@ -299,7 +299,7 @@ export function TransferDialog({ isOpen, onClose, item, bulkMode = false }: Tran
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="HILDALE">Hildale</SelectItem>
-                  <SelectItem value="PIVOT">Pivot</SelectItem>
+                  <SelectItem value="PIVOT">Extensiv</SelectItem>
                 </SelectContent>
               </Select>
               {!bulkMode && (
@@ -328,7 +328,7 @@ export function TransferDialog({ isOpen, onClose, item, bulkMode = false }: Tran
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="HILDALE">Hildale</SelectItem>
-                  <SelectItem value="PIVOT">Pivot</SelectItem>
+                  <SelectItem value="PIVOT">Extensiv</SelectItem>
                 </SelectContent>
               </Select>
             </div>

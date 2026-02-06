@@ -4680,6 +4680,7 @@ TOTAL: $${subtotal.toFixed(2)}
       let discrepancyCount = 0;
       let adjustmentsApplied = 0;
       let itemsFlagged = 0;
+      let autoCreatedCount = 0;
       const unmatchedSkus: string[] = [];
       const errors: string[] = [];
       const discrepancies: Array<{ sku: string; pivotQty: number; extensivQty: number; delta: number }> = [];
@@ -4706,26 +4707,32 @@ TOTAL: $${subtotal.toFixed(2)}
           }
           
           if (!item) {
-            unmatchedSkus.push(extensivItem.sku);
-            
-            // Log SKU mismatch for review (but don't block - Extensiv is read-only)
+            // Auto-create: create a new product for this Extensiv item and link it
             try {
-              const { logService } = await import('./services/log-service');
-              await logService.logSkuMismatch({
-                source: 'EXTENSIV',
-                externalSku: extensivItem.sku,
-                orderId: 'INVENTORY_SYNC',
-                lineItemData: { 
-                  sku: extensivItem.sku, 
-                  quantity: extensivItem.quantity,
-                  tip: 'Configure via BOM > SKU Mapping'
-                }
+              const newItem = await storage.createItem({
+                name: extensivItem.name || extensivItem.sku,
+                sku: extensivItem.sku,
+                type: 'finished_product',
+                extensivSku: extensivItem.sku,
+                upc: extensivItem.upc || null,
+                pivotQty: 0,
+                hildaleQty: 0,
+                currentStock: 0,
               });
-            } catch (logErr) {
-              console.warn('[Extensiv] Failed to log SKU mismatch:', logErr);
+              item = newItem;
+              autoCreatedCount++;
+              console.log(`[Extensiv] Auto-created product: ${newItem.sku} (${newItem.name})`);
+            } catch (createErr: any) {
+              // If duplicate SKU, try to find by SKU again (race condition)
+              if (createErr.message?.includes('duplicate') || createErr.message?.includes('already exists') || createErr.code === '23505') {
+                item = await storage.getItemBySku(extensivItem.sku);
+              }
+              if (!item) {
+                unmatchedSkus.push(extensivItem.sku);
+                console.warn(`[Extensiv] Failed to auto-create ${extensivItem.sku}:`, createErr.message);
+                continue;
+              }
             }
-            
-            continue;
           }
 
           // Track this SKU as seen in Extensiv
@@ -4804,8 +4811,8 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       const summary = syncMode === "compare" 
-        ? `Compared ${comparedCount} items. ${discrepancyCount} discrepancies found. ${unmatchedSkus.length} unmatched SKUs.`
-        : `Applied ${adjustmentsApplied} adjustments${itemsFlagged > 0 ? `, ${itemsFlagged} items zeroed` : ''}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
+        ? `Compared ${comparedCount} items${autoCreatedCount > 0 ? ` (${autoCreatedCount} auto-created)` : ''}. ${discrepancyCount} discrepancies found. ${unmatchedSkus.length} unmatched SKUs.`
+        : `Applied ${adjustmentsApplied} adjustments${autoCreatedCount > 0 ? `, ${autoCreatedCount} products created` : ''}${itemsFlagged > 0 ? `, ${itemsFlagged} items zeroed` : ''}. ${unmatchedSkus.length} unmatched SKUs${errors.length > 0 ? `, ${errors.length} errors` : ''}`;
       const hasErrors = errors.length > 0;
       
       // Update integration config status
@@ -4837,6 +4844,7 @@ TOTAL: $${subtotal.toFixed(2)}
         itemsCompared: comparedCount,
         discrepancies: discrepancyCount,
         adjustmentsApplied,
+        autoCreatedCount,
         itemsFlagged,
         syncedItems: adjustmentsApplied, // backward compatibility
         unmatchedSkus,

@@ -287,17 +287,20 @@ export class ExtensivClient {
 
   private async handleResponse(response: Response, operation: string): Promise<any> {
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const errorText = await response.text().catch(() => '');
+      let errorData: any = {};
+      try { errorData = JSON.parse(errorText); } catch { errorData = { rawBody: errorText }; }
       const code = this.mapStatusCode(response.status);
       
-      // Clear cached token on auth failures so retry will get a new token
+      console.error(`[Extensiv API Error] ${operation}: ${response.status} ${response.statusText}`, errorData);
+      
       if (response.status === 401 || response.status === 403) {
         this.clearCachedToken();
       }
       
       throw new ExtensivApiError(
         code,
-        errorData?.message || `Extensiv API error during ${operation}: ${response.status} ${response.statusText}`,
+        errorData?.message || errorData?.Message || `Extensiv API error during ${operation}: ${response.status} ${response.statusText}`,
         response.status,
         errorData
       );

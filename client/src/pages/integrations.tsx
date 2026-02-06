@@ -97,7 +97,7 @@ export default function IntegrationsPage() {
           provider: "EXTENSIV",
           accountName: "Pivot Warehouse",
           apiKey,
-          config: { pivotWarehouseId: "1" },
+          config: {},
         });
         return await response.json();
       }

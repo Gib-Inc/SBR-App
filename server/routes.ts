@@ -4566,8 +4566,6 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(400).json({ success: false, message });
       }
 
-      // Get Pivot warehouse ID from config or environment variable
-      const pivotWarehouseId = configData.pivotWarehouseId || process.env.PIVOT_WAREHOUSE_ID || '1';
       const baseUrl = configData.baseUrl || 'https://secure-wms.com';
       const clientId = configData.clientId;
       const clientSecret = apiKey;
@@ -4585,8 +4583,16 @@ TOTAL: $${subtotal.toFixed(2)}
         });
       }
 
-      // Fetch all inventory from Extensiv for Pivot warehouse
-      console.log(`[Extensiv] Fetching inventory for warehouse ${pivotWarehouseId}...`);
+      // Auto-detect customer ID from the API
+      const warehouses = await client.getWarehouses();
+      if (!warehouses || warehouses.length === 0) {
+        throw new Error('No customers/warehouses found in your Extensiv account. Please check your API credentials.');
+      }
+      const pivotWarehouseId = warehouses[0].id;
+      console.log(`[Extensiv] Auto-detected customer ID: ${pivotWarehouseId} (${warehouses[0].name})`);
+
+      // Fetch all inventory from Extensiv for the customer
+      console.log(`[Extensiv] Fetching inventory for customer ${pivotWarehouseId}...`);
       const extensivItems = await client.getAllInventory(pivotWarehouseId);
       console.log(`[Extensiv] Fetched ${extensivItems.length} items from Extensiv`);
 

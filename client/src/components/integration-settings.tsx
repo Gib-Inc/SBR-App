@@ -76,7 +76,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
 
   // Form state for different integration types
   const [apiKey, setApiKey] = useState("");
-  const [pivotWarehouseId, setPivotWarehouseId] = useState("1");
+  
   const [extensivBaseUrl, setExtensivBaseUrl] = useState("https://secure-wms.com");
   const [extensivPushOrders, setExtensivPushOrders] = useState(false);
   const [extensivClientId, setExtensivClientId] = useState("");
@@ -222,7 +222,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     if (config && config.apiKey) {
       setApiKey("");
       if (integrationType === "EXTENSIV") {
-        setPivotWarehouseId(config.config?.pivotWarehouseId || "1");
         setExtensivBaseUrl(config.config?.baseUrl || "https://secure-wms.com");
         setExtensivPushOrders(config.config?.pushOrders || false);
         setExtensivClientId(config.config?.clientId || "");
@@ -340,7 +339,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
           throw new Error("User Login (GUID) is required when using Client ID authentication");
         }
         configData = { 
-          pivotWarehouseId,
           baseUrl: extensivBaseUrl,
           pushOrders: extensivPushOrders,
           clientId: extensivClientId,
@@ -625,12 +623,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                   <span className="text-sm font-mono">{config.config.orgKey}</span>
                 </div>
               )}
-              {config.config?.pivotWarehouseId && (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Warehouse ID</span>
-                  <span className="text-sm font-mono">{config.config.pivotWarehouseId}</span>
-                </div>
-              )}
+              
             </div>
           )}
 
@@ -704,21 +697,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       The GUID provided by your warehouse / Extensiv team for API authentication.
                     </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="warehouse-id" data-testid="label-warehouse-id">
-                      Pivot Warehouse ID
-                    </Label>
-                    <Input
-                      id="warehouse-id"
-                      placeholder="1"
-                      value={pivotWarehouseId}
-                      onChange={(e) => setPivotWarehouseId(e.target.value)}
-                      data-testid="input-warehouse-id"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      The Extensiv warehouse ID for your Pivot 3PL location.
-                    </p>
-                  </div>
+                  
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
                       <Label 

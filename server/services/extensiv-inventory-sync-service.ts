@@ -66,7 +66,7 @@ export class ExtensivInventorySyncService {
         this.credentials = {
           apiKey: config.apiKey,
           baseUrl,
-          pivotWarehouseId: configData.pivotWarehouseId || '1',
+          pivotWarehouseId: '',
           pushOrders: configData.pushOrders === true,
         };
         
@@ -126,6 +126,28 @@ export class ExtensivInventorySyncService {
     return !!(this.credentials?.apiKey && this.client);
   }
 
+  /**
+   * Auto-detect customer ID from the API if not already resolved
+   */
+  private async ensureCustomerId(): Promise<string> {
+    if (this.credentials?.pivotWarehouseId) {
+      return this.credentials.pivotWarehouseId;
+    }
+    if (!this.client) {
+      throw new Error('ExtensivInventorySync client not initialized');
+    }
+    const warehouses = await this.client.getWarehouses();
+    if (!warehouses || warehouses.length === 0) {
+      throw new Error('No customers/warehouses found in Extensiv account');
+    }
+    const customerId = warehouses[0].id;
+    console.log(`[ExtensivInventorySync] Auto-detected customer ID: ${customerId} (${warehouses[0].name})`);
+    if (this.credentials) {
+      this.credentials.pivotWarehouseId = customerId;
+    }
+    return customerId;
+  }
+
   getCredentialsInfo(): { 
     configured: boolean; 
     baseUrl?: string; 
@@ -135,7 +157,7 @@ export class ExtensivInventorySyncService {
     return {
       configured: this.isConfigured(),
       baseUrl: this.credentials?.baseUrl,
-      warehouseId: this.credentials?.pivotWarehouseId,
+      warehouseId: this.credentials?.pivotWarehouseId || 'auto-detect',
       pushOrdersEnabled: this.credentials?.pushOrders || false,
     };
   }
@@ -156,7 +178,8 @@ export class ExtensivInventorySyncService {
     }
 
     try {
-      const extensivItems = await this.client.getAllInventory(this.credentials.pivotWarehouseId);
+      const warehouseId = await this.ensureCustomerId();
+      const extensivItems = await this.client.getAllInventory(warehouseId);
       
       const skuToMatch = item.extensivSku || item.sku;
       const extensivItem = extensivItems.find(e => e.sku === skuToMatch);
@@ -169,7 +192,7 @@ export class ExtensivInventorySyncService {
           previousQty: item.pivotQty ?? 0,
           newQty: item.pivotQty ?? 0,
           variance: 0,
-          error: `SKU ${skuToMatch} not found in Extensiv warehouse ${this.credentials.pivotWarehouseId}`,
+          error: `SKU ${skuToMatch} not found in Extensiv customer ${warehouseId}`,
         };
       }
 
@@ -255,12 +278,12 @@ export class ExtensivInventorySyncService {
         unmatchedSkus: [],
         failed: 0,
         results: [],
-        warehouseId: this.credentials?.pivotWarehouseId || '1',
+        warehouseId: 'unknown',
       };
     }
 
-    const warehouseId = this.credentials.pivotWarehouseId;
-    console.log(`[ExtensivInventorySync] Starting bulk sync from warehouse ${warehouseId}`);
+    const warehouseId = await this.ensureCustomerId();
+    console.log(`[ExtensivInventorySync] Starting bulk sync from customer ${warehouseId}`);
 
     try {
       const extensivItems = await this.client.getAllInventory(warehouseId);

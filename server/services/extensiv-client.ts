@@ -386,11 +386,13 @@ export class ExtensivClient {
         }
         
         return customers.map((c: any) => {
-          // 3PL WMS nests the ID inside ReadOnly.customerId
+          // 3PL WMS uses PascalCase: ReadOnly.CustomerId, CompanyInfo, ExternalId
           const ro = c.ReadOnly || c.readOnly || {};
-          const id = ro.customerId || ro.customerID || c.customerID || c.customerId || c.customer_id || c.id;
-          const name = c.companyName || c.name || c.customerName || ro.companyName || 'Unknown';
-          const code = c.externalId || c.code || ro.externalId;
+          const companyInfo = c.CompanyInfo || c.companyInfo || {};
+          const id = ro.CustomerId || ro.customerId || ro.customerID || c.CustomerId || c.customerID || c.customerId || c.id;
+          const name = companyInfo.CompanyName || companyInfo.companyName || c.CompanyName || c.companyName || c.name || 'Unknown';
+          const code = c.ExternalId || c.externalId || c.code;
+          console.log(`[Extensiv] Customer mapped: id=${id}, name=${name}`);
           return { id: String(id), name, code };
         });
       } catch (error: any) {

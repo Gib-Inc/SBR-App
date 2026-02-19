@@ -48,9 +48,6 @@ export class PurchaseOrderEmailService {
     if (process.env.APP_BASE_URL) {
       return process.env.APP_BASE_URL;
     }
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      return `https://${process.env.REPLIT_DEV_DOMAIN}`;
-    }
     return 'http://localhost:5000';
   }
 

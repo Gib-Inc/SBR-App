@@ -83,7 +83,7 @@ export class MetaAdsClient {
   private loadConfig() {
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
-    const redirectUri = process.env.META_REDIRECT_URI || `${process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/api/ads/meta/callback`;
+    const redirectUri = process.env.META_REDIRECT_URI || `${process.env.APP_BASE_URL || 'http://localhost:5000'}/api/ads/meta/callback`;
 
     if (appId && appSecret) {
       this.config = { appId, appSecret, redirectUri };

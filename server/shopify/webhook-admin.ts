@@ -135,7 +135,7 @@ export async function ensureWebhooks(
   const address = getShopifyWebhookUrl();
   
   if (!address) {
-    console.error('[Webhook Admin] No webhook URL configured. Set SHOPIFY_WEBHOOK_URL or REPLIT_DEV_DOMAIN.');
+    console.error('[Webhook Admin] No webhook URL configured. Set SHOPIFY_WEBHOOK_URL or APP_BASE_URL.');
     return {
       success: false,
       registered: 0,

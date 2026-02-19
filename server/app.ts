@@ -76,6 +76,11 @@ app.use(express.urlencoded({ extended: false }));
 // Serve uploaded damage photos statically
 app.use('/uploads', express.static('uploads'));
 
+// Public health check endpoint for Railway deployment
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Intuit-compliant security headers middleware
 app.use(securityHeadersMiddleware);
 

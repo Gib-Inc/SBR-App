@@ -142,9 +142,7 @@ export class StaleSyncAlertService {
         ? new Date(config.lastSyncAt).toLocaleString()
         : 'Never';
       
-      const appUrl = process.env.REPLIT_DEV_DOMAIN 
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : 'https://inventory.replit.app';
+      const appUrl = process.env.APP_BASE_URL || 'https://localhost:5000';
       
       const aiAgentsLink = `${appUrl}/ai-agents?tab=data-sources`;
       

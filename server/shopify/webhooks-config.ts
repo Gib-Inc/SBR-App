@@ -64,18 +64,18 @@ export interface ShopifyWebhookContext {
 
 /**
  * Get the public webhook URL for Shopify callbacks
- * Uses SHOPIFY_WEBHOOK_URL env var, or constructs from REPLIT_DEV_DOMAIN if available
+ * Uses SHOPIFY_WEBHOOK_URL env var, or constructs from APP_BASE_URL if available
  */
 export function getShopifyWebhookUrl(): string {
   if (process.env.SHOPIFY_WEBHOOK_URL) {
     return process.env.SHOPIFY_WEBHOOK_URL;
   }
 
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    return `https://${process.env.REPLIT_DEV_DOMAIN}/api/webhooks/shopify`;
+  if (process.env.APP_BASE_URL) {
+    return `${process.env.APP_BASE_URL}/api/webhooks/shopify`;
   }
 
-  console.warn('[Shopify Webhooks] No SHOPIFY_WEBHOOK_URL or REPLIT_DEV_DOMAIN set');
+  console.warn('[Shopify Webhooks] No SHOPIFY_WEBHOOK_URL or APP_BASE_URL set');
   return '';
 }
 

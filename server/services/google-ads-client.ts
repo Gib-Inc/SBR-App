@@ -62,7 +62,7 @@ export class GoogleAdsClient {
     const clientSecret = process.env.GOOGLE_ADS_CLIENT_SECRET;
     const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
     const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || 
-      `${process.env.REPLIT_DEV_DOMAIN || 'http://localhost:5000'}/api/ads/google/callback`;
+      `${process.env.APP_BASE_URL || 'http://localhost:5000'}/api/ads/google/callback`;
 
     if (clientId && clientSecret) {
       this.config = { clientId, clientSecret, redirectUri, developerToken };

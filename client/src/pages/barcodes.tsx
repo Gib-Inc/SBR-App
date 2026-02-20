@@ -15,7 +15,6 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDes
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building, Package, ExternalLink, Tag } from "lucide-react";
-import { SmartImport } from "@/components/smart-import";
 import { SiAmazon as AmazonIcon, SiShopify as ShopifyIcon } from "react-icons/si";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -625,7 +624,6 @@ export default function Barcodes() {
   const [sortBy, setSortBy] = useState<string>("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [isSmartImportOpen, setIsSmartImportOpen] = useState(false);
   const [isPrintLabelsDialogOpen, setIsPrintLabelsDialogOpen] = useState(false);
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
@@ -871,7 +869,7 @@ export default function Barcodes() {
           <p className="text-sm text-muted-foreground">Manage barcodes, UPCs, and print labels for your products</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setIsSmartImportOpen(true)}>
+          <Button variant="outline" onClick={() => setIsImportWizardOpen(true)}>
             <Upload className="mr-1 h-4 w-4" />
             Import
           </Button>
@@ -1466,12 +1464,6 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
         </Tabs>
       </CardContent>
     </Card>
-      <SmartImport
-        open={isSmartImportOpen}
-        onOpenChange={setIsSmartImportOpen}
-        entityType="barcodes"
-      />
-    </div>
   );
 }
 

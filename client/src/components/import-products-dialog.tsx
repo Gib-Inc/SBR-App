@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -8,17 +8,12 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -27,313 +22,245 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2, Loader2, Trash2, Plus, Camera } from "lucide-react";
+import { VisionDropZone } from "./vision-drop-zone";
 
 interface ImportProductsDialogProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type ImportStep = "upload" | "preview" | "processing" | "complete";
-
 export function ImportProductsDialog({ isOpen, onClose }: ImportProductsDialogProps) {
   const { toast } = useToast();
-  const [step, setStep] = useState<ImportStep>("upload");
+  const [tab, setTab] = useState<string>("screenshot");
+  const [records, setRecords] = useState<any[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ created: number; errors: string[] } | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string>("default");
-  const [previewData, setPreviewData] = useState<any[]>([]);
-  const [importResult, setImportResult] = useState<any>(null);
 
-  // Fetch import profiles
-  const { data: profiles } = useQuery<any[]>({
+  const { data: importProfiles = [] } = useQuery<any[]>({
     queryKey: ["/api/import-profiles"],
+    enabled: isOpen,
   });
 
-  // Handle file selection
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleExtracted = useCallback((newRecords: any[]) => {
+    setRecords(prev => [...prev, ...newRecords]);
+    setImportResult(null);
+  }, []);
+
+  const updateField = useCallback((index: number, field: string, value: any) => {
+    setRecords(prev => prev.map((r, i) => i === index ? { ...r, [field]: value } : r));
+  }, []);
+
+  const removeRecord = useCallback((index: number) => {
+    setRecords(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleCsvUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      // Parse CSV for preview
-      parseCSVPreview(file);
-    }
-  };
+    if (!file) return;
+    setSelectedFile(file);
 
-  // Parse CSV file for preview (first 5 rows)
-  const parseCSVPreview = (file: File) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target?.result as string;
-      const lines = text.split('\n').filter(line => line.trim());
-      const headers = lines[0].split(',').map(h => h.trim());
-      const rows = lines.slice(1, 6).map(line => {
-        const values = line.split(',').map(v => v.trim());
-        const obj: any = {};
-        headers.forEach((header, i) => {
-          obj[header] = values[i] || '';
+    reader.onload = () => {
+      const text = reader.result as string;
+      const lines = text.trim().split("\n");
+      if (lines.length < 2) return;
+
+      const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+      const parsed: any[] = [];
+
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        if (values.length === 0 || (values.length === 1 && !values[0])) continue;
+
+        const record: any = {};
+        headers.forEach((header, idx) => {
+          const val = values[idx] || "";
+          if (["currentStock", "minStock", "dailyUsage", "defaultPurchaseCost"].includes(header) && val) {
+            record[header] = Number(val) || 0;
+          } else {
+            record[header] = val || null;
+          }
         });
-        return obj;
-      });
-      setPreviewData(rows);
-    };
-    reader.readAsText(file);
-  };
-
-  // Import mutation
-  const importMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedFile) throw new Error("No file selected");
-
-      // Note: Real implementation would send FormData to upload endpoint
-      // For now, we'll simulate the process since backend file upload isn't implemented yet
-      
-      // Create import job to track status
-      const jobRes = await apiRequest("POST", "/api/import-jobs", {
-        profileId: selectedProfileId === "default" ? null : selectedProfileId,
-        fileName: selectedFile.name,
-        status: "processing",
-      });
-
-      if (!jobRes.ok) {
-        throw new Error("Failed to create import job");
+        if (!record.type) record.type = "component";
+        if (!record.sku) record.sku = `IMPORT-${String(i).padStart(3, "0")}`;
+        parsed.push(record);
       }
 
-      const job = await jobRes.json();
+      setRecords(prev => [...prev, ...parsed]);
+      toast({ title: `Parsed ${parsed.length} products from CSV` });
+    };
+    reader.readAsText(file);
+  }, [toast]);
 
-      // TODO: In production, this would:
-      // 1. Upload the file to a processing endpoint
-      // 2. Poll the job status endpoint
-      // 3. Handle real-time progress updates
-      // For now, simulate success with preview data
-      
-      return new Promise((resolve) => {
-        setTimeout(() => {
-          resolve({
-            jobId: job.id,
-            summary: {
-              inserted: previewData.length,
-              updated: 0,
-              ignored: 0,
-              failed: 0,
-            },
-            errors: [],
-          });
-        }, 2000);
-      });
-    },
-    onSuccess: (result: any) => {
+  const handleImport = useCallback(async () => {
+    const valid = records.filter(r => r.name?.trim() && r.sku?.trim());
+    if (valid.length === 0) {
+      toast({ title: "No valid products", description: "Each product needs a name and SKU", variant: "destructive" });
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const res = await apiRequest("POST", "/api/import/bulk", { entityType: "products", records: valid });
+      const result = await res.json();
       setImportResult(result);
-      setStep("complete");
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/import-jobs"] });
-    },
-    onError: (error: any) => {
-      toast({
-        variant: "destructive",
-        title: "Import failed",
-        description: error.message || "Failed to import products",
-      });
-    },
-  });
 
-  const handleImport = () => {
-    setStep("processing");
-    importMutation.mutate();
-  };
+      if (result.created > 0) {
+        toast({
+          title: `Imported ${result.created} product${result.created !== 1 ? "s" : ""}`,
+          description: result.errors.length > 0 ? `${result.errors.length} had errors` : "All imported successfully",
+        });
+      }
+    } catch (err: any) {
+      toast({ title: "Import failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsImporting(false);
+    }
+  }, [records, toast]);
 
-  const handleClose = () => {
-    setStep("upload");
-    setSelectedFile(null);
-    setSelectedProfileId("default");
-    setPreviewData([]);
+  const handleClose = useCallback(() => {
+    setRecords([]);
     setImportResult(null);
+    setSelectedFile(null);
+    setTab("screenshot");
     onClose();
-  };
+  }, [onClose]);
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Product Import</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            <Upload className="h-5 w-5" />
+            Import Products
+          </DialogTitle>
           <DialogDescription>
-            Upload a CSV or XLSX file to bulk import products into your inventory
+            Drop screenshots from Katana, Shopify, spreadsheets, catalogs — or upload a CSV file.
           </DialogDescription>
         </DialogHeader>
 
-        {step === "upload" && (
-          <div className="space-y-6">
-            {/* Import Profile Selection */}
-            <div className="space-y-2">
-              <Label htmlFor="import-profile">Import Profile (Optional)</Label>
-              <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
-                <SelectTrigger data-testid="select-import-profile">
-                  <SelectValue placeholder="Select a profile or use default mapping" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Default Mapping</SelectItem>
-                  {profiles?.map((profile) => (
-                    <SelectItem key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-sm text-muted-foreground">
-                Import profiles define how columns in your file map to product fields
-              </p>
-            </div>
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="screenshot" className="gap-1.5">
+              <Camera className="h-3.5 w-3.5" /> Screenshot
+            </TabsTrigger>
+            <TabsTrigger value="csv" className="gap-1.5">
+              <FileSpreadsheet className="h-3.5 w-3.5" /> CSV File
+            </TabsTrigger>
+          </TabsList>
 
-            {/* File Upload */}
-            <div className="space-y-2">
-              <Label htmlFor="file-upload">Upload File</Label>
-              <div className="flex items-center gap-4">
-                <Input
-                  id="file-upload"
-                  type="file"
-                  accept=".csv,.xlsx"
-                  onChange={handleFileChange}
-                  data-testid="input-file-upload"
-                  className="flex-1"
-                />
-                {selectedFile && (
-                  <Badge variant="secondary" className="gap-2">
-                    <FileSpreadsheet className="h-3 w-3" />
-                    {selectedFile.name}
-                  </Badge>
-                )}
-              </div>
-            </div>
+          <TabsContent value="screenshot" className="mt-3">
+            <VisionDropZone
+              entityType="products"
+              onExtracted={handleExtracted}
+              maxFiles={15}
+              compact={records.length > 0}
+            />
+          </TabsContent>
 
-            {/* Preview Table */}
-            {previewData.length > 0 && (
-              <div className="space-y-2">
-                <Label>Preview (First 5 Rows)</Label>
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            {Object.keys(previewData[0]).map((header) => (
-                              <TableHead key={header}>{header}</TableHead>
-                            ))}
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {previewData.map((row, idx) => (
-                            <TableRow key={idx}>
-                              {Object.values(row).map((value: any, cellIdx) => (
-                                <TableCell key={cellIdx} className="text-sm">
-                                  {value}
-                                </TableCell>
-                              ))}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </CardContent>
-                </Card>
+          <TabsContent value="csv" className="mt-3 space-y-3">
+            {importProfiles.length > 0 && (
+              <div>
+                <label className="text-sm font-medium">Import Profile (Optional)</label>
+                <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Default Mapping" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default Mapping</SelectItem>
+                    {importProfiles.map((p: any) => (<SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>))}
+                  </SelectContent>
+                </Select>
               </div>
             )}
-
-            {/* Action Buttons */}
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={handleClose} data-testid="button-cancel-import">
-                Cancel
-              </Button>
-              <Button
-                onClick={handleImport}
-                disabled={!selectedFile}
-                data-testid="button-start-import"
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                Import Products
-              </Button>
+            <div className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors"
+              onClick={() => document.getElementById("csv-product-input")?.click()}>
+              <input id="csv-product-input" type="file" accept=".csv,.tsv" className="hidden" onChange={handleCsvUpload} />
+              <FileSpreadsheet className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+              <p className="text-sm font-medium">{selectedFile ? selectedFile.name : "Click to upload CSV"}</p>
+              <p className="text-xs text-muted-foreground mt-1">CSV with headers: name, sku, type, unit, currentStock, minStock</p>
             </div>
-          </div>
+          </TabsContent>
+        </Tabs>
+
+        {/* Extracted records table */}
+        {records.length > 0 && (
+          <ScrollArea className="flex-1 max-h-[350px] border rounded-lg">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-8">#</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead className="w-28">SKU</TableHead>
+                  <TableHead className="w-28">Type</TableHead>
+                  <TableHead className="w-16">Stock</TableHead>
+                  <TableHead className="w-16">Cost</TableHead>
+                  <TableHead className="w-8"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {records.map((record, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="text-muted-foreground text-xs">{i + 1}</TableCell>
+                    <TableCell>
+                      <Input value={record.name || ""} onChange={(e) => updateField(i, "name", e.target.value)} className="h-7 text-sm" placeholder="Product name" />
+                    </TableCell>
+                    <TableCell>
+                      <Input value={record.sku || ""} onChange={(e) => updateField(i, "sku", e.target.value)} className="h-7 text-sm" placeholder="SKU" />
+                    </TableCell>
+                    <TableCell>
+                      <select value={record.type || "component"} onChange={(e) => updateField(i, "type", e.target.value)} className="h-7 w-full rounded border bg-background px-2 text-xs">
+                        <option value="component">Component</option>
+                        <option value="finished_product">Finished</option>
+                      </select>
+                    </TableCell>
+                    <TableCell>
+                      <Input type="number" value={record.currentStock || 0} onChange={(e) => updateField(i, "currentStock", Number(e.target.value))} className="h-7 text-sm w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Input type="number" value={record.defaultPurchaseCost || ""} onChange={(e) => updateField(i, "defaultPurchaseCost", Number(e.target.value) || null)} className="h-7 text-sm w-16" placeholder="$" />
+                    </TableCell>
+                    <TableCell>
+                      <button onClick={() => removeRecord(i)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </ScrollArea>
         )}
 
-        {step === "processing" && (
-          <div className="flex flex-col items-center justify-center py-12 space-y-4">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-            <p className="text-lg font-medium">Processing import...</p>
-            <p className="text-sm text-muted-foreground">
-              This may take a moment for large files
-            </p>
-          </div>
-        )}
-
-        {step === "complete" && importResult && (
-          <div className="space-y-6">
-            <Alert>
-              <CheckCircle2 className="h-4 w-4" />
-              <AlertDescription>
-                Import completed successfully!
-              </AlertDescription>
-            </Alert>
-
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <p className="text-2xl font-bold text-green-600">
-                    {importResult.summary.inserted}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Inserted</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <p className="text-2xl font-bold text-blue-600">
-                    {importResult.summary.updated}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Updated</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <p className="text-2xl font-bold text-yellow-600">
-                    {importResult.summary.ignored}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Ignored</p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="p-4 text-center">
-                  <p className="text-2xl font-bold text-red-600">
-                    {importResult.summary.failed}
-                  </p>
-                  <p className="text-sm text-muted-foreground">Failed</p>
-                </CardContent>
-              </Card>
+        {importResult && (
+          <div className={`rounded-lg p-3 text-sm ${importResult.errors.length > 0 ? "bg-yellow-500/10 border border-yellow-500/30" : "bg-green-500/10 border border-green-500/30"}`}>
+            <div className="flex items-center gap-2 font-medium">
+              {importResult.errors.length > 0 ? <AlertCircle className="h-4 w-4 text-yellow-500" /> : <CheckCircle2 className="h-4 w-4 text-green-500" />}
+              {importResult.created} imported{importResult.errors.length > 0 && `, ${importResult.errors.length} failed`}
             </div>
-
-            {importResult.errors && importResult.errors.length > 0 && (
-              <div className="space-y-2">
-                <Label>Errors</Label>
-                <Card>
-                  <CardContent className="p-4 space-y-2">
-                    {importResult.errors.map((error: string, idx: number) => (
-                      <div key={idx} className="flex items-start gap-2 text-sm">
-                        <AlertCircle className="h-4 w-4 text-destructive mt-0.5" />
-                        <span>{error}</span>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </div>
+            {importResult.errors.length > 0 && (
+              <ul className="mt-1 text-xs text-muted-foreground space-y-0.5">
+                {importResult.errors.slice(0, 5).map((err, i) => <li key={i}>• {err}</li>)}
+              </ul>
             )}
-
-            <div className="flex justify-end">
-              <Button onClick={handleClose} data-testid="button-close-import">
-                Close
-              </Button>
-            </div>
           </div>
         )}
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={handleClose}>{importResult?.created ? "Done" : "Cancel"}</Button>
+          {records.length > 0 && !importResult?.created && (
+            <Button onClick={handleImport} disabled={isImporting} className="gap-1.5">
+              {isImporting ? <><Loader2 className="h-4 w-4 animate-spin" /> Importing...</> : <><Plus className="h-4 w-4" /> Import {records.length} Product{records.length !== 1 ? "s" : ""}</>}
+            </Button>
+          )}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

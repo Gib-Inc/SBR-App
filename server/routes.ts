@@ -726,21 +726,133 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
       }
 
-      const fieldSchemas: Record<string, string> = {
-        suppliers: `Each supplier object should have: { "name": string (required), "supplierType": "supplier"|"private"|"online" (default "supplier"), "contactName": string|null, "email": string|null, "phone": string|null, "streetAddress": string|null, "city": string|null, "stateRegion": string|null, "postalCode": string|null, "country": string|null, "paymentTerms": string|null, "notes": string|null }`,
-        products: `Each product object should have: { "name": string (required), "sku": string (required, generate if not visible like "PROD-001"), "type": "component"|"finished_product" (required, infer from context), "unit": string (default "units"), "currentStock": number (default 0), "minStock": number (default 0), "barcode": string|null, "notes": string|null }`,
-        barcodes: `Each barcode object should have: { "value": string (required, the barcode number), "name": string (required, item name), "sku": string|null, "purpose": "component"|"finished_product"|"bin" (required, infer from context) }`,
+      const prompts: Record<string, string> = {
+        suppliers: `You are a supplier data extraction expert for an inventory management system.
+
+TASK: Extract supplier/vendor/company information from this image. This could be:
+- A screenshot of a supplier list from another system (Katana, QuickBooks, etc.)
+- A business card photo
+- A flyer, catalog cover, or advertisement
+- An Amazon/retail website screenshot
+- An invoice or purchase order header
+- A photo of a building sign, truck, or storefront
+- A contact list, email, or text message
+- ANY image that contains supplier/vendor information
+
+EXTRACT ONLY SUPPLIER-RELEVANT DATA. Ignore product details, prices, inventory counts, order numbers, etc.
+
+For EACH supplier/vendor/company you find, extract:
+{
+  "name": string (REQUIRED - company/business name),
+  "supplierType": "supplier" | "private" | "online" (REQUIRED - classify based on context:
+    - "online" = Amazon, retail websites, online stores, any e-commerce source
+    - "private" = individual contractors, freelancers, one-person operations, handyman services
+    - "supplier" = traditional businesses, manufacturers, distributors, wholesalers),
+  "contactName": string|null (person's name if visible),
+  "email": string|null,
+  "phone": string|null,
+  "streetAddress": string|null,
+  "city": string|null,
+  "stateRegion": string|null,
+  "postalCode": string|null,
+  "country": string|null,
+  "paymentTerms": string|null (e.g. "Net 30" if visible),
+  "catalogUrl": string|null (website URL if visible),
+  "notes": string|null (any other useful context)
+}
+
+RULES:
+- Extract EVERY supplier/vendor you can identify
+- One entry per unique supplier (don't duplicate)
+- If it's clearly Amazon, Walmart, Home Depot etc., set supplierType to "online"
+- If it's a person's name with a phone number and trade (plumber, welder, etc.), set to "private"
+- Extract phone numbers, emails, and addresses whenever visible
+- Return ONLY a JSON array, no markdown fences, no commentary
+- Empty array [] if no supplier data found`,
+
+        products: `You are a product/inventory data extraction expert for an inventory management system.
+
+TASK: Extract product information from this image. This could be:
+- A screenshot from Katana, Shopify, QuickBooks, or any inventory system
+- A product catalog or price list
+- A spreadsheet or Excel screenshot
+- A supplier invoice or packing slip
+- A product label or packaging photo
+- ANY image that contains product/SKU information
+
+EXTRACT ONLY PRODUCT-RELEVANT DATA. Ignore supplier contact info, addresses, order details, etc.
+
+For EACH product/item you find, extract:
+{
+  "name": string (REQUIRED - product name),
+  "sku": string (REQUIRED - SKU/part number. Generate logical one like "PROD-001" if not visible),
+  "type": "component" | "finished_product" (REQUIRED - classify:
+    - "finished_product" = complete sellable products, retail items, finished goods
+    - "component" = raw materials, parts, ingredients, supplies used to make other things),
+  "unit": string (default "units" - or "kg", "lbs", "ft", "rolls", etc. if visible),
+  "currentStock": number (default 0 - quantity on hand if visible),
+  "minStock": number (default 0 - reorder point if visible),
+  "dailyUsage": number (default 0 - usage rate if visible),
+  "barcode": string|null (UPC/EAN if visible),
+  "defaultPurchaseCost": number|null (unit cost/price if visible),
+  "notes": string|null
+}
+
+RULES:
+- Extract EVERY product/item you can identify
+- One entry per unique product
+- Look for columns like: Name, SKU, Qty, Stock, Price, Cost, UPC, etc.
+- If you see a spreadsheet, extract every row
+- Return ONLY a JSON array, no markdown fences, no commentary
+- Empty array [] if no product data found`,
+
+        barcodes: `You are a barcode data extraction expert.
+
+TASK: Extract barcode information from this image. This could be:
+- Barcode labels on products or shelves
+- A printed barcode sheet
+- Product packaging with visible barcodes
+- A spreadsheet of barcode values
+
+For EACH barcode you find, extract:
+{
+  "value": string (REQUIRED - the barcode number),
+  "name": string (REQUIRED - associated item name),
+  "sku": string|null,
+  "purpose": "component" | "finished_product" | "bin" (REQUIRED)
+}
+
+Return ONLY a JSON array, no markdown fences, no commentary.`,
+
+        inventory: `You are an inventory counting expert.
+
+TASK: Look at this photo of physical items and identify what you see. This is for inventory counting/updating.
+
+For EACH distinct item type you can identify:
+{
+  "name": string (REQUIRED - what the item is, e.g. "Foam Roller", "Steel Rod", "Cardboard Box"),
+  "description": string (more detail about the item - color, size, material),
+  "estimatedQuantity": number (your best count or estimate of how many are visible),
+  "confidence": "high" | "medium" | "low" (how confident you are in the count),
+  "notes": string (anything notable - condition, approximate dimensions, etc.)
+}
+
+RULES:
+- Be specific about what you see
+- If items are stacked or partially hidden, estimate and note low confidence
+- Distinguish between different sizes/types of similar items
+- Return ONLY a JSON array, no markdown fences, no commentary`,
       };
 
-      const schema = fieldSchemas[entityType];
-      if (!schema) {
-        return res.status(400).json({ error: `Invalid entityType: ${entityType}. Must be: suppliers, products, or barcodes` });
+      const prompt = prompts[entityType];
+      if (!prompt) {
+        return res.status(400).json({ error: `Invalid entityType: ${entityType}. Must be: suppliers, products, barcodes, or inventory` });
       }
 
       const client = new Anthropic({ apiKey });
       const response = await client.messages.create({
         model: "claude-sonnet-4-5-20250929",
-        max_tokens: 4096,
+        max_tokens: 8192,
         messages: [{
           role: "user",
           content: [
@@ -752,21 +864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 data: imageBase64,
               },
             },
-            {
-              type: "text",
-              text: `You are a data extraction assistant. Look at this image and extract all ${entityType} data you can see.
-
-${schema}
-
-IMPORTANT RULES:
-- Extract EVERY entry you can see in the image
-- If a field is not visible, use null
-- For required fields, make your best guess from context
-- Return ONLY a valid JSON array, no markdown fences, no commentary
-- If you cannot extract any data, return an empty array []
-
-Respond with a JSON array of objects.`,
-            },
+            { type: "text", text: prompt },
           ],
         }],
       });
@@ -776,7 +874,6 @@ Respond with a JSON array of objects.`,
         .map(b => b.text)
         .join("");
 
-      // Parse the response
       const cleanJson = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       const records = JSON.parse(cleanJson);
 

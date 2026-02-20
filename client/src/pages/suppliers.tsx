@@ -28,7 +28,7 @@ import {
   Upload,
 } from "lucide-react";
 import { EditSupplierDialog } from "@/components/edit-supplier-dialog";
-import { SmartImport } from "@/components/smart-import";
+import { ImportSuppliersDialog } from "@/components/import-suppliers-dialog";
 import type { Supplier } from "@shared/schema";
 
 export default function Suppliers() {
@@ -277,10 +277,9 @@ export default function Suppliers() {
         mode={dialogMode}
         onSaved={handleDialogSaved}
       />
-      <SmartImport
+      <ImportSuppliersDialog
         open={importOpen}
         onOpenChange={setImportOpen}
-        entityType="suppliers"
       />
     </div>
   );

@@ -186,6 +186,7 @@ export type BillOfMaterials = typeof billOfMaterials.$inferSelect;
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
+  supplierType: text("supplier_type").notNull().default("supplier"), // 'supplier' | 'private' | 'online'
   contactName: text("contact_name"),
   email: text("email"),
   phone: text("phone"),
@@ -327,6 +328,12 @@ export const purchaseOrders = pgTable("purchase_orders", {
   
   // External Integrations (Reserved for future)
   externalAccountingId: text("external_accounting_id"), // e.g., QuickBooks PO ID
+  qbRecordType: text("qb_record_type"), // 'bill' for suppliers, 'expense' for online/private
+  
+  // Direct Purchase / Private Source tracking
+  paymentMethod: text("payment_method"), // 'card', 'check', 'cash', 'wire', 'other'
+  receiptUrl: text("receipt_url"), // URL or reference for uploaded receipt
+  accountantNotifiedAt: timestamp("accountant_notified_at"), // When accountant was notified to write check
   
   // Live vs History tracking
   isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
@@ -2500,6 +2507,18 @@ export const insertCommerceAttributionPatternSchema = createInsertSchema(commerc
 });
 export type InsertCommerceAttributionPattern = z.infer<typeof insertCommerceAttributionPatternSchema>;
 export type CommerceAttributionPattern = typeof commerceAttributionPatterns.$inferSelect;
+
+// ============================================================================
+// APP SETTINGS (key-value store for app configuration)
+// ============================================================================
+
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
 
 // ============================================================================
 // API KEYS (for external integrations like GHL Agent API)

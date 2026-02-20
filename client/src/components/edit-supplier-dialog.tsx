@@ -22,14 +22,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Building2, ShoppingBag, Wrench } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
 
 const supplierFormSchema = z.object({
   name: z.string().min(1, "Supplier name is required"),
+  supplierType: z.enum(["supplier", "private", "online"]).default("supplier"),
   contactName: z.string().optional().nullable(),
   email: z.string().email("Invalid email format").optional().or(z.literal("")),
   phone: z.string().optional().nullable(),
@@ -66,6 +68,7 @@ export function EditSupplierDialog({
     resolver: zodResolver(supplierFormSchema),
     defaultValues: {
       name: "",
+      supplierType: "supplier",
       contactName: "",
       email: "",
       phone: "",
@@ -84,6 +87,7 @@ export function EditSupplierDialog({
     if (open && supplier && mode === "edit") {
       form.reset({
         name: supplier.name || "",
+        supplierType: (supplier as any).supplierType || "supplier",
         contactName: supplier.contactName || "",
         email: supplier.email || "",
         phone: supplier.phone || "",
@@ -99,6 +103,7 @@ export function EditSupplierDialog({
     } else if (open && mode === "create") {
       form.reset({
         name: "",
+        supplierType: "supplier",
         contactName: "",
         email: "",
         phone: "",
@@ -119,6 +124,7 @@ export function EditSupplierDialog({
       // Clean up empty strings to null for optional fields
       const cleanedData = {
         ...data,
+        supplierType: data.supplierType || "supplier",
         contactName: data.contactName || null,
         email: data.email || null,
         phone: data.phone || null,
@@ -180,6 +186,42 @@ export function EditSupplierDialog({
           <form onSubmit={form.handleSubmit(onSubmit)}>
             <ScrollArea className="max-h-[60vh] pr-4">
               <div className="grid gap-4 py-4">
+                {/* Supplier Type Selector */}
+                <FormField
+                  control={form.control}
+                  name="supplierType"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Supplier Type <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { value: "supplier", label: "Supplier", desc: "Standard PO & invoicing", icon: Building2, hint: "Net 30 terms, they bill you" },
+                          { value: "online", label: "Online Source", desc: "Amazon, retail stores", icon: ShoppingBag, hint: "Paid at purchase, upload receipt" },
+                          { value: "private", label: "Private Source", desc: "Contractors, freelancers", icon: Wrench, hint: "Pay by check on delivery" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => field.onChange(opt.value)}
+                            className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border-2 transition-all text-center ${
+                              field.value === opt.value
+                                ? "border-primary bg-primary/5"
+                                : "border-border hover:border-muted-foreground/30"
+                            }`}
+                          >
+                            <opt.icon className={`h-5 w-5 ${field.value === opt.value ? "text-primary" : "text-muted-foreground"}`} />
+                            <span className="font-medium text-sm">{opt.label}</span>
+                            <span className="text-[11px] text-muted-foreground leading-tight">{opt.hint}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
                 <div className="grid grid-cols-2 gap-4">
                   <FormField
                     control={form.control}

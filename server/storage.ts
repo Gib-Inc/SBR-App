@@ -118,6 +118,7 @@ import {
   type UserTablePreferences,
   type InsertUserTablePreferences,
   type ApiKey,
+  type AppSetting,
   type InsertApiKey,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
@@ -150,6 +151,11 @@ export interface IStorage {
   createPasswordReset(reset: InsertPasswordReset): Promise<PasswordReset>;
   getPasswordResetByToken(token: string): Promise<PasswordReset | undefined>;
   markPasswordResetUsed(id: string): Promise<void>;
+
+  // App Settings
+  getAppSetting(key: string): Promise<string | null>;
+  setAppSetting(key: string, value: string): Promise<void>;
+  getAllAppSettings(): Promise<AppSetting[]>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -1025,7 +1031,23 @@ export class MemStorage implements IStorage {
     if (reset) this.passwordResets.set(id, { ...reset, usedAt: new Date() });
   }
 
+  // App Settings (in-memory stub)
+  private appSettingsMap = new Map<string, string>();
+  async getAppSetting(key: string): Promise<string | null> {
+    return this.appSettingsMap.get(key) || null;
+  }
+  async setAppSetting(key: string, value: string): Promise<void> {
+    this.appSettingsMap.set(key, value);
+  }
+  async getAllAppSettings(): Promise<AppSetting[]> {
+    return Array.from(this.appSettingsMap.entries()).map(([key, value]) => ({ key, value, updatedAt: new Date() }));
+  }
+
   // Items
+
+  async getAllItems(): Promise<Item[]> {
+    return Array.from(this.items.values());
+  }
 
   private calculateProductionForecast(finishedProductId: string): number {
     // Get BOM entries for this finished product
@@ -3913,6 +3935,19 @@ export class PostgresStorage implements IStorage {
   }
   async markPasswordResetUsed(id: string): Promise<void> {
     await this.db.update(schema.passwordResets).set({ usedAt: new Date() }).where(eq(schema.passwordResets.id, id));
+  }
+
+  // App Settings
+  async getAppSetting(key: string): Promise<string | null> {
+    const results = await this.db.select().from(schema.appSettings).where(eq(schema.appSettings.key, key));
+    return results[0]?.value || null;
+  }
+  async setAppSetting(key: string, value: string): Promise<void> {
+    await this.db.insert(schema.appSettings).values({ key, value, updatedAt: new Date() })
+      .onConflictDoUpdate({ target: schema.appSettings.key, set: { value, updatedAt: new Date() } });
+  }
+  async getAllAppSettings(): Promise<AppSetting[]> {
+    return await this.db.select().from(schema.appSettings);
   }
 
   // Items

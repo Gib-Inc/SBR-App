@@ -248,6 +248,8 @@ function AccountSettings() {
         </CardContent>
       </Card>
 
+      <BusinessSettings />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
@@ -281,6 +283,66 @@ function AccountSettings() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function BusinessSettings() {
+  const { toast } = useToast();
+  const [accountantPhone, setAccountantPhone] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load settings
+  useEffect(() => {
+    fetch("/api/settings", { credentials: "include" })
+      .then(res => res.json())
+      .then(data => {
+        if (data.accountantPhone) setAccountantPhone(data.accountantPhone);
+        setIsLoaded(true);
+      })
+      .catch(() => setIsLoaded(true));
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await apiRequest("PATCH", "/api/settings", { accountantPhone });
+      if (!res.ok) throw new Error("Failed to save");
+      toast({ title: "Saved", description: "Business settings updated" });
+    } catch {
+      toast({ title: "Error", description: "Failed to save settings", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Business Settings</CardTitle>
+        <CardDescription>Configure business contacts and operations</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label htmlFor="accountant-phone">Accountant Phone Number</Label>
+          <Input
+            id="accountant-phone"
+            type="tel"
+            placeholder="(555) 123-4567"
+            value={accountantPhone}
+            onChange={(e) => setAccountantPhone(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Used to notify your accountant when private source deliveries need a check written.
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={handleSave} disabled={isSaving || !isLoaded} size="sm">
+            {isSaving ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

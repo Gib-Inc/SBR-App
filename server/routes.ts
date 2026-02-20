@@ -677,6 +677,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================================================
+  // APP SETTINGS
+  // ============================================================================
+
+  app.get("/api/settings", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllAppSettings();
+      const obj: Record<string, string> = {};
+      for (const s of settings) obj[s.key] = s.value;
+      res.json(obj);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.patch("/api/settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const updates = req.body;
+      for (const [key, value] of Object.entries(updates)) {
+        if (typeof value === "string") {
+          await storage.setAppSetting(key, value);
+        }
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
   // Check if this is a fresh install (no users exist yet)
   app.get("/api/auth/setup-status", async (_req: Request, res: Response) => {
     try {

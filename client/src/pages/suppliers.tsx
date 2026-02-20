@@ -24,6 +24,7 @@ import {
   MapPin,
   Loader2,
   Users,
+  ShoppingBag,
 } from "lucide-react";
 import { EditSupplierDialog } from "@/components/edit-supplier-dialog";
 import type { Supplier } from "@shared/schema";
@@ -152,7 +153,19 @@ export default function Suppliers() {
                             onClick={() => handleEditSupplier(supplier)}
                           >
                             <TableCell className="font-medium" data-testid={`text-supplier-name-${supplier.id}`}>
-                              {supplier.name}
+                              <div className="flex items-center gap-2">
+                                {supplier.name}
+                                {(supplier as any).supplierType === "online" && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
+                                    <ShoppingBag className="h-3 w-3" /> Online
+                                  </Badge>
+                                )}
+                                {(supplier as any).supplierType === "private" && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
+                                    <Wrench className="h-3 w-3" /> Private
+                                  </Badge>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell data-testid={`text-contact-name-${supplier.id}`}>
                               {supplier.contactName || (

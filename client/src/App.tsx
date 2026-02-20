@@ -36,6 +36,7 @@ import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
 import LegalPrivacy from "@/pages/legal-privacy";
 import AcceptInvite from "@/pages/accept-invite";
+import ResetPassword from "@/pages/reset-password";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -140,6 +141,7 @@ export default function App() {
         <Switch>
           <Route path="/po/acknowledge/:token" component={POAcknowledge} />
           <Route path="/invite/:token" component={AcceptInvite} />
+          <Route path="/reset-password/:token" component={ResetPassword} />
           <Route path="/legal/eula" component={LegalEULA} />
           <Route path="/legal/privacy" component={LegalPrivacy} />
           <Route>

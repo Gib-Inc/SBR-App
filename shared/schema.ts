@@ -40,6 +40,23 @@ export type InsertUserInvite = z.infer<typeof insertUserInviteSchema>;
 export type UserInvite = typeof userInvites.$inferSelect;
 
 // ============================================================================
+// PASSWORD RESETS
+// ============================================================================
+
+export const passwordResets = pgTable("password_resets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertPasswordResetSchema = createInsertSchema(passwordResets).omit({ id: true, createdAt: true });
+export type InsertPasswordReset = z.infer<typeof insertPasswordResetSchema>;
+export type PasswordReset = typeof passwordResets.$inferSelect;
+
+// ============================================================================
 // ITEMS (Components & Finished Products)
 // ============================================================================
 

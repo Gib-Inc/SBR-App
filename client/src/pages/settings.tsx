@@ -8,11 +8,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield } from "lucide-react";
+import { User, Users, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield, Mail, UserPlus, Trash2, RotateCcw, Clock, Crown } from "lucide-react";
 import { Link } from "wouter";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Separator } from "@/components/ui/separator";
 
 export default function Settings() {
   return (
@@ -42,6 +45,10 @@ export default function Settings() {
             <Bot className="mr-2 h-4 w-4" />
             GHL Agent API
           </TabsTrigger>
+          <TabsTrigger value="team" data-testid="tab-team">
+            <Users className="mr-2 h-4 w-4" />
+            Team
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="space-y-4">
@@ -58,6 +65,10 @@ export default function Settings() {
 
         <TabsContent value="ghl-api" className="space-y-4">
           <GhlAgentApiSettings />
+        </TabsContent>
+
+        <TabsContent value="team" className="space-y-4">
+          <TeamManagement />
         </TabsContent>
       </Tabs>
     </div>
@@ -1099,6 +1110,374 @@ function GhlAgentApiSettings() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// TEAM MANAGEMENT
+// ============================================================================
+
+interface TeamUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  createdAt: string;
+}
+
+interface PendingInvite {
+  id: string;
+  email: string;
+  role: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+function TeamManagement() {
+  const { toast } = useToast();
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [showInviteDialog, setShowInviteDialog] = useState(false);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [resetDialog, setResetDialog] = useState<{ open: boolean; user: TeamUser | null; result: { link: string; emailSent: boolean; sentTo: string } | null }>({ open: false, user: null, result: null });
+  const [removeDialog, setRemoveDialog] = useState<{ open: boolean; user: TeamUser | null }>({ open: false, user: null });
+
+  const { data: currentUser } = useQuery<{ id: string; email: string }>({ queryKey: ["/api/auth/me"] });
+  const { data: users = [], isLoading: usersLoading } = useQuery<TeamUser[]>({ queryKey: ["/api/admin/users"] });
+  const { data: invites = [], isLoading: invitesLoading } = useQuery<PendingInvite[]>({ queryKey: ["/api/admin/invites"] });
+
+  const inviteMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/invite-user", { email: inviteEmail, role: inviteRole });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setInviteLink(data.inviteLink);
+      setInviteEmail("");
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invites"] });
+      toast({ title: "Invite sent!", description: data.invite?.email ? `Invite created for ${data.invite.email}` : "Invite link generated" });
+    },
+    onError: (err: Error) => toast({ title: "Failed to invite", description: err.message, variant: "destructive" }),
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("POST", "/api/admin/reset-password", { userId });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setResetDialog(prev => ({ ...prev, result: { link: data.resetLink, emailSent: data.emailSent, sentTo: data.sentTo } }));
+      toast({ title: "Password reset sent", description: data.emailSent ? `Reset email sent to ${data.sentTo}` : "Reset link generated (email not configured)" });
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/users/${userId}`);
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setRemoveDialog({ open: false, user: null });
+      toast({ title: "User removed" });
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const revokeInviteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/invites/${id}`);
+      if (!res.ok) throw new Error("Failed to revoke");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invites"] });
+      toast({ title: "Invite revoked" });
+    },
+  });
+
+  const roleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
+      const res = await apiRequest("PATCH", `/api/admin/users/${userId}/role`, { role });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Role updated" });
+    },
+    onError: (err: Error) => toast({ title: "Failed", description: err.message, variant: "destructive" }),
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: "Copied to clipboard" });
+  };
+
+  const formatDate = (d: string) => {
+    try { return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
+    catch { return "—"; }
+  };
+
+  const isExpired = (d: string) => new Date(d) < new Date();
+
+  return (
+    <div className="space-y-6">
+      {/* Team Members */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+          <div>
+            <CardTitle className="text-lg">Team Members</CardTitle>
+            <CardDescription>{users.length} member{users.length !== 1 ? "s" : ""}</CardDescription>
+          </div>
+          <Button size="sm" onClick={() => { setShowInviteDialog(true); setInviteLink(null); }}>
+            <UserPlus className="mr-2 h-4 w-4" />
+            Invite Member
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {usersLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : (
+            <div className="space-y-1">
+              {users.map((u) => (
+                <div key={u.id} className="flex items-center justify-between py-3 px-3 rounded-lg hover:bg-muted/50 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-medium text-sm">
+                      {(u.name || u.email).charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm truncate">{u.name || u.email.split("@")[0]}</span>
+                        {u.role === "admin" && (
+                          <Badge variant="secondary" className="text-xs gap-1 shrink-0">
+                            <Crown className="h-3 w-3" /> Admin
+                          </Badge>
+                        )}
+                        {u.id === currentUser?.id && (
+                          <Badge variant="outline" className="text-xs shrink-0">You</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                    </div>
+                  </div>
+                  {u.id !== currentUser?.id && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Select
+                        value={u.role}
+                        onValueChange={(role) => roleMutation.mutate({ userId: u.id, role })}
+                      >
+                        <SelectTrigger className="h-8 w-[100px] text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="member">Member</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                        onClick={() => { setResetDialog({ open: true, user: u, result: null }); }}
+                        title="Reset password"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => setRemoveDialog({ open: true, user: u })}
+                        title="Remove user"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Pending Invites */}
+      {(invites.length > 0 || invitesLoading) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Pending Invites</CardTitle>
+            <CardDescription>Invites waiting to be accepted</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {invitesLoading ? (
+              <div className="flex items-center justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            ) : (
+              <div className="space-y-1">
+                {invites.map((inv) => (
+                  <div key={inv.id} className="flex items-center justify-between py-3 px-3 rounded-lg hover:bg-muted/50 transition-colors">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400">
+                        <Mail className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{inv.email}</p>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          {isExpired(inv.expiresAt) ? (
+                            <span className="text-destructive">Expired</span>
+                          ) : (
+                            <span>Expires {formatDate(inv.expiresAt)}</span>
+                          )}
+                          <span>·</span>
+                          <span className="capitalize">{inv.role}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                      onClick={() => revokeInviteMutation.mutate(inv.id)}
+                      title="Revoke invite"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Invite Dialog */}
+      <Dialog open={showInviteDialog} onOpenChange={setShowInviteDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invite Team Member</DialogTitle>
+            <DialogDescription>They'll receive a link to set up their account.</DialogDescription>
+          </DialogHeader>
+          {inviteLink ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                <span className="text-sm font-medium">Invite created!</span>
+              </div>
+              <div className="space-y-2">
+                <Label>Invite Link</Label>
+                <div className="flex gap-2">
+                  <Input value={inviteLink} readOnly className="text-xs font-mono bg-muted" />
+                  <Button size="icon" variant="outline" onClick={() => copyToClipboard(inviteLink)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Share this link with the person you're inviting. It expires in 7 days.</p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowInviteDialog(false)}>Done</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="invite-email">Email Address</Label>
+                <Input
+                  id="invite-email" type="email" placeholder="colleague@company.com"
+                  value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={inviteRole} onValueChange={setInviteRole}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="member">Member — can view and edit inventory</SelectItem>
+                    <SelectItem value="admin">Admin — full access including team management</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setShowInviteDialog(false)}>Cancel</Button>
+                <Button onClick={() => inviteMutation.mutate()} disabled={!inviteEmail || inviteMutation.isPending}>
+                  {inviteMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...</> : <><Mail className="mr-2 h-4 w-4" /> Send Invite</>}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Password Reset Dialog */}
+      <Dialog open={resetDialog.open} onOpenChange={(open) => { if (!open) setResetDialog({ open: false, user: null, result: null }); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+            <DialogDescription>
+              {resetDialog.result
+                ? "Password reset link generated."
+                : `Send a password reset link to ${resetDialog.user?.email}`}
+            </DialogDescription>
+          </DialogHeader>
+          {resetDialog.result ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                {resetDialog.result.emailSent ? (
+                  <>
+                    <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                    <span className="text-sm">Reset email sent to <strong>{resetDialog.result.sentTo}</strong></span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="h-5 w-5 text-orange-500 shrink-0" />
+                    <span className="text-sm">Email not configured. Share the link manually.</span>
+                  </>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>Reset Link</Label>
+                <div className="flex gap-2">
+                  <Input value={resetDialog.result.link} readOnly className="text-xs font-mono bg-muted" />
+                  <Button size="icon" variant="outline" onClick={() => copyToClipboard(resetDialog.result!.link)}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">This link expires in 24 hours.</p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setResetDialog({ open: false, user: null, result: null })}>Done</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setResetDialog({ open: false, user: null, result: null })}>Cancel</Button>
+              <Button onClick={() => resetDialog.user && resetMutation.mutate(resetDialog.user.id)} disabled={resetMutation.isPending}>
+                {resetMutation.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...</> : <><RotateCcw className="mr-2 h-4 w-4" /> Send Reset Link</>}
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove User Confirmation */}
+      <AlertDialog open={removeDialog.open} onOpenChange={(open) => { if (!open) setRemoveDialog({ open: false, user: null }); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Team Member</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove <strong>{removeDialog.user?.name || removeDialog.user?.email}</strong>? They will lose access immediately and this cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => removeDialog.user && removeMutation.mutate(removeDialog.user.id)}
+            >
+              {removeMutation.isPending ? "Removing..." : "Remove User"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

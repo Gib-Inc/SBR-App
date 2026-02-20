@@ -3,6 +3,8 @@ import {
   type InsertUser,
   type UserInvite,
   type InsertUserInvite,
+  type PasswordReset,
+  type InsertPasswordReset,
   type Item,
   type InsertItem,
   type Bin,
@@ -143,6 +145,11 @@ export interface IStorage {
   markInviteAccepted(id: string): Promise<void>;
   getPendingInvites(): Promise<UserInvite[]>;
   deleteInvite(id: string): Promise<boolean>;
+
+  // Password Resets
+  createPasswordReset(reset: InsertPasswordReset): Promise<PasswordReset>;
+  getPasswordResetByToken(token: string): Promise<PasswordReset | undefined>;
+  markPasswordResetUsed(id: string): Promise<void>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -1002,10 +1009,23 @@ export class MemStorage implements IStorage {
     return this.invites.delete(id);
   }
 
-  // Items
-  async getAllItems(): Promise<Item[]> {
-    return Array.from(this.items.values());
+  // Password Resets (in-memory stub)
+  private passwordResets = new Map<string, PasswordReset>();
+  async createPasswordReset(reset: InsertPasswordReset): Promise<PasswordReset> {
+    const id = crypto.randomUUID();
+    const record = { ...reset, id, createdAt: new Date(), usedAt: null } as PasswordReset;
+    this.passwordResets.set(id, record);
+    return record;
   }
+  async getPasswordResetByToken(token: string): Promise<PasswordReset | undefined> {
+    return Array.from(this.passwordResets.values()).find(r => r.token === token);
+  }
+  async markPasswordResetUsed(id: string): Promise<void> {
+    const reset = this.passwordResets.get(id);
+    if (reset) this.passwordResets.set(id, { ...reset, usedAt: new Date() });
+  }
+
+  // Items
 
   private calculateProductionForecast(finishedProductId: string): number {
     // Get BOM entries for this finished product
@@ -3880,6 +3900,19 @@ export class PostgresStorage implements IStorage {
   async deleteInvite(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.userInvites).where(eq(schema.userInvites.id, id)).returning();
     return results.length > 0;
+  }
+
+  // Password Resets
+  async createPasswordReset(reset: InsertPasswordReset): Promise<PasswordReset> {
+    const results = await this.db.insert(schema.passwordResets).values(reset).returning();
+    return results[0];
+  }
+  async getPasswordResetByToken(token: string): Promise<PasswordReset | undefined> {
+    const results = await this.db.select().from(schema.passwordResets).where(eq(schema.passwordResets.token, token));
+    return results[0];
+  }
+  async markPasswordResetUsed(id: string): Promise<void> {
+    await this.db.update(schema.passwordResets).set({ usedAt: new Date() }).where(eq(schema.passwordResets.id, id));
   }
 
   // Items

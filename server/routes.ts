@@ -575,6 +575,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Admin: update a user's role
+  app.patch("/api/admin/users/:id/role", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { role } = req.body;
+      if (!["admin", "member"].includes(role)) {
+        return res.status(400).json({ error: "Role must be 'admin' or 'member'" });
+      }
+      const user = await storage.updateUser(req.params.id, { role });
+      if (!user) return res.status(404).json({ error: "User not found" });
+      const { password: _, ...safe } = user;
+      res.json(safe);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update role" });
+    }
+  });
+
+  // Admin: trigger password reset for a user
+  app.post("/api/admin/reset-password", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.body;
+      if (!userId) return res.status(400).json({ error: "userId is required" });
+
+      const user = await storage.getUser(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      const token = crypto.randomUUID() + "-" + crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+      await storage.createPasswordReset({
+        userId,
+        token,
+        expiresAt,
+        usedAt: null,
+      });
+
+      const baseUrl = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const resetLink = `${baseUrl}/reset-password/${token}`;
+
+      let emailSent = false;
+      if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = await import("@sendgrid/mail");
+          sgMail.default.setApiKey(process.env.SENDGRID_API_KEY);
+          await sgMail.default.send({
+            to: user.email,
+            from: { email: process.env.SENDGRID_FROM_EMAIL, name: process.env.SENDGRID_FROM_NAME || "SBR Inventory" },
+            subject: "Password Reset - SBR Inventory",
+            html: `<p>A password reset was requested for your account.</p>
+                   <p><a href="${resetLink}" style="background:#2563eb;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">Reset Password</a></p>
+                   <p>Or copy this link: ${resetLink}</p>
+                   <p>This link expires in 24 hours. If you didn't request this, you can ignore this email.</p>`,
+          });
+          emailSent = true;
+        } catch (emailError) {
+          console.warn("[Password Reset] SendGrid email failed:", emailError);
+        }
+      }
+
+      res.json({ success: true, resetLink, emailSent, sentTo: user.email });
+    } catch (error) {
+      console.error("Error creating password reset:", error);
+      res.status(500).json({ error: "Failed to create password reset" });
+    }
+  });
+
+  // Public: validate password reset token
+  app.get("/api/auth/reset-password/:token", async (req: Request, res: Response) => {
+    try {
+      const reset = await storage.getPasswordResetByToken(req.params.token);
+      if (!reset) return res.status(404).json({ error: "Invalid reset link" });
+      if (reset.usedAt) return res.status(410).json({ error: "This reset link has already been used" });
+      if (new Date() > new Date(reset.expiresAt)) return res.status(410).json({ error: "This reset link has expired" });
+      const user = await storage.getUser(reset.userId);
+      res.json({ email: user?.email });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to validate reset link" });
+    }
+  });
+
+  // Public: accept password reset
+  app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
+    try {
+      const { token, password } = req.body;
+      if (!token || !password) return res.status(400).json({ error: "Token and password are required" });
+      if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+      const reset = await storage.getPasswordResetByToken(token);
+      if (!reset) return res.status(404).json({ error: "Invalid reset link" });
+      if (reset.usedAt) return res.status(410).json({ error: "This reset link has already been used" });
+      if (new Date() > new Date(reset.expiresAt)) return res.status(410).json({ error: "This reset link has expired" });
+
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+      await storage.updateUser(reset.userId, { password: hashedPassword });
+      await storage.markPasswordResetUsed(reset.id);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error resetting password:", error);
+      res.status(500).json({ error: "Failed to reset password" });
+    }
+  });
+
   // Check if this is a fresh install (no users exist yet)
   app.get("/api/auth/setup-status", async (_req: Request, res: Response) => {
     try {

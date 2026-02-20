@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.replit
+replit.md
+attached_assets
+codebase_export.txt
+*.tar.gz
+.env
+.env.local

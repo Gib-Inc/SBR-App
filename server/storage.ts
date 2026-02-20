@@ -121,8 +121,8 @@ import {
   TERMINAL_STATUSES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
@@ -3797,8 +3797,8 @@ export class PostgresStorage implements IStorage {
   private db;
 
   constructor(connectionString: string) {
-    const sql = neon(connectionString);
-    this.db = drizzle(sql, { schema });
+    const pool = new pg.Pool({ connectionString });
+    this.db = drizzle(pool, { schema });
   }
 
   // Users

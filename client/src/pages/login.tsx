@@ -10,7 +10,9 @@ import { Package } from "lucide-react";
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isRegisterMode, setIsRegisterMode] = useState(false);
   const { login } = useAuth();
   const { toast } = useToast();
 
@@ -19,14 +21,37 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      await login(email, password);
-      toast({
-        title: "Welcome back!",
-        description: "You have successfully logged in",
-      });
+      if (isRegisterMode) {
+        if (password !== confirmPassword) {
+          throw new Error("Passwords do not match");
+        }
+        if (password.length < 8) {
+          throw new Error("Password must be at least 8 characters");
+        }
+        const res = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || "Registration failed");
+        }
+        toast({
+          title: "Account created!",
+          description: "You have been logged in automatically",
+        });
+        window.location.href = "/";
+      } else {
+        await login(email, password);
+        toast({
+          title: "Welcome back!",
+          description: "You have successfully logged in",
+        });
+      }
     } catch (error: any) {
       toast({
-        title: "Login failed",
+        title: isRegisterMode ? "Registration failed" : "Login failed",
         description: error.message || "Invalid email or password",
         variant: "destructive",
       });
@@ -44,7 +69,7 @@ export default function Login() {
           </div>
           <CardTitle className="text-2xl">Inventory Management</CardTitle>
           <CardDescription>
-            Sign in to access your manufacturing inventory system
+            {isRegisterMode ? "Create your account" : "Sign in to access your manufacturing inventory system"}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -72,17 +97,42 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 data-testid="input-password"
-                autoComplete="current-password"
+                autoComplete={isRegisterMode ? "new-password" : "current-password"}
               />
             </div>
+            {isRegisterMode && (
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  placeholder="Confirm your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  autoComplete="new-password"
+                />
+              </div>
+            )}
             <Button
               type="submit"
               className="w-full"
               disabled={isLoading}
               data-testid="button-login"
             >
-              {isLoading ? "Signing in..." : "Sign in"}
+              {isLoading ? (isRegisterMode ? "Creating account..." : "Signing in...") : (isRegisterMode ? "Create Account" : "Sign in")}
             </Button>
+            <div className="text-center text-sm text-muted-foreground">
+              {isRegisterMode ? (
+                <>Already have an account?{" "}
+                  <button type="button" className="text-primary underline" onClick={() => setIsRegisterMode(false)}>Sign in</button>
+                </>
+              ) : (
+                <>Need an account?{" "}
+                  <button type="button" className="text-primary underline" onClick={() => setIsRegisterMode(true)}>Register</button>
+                </>
+              )}
+            </div>
           </form>
         </CardContent>
       </Card>

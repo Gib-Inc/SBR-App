@@ -9,8 +9,8 @@
 
 import { storage } from "../storage";
 import { ShopifyClient } from "./shopify-client";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { 
   commerceAttributionCustomers, 
@@ -34,8 +34,8 @@ const getDb = () => {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL is not set");
     }
-    const sqlClient = neon(process.env.DATABASE_URL);
-    cachedDb = drizzle(sqlClient, { schema });
+    const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;
 };

@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
+import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
 import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, supplierItems, returnItems, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
 import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
@@ -19,8 +19,8 @@ const getDb = () => {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL is not set");
     }
-    const sqlClient = neon(process.env.DATABASE_URL);
-    cachedDb = drizzle(sqlClient, { schema });
+    const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;
 };

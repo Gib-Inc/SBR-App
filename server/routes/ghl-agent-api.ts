@@ -89,6 +89,12 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   const router = express.Router();
   
   router.use(requireGhlAgentAuth);
+
+  // Debug: log incoming request bodies to help diagnose GHL webhook format issues
+  router.use((req: Request, _res: Response, next: NextFunction) => {
+    console.log(`[GHL Agent API] ${req.method} ${req.path} body:`, JSON.stringify(req.body));
+    next();
+  });
   
   router.post("/inventory/reorder-status", async (req: Request, res: Response) => {
     try {
@@ -122,7 +128,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   });
   
   const orderLookupSchema = z.object({
-    order_number: z.string().min(1)
+    order_number: z.coerce.string().min(1)
   });
   
   router.post("/orders/lookup", async (req: Request, res: Response) => {
@@ -261,7 +267,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   });
   
   const refundCalculateSchema = z.object({
-    order_number: z.string().min(1)
+    order_number: z.coerce.string().min(1)
   });
   
   router.post("/refunds/calculate", async (req: Request, res: Response) => {
@@ -359,7 +365,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   });
   
   const refundProcessSchema = z.object({
-    order_number: z.string().min(1),
+    order_number: z.coerce.string().min(1),
     confirmed: z.boolean()
   });
   
@@ -794,7 +800,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   });
   
   const initiateReturnSchema = z.object({
-    order_number: z.string().min(1, "Order number is required"),
+    order_number: z.coerce.string().min(1, "Order number is required"),
   });
 
   router.post("/returns/initiate", async (req: Request, res: Response) => {

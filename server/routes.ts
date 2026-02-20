@@ -15116,10 +15116,10 @@ Generate only the email body text, no subject line.`;
         // Import GHL config for stage IDs
         const { GHL_CONFIG } = await import("./config/ghl-config");
         
-        // Use replit admin contact for system alerts
+        // Use system admin contact for system alerts
         const systemContactResult = await ghlClient.createOrFindContact(
-          'Replit Admin',
-          'replit-admin@inventory.internal',
+          'System Admin',
+          'system@sbr-inventory.app',
           undefined
         );
         const adminContactId = systemContactResult.success ? systemContactResult.contactId : contactId;
@@ -15724,7 +15724,7 @@ Generate only the email body text, no subject line.`;
       };
       
       // Trigger both workflows in parallel
-      const [firstTakeResponse, replitResponse] = await Promise.all([
+      const [firstTakeResponse, sbrResponse] = await Promise.all([
         fetch(GHL_WORKFLOWS.FIRST_TAKE_REVIEW, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -15738,31 +15738,31 @@ Generate only the email body text, no subject line.`;
       ]);
       
       const firstTakeTriggered = 'ok' in firstTakeResponse && firstTakeResponse.ok;
-      const replitTriggered = 'ok' in replitResponse && replitResponse.ok;
-      const bothTriggered = firstTakeTriggered && replitTriggered;
+      const sbrTriggered = 'ok' in sbrResponse && sbrResponse.ok;
+      const bothTriggered = firstTakeTriggered && sbrTriggered;
       
       await storage.createSystemLog({
         type: 'GHL_REVIEW_TRIGGER',
         severity: bothTriggered ? 'INFO' : 'WARNING',
-        message: `Review workflows triggered for order ${order_id}: First Take=${firstTakeTriggered}, Replit=${replitTriggered}`,
+        message: `Review workflows triggered for order ${order_id}: First Take=${firstTakeTriggered}, SBR=${sbrTriggered}`,
         entityType: 'salesOrder',
         entityId: order.id,
         metadata: { 
           orderType,
           firstTakeStatus: 'status' in firstTakeResponse ? firstTakeResponse.status : 0,
-          replitStatus: 'status' in replitResponse ? replitResponse.status : 0,
+          sbrStatus: 'status' in sbrResponse ? sbrResponse.status : 0,
           deliveryDate: delivery_date
         }
       });
       
-      console.log(`[GHL Review Trigger] Order ${order_id} - type: ${orderType}, First Take: ${firstTakeTriggered}, Replit: ${replitTriggered}`);
+      console.log(`[GHL Review Trigger] Order ${order_id} - type: ${orderType}, First Take: ${firstTakeTriggered}, SBR: ${sbrTriggered}`);
       
       res.json({
         success: true,
         order_type: orderType,
         workflows_triggered: {
           first_take_review: firstTakeTriggered,
-          review_request_replit: replitTriggered
+          review_request_sbr: sbrTriggered
         }
       });
       

@@ -317,7 +317,7 @@ export const purchaseOrders = pgTable("purchase_orders", {
   totalItemsOrdered: integer("total_items_ordered").notNull().default(0),
   
   // GHL Integration (Communication/Approval Layer Only)
-  ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity in Replit POs pipeline
+  ghlOpportunityId: text("ghl_opportunity_id"), // Link to GHL opportunity in SBR POs pipeline
   ghlRepName: text("ghl_rep_name"), // GoHighLevel rep who issued the PO
   lastSendChannel: text("last_send_channel"), // EMAIL, SMS (legacy, for GHL sends)
   lastSendStatus: text("last_send_status"), // SUCCESS, FAILED (legacy)

@@ -502,8 +502,8 @@ function LLMSettings() {
             </div>
             <p className="text-xs text-muted-foreground">
               {hasApiKey 
-                ? "API key is managed via Replit Secrets (OPENAI_API_KEY)" 
-                : "Add OPENAI_API_KEY in Replit Secrets to configure"}
+                ? "API key is managed via environment variables (ANTHROPIC_API_KEY)" 
+                : "Add ANTHROPIC_API_KEY in your environment variables to configure"}
             </p>
           </div>
 

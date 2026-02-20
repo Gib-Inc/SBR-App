@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3 } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -54,6 +54,11 @@ const mainMenuItems = [
     url: "/ai",
     icon: Brain,
   },
+  {
+    title: "App Flow",
+    url: "/app-flow",
+    icon: Workflow,
+  },
 ];
 
 export function AppSidebar() {
@@ -67,8 +72,8 @@ export function AppSidebar() {
             <Package className="h-5 w-5 text-primary-foreground" />
           </div>
           <div className="flex flex-col group-data-[collapsible=icon]:hidden">
-            <span className="text-lg font-semibold">Inventory</span>
-            <span className="text-xs text-muted-foreground">Manufacturing</span>
+            <span className="text-lg font-semibold">SBR</span>
+            <span className="text-xs text-muted-foreground">Inventory Management</span>
           </div>
         </div>
       </SidebarHeader>

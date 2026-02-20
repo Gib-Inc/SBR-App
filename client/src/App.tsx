@@ -24,6 +24,7 @@ import { SyncProgressPanel } from "@/components/sync-progress-panel";
 import Products from "@/pages/products";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
+import AppFlow from "@/pages/app-flow";
 import Settings from "@/pages/settings";
 import Suppliers from "@/pages/suppliers";
 import SalesOrders from "@/pages/sales-orders";
@@ -121,6 +122,7 @@ function AuthenticatedApp() {
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
+                    <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />
                   </Switch>

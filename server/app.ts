@@ -58,7 +58,7 @@ export function log(message: string, source = "express") {
 
 export const app = express();
 
-// Trust proxy for secure cookies behind Replit's proxy
+// Trust proxy for secure cookies behind reverse proxy
 app.set('trust proxy', 1);
 
 declare module 'http' {

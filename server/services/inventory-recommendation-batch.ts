@@ -938,7 +938,7 @@ Respond with JSON in this exact format:
       return;
     }
     
-    // Get system contact (replit admin)
+    // Get system admin contact
     const systemContactId = await ghlOpportunitiesService.getOrCreateSystemContact();
     if (!systemContactId) {
       console.log('[AI Batch] No system contact available for GHL opportunity');
@@ -1027,7 +1027,7 @@ Respond with JSON in this exact format:
       return;
     }
     
-    // Get system contact (replit admin)
+    // Get system admin contact
     const systemContactId = await ghlOpportunitiesService.getOrCreateSystemContact();
     if (!systemContactId) {
       console.log('[AI Batch] No system contact available for GHL opportunity');

@@ -130,7 +130,7 @@ export default function LegalPrivacy() {
                 <li><strong>Service Improvement:</strong> To analyze usage patterns and improve our services</li>
               </ul>
               <p>
-                <strong>AI Processing:</strong> We use OpenAI services to provide AI-powered analytics and recommendations. Your business data may be processed by AI systems to generate insights. This data is processed in accordance with OpenAI's enterprise data protection policies and is not used to train AI models.
+                <strong>AI Processing:</strong> We use Anthropic's Claude AI to provide AI-powered analytics and recommendations. Your business data may be processed by AI systems to generate insights. This data is processed in accordance with Anthropic's enterprise data protection policies and is not used to train AI models.
               </p>
             </CardContent>
           </Card>
@@ -175,7 +175,7 @@ export default function LegalPrivacy() {
                     <td className="py-2">Customer data, opportunities</td>
                   </tr>
                   <tr className="border-b">
-                    <td className="py-2">OpenAI</td>
+                    <td className="py-2">Anthropic</td>
                     <td className="py-2">AI analytics</td>
                     <td className="py-2">Business data for analysis</td>
                   </tr>

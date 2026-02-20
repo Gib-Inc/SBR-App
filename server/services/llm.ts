@@ -1,25 +1,20 @@
 import { storage } from "../storage";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 
-// the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
-const OPENAI_MODEL = "gpt-5";
+// Default model for most tasks (fast + smart). Use opus for complex multi-step reasoning.
+const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
+const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
 
 /**
- * Get OpenAI client with API key from environment secret OPENAI_API_KEY
+ * Get Anthropic client with API key from environment secret ANTHROPIC_API_KEY
  * The database llm_api_key field is deprecated - use environment secret only
  */
-async function getOpenAIClient(apiKeyOverride?: string): Promise<OpenAI> {
-  // Priority 1: Use explicit API key if provided (from request)
-  if (apiKeyOverride && apiKeyOverride.trim()) {
-    return new OpenAI({ apiKey: apiKeyOverride });
+function getAnthropicClient(apiKeyOverride?: string): Anthropic {
+  const apiKey = apiKeyOverride?.trim() || process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("No Anthropic API key configured. Please add ANTHROPIC_API_KEY in your environment variables.");
   }
-  
-  // Priority 2: Use OPENAI_API_KEY environment secret (single source of truth)
-  if (process.env.OPENAI_API_KEY) {
-    return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
-  
-  throw new Error("No OpenAI API key configured. Please add OPENAI_API_KEY in your Replit Secrets.");
+  return new Anthropic({ apiKey });
 }
 
 export type LLMProvider = "chatgpt" | "claude" | "grok" | "custom";
@@ -162,53 +157,63 @@ export class LLMService {
   }
 
   /**
-   * ChatGPT/OpenAI integration using GPT-5 model
-   * Uses API key from database settings (user-configured)
+   * ChatGPT/OpenAI integration - NOW ROUTES TO ANTHROPIC CLAUDE
+   * Kept as "chatgpt" provider name for backwards compatibility with saved settings
    */
   private static async askChatGPT(request: LLMRequest): Promise<LLMResponse> {
-    // Get OpenAI client - uses request.apiKey if provided, else database settings, else env var
-    let openai: OpenAI;
+    return this.askClaude(request);
+  }
+
+  /**
+   * Claude/Anthropic integration using Claude Sonnet
+   */
+  private static async askClaude(request: LLMRequest): Promise<LLMResponse> {
+    let client: Anthropic;
     try {
-      openai = await getOpenAIClient(request.apiKey);
+      client = getAnthropicClient(request.apiKey);
     } catch (error: any) {
       return {
         success: false,
         error: error.message,
         data: {
-          provider: "chatgpt",
+          provider: "claude",
           status: "no_api_key",
           timestamp: new Date().toISOString(),
         },
       };
     }
 
-    // Health check - verify OpenAI connection
+    // Health check - verify Anthropic connection
     if (request.taskType === "HEALTH_CHECK") {
       try {
-        // Make a simple API call to verify connection
-        const testResponse = await openai.chat.completions.create({
-          model: OPENAI_MODEL,
+        const testResponse = await client.messages.create({
+          model: CLAUDE_MODEL_FAST,
+          max_tokens: 10,
           messages: [{ role: "user", content: "Say 'OK' to confirm connection." }],
-          max_completion_tokens: 10,
         });
         
+        const responseText = testResponse.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("");
+
         return {
           success: true,
           data: {
-            provider: "chatgpt",
-            model: OPENAI_MODEL,
+            provider: "claude",
+            model: CLAUDE_MODEL,
             status: "connected",
             timestamp: new Date().toISOString(),
-            response: testResponse.choices[0]?.message?.content,
+            response: responseText,
           },
-          text: "ChatGPT connection verified with GPT-5",
+          text: `Claude connection verified with ${CLAUDE_MODEL}`,
         };
       } catch (error: any) {
         return {
           success: false,
-          error: `ChatGPT connection failed: ${error.message}`,
+          error: `Claude connection failed: ${error.message}`,
           data: {
-            provider: "chatgpt",
+            provider: "claude",
             status: "disconnected",
             timestamp: new Date().toISOString(),
           },
@@ -219,41 +224,41 @@ export class LLMService {
     // Order recommendation - use structured JSON output
     if (request.taskType === "order_recommendation" && request.payload?.prompt) {
       try {
-        const response = await openai.chat.completions.create({
-          model: OPENAI_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: "You are an expert inventory management AI. Analyze inventory data and provide recommendations in JSON format. Always respond with valid JSON."
-            },
-            { role: "user", content: request.payload.prompt }
-          ],
-          response_format: { type: "json_object" },
-          max_completion_tokens: 8192,
+        const response = await client.messages.create({
+          model: CLAUDE_MODEL,
+          max_tokens: 8192,
+          system: "You are an expert inventory management AI. Analyze inventory data and provide recommendations. Always respond with valid JSON only — no markdown, no code fences, no commentary.",
+          messages: [{ role: "user", content: request.payload.prompt }],
         });
         
-        const content = response.choices[0]?.message?.content;
+        const content = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("");
+
         if (!content) {
-          throw new Error("No response content from OpenAI");
+          throw new Error("No response content from Claude");
         }
         
-        const parsedData = JSON.parse(content);
+        // Strip any markdown fences if present
+        const cleanJson = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+        const parsedData = JSON.parse(cleanJson);
         
         return {
           success: true,
           data: {
-            provider: "chatgpt",
-            model: OPENAI_MODEL,
+            provider: "claude",
+            model: CLAUDE_MODEL,
             ...parsedData,
             taskType: request.taskType,
           },
           text: content,
         };
       } catch (error: any) {
-        console.error("[LLM] ChatGPT order_recommendation error:", error.message);
+        console.error("[LLM] Claude order_recommendation error:", error.message);
         return {
           success: false,
-          error: `ChatGPT API error: ${error.message}`,
+          error: `Claude API error: ${error.message}`,
         };
       }
     }
@@ -261,32 +266,29 @@ export class LLMService {
     // Price extraction
     if (request.taskType === "price_extraction" && request.payload?.prompt) {
       try {
-        const response = await openai.chat.completions.create({
-          model: OPENAI_MODEL,
-          messages: [
-            {
-              role: "system",
-              content: "You are a price extraction assistant. Extract pricing information from the provided text and return JSON with: found (boolean), price (number or null), currency (string), confidence (high/medium/low), notes (string)."
-            },
-            { role: "user", content: request.payload.prompt }
-          ],
-          response_format: { type: "json_object" },
-          max_completion_tokens: 500,
+        const response = await client.messages.create({
+          model: CLAUDE_MODEL_FAST,
+          max_tokens: 500,
+          system: "You are a price extraction assistant. Extract pricing information from the provided text and return JSON with: found (boolean), price (number or null), currency (string), confidence (high/medium/low), notes (string). Respond with valid JSON only — no markdown, no code fences.",
+          messages: [{ role: "user", content: request.payload.prompt }],
         });
         
-        const content = response.choices[0]?.message?.content || '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "No response"}';
+        const content = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("") || '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "No response"}';
         
         return {
           success: true,
           text: content,
-          data: { provider: "chatgpt", model: OPENAI_MODEL, taskType: request.taskType },
+          data: { provider: "claude", model: CLAUDE_MODEL_FAST, taskType: request.taskType },
         };
       } catch (error: any) {
-        console.error("[LLM] ChatGPT price_extraction error:", error.message);
+        console.error("[LLM] Claude price_extraction error:", error.message);
         return {
           success: true,
           text: '{"found": false, "price": null, "currency": "USD", "confidence": "low", "notes": "API error"}',
-          data: { provider: "chatgpt", taskType: request.taskType, error: error.message },
+          data: { provider: "claude", taskType: request.taskType, error: error.message },
         };
       }
     }
@@ -294,96 +296,42 @@ export class LLMService {
     // Generic request handler
     try {
       const prompt = this.buildPrompt(request);
-      const response = await openai.chat.completions.create({
-        model: OPENAI_MODEL,
+      const response = await client.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 4096,
+        system: "You are an expert inventory management AI assistant. Always respond with valid JSON only — no markdown, no code fences, no commentary.",
         messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        max_completion_tokens: 4096,
       });
       
-      const content = response.choices[0]?.message?.content;
+      const content = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map(b => b.text)
+        .join("");
+
       if (!content) {
-        throw new Error("No response content from OpenAI");
+        throw new Error("No response content from Claude");
       }
       
-      const parsedData = JSON.parse(content);
+      const cleanJson = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const parsedData = JSON.parse(cleanJson);
       
       return {
         success: true,
         data: {
-          provider: "chatgpt",
-          model: OPENAI_MODEL,
+          provider: "claude",
+          model: CLAUDE_MODEL,
           ...parsedData,
           taskType: request.taskType,
         },
         text: content,
       };
     } catch (error: any) {
-      console.error("[LLM] ChatGPT generic error:", error.message);
+      console.error("[LLM] Claude generic error:", error.message);
       return {
         success: false,
-        error: `ChatGPT API error: ${error.message}`,
+        error: `Claude API error: ${error.message}`,
       };
     }
-  }
-
-  /**
-   * Claude/Anthropic integration
-   */
-  private static async askClaude(request: LLMRequest): Promise<LLMResponse> {
-    // Health check returns simple success
-    if (request.taskType === "HEALTH_CHECK") {
-      return {
-        success: true,
-        data: {
-          provider: "claude",
-          status: "connected",
-          timestamp: new Date().toISOString(),
-        },
-        text: "Claude connection verified",
-      };
-    }
-    
-    // Stub implementation - would use Anthropic SDK in production
-    // const anthropic = new Anthropic({ apiKey: request.apiKey });
-    // const message = await anthropic.messages.create({
-    //   model: "claude-3-opus-20240229",
-    //   messages: [{ role: "user", content: this.buildPrompt(request) }],
-    // });
-
-    if (request.taskType === "order_recommendation" && request.payload?.prompt) {
-      return {
-        success: true,
-        data: {
-          provider: "claude",
-          recommendation: {
-            daysUntilStockout: 18,
-            willLastFourWeeks: false,
-            urgency: "high",
-            recommendedOrderQty: 140,
-            reasoning: "Current inventory analysis shows 18 days until stockout based on historical usage patterns. Given the supplier's 14-day lead time, immediate ordering is critical to maintain continuous operations. The recommended 140-unit order accounts for safety stock requirements and anticipated demand variability."
-          },
-          taskType: request.taskType,
-        },
-      };
-    }
-
-    if (request.taskType === "price_extraction" && request.payload?.prompt) {
-      return {
-        success: true,
-        text: '{"found": true, "price": 11.49, "currency": "USD", "confidence": "medium", "notes": "Price extracted from product page"}',
-        data: { provider: "claude", taskType: request.taskType },
-      };
-    }
-
-    return {
-      success: true,
-      data: {
-        provider: "claude",
-        recommendation: "Stub response from Claude",
-        taskType: request.taskType,
-      },
-    };
   }
 
   /**
@@ -940,7 +888,7 @@ Analyze this inventory situation and reason through the following:
             last90DaysSales,
             avgLeadTime,
             urgency: parsedData.urgency,
-            llmModel: 'gpt-4o-mini',
+            llmModel: 'claude-sonnet',
           },
         });
       } catch (error: any) {

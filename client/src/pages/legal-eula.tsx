@@ -174,7 +174,7 @@ export default function LegalEULA() {
                 <li><strong>Amazon Seller Central</strong> - For marketplace order management</li>
                 <li><strong>GoHighLevel</strong> - For CRM and customer relationship management</li>
                 <li><strong>Extensiv (formerly 3PL Central)</strong> - For warehouse management</li>
-                <li><strong>OpenAI</strong> - For AI-powered analytics and recommendations</li>
+                <li><strong>Anthropic (Claude)</strong> - For AI-powered analytics and recommendations</li>
                 <li><strong>SendGrid</strong> - For email communications</li>
                 <li><strong>Shippo</strong> - For shipping label generation</li>
                 <li><strong>Google Ads / Facebook Ads</strong> - For advertising analytics</li>

@@ -275,8 +275,8 @@ function AccountSettings() {
 
 function LLMSettings() {
   const { toast } = useToast();
-  const [llmProvider, setLlmProvider] = useState("chatgpt");
-  const [llmModel, setLlmModel] = useState("gpt-5");
+  const [llmProvider, setLlmProvider] = useState("claude");
+  const [llmModel, setLlmModel] = useState("claude-sonnet-4-5");
   const [llmTemperature, setLlmTemperature] = useState(0.7);
   const [llmMaxTokens, setLlmMaxTokens] = useState(2048);
   const [isTesting, setIsTesting] = useState(false);
@@ -291,17 +291,14 @@ function LLMSettings() {
   // Model presets for each provider
   const modelPresets: Record<string, { value: string; label: string }[]> = {
     chatgpt: [
-      { value: "gpt-5", label: "GPT-5 (Standard)" },
-      { value: "gpt-5.1", label: "GPT-5.1 (Recommended)" },
-      { value: "gpt-5.2", label: "GPT-5.2 (Latest)" },
-      { value: "gpt-4o", label: "GPT-4o (Legacy)" },
-      { value: "gpt-4o-mini", label: "GPT-4o Mini (Budget)" },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5 (Recommended)" },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast/Budget)" },
+      { value: "claude-opus-4-5", label: "Claude Opus 4.5 (Most Capable)" },
     ],
     claude: [
-      { value: "claude-3-opus", label: "Claude 3 Opus (Most capable)" },
-      { value: "claude-3-sonnet", label: "Claude 3 Sonnet (Balanced)" },
-      { value: "claude-3-haiku", label: "Claude 3 Haiku (Fastest)" },
-      { value: "claude-3.5-sonnet", label: "Claude 3.5 Sonnet (Latest)" },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5 (Recommended)" },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5 (Fast/Budget)" },
+      { value: "claude-opus-4-5", label: "Claude Opus 4.5 (Most Capable)" },
     ],
     grok: [
       { value: "grok-1", label: "Grok-1" },
@@ -317,7 +314,7 @@ function LLMSettings() {
   useEffect(() => {
     if (settings) {
       // Coerce legacy "custom" provider to "chatgpt" since custom endpoint is removed
-      const provider = settings.llmProvider === 'custom' ? 'chatgpt' : (settings.llmProvider || 'chatgpt');
+      const provider = settings.llmProvider === 'custom' ? 'claude' : (settings.llmProvider || 'claude');
       setLlmProvider(provider);
       
       // API key comes from env secret, just display masked value
@@ -330,7 +327,7 @@ function LLMSettings() {
       setWebhookSecret('');
       setIsEditingWebhookSecret(false);
       
-      setLlmModel(settings.llmModel || 'gpt-5');
+      setLlmModel(settings.llmModel || 'claude-sonnet-4-5');
       setLlmTemperature(settings.llmTemperature ?? 0.7);
       setLlmMaxTokens(settings.llmMaxTokens ?? 2048);
     }
@@ -435,7 +432,8 @@ function LLMSettings() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="chatgpt">ChatGPT (OpenAI)</SelectItem>
+                  <SelectItem value="claude">Claude (Anthropic)</SelectItem>
+                  <SelectItem value="chatgpt">Claude (Legacy Label)</SelectItem>
                   <SelectItem value="claude">
                     <span className="flex items-center gap-2">
                       Claude (Anthropic)
@@ -471,7 +469,7 @@ function LLMSettings() {
 
           <div className="space-y-2">
             <Label htmlFor="llm-api-key">
-              {llmProvider === "chatgpt" ? "OpenAI API Key" : 
+              {llmProvider === "chatgpt" ? "Anthropic API Key" : 
                llmProvider === "claude" ? "Anthropic API Key" :
                llmProvider === "grok" ? "Grok API Key" : "API Key"}
             </Label>
@@ -500,7 +498,7 @@ function LLMSettings() {
 
           {llmProvider === "chatgpt" && (
             <div className="space-y-2">
-              <Label htmlFor="webhook-secret">OpenAI Webhook (signing secret)</Label>
+              <Label htmlFor="webhook-secret">Webhook Signing Secret</Label>
               <div className="flex items-center gap-2">
                 <Input
                   id="webhook-secret"
@@ -521,7 +519,7 @@ function LLMSettings() {
               </div>
               {!hasWebhookSecret && (
                 <p className="text-xs text-muted-foreground">
-                  Signing secret from your OpenAI webhook configuration
+                  Signing secret for webhook verification
                 </p>
               )}
             </div>

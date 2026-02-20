@@ -3788,9 +3788,9 @@ TOTAL: $${subtotal.toFixed(2)}
           'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
         ];
         
-        // LLM API Key - read from OPENAI_API_KEY environment secret (single source of truth)
+        // LLM API Key - read from ANTHROPIC_API_KEY environment secret (single source of truth)
         // Database llm_api_key field is deprecated
-        const envApiKey = process.env.OPENAI_API_KEY;
+        const envApiKey = process.env.ANTHROPIC_API_KEY;
         const hasApiKey = !!(envApiKey && envApiKey.trim());
         sanitized.hasApiKey = hasApiKey;
         sanitized.apiKeyMasked = hasApiKey ? maskSecret(envApiKey) : null;
@@ -3811,7 +3811,7 @@ TOTAL: $${subtotal.toFixed(2)}
         res.json(sanitized);
       } else {
         // Check env secret even if no settings exist
-        const envApiKey = process.env.OPENAI_API_KEY;
+        const envApiKey = process.env.ANTHROPIC_API_KEY;
         const hasApiKey = !!(envApiKey && envApiKey.trim());
         res.json({ 
           hasApiKey, 

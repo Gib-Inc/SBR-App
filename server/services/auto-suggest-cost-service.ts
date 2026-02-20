@@ -431,35 +431,12 @@ Your response (number only or "null"):`;
   }
 
   /**
-   * Call OpenAI API for price extraction
+   * Call OpenAI API for price extraction - NOW ROUTES TO ANTHROPIC
    */
   private static async callOpenAI(apiKey: string, prompt: string): Promise<string | null> {
-    try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 50,
-          temperature: 0,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
-      }
-
-      const data = await response.json();
-      return data.choices?.[0]?.message?.content || null;
-    } catch (error: any) {
-      console.error("[AutoSuggestCostService] OpenAI call failed:", error.message);
-      throw error;
-    }
+    // Route to Anthropic - OpenAI is no longer used
+    const anthropicKey = process.env.ANTHROPIC_API_KEY || apiKey;
+    return this.callAnthropic(anthropicKey, prompt);
   }
 
   /**
@@ -467,15 +444,19 @@ Your response (number only or "null"):`;
    */
   private static async callAnthropic(apiKey: string, prompt: string): Promise<string | null> {
     try {
+      const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
+      if (!effectiveKey) {
+        throw new Error("No Anthropic API key available");
+      }
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
+          "x-api-key": effectiveKey,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-3-haiku-20240307",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 50,
           messages: [{ role: "user", content: prompt }],
         }),

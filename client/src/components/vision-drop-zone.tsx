@@ -4,6 +4,30 @@ import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
+/** Resize image to maxDim on longest side, return base64 (no data: prefix) */
+function resizeAndEncode(file: File, maxDim: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        const ratio = Math.min(maxDim / width, maxDim / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+      resolve(dataUrl.split(",")[1]);
+    };
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 interface VisionDropZoneProps {
   entityType: "suppliers" | "products" | "barcodes" | "inventory";
   onExtracted: (records: any[]) => void;
@@ -38,16 +62,12 @@ export function VisionDropZone({ entityType, onExtracted, maxFiles = 15, compact
       setFiles(prev => prev.map(f => f.preview === entry.preview ? { ...f, status: "processing" } : f));
 
       try {
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve((reader.result as string).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(entry.file);
-        });
+        // Resize image to max 2000px on longest side to keep payload reasonable
+        const base64 = await resizeAndEncode(entry.file, 2000);
 
         const res = await apiRequest("POST", "/api/import/extract-from-image", {
           imageBase64: base64,
-          mediaType: entry.file.type || "image/png",
+          mediaType: "image/jpeg",
           entityType: entityType === "inventory" ? "products" : entityType,
         });
 

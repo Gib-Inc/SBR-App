@@ -743,12 +743,12 @@ EXTRACT ONLY SUPPLIER-RELEVANT DATA. Ignore product details, prices, inventory c
 
 For EACH supplier/vendor/company you find, extract:
 {
-  "name": string (REQUIRED - company/business name),
+  "name": string (REQUIRED - company or business name. For individuals/private sources, use their full name as the business name),
   "supplierType": "supplier" | "private" | "online" (REQUIRED - classify based on context:
     - "online" = Amazon, retail websites, online stores, any e-commerce source
     - "private" = individual contractors, freelancers, one-person operations, handyman services
     - "supplier" = traditional businesses, manufacturers, distributors, wholesalers),
-  "contactName": string|null (person's name if visible),
+  "contactName": string|null (the contact person's name IF different from the business name. For private sources/individuals, set to null since the name field already has their name),
   "email": string|null,
   "phone": string|null,
   "streetAddress": string|null,

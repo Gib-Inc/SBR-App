@@ -134,8 +134,8 @@ export function ImportSuppliersDialog({ open, onOpenChange }: ImportSuppliersDia
                 <TableRow>
                   <TableHead className="w-8">#</TableHead>
                   <TableHead className="w-20">Type</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Contact</TableHead>
+                  <TableHead>Company / Name</TableHead>
+                  <TableHead>Contact Person</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead className="w-8"></TableHead>
@@ -162,7 +162,7 @@ export function ImportSuppliersDialog({ open, onOpenChange }: ImportSuppliersDia
                           value={record.name || ""}
                           onChange={(e) => updateField(i, "name", e.target.value)}
                           className="h-7 text-sm"
-                          placeholder="Supplier name"
+                          placeholder="Company or person"
                         />
                       </TableCell>
                       <TableCell>
@@ -170,7 +170,7 @@ export function ImportSuppliersDialog({ open, onOpenChange }: ImportSuppliersDia
                           value={record.contactName || ""}
                           onChange={(e) => updateField(i, "contactName", e.target.value)}
                           className="h-7 text-sm"
-                          placeholder="Contact"
+                          placeholder="Contact person"
                         />
                       </TableCell>
                       <TableCell>

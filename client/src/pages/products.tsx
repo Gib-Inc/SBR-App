@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { BatchProductionDialog } from "@/components/batch-production-dialog";
 import { TransferDialog } from "@/components/transfer-dialog";
 import { DamageAssessmentPopup } from "@/components/damage-assessment-popup";
+import { SmartImport } from "@/components/smart-import";
 import { Factory, ArrowRightLeft } from "lucide-react";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
@@ -1704,6 +1705,7 @@ export default function BOM() {
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const [isBatchProductionOpen, setIsBatchProductionOpen] = useState(false);
+  const [isSmartImportOpen, setIsSmartImportOpen] = useState(false);
   const [transferItem, setTransferItem] = useState<any>(null);
   const [isBulkTransferOpen, setIsBulkTransferOpen] = useState(false);
   const [damageAssessmentData, setDamageAssessmentData] = useState<DamageAssessmentData | null>(null);
@@ -2105,6 +2107,14 @@ export default function BOM() {
             >
               <Factory className="mr-2 h-4 w-4" />
               Produce Product
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsSmartImportOpen(true)}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Import
             </Button>
             <Button
               size="sm"
@@ -2630,6 +2640,11 @@ export default function BOM() {
           )}
         </DialogContent>
       </Dialog>
+      <SmartImport
+        open={isSmartImportOpen}
+        onOpenChange={setIsSmartImportOpen}
+        entityType="products"
+      />
     </div>
   );
 }

@@ -25,8 +25,10 @@ import {
   Loader2,
   Users,
   ShoppingBag,
+  Upload,
 } from "lucide-react";
 import { EditSupplierDialog } from "@/components/edit-supplier-dialog";
+import { SmartImport } from "@/components/smart-import";
 import type { Supplier } from "@shared/schema";
 
 export default function Suppliers() {
@@ -35,6 +37,7 @@ export default function Suppliers() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [dialogMode, setDialogMode] = useState<"edit" | "create">("edit");
+  const [importOpen, setImportOpen] = useState(false);
 
   const { data: suppliers = [], isLoading, refetch } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
@@ -107,6 +110,10 @@ export default function Suppliers() {
                 <Badge variant="secondary" data-testid="badge-supplier-count">
                   {filteredSuppliers.length} supplier{filteredSuppliers.length !== 1 ? "s" : ""}
                 </Badge>
+                <Button variant="outline" onClick={() => setImportOpen(true)}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Import
+                </Button>
                 <Button onClick={handleAddSupplier} data-testid="button-add-supplier">
                   <Plus className="mr-2 h-4 w-4" />
                   Add Supplier
@@ -269,6 +276,11 @@ export default function Suppliers() {
         supplier={selectedSupplier}
         mode={dialogMode}
         onSaved={handleDialogSaved}
+      />
+      <SmartImport
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        entityType="suppliers"
       />
     </div>
   );

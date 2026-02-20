@@ -18,6 +18,7 @@ import { GoHighLevelClient } from "./services/gohighlevel-client";
 import { AuditLogger } from "./services/audit-logger";
 import { requireAuth } from "./middleware/auth";
 import bcrypt from "bcrypt";
+import Anthropic from "@anthropic-ai/sdk";
 import multer from "multer";
 import { z } from "zod";
 import {
@@ -707,6 +708,151 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Check if this is a fresh install (no users exist yet)
+
+  // ============================================================================
+  // SMART IMPORT (Vision + CSV + JSON)
+  // ============================================================================
+
+  // Extract structured data from an image using Claude Vision
+  app.post("/api/import/extract-from-image", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { imageBase64, mediaType, entityType } = req.body;
+      if (!imageBase64 || !entityType) {
+        return res.status(400).json({ error: "imageBase64 and entityType are required" });
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+      }
+
+      const fieldSchemas: Record<string, string> = {
+        suppliers: `Each supplier object should have: { "name": string (required), "supplierType": "supplier"|"private"|"online" (default "supplier"), "contactName": string|null, "email": string|null, "phone": string|null, "streetAddress": string|null, "city": string|null, "stateRegion": string|null, "postalCode": string|null, "country": string|null, "paymentTerms": string|null, "notes": string|null }`,
+        products: `Each product object should have: { "name": string (required), "sku": string (required, generate if not visible like "PROD-001"), "type": "component"|"finished_product" (required, infer from context), "unit": string (default "units"), "currentStock": number (default 0), "minStock": number (default 0), "barcode": string|null, "notes": string|null }`,
+        barcodes: `Each barcode object should have: { "value": string (required, the barcode number), "name": string (required, item name), "sku": string|null, "purpose": "component"|"finished_product"|"bin" (required, infer from context) }`,
+      };
+
+      const schema = fieldSchemas[entityType];
+      if (!schema) {
+        return res.status(400).json({ error: `Invalid entityType: ${entityType}. Must be: suppliers, products, or barcodes` });
+      }
+
+      const client = new Anthropic({ apiKey });
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: (mediaType || "image/png") as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+                data: imageBase64,
+              },
+            },
+            {
+              type: "text",
+              text: `You are a data extraction assistant. Look at this image and extract all ${entityType} data you can see.
+
+${schema}
+
+IMPORTANT RULES:
+- Extract EVERY entry you can see in the image
+- If a field is not visible, use null
+- For required fields, make your best guess from context
+- Return ONLY a valid JSON array, no markdown fences, no commentary
+- If you cannot extract any data, return an empty array []
+
+Respond with a JSON array of objects.`,
+            },
+          ],
+        }],
+      });
+
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map(b => b.text)
+        .join("");
+
+      // Parse the response
+      const cleanJson = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const records = JSON.parse(cleanJson);
+
+      res.json({ records, raw: text });
+    } catch (error: any) {
+      console.error("[Import] Vision extraction error:", error.message);
+      res.status(500).json({ error: error.message || "Failed to extract data from image" });
+    }
+  });
+
+  // Bulk import records
+  app.post("/api/import/bulk", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { entityType, records } = req.body;
+      if (!entityType || !Array.isArray(records) || records.length === 0) {
+        return res.status(400).json({ error: "entityType and non-empty records array required" });
+      }
+
+      const results = { created: 0, errors: [] as string[] };
+
+      for (let i = 0; i < records.length; i++) {
+        const record = records[i];
+        try {
+          if (entityType === "suppliers") {
+            await storage.createSupplier({
+              name: record.name,
+              supplierType: record.supplierType || "supplier",
+              contactName: record.contactName || null,
+              email: record.email || null,
+              phone: record.phone || null,
+              streetAddress: record.streetAddress || null,
+              city: record.city || null,
+              stateRegion: record.stateRegion || null,
+              postalCode: record.postalCode || null,
+              country: record.country || null,
+              paymentTerms: record.paymentTerms || null,
+              notes: record.notes || null,
+              catalogUrl: null,
+              logoUrl: null,
+              ghlContactId: null,
+            });
+          } else if (entityType === "products") {
+            await storage.createItem({
+              name: record.name,
+              sku: record.sku,
+              type: record.type || "component",
+              unit: record.unit || "units",
+              currentStock: record.currentStock || 0,
+              minStock: record.minStock || 0,
+              dailyUsage: record.dailyUsage || 0,
+              barcode: record.barcode || null,
+            });
+          } else if (entityType === "barcodes") {
+            await storage.createBarcode({
+              value: record.value,
+              name: record.name,
+              sku: record.sku || null,
+              purpose: record.purpose || "component",
+              referenceId: record.referenceId || null,
+            });
+          } else {
+            return res.status(400).json({ error: `Invalid entityType: ${entityType}` });
+          }
+          results.created++;
+        } catch (err: any) {
+          results.errors.push(`Row ${i + 1} (${record.name || record.sku || "unknown"}): ${err.message}`);
+        }
+      }
+
+      res.json(results);
+    } catch (error: any) {
+      console.error("[Import] Bulk import error:", error.message);
+      res.status(500).json({ error: error.message || "Bulk import failed" });
+    }
+  });
+
   app.get("/api/auth/setup-status", async (_req: Request, res: Response) => {
     try {
       const users = await storage.getAllUsers();

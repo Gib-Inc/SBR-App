@@ -15,6 +15,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDes
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Search, Download, Upload, Printer, Trash2, Check, X, Barcode as BarcodeIcon, Camera, CheckCircle2, Building, Package, ExternalLink, Tag } from "lucide-react";
+import { SmartImport } from "@/components/smart-import";
 import { SiAmazon as AmazonIcon, SiShopify as ShopifyIcon } from "react-icons/si";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
@@ -624,6 +625,7 @@ export default function Barcodes() {
   const [sortBy, setSortBy] = useState<string>("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isSmartImportOpen, setIsSmartImportOpen] = useState(false);
   const [isPrintLabelsDialogOpen, setIsPrintLabelsDialogOpen] = useState(false);
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
@@ -868,13 +870,18 @@ export default function Barcodes() {
           <h1 className="text-2xl font-semibold">Product Barcodes</h1>
           <p className="text-sm text-muted-foreground">Manage barcodes, UPCs, and print labels for your products</p>
         </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-create-barcode">
-              <Plus className="mr-1 h-4 w-4" />
-              Create
-            </Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setIsSmartImportOpen(true)}>
+            <Upload className="mr-1 h-4 w-4" />
+            Import
+          </Button>
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-create-barcode">
+                <Plus className="mr-1 h-4 w-4" />
+                Create
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Barcode</DialogTitle>
@@ -882,6 +889,7 @@ export default function Barcodes() {
             <BarcodeForm onClose={() => setIsCreateDialogOpen(false)} />
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {/* Filters Row */}
@@ -1458,6 +1466,12 @@ function ShippoLabelsSection({ searchQuery }: { searchQuery: string }) {
         </Tabs>
       </CardContent>
     </Card>
+      <SmartImport
+        open={isSmartImportOpen}
+        onOpenChange={setIsSmartImportOpen}
+        entityType="barcodes"
+      />
+    </div>
   );
 }
 

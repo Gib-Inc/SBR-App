@@ -11,11 +11,33 @@ export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
+  name: text("name"),
+  role: text("role").notNull().default("member"), // 'admin' or 'member'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
-export const insertUserSchema = createInsertSchema(users).omit({ id: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+// ============================================================================
+// USER INVITES
+// ============================================================================
+
+export const userInvites = pgTable("user_invites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull(),
+  token: text("token").notNull().unique(),
+  invitedBy: varchar("invited_by").references(() => users.id),
+  role: text("role").notNull().default("member"),
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertUserInviteSchema = createInsertSchema(userInvites).omit({ id: true, createdAt: true });
+export type InsertUserInvite = z.infer<typeof insertUserInviteSchema>;
+export type UserInvite = typeof userInvites.$inferSelect;
 
 // ============================================================================
 // ITEMS (Components & Finished Products)

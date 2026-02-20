@@ -35,6 +35,7 @@ import Reports from "@/pages/reports";
 import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
 import LegalPrivacy from "@/pages/legal-privacy";
+import AcceptInvite from "@/pages/accept-invite";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -138,6 +139,7 @@ export default function App() {
       <TooltipProvider>
         <Switch>
           <Route path="/po/acknowledge/:token" component={POAcknowledge} />
+          <Route path="/invite/:token" component={AcceptInvite} />
           <Route path="/legal/eula" component={LegalEULA} />
           <Route path="/legal/privacy" component={LegalPrivacy} />
           <Route>

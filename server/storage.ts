@@ -1,6 +1,8 @@
 import {
   type User,
   type InsertUser,
+  type UserInvite,
+  type InsertUserInvite,
   type Item,
   type InsertItem,
   type Bin,
@@ -134,6 +136,13 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, user: Partial<InsertUser>): Promise<User | undefined>;
   deleteUser(id: string): Promise<boolean>;
+
+  // User Invites
+  createInvite(invite: InsertUserInvite): Promise<UserInvite>;
+  getInviteByToken(token: string): Promise<UserInvite | undefined>;
+  markInviteAccepted(id: string): Promise<void>;
+  getPendingInvites(): Promise<UserInvite[]>;
+  deleteInvite(id: string): Promise<boolean>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -954,7 +963,7 @@ export class MemStorage implements IStorage {
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
+    const user: User = { ...insertUser, id, name: insertUser.name || null, role: insertUser.role || "member", createdAt: new Date() };
     this.users.set(id, user);
     return user;
   }
@@ -969,6 +978,28 @@ export class MemStorage implements IStorage {
 
   async deleteUser(id: string): Promise<boolean> {
     return this.users.delete(id);
+  }
+
+  // User Invites (in-memory stub)
+  private invites = new Map<string, UserInvite>();
+  async createInvite(invite: InsertUserInvite): Promise<UserInvite> {
+    const id = crypto.randomUUID();
+    const record = { ...invite, id, createdAt: new Date(), acceptedAt: null } as UserInvite;
+    this.invites.set(id, record);
+    return record;
+  }
+  async getInviteByToken(token: string): Promise<UserInvite | undefined> {
+    return Array.from(this.invites.values()).find(i => i.token === token);
+  }
+  async markInviteAccepted(id: string): Promise<void> {
+    const invite = this.invites.get(id);
+    if (invite) this.invites.set(id, { ...invite, acceptedAt: new Date() });
+  }
+  async getPendingInvites(): Promise<UserInvite[]> {
+    return Array.from(this.invites.values()).filter(i => !i.acceptedAt);
+  }
+  async deleteInvite(id: string): Promise<boolean> {
+    return this.invites.delete(id);
   }
 
   // Items
@@ -3828,6 +3859,26 @@ export class PostgresStorage implements IStorage {
 
   async deleteUser(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.users).where(eq(schema.users.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // User Invites
+  async createInvite(invite: InsertUserInvite): Promise<UserInvite> {
+    const results = await this.db.insert(schema.userInvites).values(invite).returning();
+    return results[0];
+  }
+  async getInviteByToken(token: string): Promise<UserInvite | undefined> {
+    const results = await this.db.select().from(schema.userInvites).where(eq(schema.userInvites.token, token));
+    return results[0];
+  }
+  async markInviteAccepted(id: string): Promise<void> {
+    await this.db.update(schema.userInvites).set({ acceptedAt: new Date() }).where(eq(schema.userInvites.id, id));
+  }
+  async getPendingInvites(): Promise<UserInvite[]> {
+    return await this.db.select().from(schema.userInvites).where(isNull(schema.userInvites.acceptedAt));
+  }
+  async deleteInvite(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.userInvites).where(eq(schema.userInvites.id, id)).returning();
     return results.length > 0;
   }
 

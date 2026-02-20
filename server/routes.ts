@@ -427,15 +427,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // AUTHENTICATION
   // ============================================================================
 
+  // --- INVITE SYSTEM ---
+
+  // Admin: send an invite
+  app.post("/api/admin/invite-user", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { email, role } = req.body;
+      if (!email) return res.status(400).json({ error: "Email is required" });
+
+      const existingUser = await storage.getUserByEmail(email);
+      if (existingUser) return res.status(409).json({ error: "A user with that email already exists" });
+
+      // Generate a secure token
+      const token = crypto.randomUUID() + "-" + crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+      const invite = await storage.createInvite({
+        email,
+        token,
+        invitedBy: req.session.userId || null,
+        role: role || "member",
+        expiresAt,
+        acceptedAt: null,
+      });
+
+      const baseUrl = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const inviteLink = `${baseUrl}/invite/${token}`;
+
+      // Try to send email via SendGrid if configured
+      if (process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = await import("@sendgrid/mail");
+          sgMail.default.setApiKey(process.env.SENDGRID_API_KEY);
+          await sgMail.default.send({
+            to: email,
+            from: { email: process.env.SENDGRID_FROM_EMAIL, name: process.env.SENDGRID_FROM_NAME || "SBR Inventory" },
+            subject: "You're invited to SBR Inventory",
+            html: `<p>You've been invited to join the SBR Inventory system.</p>
+                   <p><a href="${inviteLink}" style="background:#2563eb;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;display:inline-block;">Accept Invite & Set Password</a></p>
+                   <p>Or copy this link: ${inviteLink}</p>
+                   <p>This invite expires in 7 days.</p>`,
+          });
+        } catch (emailError) {
+          console.warn("[Invite] SendGrid email failed:", emailError);
+        }
+      }
+
+      res.status(201).json({ invite, inviteLink });
+    } catch (error) {
+      console.error("Error creating invite:", error);
+      res.status(500).json({ error: "Failed to create invite" });
+    }
+  });
+
+  // Admin: list pending invites
+  app.get("/api/admin/invites", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const invites = await storage.getPendingInvites();
+      res.json(invites);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch invites" });
+    }
+  });
+
+  // Admin: revoke an invite
+  app.delete("/api/admin/invites/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const deleted = await storage.deleteInvite(req.params.id);
+      res.json({ success: deleted });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete invite" });
+    }
+  });
+
+  // Public: validate an invite token
+  app.get("/api/auth/invite/:token", async (req: Request, res: Response) => {
+    try {
+      const invite = await storage.getInviteByToken(req.params.token);
+      if (!invite) return res.status(404).json({ error: "Invalid invite link" });
+      if (invite.acceptedAt) return res.status(410).json({ error: "This invite has already been used" });
+      if (new Date() > new Date(invite.expiresAt)) return res.status(410).json({ error: "This invite has expired" });
+      res.json({ email: invite.email, role: invite.role });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to validate invite" });
+    }
+  });
+
+  // Public: accept invite and create account
+  app.post("/api/auth/accept-invite", async (req: Request, res: Response) => {
+    try {
+      const { token, password, name } = req.body;
+      if (!token || !password) return res.status(400).json({ error: "Token and password are required" });
+      if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+      const invite = await storage.getInviteByToken(token);
+      if (!invite) return res.status(404).json({ error: "Invalid invite link" });
+      if (invite.acceptedAt) return res.status(410).json({ error: "This invite has already been used" });
+      if (new Date() > new Date(invite.expiresAt)) return res.status(410).json({ error: "This invite has expired" });
+
+      const existingUser = await storage.getUserByEmail(invite.email);
+      if (existingUser) return res.status(409).json({ error: "An account with this email already exists" });
+
+      const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+      const user = await storage.createUser({
+        email: invite.email,
+        password: hashedPassword,
+        name: name || null,
+        role: invite.role || "member",
+      });
+
+      await storage.markInviteAccepted(invite.id);
+
+      // Auto-login
+      req.session.userId = user.id;
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => err ? reject(err) : resolve());
+      });
+
+      const { password: _, ...userWithoutPassword } = user;
+      res.status(201).json(userWithoutPassword);
+    } catch (error) {
+      console.error("Error accepting invite:", error);
+      res.status(500).json({ error: "Failed to create account" });
+    }
+  });
+
+  // Admin: list all team members
+  app.get("/api/admin/users", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const users = await storage.getAllUsers();
+      res.json(users.map(({ password: _, ...u }) => u));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  // Admin: remove a team member
+  app.delete("/api/admin/users/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      if (req.params.id === req.session.userId) {
+        return res.status(400).json({ error: "You cannot remove yourself" });
+      }
+      const deleted = await storage.deleteUser(req.params.id);
+      res.json({ success: deleted });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to remove user" });
+    }
+  });
+
+  // Check if this is a fresh install (no users exist yet)
+  app.get("/api/auth/setup-status", async (_req: Request, res: Response) => {
+    try {
+      const users = await storage.getAllUsers();
+      res.json({ needsSetup: users.length === 0 });
+    } catch (error) {
+      res.json({ needsSetup: false });
+    }
+  });
+
+  // Bootstrap register — only works when zero users exist (first-time setup)
   app.post("/api/auth/register", async (req: Request, res: Response) => {
     try {
-      // Block registration in production unless explicitly allowed
-      const isProduction = process.env.NODE_ENV === 'production';
-      const allowRegistration = process.env.ALLOW_REGISTRATION === 'true';
-      
-      if (isProduction && !allowRegistration) {
+      // Only allow registration if NO users exist yet (first-time setup)
+      const allUsers = await storage.getAllUsers();
+      if (allUsers.length > 0) {
         return res.status(403).json({ 
-          error: "Registration is disabled. Contact administrator for access." 
+          error: "Registration is disabled. Ask your admin to send you an invite." 
         });
       }
 
@@ -454,10 +611,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Hash password
       const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-      // Create user
+      // Create user (first user is always admin)
       const user = await storage.createUser({
         email,
         password: hashedPassword,
+        role: "admin",
       });
 
       // Auto-login after registration

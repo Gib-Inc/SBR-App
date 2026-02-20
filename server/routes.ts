@@ -925,6 +925,7 @@ RULES:
               minStock: record.minStock || 0,
               dailyUsage: record.dailyUsage || 0,
               barcode: record.barcode || null,
+              defaultPurchaseCost: record.defaultPurchaseCost || null,
             });
           } else if (entityType === "barcodes") {
             await storage.createBarcode({

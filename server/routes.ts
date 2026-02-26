@@ -6934,7 +6934,7 @@ TOTAL: $${subtotal.toFixed(2)}
       if (!sellerId || !refreshToken || !clientId || !clientSecret) {
         return res.status(400).json({ 
           success: false,
-          message: "Amazon SP-API credentials not configured. Please add seller ID, refresh token, client ID, and client secret in Settings." 
+          message: "Amazon SP-API not fully configured. Set Seller ID and Refresh Token in Data Sources, and ensure AMAZON_CLIENT_ID/SECRET are in environment variables." 
         });
       }
 
@@ -7562,11 +7562,11 @@ TOTAL: $${subtotal.toFixed(2)}
             const marketplaceId = marketplaceIds[0];
             const region = configData.region || 'NA';
             const refreshToken = amazonConfig.apiKey;
-            const clientId = configData.clientId;
-            const clientSecret = configData.clientSecret;
+            const clientId = configData.clientId || process.env.AMAZON_CLIENT_ID;
+            const clientSecret = configData.clientSecret || process.env.AMAZON_CLIENT_SECRET;
             
             if (!sellerId || !marketplaceId || !refreshToken || !clientId || !clientSecret) {
-              errors.push('Amazon: Missing required credentials (sellerId, marketplaceId, refreshToken, clientId, or clientSecret)');
+              errors.push('Amazon: Missing required credentials. Ensure Seller ID, Marketplace ID, and Refresh Token are set in Data Sources, and AMAZON_CLIENT_ID/SECRET are in environment variables.');
             } else {
               channelsProcessed.push('AMAZON');
               const { AmazonClient } = await import("./services/amazon-client");
@@ -7648,13 +7648,13 @@ TOTAL: $${subtotal.toFixed(2)}
       const marketplaceId = marketplaceIds[0];
       const region = configData.region || 'NA';
       const refreshToken = config?.apiKey;
-      const clientId = configData.clientId;
-      const clientSecret = configData.clientSecret;
+      const clientId = configData.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = configData.clientSecret || process.env.AMAZON_CLIENT_SECRET;
       
       if (!sellerId || !marketplaceId || !refreshToken || !clientId) {
         return res.status(400).json({ 
           success: false,
-          message: "Amazon SP-API credentials not configured",
+          message: "Amazon SP-API not fully configured. Set Seller ID and Refresh Token in Data Sources, and ensure AMAZON_CLIENT_ID is in environment variables.",
           products: [] 
         });
       }

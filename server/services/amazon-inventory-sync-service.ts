@@ -30,8 +30,8 @@ export class AmazonInventorySyncService {
 
       const sellerId = config.config?.sellerId;
       const marketplaceId = config.config?.marketplaceIds?.[0];
-      const clientId = config.config?.clientId;
-      const clientSecret = config.config?.clientSecret;
+      const clientId = config.config?.clientId || process.env.AMAZON_CLIENT_ID;
+      const clientSecret = config.config?.clientSecret || process.env.AMAZON_CLIENT_SECRET;
       const refreshToken = config.apiKey;
       const region = config.config?.region || 'NA';
 

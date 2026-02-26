@@ -98,8 +98,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   const [marketplaceIds, setMarketplaceIds] = useState("");
   const [region, setRegion] = useState("NA");
   const [refreshToken, setRefreshToken] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
+
   const [amazonSyncOrders, setAmazonSyncOrders] = useState(true);
   const [amazonPushInventory, setAmazonPushInventory] = useState(false);
   
@@ -254,8 +253,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         setMarketplaceIds(config.config?.marketplaceIds?.join(", ") || "");
         setRegion(config.config?.region || "NA");
         setRefreshToken("");
-        setClientId(config.config?.clientId || "");
-        setClientSecret("");
         setAmazonSyncOrders(config.config?.syncOrders !== false);
         setAmazonPushInventory(config.config?.pushInventory || false);
       } else if (integrationType === "GOHIGHLEVEL") {
@@ -358,7 +355,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
           sellerId,
           marketplaceIds: marketplaceIds.split(",").map((id) => id.trim()).filter(Boolean),
           region,
-          clientId,
           syncOrders: amazonSyncOrders,
           pushInventory: amazonPushInventory,
         };
@@ -394,9 +390,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       } else if (integrationType === "AMAZON") {
         if (refreshToken) payload.apiKey = refreshToken;
         else if (config?.apiKey) payload.apiKey = config.apiKey;
-        if (clientSecret) {
-          payload.config.clientSecret = clientSecret;
-        }
       } else if (integrationType === "GOHIGHLEVEL") {
         if (ghlApiKey) payload.apiKey = ghlApiKey;
         else if (config?.apiKey) payload.apiKey = config.apiKey;
@@ -436,7 +429,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     setApiKey("");
     setAccessToken("");
     setRefreshToken("");
-    setClientSecret("");
     setGhlApiKey("");
     setGhlWebhookSecret("");
     setPhantomApiKey("");
@@ -458,7 +450,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
     } else if (integrationType === "SHOPIFY") {
       return shopDomain && (config?.apiKey || accessToken);
     } else if (integrationType === "AMAZON") {
-      return sellerId && marketplaceIds && clientId && (config?.apiKey || refreshToken);
+      return sellerId && marketplaceIds && (config?.apiKey || refreshToken);
     } else if (integrationType === "GOHIGHLEVEL") {
       return ghlLocationId && (config?.apiKey || ghlApiKey);
     } else if (integrationType === "PHANTOMBUSTER") {
@@ -1037,31 +1029,6 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="client-id" data-testid="label-client-id">
-                      SP-API LWA Client ID
-                    </Label>
-                    <Input
-                      id="client-id"
-                      placeholder="amzn1.application-oa2-client.xxx"
-                      value={clientId}
-                      onChange={(e) => setClientId(e.target.value)}
-                      data-testid="input-client-id"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="client-secret" data-testid="label-client-secret">
-                      SP-API LWA Client Secret
-                    </Label>
-                    <Input
-                      id="client-secret"
-                      type="password"
-                      placeholder="Enter your LWA client secret"
-                      value={clientSecret}
-                      onChange={(e) => setClientSecret(e.target.value)}
-                      data-testid="input-client-secret"
-                    />
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="refresh-token" data-testid="label-refresh-token">
                       Refresh Token
                     </Label>
@@ -1073,6 +1040,9 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       onChange={(e) => setRefreshToken(e.target.value)}
                       data-testid="input-refresh-token"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Generate in Seller Central → Apps & Services → Develop Apps → Authorize
+                    </p>
                   </div>
                   <div className="flex items-center justify-between">
                     <Label htmlFor="amazon-sync-orders" data-testid="label-amazon-sync-orders">

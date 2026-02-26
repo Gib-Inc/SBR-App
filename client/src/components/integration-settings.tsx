@@ -643,18 +643,18 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
           )}
 
           {isConfigMode && (
-            <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="space-y-4">
+            <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="space-y-4" data-form-type="other" data-lpignore="true">
               {/* Hidden dummy fields to prevent Chrome autofill */}
-              <input type="text" name="prevent-autofill" style={{ display: 'none' }} tabIndex={-1} />
-              <input type="password" name="prevent-autofill-pw" style={{ display: 'none' }} tabIndex={-1} />
+              <input type="text" name="fk_prevent_autofill" autoComplete="off" style={{ position: 'absolute', opacity: 0, height: 0, width: 0, pointerEvents: 'none' }} tabIndex={-1} aria-hidden="true" />
+              <input type="password" name="fk_prevent_autofill_pw" autoComplete="new-password" style={{ position: 'absolute', opacity: 0, height: 0, width: 0, pointerEvents: 'none' }} tabIndex={-1} aria-hidden="true" />
               {integrationType === "EXTENSIV" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="extensiv-client-id" data-testid="label-extensiv-client-id">
+                    <Label htmlFor="sbr-ext-cid" data-testid="label-extensiv-client-id">
                       Client ID
                     </Label>
                     <Input
-                      id="extensiv-client-id"
+                      id="sbr-ext-cid" autoComplete="one-time-code"
                       placeholder="Enter your Extensiv Client ID"
                       value={extensivClientId}
                       onChange={(e) => setExtensivClientId(e.target.value)}
@@ -662,11 +662,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="extensiv-client-secret" data-testid="label-extensiv-client-secret">
+                    <Label htmlFor="sbr-ext-csec" data-testid="label-extensiv-client-secret">
                       Client Secret
                     </Label>
                     <Input
-                      id="extensiv-client-secret"
+                      id="sbr-ext-csec" autoComplete="one-time-code"
                       type="password"
                       autoComplete="new-password"
                       placeholder="Enter your Extensiv Client Secret"
@@ -679,11 +679,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     </p>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="extensiv-org-key" data-testid="label-extensiv-org-key">
+                    <Label htmlFor="sbr-ext-org" data-testid="label-extensiv-org-key">
                       User Login (GUID)
                     </Label>
                     <Input
-                      id="extensiv-org-key"
+                      id="sbr-ext-org" autoComplete="one-time-code"
                       placeholder="Enter the GUID provided by Extensiv"
                       value={extensivOrgKey}
                       onChange={(e) => setExtensivOrgKey(e.target.value)}
@@ -756,11 +756,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                   ) : (
                     <>
                       <div className="space-y-2">
-                        <Label htmlFor="shop-domain" data-testid="label-shop-domain">
+                        <Label htmlFor="sbr-shp-dom" data-testid="label-shop-domain">
                           Shop Domain
                         </Label>
                         <Input
-                          id="shop-domain"
+                          id="sbr-shp-dom" autoComplete="one-time-code"
                           placeholder="your-store.myshopify.com"
                           value={shopDomain}
                           onChange={(e) => setShopDomain(e.target.value)}
@@ -1001,11 +1001,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     )}
                     
                     <div className="space-y-2">
-                      <Label htmlFor="shopify-pivot-location-id" data-testid="label-shopify-pivot-location-id">
+                      <Label htmlFor="sbr-shp-pvt" data-testid="label-shopify-pivot-location-id">
                         Extensiv Location ID (Pyvott – 3PL)
                       </Label>
                       <Input
-                        id="shopify-pivot-location-id"
+                        id="sbr-shp-pvt" autoComplete="one-time-code"
                         placeholder="Enter Extensiv location ID (e.g., 12345678901)"
                         value={shopifyPivotLocationId}
                         onChange={(e) => setShopifyPivotLocationId(e.target.value)}
@@ -1017,11 +1017,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     </div>
                     
                     <div className="space-y-2">
-                      <Label htmlFor="shopify-hildale-location-id" data-testid="label-shopify-hildale-location-id">
+                      <Label htmlFor="sbr-shp-hld" data-testid="label-shopify-hildale-location-id">
                         Hildale Location ID (Sticker Burr HQ)
                       </Label>
                       <Input
-                        id="shopify-hildale-location-id"
+                        id="sbr-shp-hld" autoComplete="one-time-code"
                         placeholder="Enter Hildale location ID (optional)"
                         value={shopifyHildaleLocationId}
                         onChange={(e) => setShopifyHildaleLocationId(e.target.value)}
@@ -1072,11 +1072,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               {integrationType === "AMAZON" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="seller-id" data-testid="label-seller-id">
+                    <Label htmlFor="sbr-amz-sid" data-testid="label-seller-id">
                       Seller ID
                     </Label>
                     <Input
-                      id="seller-id"
+                      id="sbr-amz-sid" autoComplete="one-time-code"
                       placeholder="Enter your Amazon Seller ID"
                       value={sellerId}
                       onChange={(e) => setSellerId(e.target.value)}
@@ -1084,11 +1084,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="marketplace-ids" data-testid="label-marketplace-ids">
+                    <Label htmlFor="sbr-amz-mktid" data-testid="label-marketplace-ids">
                       Primary Marketplace ID
                     </Label>
                     <Input
-                      id="marketplace-ids"
+                      id="sbr-amz-mktid" autoComplete="one-time-code"
                       placeholder="ATVPDKIKX0DER (US)"
                       value={marketplaceIds}
                       onChange={(e) => setMarketplaceIds(e.target.value)}
@@ -1171,11 +1171,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               {integrationType === "GOHIGHLEVEL" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="ghl-api-key" data-testid="label-ghl-api-key">
+                    <Label htmlFor="sbr-ghl-ak" data-testid="label-ghl-api-key">
                       API Key {config?.apiKey && <span className="text-muted-foreground font-normal">(Connected)</span>}
                     </Label>
                     <Input
-                      id="ghl-api-key"
+                      id="sbr-ghl-ak" autoComplete="one-time-code"
                       type="password"
                       autoComplete="new-password"
                       placeholder={config?.apiKey ? maskApiKey(config.apiKey) : "Enter your GoHighLevel API key"}
@@ -1190,11 +1190,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     </p>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="ghl-location-id" data-testid="label-ghl-location-id">
+                    <Label htmlFor="sbr-ghl-loc" data-testid="label-ghl-location-id">
                       Location ID
                     </Label>
                     <Input
-                      id="ghl-location-id"
+                      id="sbr-ghl-loc" autoComplete="one-time-code"
                       placeholder="Enter your GoHighLevel Location ID"
                       value={ghlLocationId}
                       onChange={(e) => setGhlLocationId(e.target.value)}
@@ -1349,11 +1349,11 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               {integrationType === "PHANTOMBUSTER" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="phantom-api-key" data-testid="label-phantom-api-key">
+                    <Label htmlFor="sbr-pb-ak" data-testid="label-phantom-api-key">
                       API Key
                     </Label>
                     <Input
-                      id="phantom-api-key"
+                      id="sbr-pb-ak" autoComplete="one-time-code"
                       type="password"
                       autoComplete="new-password"
                       placeholder="Enter your PhantomBuster API key"
@@ -1383,12 +1383,12 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
               {integrationType === "SHIPPO" && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="shippo-api-key" data-testid="label-shippo-api-key">
+                    <Label htmlFor="sbr-ship-ak" data-testid="label-shippo-api-key">
                       API Key
                     </Label>
                     <div className="relative">
                       <Input
-                        id="shippo-api-key"
+                        id="sbr-ship-ak" autoComplete="one-time-code"
                         type={showShippoApiKey ? "text" : "password"}
                         placeholder="Enter your Shippo API key"
                         value={shippoApiKey}

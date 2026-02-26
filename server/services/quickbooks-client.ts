@@ -150,9 +150,9 @@ export class QuickBooksClient {
   private userId: string;
   private cachedTokenEndpoint: string | null = null;
 
-  // Using sandbox URL for development - change to production URL when ready:
-  // private static readonly API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
-  private static readonly API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
+  // Production URL
+  private static readonly API_BASE = 'https://quickbooks.api.intuit.com/v3/company';
+  // private static readonly API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
   
   // Retry configuration
   private static readonly MAX_RETRIES = 3;

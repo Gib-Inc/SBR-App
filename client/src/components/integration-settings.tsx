@@ -387,6 +387,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
         if (extensivClientSecret) payload.apiKey = extensivClientSecret;
       } else if (integrationType === "SHOPIFY") {
         if (accessToken) payload.apiKey = accessToken;
+        else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "AMAZON") {
         if (refreshToken) payload.apiKey = refreshToken;
         else if (config?.apiKey) payload.apiKey = config.apiKey;
@@ -448,7 +449,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       const hasOAuthCreds = extensivClientId && extensivOrgKey && (config?.apiKey || extensivClientSecret);
       return hasOAuthCreds || config?.apiKey;
     } else if (integrationType === "SHOPIFY") {
-      return shopDomain && (config?.apiKey || accessToken);
+      return config?.apiKey || (shopDomain && accessToken);
     } else if (integrationType === "AMAZON") {
       return sellerId && marketplaceIds && (config?.apiKey || refreshToken);
     } else if (integrationType === "GOHIGHLEVEL") {
@@ -718,43 +719,125 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
 
               {integrationType === "SHOPIFY" && (
                 <>
-                  <div className="space-y-2">
-                    <Label htmlFor="shop-domain" data-testid="label-shop-domain">
-                      Shop Domain
-                    </Label>
-                    <Input
-                      id="shop-domain"
-                      placeholder="your-store.myshopify.com"
-                      value={shopDomain}
-                      onChange={(e) => setShopDomain(e.target.value)}
-                      data-testid="input-shop-domain"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="access-token" data-testid="label-access-token">
-                      Access Token
-                    </Label>
-                    <Input
-                      id="access-token"
-                      type="password"
-                      placeholder="Enter your Shopify access token"
-                      value={accessToken}
-                      onChange={(e) => setAccessToken(e.target.value)}
-                      data-testid="input-access-token"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="api-version" data-testid="label-api-version">
-                      API Version
-                    </Label>
-                    <Input
-                      id="api-version"
-                      placeholder="2024-01"
-                      value={apiVersion}
-                      onChange={(e) => setApiVersion(e.target.value)}
-                      data-testid="input-api-version"
-                    />
-                  </div>
+                  {config?.apiKey ? (
+                    <>
+                      <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                        <div className="flex items-center gap-2 text-green-600">
+                          <CheckCircle2 className="h-4 w-4" />
+                          <span className="text-sm font-medium">Connected to Shopify</span>
+                        </div>
+                        {config.accountName && (
+                          <p className="text-xs text-muted-foreground mt-1">Store: {config.accountName}</p>
+                        )}
+                      </div>
+                      <Button 
+                        variant="destructive" 
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const response = await fetch("/api/shopify/disconnect", { method: "POST", credentials: "include" });
+                            if (response.ok) {
+                              toast({ title: "Disconnected", description: "Shopify has been disconnected." });
+                              queryClient.invalidateQueries({ queryKey: [`/api/integrations/config/SHOPIFY`] });
+                              handleClose();
+                            }
+                          } catch (error: any) {
+                            toast({ title: "Error", description: error.message, variant: "destructive" });
+                          }
+                        }}
+                        data-testid="button-shopify-disconnect"
+                      >
+                        Disconnect Shopify
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="shop-domain" data-testid="label-shop-domain">
+                          Shop Domain
+                        </Label>
+                        <Input
+                          id="shop-domain"
+                          placeholder="your-store.myshopify.com"
+                          value={shopDomain}
+                          onChange={(e) => setShopDomain(e.target.value)}
+                          data-testid="input-shop-domain"
+                        />
+                      </div>
+                      <Button 
+                        className="w-full bg-green-600 hover:bg-green-700 text-white"
+                        size="lg"
+                        disabled={!shopDomain}
+                        onClick={async () => {
+                          try {
+                            const response = await fetch("/api/shopify/auth-url", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              credentials: "include",
+                              body: JSON.stringify({ shopDomain }),
+                            });
+                            const data = await response.json();
+                            if (data.authUrl) {
+                              window.open(data.authUrl, '_blank');
+                              toast({ 
+                                title: "Shopify Login Opened", 
+                                description: "Complete the login in the new tab. The page will refresh when done." 
+                              });
+                            } else {
+                              toast({ title: "Error", description: data.error || "Failed to generate auth URL", variant: "destructive" });
+                            }
+                          } catch (error: any) {
+                            toast({ title: "Error", description: error.message, variant: "destructive" });
+                          }
+                        }}
+                        data-testid="button-shopify-connect-oauth"
+                      >
+                        Connect to Shopify
+                      </Button>
+                    </>
+                  )}
+                  
+                  {/* Shopify Location & Sync Settings - show when connected */}
+                  {config?.apiKey && (
+                    <>
+                      <div className="space-y-2 pt-3 border-t">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="sync-orders" data-testid="label-sync-orders">
+                            Import Orders from Shopify
+                          </Label>
+                          <Switch
+                            id="sync-orders"
+                            checked={syncOrders}
+                            onCheckedChange={setSyncOrders}
+                            data-testid="switch-sync-orders"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label 
+                              htmlFor="push-inventory" 
+                              className={!shopifyTwoWaySyncEnabled ? "text-muted-foreground" : ""}
+                              data-testid="label-push-inventory"
+                            >
+                              Push Inventory to Shopify
+                            </Label>
+                            {!shopifyTwoWaySyncEnabled && (
+                              <p className="text-xs text-muted-foreground">
+                                Enable "Shopify Two-Way Sync" in AI Agent → Rules to unlock this option
+                              </p>
+                            )}
+                          </div>
+                          <Switch
+                            id="push-inventory"
+                            checked={pushInventory}
+                            onCheckedChange={setPushInventory}
+                            disabled={!shopifyTwoWaySyncEnabled}
+                            data-testid="switch-push-inventory"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
                   
                   {/* Real-time Webhooks Section - Prominent placement after API Version */}
                   {config?.apiKey && (

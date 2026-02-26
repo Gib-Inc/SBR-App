@@ -42,6 +42,7 @@ declare module "express-session" {
   interface SessionData {
     userId?: string;
     oauthState?: string;
+    shopifyOAuthShop?: string;
   }
 }
 

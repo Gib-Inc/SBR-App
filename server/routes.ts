@@ -18287,6 +18287,219 @@ Generate only the email body text, no subject line.`;
   });
 
   // ============================================================================
+  // ============================================================================
+  // SHOPIFY OAUTH
+  // ============================================================================
+
+  // GET /api/shopify/auth-url - Generate Shopify OAuth authorization URL
+  app.post("/api/shopify/auth-url", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const clientId = process.env.SHOPIFY_CLIENT_ID;
+      if (!clientId) {
+        return res.status(400).json({ error: "Shopify app not configured. Set SHOPIFY_CLIENT_ID in environment variables." });
+      }
+
+      const { shopDomain } = req.body;
+      if (!shopDomain) {
+        return res.status(400).json({ error: "Shop domain is required" });
+      }
+
+      // Normalize shop domain
+      let shop = shopDomain.trim().toLowerCase();
+      shop = shop.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (!shop.includes('.myshopify.com')) {
+        shop = shop.replace(/\.myshopify\.com.*/, '') + '.myshopify.com';
+      }
+
+      const redirectUri = process.env.SHOPIFY_REDIRECT_URI || 
+        `${req.protocol}://${req.get('host')}/api/shopify/callback`;
+      
+      const scopes = 'read_orders,write_orders,read_products,write_products,read_inventory,write_inventory,read_fulfillments,write_fulfillments,read_shipping,write_shipping,read_customers,write_customers,read_draft_orders,write_draft_orders,read_returns,write_returns,read_locations,read_checkouts,read_price_rules,write_price_rules,read_discounts,write_discounts';
+      
+      // Generate nonce for CSRF protection
+      const crypto = await import('crypto');
+      const state = crypto.randomBytes(16).toString('hex');
+      
+      // Store state and shop in session
+      req.session.oauthState = state;
+      req.session.shopifyOAuthShop = shop;
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => err ? reject(err) : resolve());
+      });
+
+      const authUrl = `https://${shop}/admin/oauth/authorize?` +
+        `client_id=${clientId}&` +
+        `scope=${encodeURIComponent(scopes)}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+        `state=${state}`;
+
+      console.log('[Shopify OAuth] Generated auth URL for shop:', shop);
+      res.json({ authUrl });
+    } catch (error: any) {
+      console.error('[Shopify OAuth] Auth URL error:', error);
+      res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
+    }
+  });
+
+  // GET /api/shopify/callback - Handle OAuth callback from Shopify
+  app.get("/api/shopify/callback", async (req: Request, res: Response) => {
+    try {
+      const { code, shop, state, hmac } = req.query;
+      
+      if (!code || !shop || !state) {
+        console.error('[Shopify OAuth] Missing params:', { code: !!code, shop: !!shop, state: !!state });
+        return res.redirect('/ai?tab=datasources&error=missing_params');
+      }
+
+      const clientId = process.env.SHOPIFY_CLIENT_ID;
+      const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return res.redirect('/ai?tab=datasources&error=app_not_configured');
+      }
+
+      // Verify HMAC from Shopify
+      if (hmac) {
+        const crypto = await import('crypto');
+        const queryParams = { ...req.query };
+        delete queryParams.hmac;
+        const sortedParams = Object.keys(queryParams).sort().map(key => `${key}=${queryParams[key]}`).join('&');
+        const digest = crypto.createHmac('sha256', clientSecret).update(sortedParams).digest('hex');
+        if (digest !== hmac) {
+          console.error('[Shopify OAuth] HMAC verification failed');
+          return res.redirect('/ai?tab=datasources&error=hmac_failed');
+        }
+      }
+
+      // Verify state matches session
+      if (req.session.oauthState && state !== req.session.oauthState) {
+        console.error('[Shopify OAuth] State mismatch');
+        return res.redirect('/ai?tab=datasources&error=state_mismatch');
+      }
+
+      // Exchange code for permanent access token
+      const tokenResponse = await fetch(`https://${shop}/admin/oauth/access_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.error('[Shopify OAuth] Token exchange failed:', errorText);
+        return res.redirect('/ai?tab=datasources&error=token_exchange_failed');
+      }
+
+      const tokenData = await tokenResponse.json();
+      const accessToken = tokenData.access_token;
+
+      if (!accessToken) {
+        console.error('[Shopify OAuth] No access token in response');
+        return res.redirect('/ai?tab=datasources&error=no_token');
+      }
+
+      // Store in integration_configs
+      const userId = req.session.userId;
+      if (!userId) {
+        console.error('[Shopify OAuth] No user in session');
+        return res.redirect('/login?error=session_expired');
+      }
+
+      const shopStr = String(shop);
+      const existingConfig = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      if (existingConfig) {
+        await storage.updateIntegrationConfig(existingConfig.id, {
+          apiKey: accessToken,
+          accountName: shopStr,
+          config: {
+            ...(existingConfig.config as Record<string, any> || {}),
+            shopDomain: shopStr,
+            apiVersion: '2024-01',
+            oauthConnected: true,
+          },
+          lastSyncStatus: 'SUCCESS',
+          lastSyncMessage: `Connected via OAuth to ${shopStr}`,
+          lastSyncAt: new Date(),
+        });
+      } else {
+        await storage.createIntegrationConfig({
+          userId,
+          provider: 'SHOPIFY',
+          apiKey: accessToken,
+          accountName: shopStr,
+          config: {
+            shopDomain: shopStr,
+            apiVersion: '2024-01',
+            oauthConnected: true,
+          },
+          isActive: true,
+        });
+      }
+
+      // Clean up session
+      delete req.session.oauthState;
+      delete req.session.shopifyOAuthShop;
+
+      console.log('[Shopify OAuth] Successfully connected shop:', shopStr);
+      res.redirect('/ai?tab=datasources&shopify=connected');
+    } catch (error: any) {
+      console.error('[Shopify OAuth] Callback error:', error);
+      res.redirect(`/ai?tab=datasources&error=${encodeURIComponent(error.message || 'oauth_failed')}`);
+    }
+  });
+
+  // GET /api/shopify/connection-status - Get Shopify connection status
+  app.get("/api/shopify/connection-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      if (!config || !config.apiKey) {
+        return res.json({ isConnected: false });
+      }
+
+      const configData = config.config as Record<string, any> || {};
+      res.json({
+        isConnected: true,
+        shopDomain: configData.shopDomain || config.accountName,
+        oauthConnected: configData.oauthConnected || false,
+        lastSyncAt: config.lastSyncAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // POST /api/shopify/disconnect - Disconnect Shopify
+  app.post("/api/shopify/disconnect", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, 'SHOPIFY');
+      
+      if (config) {
+        await storage.updateIntegrationConfig(config.id, {
+          apiKey: '',
+          lastSyncStatus: 'DISCONNECTED',
+          lastSyncMessage: 'Disconnected by user',
+          config: {
+            ...(config.config as Record<string, any> || {}),
+            oauthConnected: false,
+          },
+        });
+      }
+      
+      console.log('[Shopify] Disconnected for user:', userId);
+      res.json({ success: true, message: 'Shopify disconnected' });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
   // SHOPIFY INVENTORY SYNC
   // ============================================================================
 

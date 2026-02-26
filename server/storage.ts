@@ -6315,7 +6315,8 @@ export class PostgresStorage implements IStorage {
         webhookVerifierToken: token,
         accessToken: '',
         refreshToken: '',
-        tokenExpiresAt: new Date(),
+        accessTokenExpiresAt: new Date('2099-01-01'),
+        refreshTokenExpiresAt: new Date('2099-01-01'),
         realmId: '',
       })
       .returning();

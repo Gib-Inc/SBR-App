@@ -87,6 +87,29 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
     console.log(`[GHL Agent API] ${req.method} ${req.path} body:`, JSON.stringify(req.body));
     next();
   });
+
+  // GHL Voice AI can send params in different formats depending on version/config.
+  // This helper extracts params from wherever GHL puts them.
+  function extractGhlParams(body: any): Record<string, any> {
+    if (!body || typeof body !== 'object') return {};
+    // Try nested "parameters" key first (some GHL agent versions wrap params)
+    if (body.parameters && typeof body.parameters === 'object') {
+      return { ...body.parameters };
+    }
+    // Try nested "data" key
+    if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+      return { ...body.data };
+    }
+    // Otherwise use flat body (filter out known GHL metadata fields)
+    const ghlMeta = ['call_id', 'contact_id', 'conversation_id', 'location_id', 'agent_id', 'action_id', 'type'];
+    const params: Record<string, any> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (!ghlMeta.includes(key)) {
+        params[key] = value;
+      }
+    }
+    return params;
+  }
   
   router.post("/inventory/reorder-status", async (req: Request, res: Response) => {
     try {
@@ -125,19 +148,27 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/orders/lookup", async (req: Request, res: Response) => {
     try {
-      const parsed = orderLookupSchema.safeParse(req.body);
+      const params = extractGhlParams(req.body);
+      const parsed = orderLookupSchema.safeParse(params);
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
           message: "order_number is required",
-          error_code: "INVALID_REQUEST"
+          error_code: "INVALID_REQUEST",
+          debug: {
+            received_body: req.body,
+            extracted_params: params,
+            validation_errors: parsed.error.errors
+          }
         });
       }
       
-      const { order_number } = parsed.data;
+      // Strip # prefix if present and trim whitespace
+      let order_number = parsed.data.order_number.replace(/^#/, '').trim();
       const db = getDb();
       
-      const orders = await db
+      // Try exact match first, then partial match
+      let orders = await db
         .select()
         .from(salesOrders)
         .where(
@@ -148,11 +179,26 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
         )
         .limit(1);
       
+      // If no exact match, try partial/ilike match
+      if (orders.length === 0) {
+        orders = await db
+          .select()
+          .from(salesOrders)
+          .where(
+            or(
+              ilike(salesOrders.externalOrderId, `%${order_number}%`),
+              ilike(salesOrders.id, `%${order_number}%`)
+            )
+          )
+          .limit(1);
+      }
+      
       if (orders.length === 0) {
         return res.status(404).json({
           status: "error",
-          message: "Order not found",
-          error_code: "NOT_FOUND"
+          message: `Order not found. Searched for: ${order_number}`,
+          error_code: "NOT_FOUND",
+          debug: { searched_for: order_number, received_body: req.body }
         });
       }
       
@@ -201,12 +247,18 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/orders/search", async (req: Request, res: Response) => {
     try {
-      const parsed = orderSearchSchema.safeParse(req.body);
+      const params = extractGhlParams(req.body);
+      const parsed = orderSearchSchema.safeParse(params);
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
           message: "name is required for search",
-          error_code: "INVALID_REQUEST"
+          error_code: "INVALID_REQUEST",
+          debug: {
+            received_body: req.body,
+            extracted_params: params,
+            validation_errors: parsed.error.errors
+          }
         });
       }
       
@@ -264,7 +316,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/refunds/calculate", async (req: Request, res: Response) => {
     try {
-      const parsed = refundCalculateSchema.safeParse(req.body);
+      const parsed = refundCalculateSchema.safeParse(extractGhlParams(req.body));
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -363,7 +415,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/refunds/process", async (req: Request, res: Response) => {
     try {
-      const parsed = refundProcessSchema.safeParse(req.body);
+      const parsed = refundProcessSchema.safeParse(extractGhlParams(req.body));
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -468,7 +520,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/po/create", async (req: Request, res: Response) => {
     try {
-      const parsed = poCreateSchema.safeParse(req.body);
+      const parsed = poCreateSchema.safeParse(extractGhlParams(req.body));
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -727,7 +779,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.post("/tasks/create", async (req: Request, res: Response) => {
     try {
-      const parsed = taskCreateSchema.safeParse(req.body);
+      const parsed = taskCreateSchema.safeParse(extractGhlParams(req.body));
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",
@@ -797,7 +849,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
 
   router.post("/returns/initiate", async (req: Request, res: Response) => {
     try {
-      const parseResult = initiateReturnSchema.safeParse(req.body);
+      const parseResult = initiateReturnSchema.safeParse(extractGhlParams(req.body));
       if (!parseResult.success) {
         return res.status(400).json({
           status: "error",
@@ -1043,7 +1095,7 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
         notes: z.string().optional(),
       });
       
-      const parsed = transferSchema.safeParse(req.body);
+      const parsed = transferSchema.safeParse(extractGhlParams(req.body));
       if (!parsed.success) {
         return res.status(400).json({
           status: "error",

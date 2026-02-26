@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink, ChevronDown, Eye, EyeOff } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, AlertCircle, RefreshCw, Settings2, Webhook, Trash2, Info, Play, ExternalLink, ChevronDown, Eye, EyeOff, Copy, Check, Shield } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -106,6 +106,9 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
   const [ghlApiKey, setGhlApiKey] = useState("");
   const [ghlLocationId, setGhlLocationId] = useState("");
   const [ghlWebhookSecret, setGhlWebhookSecret] = useState("");
+  const [ghlSecretCopied, setGhlSecretCopied] = useState(false);
+  const [ghlSecretVisible, setGhlSecretVisible] = useState(false);
+  const [ghlHowToOpen, setGhlHowToOpen] = useState(false);
   
   // PhantomBuster fields
   const [phantomApiKey, setPhantomApiKey] = useState("");
@@ -1199,21 +1202,143 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       Find your Location ID in Settings → Business Profile → Location ID
                     </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="ghl-webhook-secret" data-testid="label-ghl-webhook-secret">
-                      AI Agent Webhook Secret (Optional)
-                    </Label>
-                    <Input
-                      id="ghl-webhook-secret"
-                      type="password"
-                      placeholder="Enter a secret for AI Agent custom actions"
-                      value={ghlWebhookSecret}
-                      onChange={(e) => setGhlWebhookSecret(e.target.value)}
-                      data-testid="input-ghl-webhook-secret"
-                    />
+                  <div className="space-y-3 pt-3 border-t">
+                    <div className="flex items-center gap-1.5">
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      <Label data-testid="label-ghl-webhook-secret">
+                        GHL Webhook Secret
+                      </Label>
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      Used to authenticate AI Agent custom actions (e.g., return labels). Use this same secret as the X-GHL-Secret header in your GHL Custom Actions.
+                      Secures your GHL Custom Actions. Generate once and paste into each GHL Custom Action as the X-GHL-Secret header.
                     </p>
+                    
+                    {!ghlWebhookSecret ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => {
+                          const array = new Uint8Array(16);
+                          crypto.getRandomValues(array);
+                          const secret = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+                          setGhlWebhookSecret(secret);
+                          setGhlSecretVisible(true);
+                        }}
+                        data-testid="button-ghl-generate-secret"
+                      >
+                        <Shield className="h-3.5 w-3.5 mr-1.5" />
+                        Generate Secret
+                      </Button>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <div className="relative flex-1">
+                            <Input
+                              id="ghl-webhook-secret"
+                              type={ghlSecretVisible ? "text" : "password"}
+                              value={ghlWebhookSecret}
+                              readOnly
+                              className="pr-10 font-mono text-xs"
+                              data-testid="input-ghl-webhook-secret"
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                              onClick={() => setGhlSecretVisible(!ghlSecretVisible)}
+                            >
+                              {ghlSecretVisible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            </Button>
+                          </div>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9 shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(ghlWebhookSecret);
+                                  setGhlSecretCopied(true);
+                                  setTimeout(() => setGhlSecretCopied(false), 2000);
+                                }}
+                                data-testid="button-ghl-copy-secret"
+                              >
+                                {ghlSecretCopied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{ghlSecretCopied ? "Copied!" : "Copy secret"}</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-9 w-9 shrink-0"
+                                onClick={() => {
+                                  if (window.confirm("Regenerate secret? This will break any existing GHL Custom Actions using the current secret. You'll need to update the X-GHL-Secret header in each action.")) {
+                                    const array = new Uint8Array(16);
+                                    crypto.getRandomValues(array);
+                                    const secret = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+                                    setGhlWebhookSecret(secret);
+                                    setGhlSecretVisible(true);
+                                  }
+                                }}
+                                data-testid="button-ghl-regenerate-secret"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Regenerate secret</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <Collapsible open={ghlHowToOpen} onOpenChange={setGhlHowToOpen}>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="w-full justify-between text-xs text-muted-foreground" data-testid="button-ghl-howto-toggle">
+                          How to use in GHL
+                          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${ghlHowToOpen ? 'rotate-180' : ''}`} />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-2 pt-1">
+                        <div className="rounded-lg bg-muted/50 p-3 space-y-2.5 text-xs">
+                          <div className="space-y-1">
+                            <p className="font-medium">Step 1</p>
+                            <p className="text-muted-foreground">In GHL, go to your Custom Action → Headers</p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="font-medium">Step 2</p>
+                            <p className="text-muted-foreground">Add header: <code className="bg-background px-1 py-0.5 rounded">X-GHL-Secret</code> = <code className="bg-background px-1 py-0.5 rounded">[your secret]</code></p>
+                          </div>
+                          <div className="space-y-1.5">
+                            <p className="font-medium">Step 3 — Secured endpoints:</p>
+                            {[
+                              '/api/ghl/custom-actions/create-return-label',
+                            ].map((path) => {
+                              const url = `https://sbr-app-production.up.railway.app${path}`;
+                              return (
+                                <div key={path} className="flex items-center gap-1.5">
+                                  <code className="text-[10px] bg-background px-1.5 py-1 rounded flex-1 truncate">{url}</code>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6 shrink-0"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(url);
+                                      toast({ title: "Copied", description: "Endpoint URL copied to clipboard" });
+                                    }}
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
                 </>
               )}

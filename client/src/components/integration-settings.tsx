@@ -647,7 +647,10 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
           )}
 
           {isConfigMode && (
-            <div className="space-y-4">
+            <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="space-y-4">
+              {/* Hidden dummy fields to prevent Chrome autofill */}
+              <input type="text" name="prevent-autofill" style={{ display: 'none' }} tabIndex={-1} />
+              <input type="password" name="prevent-autofill-pw" style={{ display: 'none' }} tabIndex={-1} />
               {integrationType === "EXTENSIV" && (
                 <>
                   <div className="space-y-2">
@@ -669,6 +672,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     <Input
                       id="extensiv-client-secret"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Enter your Extensiv Client Secret"
                       value={extensivClientSecret}
                       onChange={(e) => setExtensivClientSecret(e.target.value)}
@@ -1121,6 +1125,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     <Input
                       id="refresh-token"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Enter your Amazon refresh token"
                       value={refreshToken}
                       onChange={(e) => setRefreshToken(e.target.value)}
@@ -1176,6 +1181,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     <Input
                       id="ghl-api-key"
                       type="password"
+                      autoComplete="new-password"
                       placeholder={config?.apiKey ? maskApiKey(config.apiKey) : "Enter your GoHighLevel API key"}
                       value={ghlApiKey}
                       onChange={(e) => setGhlApiKey(e.target.value)}
@@ -1196,6 +1202,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       placeholder="Enter your GoHighLevel Location ID"
                       value={ghlLocationId}
                       onChange={(e) => setGhlLocationId(e.target.value)}
+                      autoComplete="off"
                       data-testid="input-ghl-location-id"
                     />
                     <p className="text-xs text-muted-foreground">
@@ -1352,6 +1359,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                     <Input
                       id="phantom-api-key"
                       type="password"
+                      autoComplete="new-password"
                       placeholder="Enter your PhantomBuster API key"
                       value={phantomApiKey}
                       onChange={(e) => setPhantomApiKey(e.target.value)}
@@ -1469,7 +1477,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                   </div>
                 </>
               )}
-            </div>
+            </form>
           )}
         </div>
 

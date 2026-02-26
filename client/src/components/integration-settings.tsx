@@ -385,24 +385,20 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
       };
 
       // Include credentials based on integration type
+      // IMPORTANT: Only send apiKey if user provided a NEW value.
+      // config.apiKey from the server is sanitized to "••••••••" — never write that back.
       if (integrationType === "EXTENSIV") {
-        // Extensiv uses OAuth2 with client ID and secret
         if (extensivClientSecret) payload.apiKey = extensivClientSecret;
       } else if (integrationType === "SHOPIFY") {
         if (accessToken) payload.apiKey = accessToken;
-        else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "AMAZON") {
         if (refreshToken) payload.apiKey = refreshToken;
-        else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "GOHIGHLEVEL") {
         if (ghlApiKey) payload.apiKey = ghlApiKey;
-        else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "PHANTOMBUSTER") {
         if (phantomApiKey) payload.apiKey = phantomApiKey;
-        else if (config?.apiKey) payload.apiKey = config.apiKey;
       } else if (integrationType === "SHIPPO") {
         if (shippoApiKey) payload.apiKey = shippoApiKey;
-        else if (config?.apiKey) payload.apiKey = config.apiKey;
       }
 
       if (config) {

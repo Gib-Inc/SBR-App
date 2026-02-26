@@ -4659,7 +4659,13 @@ TOTAL: $${subtotal.toFixed(2)}
   app.post("/api/integration-configs", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const { provider, accountName, apiKey, config } = req.body;
+      let { provider, accountName, apiKey, config } = req.body;
+
+      // CRITICAL: Never allow masked/sanitized apiKey to be written to DB
+      if (apiKey && /[^\x00-\xff]/.test(apiKey)) {
+        console.warn('[IntegrationConfig] BLOCKED: Attempted to save non-ASCII apiKey (likely masked value)');
+        apiKey = undefined;
+      }
 
       if (!provider) {
         return res.status(400).json({ error: "Provider is required" });
@@ -4754,7 +4760,15 @@ TOTAL: $${subtotal.toFixed(2)}
   app.patch("/api/integration-configs/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
-      const updates = req.body;
+      const updates = { ...req.body };
+      
+      // CRITICAL: Never allow masked/sanitized apiKey to be written back to DB
+      // The sanitize function sends "••••••••" to the client — reject if it comes back
+      if (updates.apiKey && /[^\x00-\xff]/.test(updates.apiKey)) {
+        console.warn('[IntegrationConfig] BLOCKED: Attempted to save non-ASCII apiKey (likely masked value)');
+        delete updates.apiKey;
+      }
+      
       const existingConfig = await storage.getIntegrationConfigById(req.params.id);
       const updated = await storage.updateIntegrationConfig(req.params.id, updates);
 

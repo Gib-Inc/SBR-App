@@ -43,7 +43,7 @@ export default function Settings() {
           </TabsTrigger>
           <TabsTrigger value="ghl-api" data-testid="tab-ghl-api">
             <Bot className="mr-2 h-4 w-4" />
-            GHL Agent API
+            GHL Connector
           </TabsTrigger>
           <TabsTrigger value="team" data-testid="tab-team">
             <Users className="mr-2 h-4 w-4" />
@@ -849,12 +849,12 @@ function GhlAgentApiSettings() {
     hasDbKey: boolean;
     lastUsedAt: string | null;
   }>({
-    queryKey: ["/api/settings/ghl-agent-api-key-status"],
+    queryKey: ["/api/settings/sbr-ghl-connector-key-status"],
   });
   
   const generateKeyMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/settings/ghl-agent-api-key/generate");
+      const res = await apiRequest("POST", "/api/settings/sbr-ghl-connector-key/generate");
       return res.json();
     },
     onSuccess: (data) => {
@@ -956,7 +956,7 @@ function GhlAgentApiSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Bot className="h-5 w-5" />
-            GHL Agent API Configuration
+            GHL Connector Configuration
           </CardTitle>
           <CardDescription>
             Connect your GoHighLevel AI Agent to this inventory system using these API endpoints.

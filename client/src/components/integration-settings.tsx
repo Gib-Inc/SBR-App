@@ -666,7 +666,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       Client Secret
                     </Label>
                     <Input
-                      id="sbr-ext-csec" autoComplete="one-time-code"
+                      id="sbr-ext-csec"
                       type="password"
                       autoComplete="new-password"
                       placeholder="Enter your Extensiv Client Secret"
@@ -1076,7 +1076,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       Seller ID
                     </Label>
                     <Input
-                      id="sbr-amz-sid" autoComplete="one-time-code"
+                      id="sbr-amz-sid"
                       placeholder="Enter your Amazon Seller ID"
                       value={sellerId}
                       onChange={(e) => setSellerId(e.target.value)}
@@ -1175,18 +1175,18 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       API Key {config?.apiKey && <span className="text-muted-foreground font-normal">(Connected)</span>}
                     </Label>
                     <Input
-                      id="sbr-ghl-ak" autoComplete="one-time-code"
+                      id="sbr-ghl-ak"
                       type="password"
-                      autoComplete="new-password"
-                      placeholder={config?.apiKey ? maskApiKey(config.apiKey) : "Enter your GoHighLevel API key"}
+                      autoComplete="one-time-code"
+                      placeholder={config?.apiKey ? maskApiKey(config.apiKey) : "Paste your GHL API key (no Bearer prefix)"}
                       value={ghlApiKey}
                       onChange={(e) => setGhlApiKey(e.target.value)}
                       data-testid="input-ghl-api-key"
                     />
                     <p className="text-xs text-muted-foreground">
                       {config?.apiKey 
-                        ? "Leave blank to keep existing key, or enter a new key to replace it"
-                        : "Get your API key from GoHighLevel Settings → API Keys"}
+                        ? "Leave blank to keep existing key, or enter a new key to replace it. Do not include \"Bearer\" — it's added automatically."
+                        : "Get your API key from GoHighLevel Settings → API Keys. Paste the raw key only — do not include \"Bearer\"."}
                     </p>
                   </div>
                   <div className="space-y-2">

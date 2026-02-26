@@ -1425,8 +1425,7 @@ RULES:
       const ghlConfig = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
       // V2 API uses a different base URL
       const baseUrl = 'https://services.leadconnectorhq.com';
-      // Check environment variable first, then fall back to stored config
-      const apiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+      const apiKey = ghlConfig?.apiKey;
       const locationId = (ghlConfig?.config as any)?.locationId;
       const pipelineId = (ghlConfig?.config as any)?.purchasePipelineId || process.env.GHL_PURCHASE_PIPELINE_ID;
       const stageDraftId = (ghlConfig?.config as any)?.purchaseStageDraftId || process.env.GHL_PURCHASE_STAGE_DRAFT_ID;
@@ -4527,9 +4526,9 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  app.get("/api/settings/ghl-agent-api-key-status", requireAuth, async (req: Request, res: Response) => {
-    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
-    const configured = !!(process.env.GHL_AGENT_API_KEY || dbKey?.isActive);
+  app.get("/api/settings/sbr-ghl-connector-key-status", requireAuth, async (req: Request, res: Response) => {
+    const dbKey = await storage.getApiKeyByName('SBR_GHL_CONNECTOR_KEY');
+    const configured = !!dbKey?.isActive;
     res.json({ 
       configured,
       keyPrefix: dbKey?.keyPrefix || null,
@@ -4538,14 +4537,14 @@ TOTAL: $${subtotal.toFixed(2)}
     });
   });
 
-  app.post("/api/settings/ghl-agent-api-key/generate", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/settings/sbr-ghl-connector-key/generate", requireAuth, async (req: Request, res: Response) => {
     try {
-      const rawKey = `rep_${crypto.randomBytes(24).toString('hex')}`;
+      const rawKey = `sbr_${crypto.randomBytes(24).toString('hex')}`;
       const keyHash = await bcrypt.hash(rawKey, 10);
       const keyPrefix = rawKey.substring(0, 12) + '...';
       
       await storage.createApiKey({
-        name: 'GHL_AGENT_API_KEY',
+        name: 'SBR_GHL_CONNECTOR_KEY',
         keyHash,
         keyPrefix,
         isActive: true,
@@ -4555,20 +4554,20 @@ TOTAL: $${subtotal.toFixed(2)}
         success: true,
         apiKey: rawKey,
         keyPrefix,
-        message: 'API key generated. Copy it now - it won\'t be shown again.'
+        message: 'SBR GHL Connector Key generated. Copy it now — it won\'t be shown again. Paste this into your GHL agent\'s Authorization header as: Bearer YOUR_KEY'
       });
     } catch (error: any) {
-      console.error('[API Key] Generation error:', error);
+      console.error('[SBR GHL Connector Key] Generation error:', error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
 
-  app.delete("/api/settings/ghl-agent-api-key", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/settings/sbr-ghl-connector-key", requireAuth, async (req: Request, res: Response) => {
     try {
-      const deleted = await storage.deleteApiKeyByName('GHL_AGENT_API_KEY');
+      const deleted = await storage.deleteApiKeyByName('SBR_GHL_CONNECTOR_KEY');
       res.json({ success: true, deleted });
     } catch (error: any) {
-      console.error('[API Key] Deletion error:', error);
+      console.error('[SBR GHL Connector Key] Deletion error:', error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
@@ -4665,6 +4664,11 @@ TOTAL: $${subtotal.toFixed(2)}
       if (apiKey && /[^\x00-\xff]/.test(apiKey)) {
         console.warn('[IntegrationConfig] BLOCKED: Attempted to save non-ASCII apiKey (likely masked value)');
         apiKey = undefined;
+      }
+      
+      // Auto-strip "Bearer " prefix if user accidentally included it
+      if (apiKey && apiKey.toLowerCase().startsWith('bearer ')) {
+        apiKey = apiKey.substring(7).trim();
       }
 
       if (!provider) {
@@ -4767,6 +4771,12 @@ TOTAL: $${subtotal.toFixed(2)}
       if (updates.apiKey && /[^\x00-\xff]/.test(updates.apiKey)) {
         console.warn('[IntegrationConfig] BLOCKED: Attempted to save non-ASCII apiKey (likely masked value)');
         delete updates.apiKey;
+      }
+      
+      // Auto-strip "Bearer " prefix if user accidentally included it
+      if (updates.apiKey && updates.apiKey.toLowerCase().startsWith('bearer ')) {
+        updates.apiKey = updates.apiKey.substring(7).trim();
+        console.log('[IntegrationConfig] Auto-stripped Bearer prefix from apiKey');
       }
       
       const existingConfig = await storage.getIntegrationConfigById(req.params.id);
@@ -6001,7 +6011,7 @@ TOTAL: $${subtotal.toFixed(2)}
             if (req.user?.id && (orderData.customerEmail || orderData.customerPhone)) {
               try {
                 const ghlConfig = await storage.getIntegrationConfig(req.user.id, 'GOHIGHLEVEL');
-                const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+                const ghlApiKey = ghlConfig?.apiKey;
                 const ghlLocationId = (ghlConfig?.config as any)?.locationId;
                 
                 if (ghlApiKey && ghlLocationId) {
@@ -7157,7 +7167,7 @@ TOTAL: $${subtotal.toFixed(2)}
             if (req.user?.id && (orderData.customerEmail || orderData.customerPhone)) {
               try {
                 const ghlConfig = await storage.getIntegrationConfig(req.user.id, 'GOHIGHLEVEL');
-                const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+                const ghlApiKey = ghlConfig?.apiKey;
                 const ghlLocationId = (ghlConfig?.config as any)?.locationId;
                 
                 if (ghlApiKey && ghlLocationId) {
@@ -7847,15 +7857,23 @@ TOTAL: $${subtotal.toFixed(2)}
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
       // V2 API uses a different base URL
       const baseUrl = 'https://services.leadconnectorhq.com';
-      // Check environment variable first, then fall back to stored config
-      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+      let apiKey = config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
+      
+      // Auto-strip "Bearer " prefix if user accidentally included it
+      if (apiKey && apiKey.toLowerCase().startsWith('bearer ')) {
+        apiKey = apiKey.substring(7).trim();
+        // Fix it in the DB too
+        if (config) {
+          await storage.updateIntegrationConfig(config.id, { apiKey });
+        }
+      }
       
       // Return specific error codes for missing credentials
       if (!apiKey && !locationId) {
         return res.status(400).json({ 
           success: false,
-          message: "GoHighLevel credentials not configured. Please add API key and Location ID.",
+          message: "GoHighLevel credentials not configured. Please add your API key (raw key only, no \"Bearer\" prefix) and Location ID.",
           errorCode: 'NOT_CONFIGURED',
         });
       }
@@ -7916,7 +7934,7 @@ TOTAL: $${subtotal.toFixed(2)}
       // Get credentials from integration config
       const config = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
       const baseUrl = 'https://services.leadconnectorhq.com';
-      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+      const apiKey = config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       
       if (!apiKey || !locationId) {
@@ -8095,7 +8113,7 @@ TOTAL: $${subtotal.toFixed(2)}
       // V2 API uses a different base URL
       const baseUrl = 'https://services.leadconnectorhq.com';
       // Check environment variable first, then fall back to stored config
-      const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+      const apiKey = config?.apiKey;
       const locationId = (config?.config as any)?.locationId;
       
       if (!apiKey || !locationId) {
@@ -16831,7 +16849,7 @@ Generate only the email body text, no subject line.`;
 
       // Get GHL config from integration settings (need locationId for response)
       const ghlConfig = await storage.getIntegrationConfig(req.session.userId!, 'GOHIGHLEVEL');
-      const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || ghlConfig?.apiKey;
+      const ghlApiKey = ghlConfig?.apiKey;
       const locationId = (ghlConfig?.config as any)?.locationId;
 
       // Check if already linked - return early with locationId

@@ -21,7 +21,7 @@ export async function createGhlTaskForReturn(
     // V2 API uses a different base URL
     const baseUrl = 'https://services.leadconnectorhq.com';
     // Check environment variable first, then fall back to stored config
-    const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+    const apiKey = config?.apiKey;
     const locationId = (config?.config as any)?.locationId;
     
     if (!apiKey || !locationId) {
@@ -119,7 +119,7 @@ export async function createGhlTaskForDispute(
     // V2 API uses a different base URL
     const baseUrl = 'https://services.leadconnectorhq.com';
     // Check environment variable first, then fall back to stored config
-    const apiKey = process.env.GOHIGHLEVEL_API_KEY || config?.apiKey;
+    const apiKey = config?.apiKey;
     const locationId = (config?.config as any)?.locationId;
     
     if (!apiKey || !locationId) {

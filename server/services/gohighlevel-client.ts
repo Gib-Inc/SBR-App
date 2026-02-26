@@ -148,7 +148,7 @@ export class GoHighLevelClient {
         if (response.status === 401) {
           return {
             success: false,
-            message: 'Invalid API key. Please check your GoHighLevel API key and try again.',
+            message: 'Invalid API key. Please check your GoHighLevel API key in Data Sources. Paste the raw key only — do not include "Bearer".',
             errorCode: 'INVALID_API_KEY',
           };
         }

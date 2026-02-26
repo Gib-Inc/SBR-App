@@ -264,17 +264,14 @@ export class CommerceAttributionService {
       if (isValidAscii) {
         this.ghlApiKey = dbApiKey;
       } else {
-        // Fallback to environment variable
-        this.ghlApiKey = process.env.GOHIGHLEVEL_API_KEY || "";
-        if (this.ghlApiKey) {
-          console.log("[CommerceAttribution] Using GOHIGHLEVEL_API_KEY from environment (database key was invalid)");
-        }
+        this.ghlApiKey = "";
+        console.warn("[CommerceAttribution] GHL API key in database is invalid (likely corrupted). Please re-enter it in Data Sources → GoHighLevel.");
       }
       
       this.ghlLocationId = ghlConfigData.locationId || "";
 
       if (!this.ghlApiKey || !this.ghlLocationId) {
-        return { success: false, error: "GoHighLevel credentials not configured. Please update the API key in Settings or set GOHIGHLEVEL_API_KEY environment variable." };
+        return { success: false, error: "GoHighLevel credentials not configured. Please add your API key (raw key, no Bearer prefix) and Location ID in Data Sources." };
       }
 
       this.initialized = true;

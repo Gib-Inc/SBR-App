@@ -11,7 +11,7 @@ import { returnsService } from "../services/returns-service";
 import bcrypt from "bcrypt";
 import sgMail from "@sendgrid/mail";
 
-const GHL_AGENT_API_KEY_ENV = "GHL_AGENT_API_KEY";
+const SBR_CONNECTOR_KEY_NAME = "SBR_GHL_CONNECTOR_KEY";
 
 let cachedDb: ReturnType<typeof drizzle> | null = null;
 const getDb = () => {
@@ -31,20 +31,15 @@ async function requireGhlAgentAuth(req: Request, res: Response, next: NextFuncti
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
       status: "error",
-      message: "Missing or invalid Authorization header. Use: Bearer YOUR_API_KEY",
+      message: "Missing or invalid Authorization header. Use: Bearer YOUR_SBR_CONNECTOR_KEY",
       error_code: "UNAUTHORIZED"
     });
   }
   
   const token = authHeader.substring(7);
   
-  const envKey = process.env[GHL_AGENT_API_KEY_ENV];
-  if (envKey && token === envKey) {
-    return next();
-  }
-  
   try {
-    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
+    const dbKey = await storage.getApiKeyByName(SBR_CONNECTOR_KEY_NAME);
     if (dbKey?.isActive) {
       const isValid = await bcrypt.compare(token, dbKey.keyHash);
       if (isValid) {
@@ -52,25 +47,22 @@ async function requireGhlAgentAuth(req: Request, res: Response, next: NextFuncti
         return next();
       }
     }
+    
+    if (!dbKey?.isActive) {
+      console.error("[GHL Agent API] No SBR GHL Connector Key configured");
+      return res.status(500).json({
+        status: "error",
+        message: "SBR GHL Connector Key not configured. Generate one in SBR-App Settings → API Keys.",
+        error_code: "NOT_CONFIGURED"
+      });
+    }
   } catch (error) {
     console.error("[GHL Agent API] DB key check error:", error);
   }
   
-  if (!envKey) {
-    const dbKey = await storage.getApiKeyByName('GHL_AGENT_API_KEY');
-    if (!dbKey?.isActive) {
-      console.error("[GHL Agent API] No API key configured");
-      return res.status(500).json({
-        status: "error",
-        message: "API not configured. Generate an API key in Settings.",
-        error_code: "NOT_CONFIGURED"
-      });
-    }
-  }
-  
   return res.status(403).json({
     status: "error",
-    message: "Invalid API key",
+    message: "Invalid SBR GHL Connector Key",
     error_code: "FORBIDDEN"
   });
 }
@@ -746,19 +738,19 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       
       const { assigned_to, task_description, due_date, priority } = parsed.data;
       
-      const ghlApiKey = process.env.GOHIGHLEVEL_API_KEY;
-      if (!ghlApiKey) {
-        return res.status(500).json({
-          status: "error",
-          message: "GoHighLevel integration not configured",
-          error_code: "GHL_NOT_CONFIGURED"
-        });
-      }
-      
       const ghlConfig = await storage.getIntegrationConfig(
         (await storage.getAllUsers())[0]?.id || "",
         "GOHIGHLEVEL"
       );
+      
+      const ghlApiKey = ghlConfig?.apiKey;
+      if (!ghlApiKey) {
+        return res.status(500).json({
+          status: "error",
+          message: "GoHighLevel API key not configured. Add it in SBR-App → Data Sources → GoHighLevel.",
+          error_code: "GHL_NOT_CONFIGURED"
+        });
+      }
       
       const configData = ghlConfig?.config as { apiBaseUrl?: string; locationId?: string } | null;
       const baseUrl = configData?.apiBaseUrl || "https://services.leadconnectorhq.com";

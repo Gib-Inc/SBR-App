@@ -166,27 +166,54 @@ export async function handleOrderCreated(
       }
     }
     
-    const salesOrder = await storage.createSalesOrder({
-      externalOrderId: String(orderId),
-      channel: 'SHOPIFY',
-      customerName,
-      customerEmail: payload.customer?.email || payload.email || null,
-      customerPhone: payload.customer?.phone || payload.phone || null,
-      status: orderStatus,
-      orderDate: new Date(payload.created_at || Date.now()),
-      expectedDeliveryDate: null,
-      deliveredAt,
-      sourceUrl: `https://${context.shopDomain}/admin/orders/${orderId}`,
-      totalAmount: payload.total_price ? parseFloat(payload.total_price) : 0,
-      currency: payload.currency || 'USD',
-      fulfillmentSource,
-      rawPayload: payload,
-      shipToStreet: shippingAddr.address1 || null,
-      shipToCity: shippingAddr.city || null,
-      shipToState: shippingAddr.province_code || shippingAddr.province || null,
-      shipToZip: shippingAddr.zip || null,
-      shipToCountry: shippingAddr.country_code || shippingAddr.country || null,
-    });
+    let isExistingOrder = false;
+    const salesOrder = await (async () => {
+      try {
+        return await storage.createSalesOrder({
+          externalOrderId: String(orderId),
+          channel: 'SHOPIFY',
+          customerName,
+          customerEmail: payload.customer?.email || payload.email || null,
+          customerPhone: payload.customer?.phone || payload.phone || null,
+          status: orderStatus,
+          orderDate: new Date(payload.created_at || Date.now()),
+          expectedDeliveryDate: null,
+          deliveredAt,
+          sourceUrl: `https://${context.shopDomain}/admin/orders/${orderId}`,
+          totalAmount: payload.total_price ? parseFloat(payload.total_price) : 0,
+          currency: payload.currency || 'USD',
+          fulfillmentSource,
+          rawPayload: payload,
+          shipToStreet: shippingAddr.address1 || null,
+          shipToCity: shippingAddr.city || null,
+          shipToState: shippingAddr.province_code || shippingAddr.province || null,
+          shipToZip: shippingAddr.zip || null,
+          shipToCountry: shippingAddr.country_code || shippingAddr.country || null,
+        });
+      } catch (err: any) {
+        // Race condition: orders/updated and orders/create can arrive simultaneously.
+        // If another webhook already created this order, just use the existing one.
+        if (err.code === '23505' || err.message?.includes('duplicate key')) {
+          console.log(`[Shopify Webhook] Order ${orderName} already exists (race condition), using existing record`);
+          const existing = await storage.getSalesOrdersByExternalId('SHOPIFY', String(orderId));
+          if (existing[0]) {
+            isExistingOrder = true;
+            return existing[0];
+          }
+        }
+        throw err;
+      }
+    })();
+
+    // If we hit a race condition and found an existing order, skip all line item creation,
+    // inventory movements, and GHL syncs — the first webhook already handled all of that.
+    if (isExistingOrder) {
+      return {
+        success: true,
+        message: `Order ${orderName} already processed (race condition resolved)`,
+        data: { salesOrderId: salesOrder.id, raceCondition: true },
+      };
+    }
 
     console.log(`[Shopify Webhook] Created sales order ${salesOrder.id} for Shopify order ${orderName}`);
 

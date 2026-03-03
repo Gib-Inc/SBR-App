@@ -82,32 +82,99 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
   
   router.use(requireGhlAgentAuth);
 
-  // Debug: log incoming request bodies to help diagnose GHL webhook format issues
+  // Verbose request logging — dump headers + body so Railway logs show exactly what GHL sends
   router.use((req: Request, _res: Response, next: NextFunction) => {
-    console.log(`[GHL Agent API] ${req.method} ${req.path} body:`, JSON.stringify(req.body));
+    console.log(`[GHL Agent API] === INCOMING REQUEST ===`);
+    console.log(`[GHL Agent API] ${req.method} ${req.path}`);
+    console.log(`[GHL Agent API] Content-Type: ${req.headers['content-type']}`);
+    console.log(`[GHL Agent API] Authorization: ${req.headers.authorization ? 'Bearer ***' + (req.headers.authorization as string).slice(-6) : 'MISSING'}`);
+    console.log(`[GHL Agent API] Raw Body:`, JSON.stringify(req.body));
+    console.log(`[GHL Agent API] Body type: ${typeof req.body}, keys: ${req.body ? Object.keys(req.body).join(', ') : 'none'}`);
     next();
   });
 
-  // GHL Voice AI can send params in different formats depending on version/config.
-  // This helper extracts params from wherever GHL puts them.
+  // GHL Voice AI / Custom Actions send params in many different formats depending on
+  // agent version, action type (voice vs SMS vs workflow), and GHL platform updates.
+  // This helper tries every known structure to find the actual parameters.
   function extractGhlParams(body: any): Record<string, any> {
     if (!body || typeof body !== 'object') return {};
-    // Try nested "parameters" key first (some GHL agent versions wrap params)
+
+    // 1. GHL Voice AI v2 "function_call" wrapper
+    if (body.function_call?.parameters && typeof body.function_call.parameters === 'object') {
+      console.log(`[GHL Agent API] Extracted params from body.function_call.parameters`);
+      return { ...body.function_call.parameters };
+    }
+
+    // 2. GHL "tool_call" wrapper (OpenAI-style function calling format)
+    if (body.tool_call?.arguments) {
+      try {
+        const args = typeof body.tool_call.arguments === 'string'
+          ? JSON.parse(body.tool_call.arguments)
+          : body.tool_call.arguments;
+        console.log(`[GHL Agent API] Extracted params from body.tool_call.arguments`);
+        return { ...args };
+      } catch (e) {
+        console.error(`[GHL Agent API] Failed to parse tool_call.arguments:`, e);
+      }
+    }
+
+    // 3. GHL "tool_calls" array format (some versions send array)
+    if (Array.isArray(body.tool_calls) && body.tool_calls[0]?.function?.arguments) {
+      try {
+        const args = typeof body.tool_calls[0].function.arguments === 'string'
+          ? JSON.parse(body.tool_calls[0].function.arguments)
+          : body.tool_calls[0].function.arguments;
+        console.log(`[GHL Agent API] Extracted params from body.tool_calls[0].function.arguments`);
+        return { ...args };
+      } catch (e) {
+        console.error(`[GHL Agent API] Failed to parse tool_calls[0].function.arguments:`, e);
+      }
+    }
+
+    // 4. GHL "function" wrapper with "arguments" (another variant)
+    if (body.function?.arguments) {
+      try {
+        const args = typeof body.function.arguments === 'string'
+          ? JSON.parse(body.function.arguments)
+          : body.function.arguments;
+        console.log(`[GHL Agent API] Extracted params from body.function.arguments`);
+        return { ...args };
+      } catch (e) {
+        console.error(`[GHL Agent API] Failed to parse function.arguments:`, e);
+      }
+    }
+
+    // 5. Nested "parameters" key (some GHL agent versions wrap params here)
     if (body.parameters && typeof body.parameters === 'object') {
+      console.log(`[GHL Agent API] Extracted params from body.parameters`);
       return { ...body.parameters };
     }
-    // Try nested "data" key
+
+    // 6. Nested "data" key
     if (body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+      console.log(`[GHL Agent API] Extracted params from body.data`);
       return { ...body.data };
     }
-    // Otherwise use flat body (filter out known GHL metadata fields)
-    const ghlMeta = ['call_id', 'contact_id', 'conversation_id', 'location_id', 'agent_id', 'action_id', 'type'];
+
+    // 7. Nested "payload" key (workflow webhook format)
+    if (body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)) {
+      console.log(`[GHL Agent API] Extracted params from body.payload`);
+      return { ...body.payload };
+    }
+
+    // 8. Flat body — filter out known GHL metadata fields and use the rest as params
+    const ghlMeta = [
+      'call_id', 'contact_id', 'conversation_id', 'location_id', 
+      'agent_id', 'action_id', 'type', 'workflow_id', 'event',
+      'timestamp', 'source', 'version'
+    ];
     const params: Record<string, any> = {};
     for (const [key, value] of Object.entries(body)) {
       if (!ghlMeta.includes(key)) {
         params[key] = value;
       }
     }
+    console.log(`[GHL Agent API] Extracted params from flat body (filtered metadata):`, JSON.stringify(params));
     return params;
   }
   

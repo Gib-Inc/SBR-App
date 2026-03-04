@@ -1302,6 +1302,18 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       const params = extractGhlParams(req.body);
       const request = params.request || params.message || params.query || '';
       
+      // Extract GHL workflow standard data for callback (read from raw body, not filtered params)
+      const rawBody = req.body || {};
+      const ghlContactId = rawBody.contact_id || rawBody.contactId || params.contact_id || params.contactId || '';
+      const ghlLocationId = rawBody.location_id || rawBody.locationId || params.location_id || params.locationId || '';
+      const ghlContactPhone = rawBody.phone || rawBody.contact_phone || params.phone || '';
+      const ghlContactName = rawBody.first_name || rawBody.full_name || rawBody.contact_name || params.first_name || '';
+      
+      // Log if this came from a GHL conversation workflow
+      if (ghlContactId) {
+        console.log(`[GHL Agent API] Conversation workflow call - contact: ${ghlContactId}, name: ${ghlContactName}, phone: ${ghlContactPhone}`);
+      }
+      
       if (!request || typeof request !== 'string' || !request.trim()) {
         return res.status(200).json({
           status: "test_mode",
@@ -1318,6 +1330,85 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
           ]
         });
       }
+
+      // Helper: After processing, send reply back to GHL contact if contactId present
+      const sendGhlReply = async (responseData: any) => {
+        if (!ghlContactId) return; // Not a workflow call, skip
+        
+        // Extract the text response to send back
+        let replyText = '';
+        if (responseData.data?.response) {
+          replyText = responseData.data.response;
+        } else if (responseData.message) {
+          replyText = responseData.message;
+        } else if (responseData.data) {
+          // Build a readable summary from structured data
+          const d = responseData.data;
+          if (d.order_number) {
+            replyText = `Order ${d.order_number}: Status: ${d.status || 'N/A'}, Customer: ${d.customer_name || 'N/A'}, Total: $${d.total || '0'}`;
+            if (d.line_items?.length) {
+              replyText += `\nItems: ${d.line_items.map((l: any) => `${l.name || l.sku} x${l.quantity}`).join(', ')}`;
+            }
+          } else if (d.results_count !== undefined) {
+            replyText = `Found ${d.results_count} orders for "${d.query}"`;
+            if (d.orders?.length) {
+              replyText += ':\n' + d.orders.slice(0, 5).map((o: any) => 
+                `• #${o.order_number} - ${o.customer_name} - $${o.total} (${o.status})`
+              ).join('\n');
+            }
+          } else if (d.low_stock_items) {
+            replyText = `${d.total_low_stock} items need reordering:\n${d.low_stock_items.slice(0, 5).map((i: any) => 
+              `• ${i.sku}: ${i.available} left (reorder at ${i.reorder_point})`
+            ).join('\n')}`;
+          }
+        }
+        
+        if (!replyText || replyText.trim() === '') return; // Nothing to send
+        
+        try {
+          // Get GHL credentials from integration_configs
+          const userId = 1; // Default user
+          const ghlConfig = await storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+          if (!ghlConfig?.config) {
+            console.error('[GHL Agent API] Cannot callback - no GHL integration config found');
+            return;
+          }
+          
+          const config = typeof ghlConfig.config === 'string' ? JSON.parse(ghlConfig.config) : ghlConfig.config;
+          const apiKey = config.apiKey || config.api_key || '';
+          const locationId = ghlLocationId || config.locationId || config.location_id || '';
+          
+          if (!apiKey) {
+            console.error('[GHL Agent API] Cannot callback - no GHL API key configured');
+            return;
+          }
+          
+          const ghlClient = new GoHighLevelClient(
+            'https://services.leadconnectorhq.com',
+            apiKey,
+            locationId
+          );
+          
+          const smsResult = await ghlClient.sendSMS(ghlContactId, replyText);
+          if (smsResult.success) {
+            console.log(`[GHL Agent API] Reply sent to contact ${ghlContactId}: ${replyText.substring(0, 80)}...`);
+          } else {
+            console.error(`[GHL Agent API] Failed to send reply to ${ghlContactId}: ${smsResult.error}`);
+          }
+        } catch (callbackError) {
+          console.error('[GHL Agent API] Callback error:', callbackError);
+        }
+      };
+
+      // Intercept res.json to also fire GHL callback when contactId is present
+      const originalJson = res.json.bind(res);
+      res.json = ((data: any) => {
+        // Fire callback async (don't block the HTTP response)
+        if (ghlContactId && data?.status !== 'test_mode') {
+          sendGhlReply(data).catch((err: any) => console.error('[GHL Agent API] Async callback failed:', err));
+        }
+        return originalJson(data);
+      }) as any;
 
       console.log(`[GHL Agent API] Unified action request: "${request}"`);
 

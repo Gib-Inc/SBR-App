@@ -245,6 +245,20 @@ export class InventoryRecommendationBatch {
           sourceSignals: sourceSignals,
           contextSnapshot: skuContext ? { ...skuContext, batchReason: params.reason } : null,
           notesForHuman: rec.notesForHuman || null,
+          // Phase 2: Populate supplier info for grouping
+          ...(() => {
+            const designatedSI = supplierItems.find(
+              (si: any) => si.itemId === rec.itemId && si.isDesignatedSupplier
+            ) || supplierItems.find((si: any) => si.itemId === rec.itemId);
+            if (designatedSI) {
+              const supplier = suppliers.find((s: any) => s.id === designatedSI.supplierId);
+              return {
+                supplierId: designatedSI.supplierId,
+                supplierType: supplier?.supplierType || 'supplier',
+              };
+            }
+            return {};
+          })(),
         });
 
         // Auto-create draft PO for critical items with ORDER_TODAY timing

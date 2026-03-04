@@ -1515,6 +1515,156 @@ Response format: {"intent": "intent_name", "params": {extracted params}, "confid
           });
         }
 
+        case "process_refund": {
+          const processOrderNum = String(extractedParams?.order_number || '').replace(/^#/, '').trim();
+          if (!processOrderNum) {
+            return res.json({ status: "error", message: "I need an order number to process a refund for." });
+          }
+          const processOrders = await db.select().from(salesOrders).where(
+            or(
+              eq(salesOrders.externalOrderId, processOrderNum),
+              ilike(salesOrders.externalOrderId, `%${processOrderNum}%`)
+            )
+          );
+          if (processOrders.length === 0) {
+            return res.json({ status: "success", message: `No order found matching "${processOrderNum}"` });
+          }
+          const processOrder = processOrders[0];
+          const processLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, processOrder.id));
+          const processSubtotal = processLines.reduce((sum: number, l: any) => sum + ((l.unitPrice || 0) * (l.quantity || 0)), 0);
+          
+          // Refunds require manual confirmation - provide info and flag for staff review
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              order_number: processOrder.externalOrderId || processOrder.id,
+              customer_name: processOrder.customerName,
+              total: processOrder.totalPrice || processSubtotal.toFixed(2),
+              line_items_count: processLines.length,
+              response: `Refund for order ${processOrder.externalOrderId} totaling $${processOrder.totalPrice || processSubtotal.toFixed(2)} has been flagged for staff review. A team member will process this shortly.`,
+            },
+          });
+        }
+
+        case "create_po": {
+          const poSku = extractedParams?.sku || '';
+          const poQty = Number(extractedParams?.quantity) || 0;
+          const poSupplierName = extractedParams?.supplier_name || '';
+          
+          if (!poSku || !poQty) {
+            return res.json({ status: "error", message: "I need a SKU and quantity to create a purchase order. What SKU and how many?" });
+          }
+          
+          // Look up the item
+          const poItems = await db.select().from(schema.items).where(
+            or(
+              eq(schema.items.sku, poSku),
+              ilike(schema.items.sku, `%${poSku}%`)
+            )
+          );
+          
+          if (poItems.length === 0) {
+            return res.json({ status: "success", message: `No item found with SKU "${poSku}". Check the SKU and try again.` });
+          }
+          
+          const poItem = poItems[0];
+          
+          // Find supplier
+          let supplierInfo: any = null;
+          if (poSupplierName) {
+            const matchedSuppliers = await db.select().from(suppliers).where(
+              ilike(suppliers.name, `%${poSupplierName}%`)
+            );
+            if (matchedSuppliers.length > 0) supplierInfo = matchedSuppliers[0];
+          }
+          
+          if (!supplierInfo) {
+            // Try to find designated supplier for this item
+            const itemSuppliers = await db.select().from(supplierItems).where(
+              eq(supplierItems.itemId, poItem.id)
+            );
+            if (itemSuppliers.length > 0) {
+              const designatedSI = itemSuppliers.find((si: any) => si.isDesignatedSupplier) || itemSuppliers[0];
+              const supplierResults = await db.select().from(suppliers).where(eq(suppliers.id, designatedSI.supplierId));
+              if (supplierResults.length > 0) supplierInfo = supplierResults[0];
+            }
+          }
+
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              sku: poItem.sku,
+              item_name: poItem.name,
+              quantity: poQty,
+              supplier: supplierInfo?.name || "No supplier found",
+              supplier_id: supplierInfo?.id || null,
+              response: supplierInfo 
+                ? `Purchase order request: ${poQty} units of ${poItem.sku} (${poItem.name}) from ${supplierInfo.name}. This has been queued for staff review.`
+                : `Found item ${poItem.sku} but no supplier is assigned. Please assign a supplier first, then create the PO.`,
+            },
+          });
+        }
+
+        case "initiate_return": {
+          const returnOrderNum = String(extractedParams?.order_number || '').replace(/^#/, '').trim();
+          const returnReason = extractedParams?.reason || 'Customer requested return';
+          
+          if (!returnOrderNum) {
+            return res.json({ status: "error", message: "I need an order number to start a return. What's the order number?" });
+          }
+          
+          const returnOrders = await db.select().from(salesOrders).where(
+            or(
+              eq(salesOrders.externalOrderId, returnOrderNum),
+              ilike(salesOrders.externalOrderId, `%${returnOrderNum}%`)
+            )
+          );
+          
+          if (returnOrders.length === 0) {
+            return res.json({ status: "success", message: `No order found matching "${returnOrderNum}"` });
+          }
+          
+          const returnOrder = returnOrders[0];
+          const returnLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, returnOrder.id));
+          
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              order_number: returnOrder.externalOrderId || returnOrder.id,
+              customer_name: returnOrder.customerName,
+              reason: returnReason,
+              line_items: returnLines.map((l: any) => ({
+                sku: l.sku,
+                name: l.productName,
+                quantity: l.quantity,
+              })),
+              response: `Return initiated for order ${returnOrder.externalOrderId}. Reason: ${returnReason}. A team member will process the RMA and send return instructions to the customer.`,
+            },
+          });
+        }
+
+        case "create_task": {
+          const taskTitle = extractedParams?.title || '';
+          const taskDescription = extractedParams?.description || '';
+          
+          if (!taskTitle) {
+            return res.json({ status: "error", message: "I need a title for the task. What should it be called?" });
+          }
+          
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              title: taskTitle,
+              description: taskDescription,
+              response: `Task created: "${taskTitle}"${taskDescription ? ` - ${taskDescription}` : ''}. A team member will follow up.`,
+            },
+          });
+        }
+
         case "general_query": {
           // For general questions, use Claude with business context
           const allItemsForContext = await db.select().from(schema.items);

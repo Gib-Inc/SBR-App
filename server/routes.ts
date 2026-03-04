@@ -4948,6 +4948,59 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // SKU Mismatch Detection - Find Shopify variants with no SKU (fallback SHOPIFY-{id} format)
+  app.get("/api/integrations/sku-mismatches", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allItems = await storage.getAllItems();
+      const mismatches: Array<{
+        itemId: string;
+        sku: string;
+        name: string;
+        type: string;
+        shopifyVariantId: string | null;
+        issue: string;
+        fixUrl: string | null;
+      }> = [];
+      
+      for (const item of allItems) {
+        // Detect SHOPIFY-{variantId} fallback SKUs
+        if (item.sku && item.sku.startsWith('SHOPIFY-')) {
+          const variantId = item.sku.replace('SHOPIFY-', '');
+          mismatches.push({
+            itemId: item.id,
+            sku: item.sku,
+            name: item.name || 'Unknown',
+            type: item.type || 'unknown',
+            shopifyVariantId: variantId,
+            issue: 'Shopify variant has no SKU set — using fallback ID. Set a real SKU in Shopify Admin.',
+            fixUrl: `https://admin.shopify.com/store/stickerburrroller/products?selectedView=all&query=${encodeURIComponent(item.name || variantId)}`,
+          });
+        }
+        
+        // Detect items with empty or null SKU
+        if (!item.sku || item.sku.trim() === '') {
+          mismatches.push({
+            itemId: item.id,
+            sku: '(empty)',
+            name: item.name || 'Unknown',
+            type: item.type || 'unknown',
+            shopifyVariantId: null,
+            issue: 'Item has no SKU assigned.',
+            fixUrl: null,
+          });
+        }
+      }
+      
+      res.json({
+        total: mismatches.length,
+        mismatches,
+      });
+    } catch (error: any) {
+      console.error("[SKU Mismatch] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Verify Channel SKUs - API-backed health check that confirms each channel's SKUs exist
   app.post("/api/integrations/verify-channel-skus", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -11464,6 +11517,8 @@ Notes: ${po.notes || 'None'}
         const recommendations = await storage.getAIRecommendationsByBatchId(log.id);
         const acceptedCount = recommendations.filter(r => r.status === "ACCEPTED").length;
         const dismissedCount = recommendations.filter(r => r.status === "DISMISSED").length;
+        const modifiedCount = recommendations.filter(r => (r as any).staffDecision === "MODIFIED" || r.status === "MODIFIED").length;
+        const deniedCount = recommendations.filter(r => (r as any).staffDecision === "DENIED" || r.status === "DENIED").length;
         const totalCount = recommendations.length;
         
         // Compute total recommended quantity (MOQ) across all recommendations in this batch
@@ -11475,6 +11530,8 @@ Notes: ${po.notes || 'None'}
           recommendationsCount: totalCount,
           acceptedCount,
           dismissedCount,
+          modifiedCount,
+          deniedCount,
           totalRecommendedQty,
         };
       }));
@@ -11483,6 +11540,72 @@ Notes: ${po.notes || 'None'}
     } catch (error: any) {
       console.error("[AIBatchDecisions] Error fetching batch decisions:", error);
       res.status(500).json({ error: "Failed to fetch batch decisions" });
+    }
+  });
+
+  // Phase 3: AI Accuracy Stats - Rolling accuracy across batches
+  app.get("/api/ai-batch-decisions/accuracy", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const logs = await storage.getAllAIBatchLogs(100);
+      
+      let totalBatches = logs.length;
+      let batchesWithDecisions = 0;
+      let totalAccepted = 0;
+      let totalDenied = 0;
+      let totalModified = 0;
+      let totalDismissed = 0;
+      let totalRecommendations = 0;
+      let accuracySum = 0;
+      let accuracyCount = 0;
+      
+      for (const log of logs) {
+        const recommendations = await storage.getAIRecommendationsByBatchId(log.id);
+        if (recommendations.length === 0) continue;
+        
+        batchesWithDecisions++;
+        totalRecommendations += recommendations.length;
+        
+        for (const rec of recommendations) {
+          if (rec.status === 'ACCEPTED') totalAccepted++;
+          else if (rec.status === 'DISMISSED') totalDismissed++;
+          
+          // Check staffDecision for MODIFIED and DENIED
+          const staffDec = (rec as any).staffDecision;
+          if (staffDec === 'MODIFIED') totalModified++;
+          if (staffDec === 'DENIED') totalDenied++;
+          
+          // Track accuracy from linked PO qty comparison
+          const accPct = (rec as any).accuracyPercent;
+          if (accPct !== null && accPct !== undefined) {
+            accuracySum += Math.abs(accPct);
+            accuracyCount++;
+          }
+        }
+      }
+      
+      const acceptanceRate = totalRecommendations > 0 
+        ? Math.round((totalAccepted / totalRecommendations) * 100) 
+        : 0;
+      const avgDeviation = accuracyCount > 0 
+        ? Math.round((accuracySum / accuracyCount) * 10) / 10
+        : null;
+      
+      res.json({
+        totalBatches,
+        batchesWithDecisions,
+        totalRecommendations,
+        decisions: {
+          accepted: totalAccepted,
+          denied: totalDenied,
+          modified: totalModified,
+          dismissed: totalDismissed,
+        },
+        acceptanceRate,
+        avgDeviation,  // avg % difference between AI qty and PO qty
+      });
+    } catch (error: any) {
+      console.error("[AIAccuracy] Error:", error);
+      res.status(500).json({ error: "Failed to fetch accuracy stats" });
     }
   });
 

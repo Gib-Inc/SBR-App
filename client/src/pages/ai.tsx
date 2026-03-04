@@ -128,7 +128,7 @@ interface PersistedRecommendation {
   recommendedQty: number | null;
   stockGapPercent: number | null;
   qtyOnPo: number | null;
-  status: "NEW" | "ACCEPTED" | "DISMISSED";
+  status: "NEW" | "ACCEPTED" | "DENIED" | "MODIFIED" | "DISMISSED";
   reasonSummary: string | null;
   sourceSignals: Record<string, unknown> | null;
   sourceDecisionsJson: RecommendationDetail | null;
@@ -137,6 +137,14 @@ interface PersistedRecommendation {
   adjustedVelocity: number | null;
   orderTiming: "ORDER_TODAY" | "SAFE_UNTIL_TOMORROW" | null;
   batchLogId: string | null;
+  staffDecision: string | null;
+  staffDecisionAt: string | null;
+  linkedPoId: string | null;
+  linkedPoNumber: string | null;
+  accuracyPercent: number | null;
+  supplierType: string | null;
+  supplierId: string | null;
+  notesForHuman: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1628,6 +1636,8 @@ interface BatchDecision {
   recommendationsCount: number;
   acceptedCount: number;
   dismissedCount: number;
+  modifiedCount: number;
+  deniedCount: number;
   totalRecommendedQty: number;
 }
 
@@ -2196,6 +2206,334 @@ function BatchTimelineModal({
   );
 }
 
+// ============================================================================
+// SKU Mismatch Notification Banner
+// ============================================================================
+function SkuMismatchBanner() {
+  const { data, isLoading } = useQuery<{ total: number; mismatches: Array<{ sku: string; name: string; issue: string; fixUrl: string | null }> }>({
+    queryKey: ["/api/integrations/sku-mismatches"],
+    staleTime: 300000, // 5 min
+  });
+  
+  if (isLoading || !data || data.total === 0) return null;
+  
+  return (
+    <Card className="border-amber-500/50 bg-amber-50 dark:bg-amber-950/20 mb-4">
+      <CardContent className="py-3 px-4">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-amber-800 dark:text-amber-300">
+              {data.total} SKU {data.total === 1 ? 'mismatch' : 'mismatches'} found
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-0.5">
+              These items have no real SKU in Shopify and are using fallback IDs. AI recommendations and inventory tracking may not work correctly for them.
+            </p>
+            <div className="mt-2 space-y-1">
+              {data.mismatches.slice(0, 5).map((m) => (
+                <div key={m.sku} className="flex items-center gap-2 text-sm">
+                  <Badge variant="outline" className="text-xs font-mono shrink-0">{m.sku}</Badge>
+                  <span className="text-amber-700 dark:text-amber-400 truncate">{m.name}</span>
+                  {m.fixUrl && (
+                    <a href={m.fixUrl} target="_blank" rel="noopener noreferrer" className="text-amber-600 hover:text-amber-800 underline text-xs shrink-0">
+                      Fix in Shopify
+                    </a>
+                  )}
+                </div>
+              ))}
+              {data.total > 5 && (
+                <p className="text-xs text-amber-600">...and {data.total - 5} more</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ============================================================================
+// Phase 3: Accuracy Stats Cards
+// ============================================================================
+interface AccuracyStats {
+  totalBatches: number;
+  batchesWithDecisions: number;
+  totalRecommendations: number;
+  decisions: { accepted: number; denied: number; modified: number; dismissed: number };
+  acceptanceRate: number;
+  avgDeviation: number | null;
+}
+
+function AccuracyStatsCards() {
+  const { data, isLoading } = useQuery<AccuracyStats>({
+    queryKey: ["/api/ai-batch-decisions/accuracy"],
+    staleTime: 60000,
+  });
+  
+  if (isLoading || !data || data.totalRecommendations === 0) return null;
+  
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <Card>
+        <CardContent className="py-3 px-4">
+          <p className="text-xs text-muted-foreground">Acceptance Rate</p>
+          <p className="text-2xl font-bold text-green-600">{data.acceptanceRate}%</p>
+          <p className="text-xs text-muted-foreground">{data.decisions.accepted} of {data.totalRecommendations} recs</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="py-3 px-4">
+          <p className="text-xs text-muted-foreground">Avg Qty Deviation</p>
+          <p className="text-2xl font-bold">
+            {data.avgDeviation !== null ? (
+              <span className={data.avgDeviation <= 15 ? "text-green-600" : data.avgDeviation <= 30 ? "text-amber-600" : "text-red-600"}>
+                ±{data.avgDeviation}%
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </p>
+          <p className="text-xs text-muted-foreground">AI vs actual PO qty</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="py-3 px-4">
+          <p className="text-xs text-muted-foreground">Modified</p>
+          <p className="text-2xl font-bold text-amber-600">{data.decisions.modified}</p>
+          <p className="text-xs text-muted-foreground">Staff changed qty</p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="py-3 px-4">
+          <p className="text-xs text-muted-foreground">Dismissed</p>
+          <p className="text-2xl font-bold text-muted-foreground">{data.decisions.dismissed}</p>
+          <p className="text-xs text-muted-foreground">No action taken</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// Phase 2: Grouped Recommendations View (by Supplier Type)
+// ============================================================================
+function GroupedRecommendationsView() {
+  const { toast } = useToast();
+  
+  // Fetch current (NEW) recommendations
+  const { data: recsData, isLoading } = useQuery<PersistedRecommendationsResponse>({
+    queryKey: ["/api/ai/recommendations", "active"],
+    queryFn: async () => {
+      const response = await fetch("/api/ai/recommendations?status=active", { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch recommendations");
+      return response.json();
+    },
+  });
+  
+  // Fetch suppliers for grouping
+  const { data: suppliersData } = useQuery<any[]>({
+    queryKey: ["/api/suppliers"],
+    queryFn: async () => {
+      const response = await fetch("/api/suppliers", { credentials: "include" });
+      if (!response.ok) return [];
+      return response.json();
+    },
+  });
+  
+  // Accept mutation
+  const acceptMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      return apiRequest("PATCH", `/api/ai/recommendations/${id}`, { staffDecision: status });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-batch-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-batch-decisions/accuracy"] });
+    },
+  });
+  
+  // Batch accept mutation
+  const batchAcceptMutation = useMutation({
+    mutationFn: async ({ batchLogId, supplierType }: { batchLogId: string; supplierType?: string }) => {
+      return apiRequest("POST", `/api/ai/recommendations/batch/${batchLogId}/accept-all`, { supplierType });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/recommendations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-batch-decisions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai-batch-decisions/accuracy"] });
+      toast({ title: "Recommendations accepted" });
+    },
+  });
+  
+  const recommendations = recsData?.recommendations?.filter(r => r.status === "NEW") || [];
+  
+  if (isLoading) {
+    return (
+      <Card className="mb-4">
+        <CardContent className="py-8 flex items-center justify-center">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        </CardContent>
+      </Card>
+    );
+  }
+  
+  if (recommendations.length === 0) return null;
+  
+  // Group by supplier type
+  const supplierMap = new Map<string, any>();
+  if (suppliersData) {
+    for (const s of suppliersData) {
+      supplierMap.set(s.id, s);
+    }
+  }
+  
+  // Group recommendations by supplierType
+  const groups: Record<string, PersistedRecommendation[]> = {
+    supplier: [],
+    online: [],
+    private: [],
+    unassigned: [],
+  };
+  
+  for (const rec of recommendations) {
+    const type = rec.supplierType || 'unassigned';
+    if (groups[type]) {
+      groups[type].push(rec);
+    } else {
+      groups.unassigned.push(rec);
+    }
+  }
+  
+  const batchLogId = recommendations[0]?.batchLogId;
+  
+  const typeConfig: Record<string, { label: string; icon: any; actionLabel: string; description: string; color: string }> = {
+    supplier: { label: "Supplier Orders", icon: Building, actionLabel: "Create POs", description: "Accept to auto-create purchase orders for each supplier", color: "text-blue-600" },
+    online: { label: "Online Sources", icon: ShoppingBag, actionLabel: "Generate Shopping List", description: "Accept to generate a shopping list with product links", color: "text-purple-600" },
+    private: { label: "Private Sources", icon: Users, actionLabel: "Send Text Request", description: "Accept to send a request via GHL text message", color: "text-green-600" },
+    unassigned: { label: "Unassigned", icon: Package, actionLabel: "Accept", description: "No supplier type assigned — assign suppliers for auto-routing", color: "text-muted-foreground" },
+  };
+  
+  const getRiskBadge = (risk: string) => {
+    switch (risk) {
+      case "HIGH": return <Badge variant="destructive" className="text-xs">High</Badge>;
+      case "MEDIUM": return <Badge variant="default" className="text-xs">Medium</Badge>;
+      case "LOW": return <Badge variant="secondary" className="text-xs">Low</Badge>;
+      default: return <Badge variant="outline" className="text-xs">—</Badge>;
+    }
+  };
+  
+  return (
+    <Card className="mb-4 border-primary/30">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <CardTitle className="text-lg">Open AI Recommendation</CardTitle>
+            <Badge variant="outline" className="text-xs">{recommendations.length} items</Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                for (const rec of recommendations) {
+                  acceptMutation.mutate({ id: rec.id, status: "DISMISSED" });
+                }
+              }}
+              disabled={acceptMutation.isPending}
+            >
+              Dismiss All
+            </Button>
+          </div>
+        </div>
+        <CardDescription>
+          {new Date(recommendations[0]?.createdAt).toLocaleString()} batch — review and accept by group
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {Object.entries(groups).map(([type, recs]) => {
+          if (recs.length === 0) return null;
+          const config = typeConfig[type] || typeConfig.unassigned;
+          const Icon = config.icon;
+          
+          return (
+            <div key={type} className="border rounded-lg">
+              <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-b">
+                <div className="flex items-center gap-2">
+                  <Icon className={`h-4 w-4 ${config.color}`} />
+                  <span className="font-medium text-sm">{config.label}</span>
+                  <Badge variant="outline" className="text-xs">{recs.length}</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{config.description}</span>
+                  {batchLogId && (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="h-7 text-xs"
+                      onClick={() => batchAcceptMutation.mutate({ batchLogId, supplierType: type === 'unassigned' ? undefined : type })}
+                      disabled={batchAcceptMutation.isPending}
+                    >
+                      <CheckCircle2 className="h-3 w-3 mr-1" />
+                      {config.actionLabel}
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="divide-y">
+                {recs.map((rec) => (
+                  <div key={rec.id} className="flex items-center justify-between px-4 py-2 hover:bg-muted/20 text-sm">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs">{rec.sku}</span>
+                          {getRiskBadge(rec.riskLevel)}
+                          {rec.orderTiming === "ORDER_TODAY" && (
+                            <Badge variant="destructive" className="text-xs">Order Today</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate">{rec.productName}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 shrink-0">
+                      <div className="text-right">
+                        <p className="font-medium">{rec.recommendedQty} units</p>
+                        <p className="text-xs text-muted-foreground">
+                          {rec.daysUntilStockout !== null ? `${rec.daysUntilStockout}d until stockout` : 'N/A'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
+                          onClick={() => acceptMutation.mutate({ id: rec.id, status: "ACCEPTED" })}
+                          disabled={acceptMutation.isPending}
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50"
+                          onClick={() => acceptMutation.mutate({ id: rec.id, status: "DENIED" })}
+                          disabled={acceptMutation.isPending}
+                        >
+                          <XCircle className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 function BatchDecisionsSection() {
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   
@@ -2312,9 +2650,26 @@ function BatchDecisionsSection() {
                         </p>
                       </td>
                       <td className="px-4 align-middle max-w-[200px]" data-testid={`cell-staff-decision-${batch.id}`}>
-                        <p className="truncate text-muted-foreground">
-                          {batch.staffDecisionSummary || `${batch.acceptedCount}/${batch.recommendationsCount} accepted`}
-                        </p>
+                        <div className="flex items-center gap-1.5">
+                          {batch.acceptedCount > 0 && (
+                            <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
+                              <CheckCircle2 className="h-3 w-3 mr-1" />{batch.acceptedCount}
+                            </Badge>
+                          )}
+                          {batch.modifiedCount > 0 && (
+                            <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">
+                              ±{batch.modifiedCount}
+                            </Badge>
+                          )}
+                          {batch.dismissedCount > 0 && (
+                            <Badge variant="outline" className="text-xs bg-gray-50 text-gray-500 border-gray-200">
+                              {batch.dismissedCount} skip
+                            </Badge>
+                          )}
+                          {batch.recommendationsCount === 0 && (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 align-middle text-center font-mono" data-testid={`cell-moq-${batch.id}`}>
                         {batch.totalRecommendedQty > 0 ? batch.totalRecommendedQty.toLocaleString() : "-"}
@@ -2672,6 +3027,15 @@ function OrderFeedbackTab({ setActiveTab }: { setActiveTab: (tab: string) => voi
         </TabsContent>
 
         <TabsContent value="recommendations">
+          {/* SKU Mismatch Warning */}
+          <SkuMismatchBanner />
+          
+          {/* Phase 3: Accuracy Stats */}
+          <AccuracyStatsCards />
+          
+          {/* Phase 2: Open Grouped Recommendations */}
+          <GroupedRecommendationsView />
+          
           {/* Batch Decisions Table - Timeline View */}
           <BatchDecisionsSection />
         </TabsContent>

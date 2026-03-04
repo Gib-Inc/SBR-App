@@ -2365,7 +2365,10 @@ function GroupedRecommendationsView() {
     },
   });
   
-  const recommendations = recsData?.recommendations?.filter(r => r.status === "NEW") || [];
+  const recommendations = recsData?.recommendations?.filter(r => 
+    r.status === "NEW" && 
+    (r.recommendationType === "REORDER" || r.recommendedQty && r.recommendedQty > 0)
+  ) || [];
   
   if (isLoading) {
     return (

@@ -29,6 +29,7 @@ async function requireGhlAgentAuth(req: Request, res: Response, next: NextFuncti
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.error("[GHL Agent API] Auth failed: Missing or malformed Authorization header. Got:", authHeader ? `"${authHeader.substring(0, 20)}..."` : "none");
     return res.status(401).json({
       status: "error",
       message: "Missing or invalid Authorization header. Use: Bearer YOUR_SBR_CONNECTOR_KEY",
@@ -36,35 +37,60 @@ async function requireGhlAgentAuth(req: Request, res: Response, next: NextFuncti
     });
   }
   
-  const token = authHeader.substring(7);
+  const token = authHeader.substring(7).trim();
+  
+  if (!token) {
+    console.error("[GHL Agent API] Auth failed: Bearer prefix present but token is empty");
+    return res.status(401).json({
+      status: "error",
+      message: "Authorization header has Bearer prefix but no key value",
+      error_code: "UNAUTHORIZED"
+    });
+  }
   
   try {
     const dbKey = await storage.getApiKeyByName(SBR_CONNECTOR_KEY_NAME);
-    if (dbKey?.isActive) {
-      const isValid = await bcrypt.compare(token, dbKey.keyHash);
-      if (isValid) {
-        storage.updateApiKeyLastUsed(dbKey.id).catch(console.error);
-        return next();
-      }
-    }
     
-    if (!dbKey?.isActive) {
-      console.error("[GHL Agent API] No SBR GHL Connector Key configured");
+    if (!dbKey) {
+      console.error("[GHL Agent API] Auth failed: No SBR_GHL_CONNECTOR_KEY found in database at all");
       return res.status(500).json({
         status: "error",
-        message: "SBR GHL Connector Key not configured. Generate one in SBR-App Settings → API Keys.",
+        message: "SBR GHL Connector Key not configured. Go to SBR App → Settings → GHL Connector tab → Generate Key.",
         error_code: "NOT_CONFIGURED"
       });
     }
+    
+    if (!dbKey.isActive) {
+      console.error("[GHL Agent API] Auth failed: Key exists but is deactivated");
+      return res.status(500).json({
+        status: "error",
+        message: "SBR GHL Connector Key is deactivated. Go to Settings → GHL Connector to regenerate.",
+        error_code: "KEY_DEACTIVATED"
+      });
+    }
+    
+    const isValid = await bcrypt.compare(token, dbKey.keyHash);
+    if (isValid) {
+      storage.updateApiKeyLastUsed(dbKey.id).catch(console.error);
+      return next();
+    }
+    
+    // Key exists, is active, but doesn't match
+    console.error(`[GHL Agent API] Auth failed: Key mismatch. Received key starts with "${token.substring(0, 8)}...", DB key prefix: "${dbKey.keyPrefix}". The key in GHL does not match the one stored. Regenerate in Settings → GHL Connector.`);
+    return res.status(403).json({
+      status: "error",
+      message: `Invalid key. Your key starts with "${token.substring(0, 8)}..." but doesn't match stored key (${dbKey.keyPrefix}). Regenerate in SBR App → Settings → GHL Connector tab.`,
+      error_code: "KEY_MISMATCH"
+    });
+    
   } catch (error) {
     console.error("[GHL Agent API] DB key check error:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Internal error checking API key",
+      error_code: "INTERNAL_ERROR"
+    });
   }
-  
-  return res.status(403).json({
-    status: "error",
-    message: "Invalid SBR GHL Connector Key",
-    error_code: "FORBIDDEN"
-  });
 }
 
 function handleError(res: Response, error: unknown, errorCode: string = "INTERNAL_ERROR") {
@@ -1525,10 +1551,13 @@ Current inventory snapshot:
         }
 
         case "not_applicable": {
-          // Return a signal that this isn't a business query - GHL agent handles natively
+          // Return empty data so GHL agent handles conversationally with its own AI
+          // Don't return error messages that would be read to the customer
           return res.json({
-            status: "not_applicable",
-            message: "This request is not related to inventory, orders, or business operations. The voice agent should handle this conversationally.",
+            status: "success",
+            data: {
+              response: ""
+            }
           });
         }
 

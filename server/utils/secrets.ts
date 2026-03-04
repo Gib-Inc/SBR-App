@@ -8,13 +8,17 @@ export function maskSecret(secret: string | null | undefined): string | null {
     return null;
   }
   
-  // Always use first3***last3 format, padding short secrets as needed
-  if (trimmed.length <= 6) {
-    // For very short secrets, show what we can but maintain the format
-    const first = trimmed.slice(0, Math.min(3, trimmed.length));
-    const last = trimmed.length > 3 ? trimmed.slice(-Math.min(3, trimmed.length - 3)) : '';
-    return `${first}***${last}`;
+  // For Anthropic keys (sk-ant-...), show prefix + last 4 for confirmation
+  if (trimmed.startsWith('sk-ant-')) {
+    return `sk-ant-••••••••${trimmed.slice(-4)}`;
   }
   
-  return `${trimmed.slice(0, 3)}***${trimmed.slice(-3)}`;
+  // For other keys, show first 4 + last 4
+  if (trimmed.length <= 8) {
+    const first = trimmed.slice(0, Math.min(3, trimmed.length));
+    const last = trimmed.length > 3 ? trimmed.slice(-Math.min(3, trimmed.length - 3)) : '';
+    return `${first}••••${last}`;
+  }
+  
+  return `${trimmed.slice(0, 4)}••••••••${trimmed.slice(-4)}`;
 }

@@ -1322,18 +1322,21 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
           max_tokens: 500,
-          system: `You are an intent parser for an inventory management system. Given a natural language request, determine the intent and extract parameters. Respond ONLY with valid JSON, no markdown.
+          system: `You are an intent parser for Sticker Burr Roller's inventory management system. ONLY classify requests related to inventory, orders, returns, refunds, purchase orders, or business operations. Respond ONLY with valid JSON, no markdown.
 
 Available intents:
-- check_inventory: Check which items need reordering. No parameters needed.
-- lookup_order: Look up a specific order. Extract: order_number (string)
+- check_inventory: Check which items need reordering, stock levels, what's low. No parameters needed.
+- lookup_order: Look up a specific order by number. Extract: order_number (string)
 - search_orders: Search orders by customer name. Extract: name (string)
-- calculate_refund: Get refund estimate. Extract: order_number (string)
+- calculate_refund: Get refund estimate for an order. Extract: order_number (string)
 - process_refund: Process a refund. Extract: order_number (string), confirmed (boolean, default false)
 - create_po: Create purchase order. Extract: sku (string), quantity (number), supplier_name (string, optional)
-- initiate_return: Start return. Extract: order_number (string), reason (string)
-- create_task: Create task. Extract: title (string), description (string, optional)
-- general_query: Any other question about the business
+- initiate_return: Start a return. Extract: order_number (string), reason (string)
+- create_task: Create a task. Extract: title (string), description (string, optional)
+- general_query: Business/inventory question that doesn't fit above (e.g. "how many orders this week", "who is our top supplier")
+- not_applicable: Greetings, small talk, non-business questions, anything NOT about inventory/orders/business. Examples: "how are you", "what's the weather", "tell me a joke"
+
+IMPORTANT: If the request is casual conversation, greetings, or not related to business operations, ALWAYS return not_applicable.
 
 Response format: {"intent": "intent_name", "params": {extracted params}, "confidence": 0.0-1.0}`,
           messages: [{ role: "user", content: request }],
@@ -1518,6 +1521,14 @@ Current inventory snapshot:
             status: "success",
             intent: "general_query",
             data: { response: answer },
+          });
+        }
+
+        case "not_applicable": {
+          // Return a signal that this isn't a business query - GHL agent handles natively
+          return res.json({
+            status: "not_applicable",
+            message: "This request is not related to inventory, orders, or business operations. The voice agent should handle this conversationally.",
           });
         }
 

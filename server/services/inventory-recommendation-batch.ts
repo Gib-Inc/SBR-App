@@ -117,6 +117,21 @@ export class InventoryRecommendationBatch {
 
       console.log(`[AI Batch] Starting batch run: ${params.reason}, log ID: ${batchLog.id}`);
 
+      // Auto-dismiss all previous open recommendations (only 1 open at a time)
+      try {
+        const openRecs = await this.storage.getAIRecommendationsByStatus("NEW");
+        if (openRecs.length > 0) {
+          console.log(`[AI Batch] Auto-dismissing ${openRecs.length} previous open recommendations`);
+          for (const rec of openRecs) {
+            await this.storage.updateAIRecommendation(rec.id, {
+              status: "DISMISSED",
+            });
+          }
+        }
+      } catch (dismissError) {
+        console.warn(`[AI Batch] Failed to auto-dismiss old recommendations (non-blocking):`, dismissError);
+      }
+
       // Get user settings for LLM config and thresholds
       const users = await this.storage.getAllItems(); // Just to get a userId - in production this would be better structured
       const defaultUserId = "default";
@@ -460,10 +475,10 @@ export class InventoryRecommendationBatch {
     apiKey: string | undefined | null,
     settings: Settings | undefined
   ): Promise<LLMRecommendation[]> {
-    // If no API key, use deterministic fallback
+    // If no API key, do NOT fall back to deterministic - require real AI
     if (!apiKey) {
-      console.log("[AI Batch] No API key configured, using deterministic fallback");
-      return this.generateDeterministicRecommendations(contexts);
+      console.error("[AI Batch] No LLM API key configured. Add your Anthropic key in Settings → LLM Configuration.");
+      return [];
     }
 
     // Build report context for business-informed decisions
@@ -487,8 +502,8 @@ export class InventoryRecommendationBatch {
       });
 
       if (!response.success || !response.data) {
-        console.log("[AI Batch] LLM call failed, using deterministic fallback");
-        return this.generateDeterministicRecommendations(contexts);
+        console.error("[AI Batch] LLM call failed:", response.error);
+        return [];
       }
 
       // Try to parse the LLM response
@@ -498,16 +513,17 @@ export class InventoryRecommendationBatch {
         if (data.recommendations && Array.isArray(data.recommendations)) {
           return data.recommendations.map((rec: any) => this.normalizeRecommendation(rec, contexts));
         }
-        // Fallback to deterministic if response format is unexpected
-        return this.generateDeterministicRecommendations(contexts);
+        // Unexpected response format - log and return empty
+        console.error("[AI Batch] Unexpected LLM response format:", JSON.stringify(data).substring(0, 200));
+        return [];
       } catch (parseError) {
-        console.log("[AI Batch] Failed to parse LLM response, using deterministic fallback");
-        return this.generateDeterministicRecommendations(contexts);
+        console.error("[AI Batch] Failed to parse LLM response:", parseError);
+        return [];
       }
 
     } catch (error: any) {
       console.error("[AI Batch] LLM error:", error);
-      return this.generateDeterministicRecommendations(contexts);
+      return [];
     }
   }
 

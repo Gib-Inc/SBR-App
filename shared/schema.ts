@@ -875,6 +875,14 @@ export const aiRecommendations = pgTable("ai_recommendations", {
   batchLogId: varchar("batch_log_id"), // Reference to the batch run that created/updated this
   // LLM-generated notes for human review (edge cases, special considerations)
   notesForHuman: text("notes_for_human"),
+  // Staff decision tracking (Phase 2/3)
+  staffDecision: text("staff_decision"), // 'ACCEPTED', 'DENIED', 'MODIFIED', 'DISMISSED' - final decision
+  staffDecisionAt: timestamp("staff_decision_at"), // When staff made their decision
+  linkedPoId: varchar("linked_po_id"), // PO created in response to (or matched with) this recommendation
+  linkedPoNumber: text("linked_po_number"), // PO number for display
+  accuracyPercent: real("accuracy_percent"), // % difference between recommended qty and actual PO qty
+  supplierType: text("supplier_type"), // 'supplier', 'online', 'private' - from supplier record
+  supplierId: varchar("supplier_id"), // Which supplier this recommendation targets
 }, (table) => ({
   itemIdIdx: index("ai_recommendations_item_id_idx").on(table.itemId),
   createdAtIdx: index("ai_recommendations_created_at_idx").on(table.createdAt),

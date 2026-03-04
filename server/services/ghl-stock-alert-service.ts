@@ -55,23 +55,27 @@ export class GHLStockAlertService {
     userId: string
   ): Promise<ShortageAlertResult> {
     try {
-      // Get user settings for GHL configuration
-      const settings = await this.storage.getSettings(userId);
-      if (!settings) {
-        console.warn('[GHLStockAlert] No settings found for user:', userId);
+      // Get GHL configuration from integration_configs table (where Data Sources UI saves it)
+      const ghlConfig = await this.storage.getIntegrationConfig(userId, 'GOHIGHLEVEL');
+      
+      if (!ghlConfig) {
+        console.warn('[GHLStockAlert] No GHL integration config found for user:', userId);
         return {
           success: false,
-          error: 'No settings found for user',
+          error: 'GoHighLevel not configured in Data Sources',
           action: 'skipped',
         };
       }
 
+      const ghlApiKey = ghlConfig.apiKey;
+      const ghlLocationId = (ghlConfig.config as any)?.locationId;
+
       // Check if GHL is configured
-      if (!settings.gohighlevelApiKey || !settings.gohighlevelLocationId) {
-        console.warn('[GHLStockAlert] GHL not configured, skipping alert for SKU:', params.sku);
+      if (!ghlApiKey || !ghlLocationId) {
+        console.warn('[GHLStockAlert] GHL API key or Location ID missing, skipping alert for SKU:', params.sku);
         return {
           success: false,
-          error: 'GoHighLevel not configured',
+          error: 'GoHighLevel API key or Location ID not configured',
           action: 'skipped',
         };
       }
@@ -91,12 +95,11 @@ export class GHLStockAlertService {
       }
 
       // Initialize GHL client
-      // Constructor: (baseUrl, apiKey, locationId)
-      const baseUrl = settings.gohighlevelBaseUrl || 'https://services.leadconnectorhq.com';
+      const baseUrl = (ghlConfig.config as any)?.baseUrl || 'https://services.leadconnectorhq.com';
       const ghlClient = new GoHighLevelClient(
         baseUrl,
-        settings.gohighlevelApiKey!,
-        settings.gohighlevelLocationId!
+        ghlApiKey,
+        ghlLocationId
       );
 
       // Build opportunity name - unique per SKU to allow deduplication

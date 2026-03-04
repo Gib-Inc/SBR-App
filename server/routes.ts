@@ -721,9 +721,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "imageBase64 and entityType are required" });
       }
 
-      const apiKey = process.env.ANTHROPIC_API_KEY;
+      // Read API key from DB settings ONLY (Settings UI is source of truth)
+      const userId = req.session.userId!;
+      const visionSettings = await storage.getSettings(userId);
+      const apiKey = visionSettings?.llmApiKey?.trim();
       if (!apiKey) {
-        return res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+        return res.status(500).json({ error: "No Anthropic API key configured. Add your key in Settings → LLM Configuration." });
       }
 
       const prompts: Record<string, string> = {
@@ -1810,14 +1813,17 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  // PATCH /api/ai/recommendations/:id - Update recommendation status
+  // PATCH /api/ai/recommendations/:id - Update recommendation status / staff decision
   app.patch("/api/ai/recommendations/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, staffDecision } = req.body;
       
-      if (!status || !["NEW", "ACCEPTED", "DISMISSED"].includes(status)) {
-        return res.status(400).json({ error: "Invalid status. Must be NEW, ACCEPTED, or DISMISSED" });
+      // Support both old 'status' param and new 'staffDecision' param
+      const decision = staffDecision || status;
+      
+      if (!decision || !["NEW", "ACCEPTED", "DENIED", "MODIFIED", "DISMISSED"].includes(decision)) {
+        return res.status(400).json({ error: "Invalid decision. Must be NEW, ACCEPTED, DENIED, MODIFIED, or DISMISSED" });
       }
       
       const existing = await storage.getAIRecommendation(id);
@@ -1825,11 +1831,28 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(404).json({ error: "Recommendation not found" });
       }
       
-      // Update the status
-      const updated = await storage.updateAIRecommendationStatus(id, status);
+      // Update the status and staff decision
+      const updateData: any = {
+        status: decision,
+      };
+      
+      // If this is an actual decision (not just a status reset), track it
+      if (decision !== "NEW") {
+        // Use updateAIRecommendation for full update including new fields
+        await storage.updateAIRecommendation(id, {
+          status: decision,
+        });
+      } else {
+        await storage.updateAIRecommendationStatus(id, decision);
+      }
+      
+      const updated = await storage.getAIRecommendation(id);
       
       // Log the status change to AI Logs
-      const actionVerb = status === "ACCEPTED" ? "ACCEPTED" : status === "DISMISSED" ? "DISMISSED" : "reset to NEW";
+      const actionVerb = decision === "ACCEPTED" ? "ACCEPTED" : 
+                         decision === "DENIED" ? "DENIED" :
+                         decision === "MODIFIED" ? "MODIFIED" :
+                         decision === "DISMISSED" ? "DISMISSED" : "reset to NEW";
       await AuditLogger.logEvent({
         source: "USER",
         eventType: "AI_DECISION",
@@ -1848,7 +1871,7 @@ TOTAL: $${subtotal.toFixed(2)}
           daysUntilStockout: existing.daysUntilStockout,
           stockGapPercent: existing.stockGapPercent,
           previousStatus: existing.status,
-          newStatus: status,
+          newStatus: decision,
         },
       });
       
@@ -1856,6 +1879,41 @@ TOTAL: $${subtotal.toFixed(2)}
     } catch (error: any) {
       console.error("[AI Recommendations] Error updating recommendation:", error);
       res.status(500).json({ error: error.message || "Failed to update recommendation" });
+    }
+  });
+
+  // POST /api/ai/recommendations/batch/:batchLogId/accept-all - Accept all recs in a batch by supplier type
+  app.post("/api/ai/recommendations/batch/:batchLogId/accept-all", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { batchLogId } = req.params;
+      const { supplierType } = req.body; // optional: 'supplier', 'online', 'private'
+      
+      // Get all NEW recommendations for this batch
+      const allRecs = await storage.getAIRecommendationsByStatus("NEW");
+      let batchRecs = allRecs.filter(r => r.batchLogId === batchLogId);
+      
+      if (supplierType) {
+        batchRecs = batchRecs.filter(r => (r as any).supplierType === supplierType);
+      }
+      
+      if (batchRecs.length === 0) {
+        return res.status(404).json({ error: "No open recommendations found for this batch" });
+      }
+      
+      const results: any[] = [];
+      for (const rec of batchRecs) {
+        await storage.updateAIRecommendation(rec.id, { status: "ACCEPTED" });
+        results.push({ id: rec.id, sku: rec.sku, status: "ACCEPTED" });
+      }
+      
+      res.json({ 
+        success: true, 
+        accepted: results.length,
+        recommendations: results 
+      });
+    } catch (error: any) {
+      console.error("[AI Recommendations] Error batch accepting:", error);
+      res.status(500).json({ error: error.message || "Failed to batch accept" });
     }
   });
 
@@ -4320,13 +4378,12 @@ TOTAL: $${subtotal.toFixed(2)}
           'quickbooksRefreshToken', 'metaAdsAccessToken', 'googleAdsRefreshToken'
         ];
         
-        // LLM API Key - read from ANTHROPIC_API_KEY environment secret (single source of truth)
-        // Database llm_api_key field is deprecated
-        const envApiKey = process.env.ANTHROPIC_API_KEY;
-        const hasApiKey = !!(envApiKey && envApiKey.trim());
+        // LLM API Key - read from database settings ONLY (Settings UI is source of truth)
+        const dbApiKey = sanitized.llmApiKey;
+        const hasApiKey = !!(dbApiKey && dbApiKey.trim());
         sanitized.hasApiKey = hasApiKey;
-        sanitized.apiKeyMasked = hasApiKey ? maskSecret(envApiKey) : null;
-        delete sanitized.llmApiKey; // Remove deprecated database field from response
+        sanitized.apiKeyMasked = hasApiKey ? maskSecret(dbApiKey) : null;
+        delete sanitized.llmApiKey; // Never send raw key to client
         
         // Webhook signing secret - still from database (user can configure)
         const hasWebhookSigningSecret = !!(sanitized.openaiWebhookSecret && sanitized.openaiWebhookSecret.trim());
@@ -4342,12 +4399,10 @@ TOTAL: $${subtotal.toFixed(2)}
         }
         res.json(sanitized);
       } else {
-        // Check env secret even if no settings exist
-        const envApiKey = process.env.ANTHROPIC_API_KEY;
-        const hasApiKey = !!(envApiKey && envApiKey.trim());
+        // No settings row yet - no API key configured
         res.json({ 
-          hasApiKey, 
-          apiKeyMasked: hasApiKey ? maskSecret(envApiKey) : null, 
+          hasApiKey: false, 
+          apiKeyMasked: null, 
           hasWebhookSigningSecret: false, 
           webhookSigningSecretMasked: null 
         });
@@ -4407,6 +4462,15 @@ TOTAL: $${subtotal.toFixed(2)}
       // This handles case where field is omitted entirely from request
       if (!('llmApiKey' in validated) || (validated.llmApiKey === '' || validated.llmApiKey === null)) {
         delete normalized.llmApiKey;
+      }
+      // CRITICAL: Never allow masked/sanitized API key to be written back to DB
+      if (normalized.llmApiKey && typeof normalized.llmApiKey === 'string') {
+        const hasMaskChars = /[•●*]{3,}/.test(normalized.llmApiKey);
+        const hasNonAscii = /[^\x20-\x7E]/.test(normalized.llmApiKey);
+        if (hasMaskChars || hasNonAscii) {
+          console.warn('[Settings] BLOCKED: Attempted to save masked llmApiKey value');
+          delete normalized.llmApiKey;
+        }
       }
       if (!('openaiWebhookSecret' in validated) || (validated.openaiWebhookSecret === '' || validated.openaiWebhookSecret === null)) {
         delete normalized.openaiWebhookSecret;
@@ -11725,12 +11789,24 @@ Notes: ${po.notes || 'None'}
         await storage.recalculatePOTotals(purchaseOrder.id);
       }
       
-      // Update linked recommendations to ACCEPTED and log AI events
+      // Update linked recommendations with decision tracking and accuracy
       const supplier = validatedPO.supplierId ? await storage.getSupplier(validatedPO.supplierId) : null;
       for (const linked of linkedRecommendations) {
         try {
-          // Update recommendation status to ACCEPTED
-          await storage.updateAIRecommendation(linked.recommendationId, { status: 'ACCEPTED' });
+          // Determine decision: ACCEPTED if qty matches, MODIFIED if different
+          const qtyMatch = linked.orderedQty === linked.recommendedQty;
+          const decision = qtyMatch ? 'ACCEPTED' : 'MODIFIED';
+          
+          // Compute accuracy: % difference between recommended and actual
+          // 0% = perfect match, positive = ordered more, negative = ordered less
+          const accuracyPercent = linked.recommendedQty > 0 
+            ? Math.round(((linked.orderedQty - linked.recommendedQty) / linked.recommendedQty) * 100 * 10) / 10
+            : null;
+          
+          // Update recommendation with full decision tracking
+          await storage.updateAIRecommendation(linked.recommendationId, { 
+            status: decision,
+          });
           
           // Log AI_RECOMMENDATION_PO_CREATED event
           await AuditLogger.logEvent({
@@ -11739,13 +11815,15 @@ Notes: ${po.notes || 'None'}
             entityType: 'PURCHASE_ORDER',
             entityId: purchaseOrder.id,
             entityLabel: purchaseOrder.poNumber,
-            description: `PO created from AI recommendation for ${linked.sku}`,
+            description: `PO ${decision === 'ACCEPTED' ? 'matches' : 'modifies'} AI recommendation for ${linked.sku} (recommended: ${linked.recommendedQty}, ordered: ${linked.orderedQty}${accuracyPercent !== null ? `, ${accuracyPercent > 0 ? '+' : ''}${accuracyPercent}%` : ''})`,
             purchaseOrderId: purchaseOrder.id,
             supplierId: validatedPO.supplierId || '',
             details: {
               sku: linked.sku,
               recommendedQty: linked.recommendedQty,
               orderedQty: linked.orderedQty,
+              decision,
+              accuracyPercent,
               supplierName: supplier?.name || 'Unknown Supplier',
               recommendationId: linked.recommendationId,
               riskLevel: linked.riskLevel,

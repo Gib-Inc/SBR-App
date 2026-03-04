@@ -6,13 +6,13 @@ const CLAUDE_MODEL = "claude-sonnet-4-5-20250929";
 const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
 
 /**
- * Get Anthropic client with API key from environment secret ANTHROPIC_API_KEY
- * The database llm_api_key field is deprecated - use environment secret only
+ * Get Anthropic client with API key from database (via Settings UI)
+ * No env var fallback - Settings UI is the single source of truth
  */
 function getAnthropicClient(apiKeyOverride?: string): Anthropic {
-  const apiKey = apiKeyOverride?.trim() || process.env.ANTHROPIC_API_KEY;
+  const apiKey = apiKeyOverride?.trim();
   if (!apiKey) {
-    throw new Error("No Anthropic API key configured. Please add ANTHROPIC_API_KEY in your environment variables.");
+    throw new Error("No Anthropic API key configured. Add your key in Settings → LLM Configuration.");
   }
   return new Anthropic({ apiKey });
 }

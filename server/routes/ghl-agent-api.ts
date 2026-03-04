@@ -1249,10 +1249,11 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
 
   router.get("/status", async (req: Request, res: Response) => {
     return res.json({
-      status: "success",
+      status: "ok",
       message: "GHL Agent API is operational",
       version: "1.0.0",
       endpoints: [
+        "POST /action (UNIFIED - send natural language request)",
         "POST /inventory/reorder-status",
         "POST /inventory/hildale-transfer",
         "POST /orders/lookup",
@@ -1265,7 +1266,275 @@ export function registerGhlAgentApiRoutes(app: express.Application) {
       ]
     });
   });
+  // ============================================================================
+  // UNIFIED ENDPOINT - Single action for GHL Agent
+  // GHL sends one parameter "request" (natural language), Claude parses intent
+  // ============================================================================
   
+  router.post("/action", async (req: Request, res: Response) => {
+    try {
+      const params = extractGhlParams(req.body);
+      const request = params.request || params.message || params.query || '';
+      
+      if (!request || typeof request !== 'string' || !request.trim()) {
+        return res.status(200).json({
+          status: "test_mode",
+          message: "Unified endpoint reachable. Send a 'request' parameter with natural language (e.g., 'look up order 13287', 'what needs restocking').",
+          available_intents: [
+            "check_inventory - Check items that need reordering",
+            "lookup_order - Look up a specific order by number",
+            "search_orders - Search orders by customer name",
+            "calculate_refund - Get refund estimate for an order",
+            "process_refund - Process a refund for an order",
+            "create_po - Create a purchase order",
+            "initiate_return - Start a return process",
+            "create_task - Create a task/to-do",
+          ]
+        });
+      }
+
+      console.log(`[GHL Agent API] Unified action request: "${request}"`);
+
+      // Get admin user and their Anthropic API key
+      const adminUsers = await storage.getAllUsers();
+      const adminUser = adminUsers[0];
+      if (!adminUser) {
+        return res.status(500).json({ status: "error", message: "No admin user found" });
+      }
+      
+      const settings = await storage.getSettings(adminUser.id);
+      const anthropicKey = settings?.llmApiKey?.trim();
+      if (!anthropicKey) {
+        return res.status(500).json({ 
+          status: "error", 
+          message: "No Anthropic API key configured. Add your key in Settings → LLM Configuration." 
+        });
+      }
+
+      // Use Claude to parse intent and extract parameters
+      const intentResponse = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          system: `You are an intent parser for an inventory management system. Given a natural language request, determine the intent and extract parameters. Respond ONLY with valid JSON, no markdown.
+
+Available intents:
+- check_inventory: Check which items need reordering. No parameters needed.
+- lookup_order: Look up a specific order. Extract: order_number (string)
+- search_orders: Search orders by customer name. Extract: name (string)
+- calculate_refund: Get refund estimate. Extract: order_number (string)
+- process_refund: Process a refund. Extract: order_number (string), confirmed (boolean, default false)
+- create_po: Create purchase order. Extract: sku (string), quantity (number), supplier_name (string, optional)
+- initiate_return: Start return. Extract: order_number (string), reason (string)
+- create_task: Create task. Extract: title (string), description (string, optional)
+- general_query: Any other question about the business
+
+Response format: {"intent": "intent_name", "params": {extracted params}, "confidence": 0.0-1.0}`,
+          messages: [{ role: "user", content: request }],
+        }),
+      });
+
+      if (!intentResponse.ok) {
+        console.error(`[GHL Agent API] Claude intent parse failed: ${intentResponse.status}`);
+        return res.status(500).json({ status: "error", message: "Failed to parse request intent" });
+      }
+
+      const intentData = await intentResponse.json();
+      const intentText = intentData.content?.[0]?.text || '{}';
+      
+      let parsed;
+      try {
+        parsed = JSON.parse(intentText.replace(/```json|```/g, '').trim());
+      } catch {
+        console.error(`[GHL Agent API] Failed to parse intent JSON: ${intentText}`);
+        return res.status(500).json({ status: "error", message: "Could not understand the request" });
+      }
+
+      const { intent, params: extractedParams, confidence } = parsed;
+      console.log(`[GHL Agent API] Intent: ${intent}, confidence: ${confidence}, params:`, extractedParams);
+
+      // Route to appropriate handler based on intent
+      // We create a fake req.body with the extracted params and call the internal logic
+      const db = getDb();
+
+      switch (intent) {
+        case "check_inventory": {
+          const allItems = await db.select().from(schema.items);
+          const lowStockItems = allItems.filter((item: any) => {
+            const available = item.quantityAvailable ?? 0;
+            const reorder = item.reorderPoint ?? 0;
+            return available <= reorder;
+          });
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              items_needing_reorder: lowStockItems.length,
+              items: lowStockItems.slice(0, 20).map((item: any) => ({
+                sku: item.sku,
+                name: item.name,
+                available: item.quantityAvailable,
+                reorder_point: item.reorderPoint,
+                shortage: (item.reorderPoint ?? 0) - (item.quantityAvailable ?? 0),
+              })),
+            },
+          });
+        }
+
+        case "lookup_order": {
+          const orderNum = String(extractedParams?.order_number || '').replace(/^#/, '').trim();
+          if (!orderNum) {
+            return res.json({ status: "error", message: "I need an order number to look up. What's the order number?" });
+          }
+          const orders = await db.select().from(salesOrders).where(
+            or(
+              eq(salesOrders.externalOrderId, orderNum),
+              ilike(salesOrders.externalOrderId, `%${orderNum}%`)
+            )
+          );
+          if (orders.length === 0) {
+            return res.json({ status: "success", message: `No order found matching "${orderNum}"` });
+          }
+          const order = orders[0];
+          const lines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, order.id));
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              order_number: order.externalOrderId || order.id,
+              status: order.status,
+              channel: order.channel,
+              customer_name: order.customerName,
+              customer_email: order.customerEmail,
+              total: order.totalPrice,
+              created: order.orderDate,
+              line_items: lines.map((l: any) => ({
+                sku: l.sku,
+                name: l.productName,
+                quantity: l.quantity,
+                price: l.unitPrice,
+              })),
+            },
+          });
+        }
+
+        case "search_orders": {
+          const searchName = extractedParams?.name || '';
+          if (!searchName) {
+            return res.json({ status: "error", message: "I need a customer name to search for. What name should I look up?" });
+          }
+          const matchedOrders = await db.select().from(salesOrders).where(
+            ilike(salesOrders.customerName, `%${searchName}%`)
+          ).orderBy(desc(salesOrders.orderDate)).limit(10);
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              query: searchName,
+              results_count: matchedOrders.length,
+              orders: matchedOrders.map((o: any) => ({
+                order_number: o.externalOrderId || o.id,
+                customer_name: o.customerName,
+                status: o.status,
+                total: o.totalPrice,
+                date: o.orderDate,
+              })),
+            },
+          });
+        }
+
+        case "calculate_refund": {
+          const refundOrderNum = String(extractedParams?.order_number || '').replace(/^#/, '').trim();
+          if (!refundOrderNum) {
+            return res.json({ status: "error", message: "I need an order number to calculate a refund for." });
+          }
+          const refundOrders = await db.select().from(salesOrders).where(
+            or(
+              eq(salesOrders.externalOrderId, refundOrderNum),
+              ilike(salesOrders.externalOrderId, `%${refundOrderNum}%`)
+            )
+          );
+          if (refundOrders.length === 0) {
+            return res.json({ status: "success", message: `No order found matching "${refundOrderNum}"` });
+          }
+          const refundOrder = refundOrders[0];
+          const refundLines = await db.select().from(salesOrderLines).where(eq(salesOrderLines.salesOrderId, refundOrder.id));
+          const subtotal = refundLines.reduce((sum: number, l: any) => sum + ((l.unitPrice || 0) * (l.quantity || 0)), 0);
+          return res.json({
+            status: "success",
+            intent,
+            data: {
+              order_number: refundOrder.externalOrderId || refundOrder.id,
+              customer_name: refundOrder.customerName,
+              subtotal: subtotal.toFixed(2),
+              total: refundOrder.totalPrice,
+              line_items: refundLines.map((l: any) => ({
+                sku: l.sku,
+                name: l.productName,
+                quantity: l.quantity,
+                unit_price: l.unitPrice,
+                line_total: ((l.unitPrice || 0) * (l.quantity || 0)).toFixed(2),
+              })),
+              message: `Refund estimate for order ${refundOrder.externalOrderId}: $${refundOrder.totalPrice || subtotal.toFixed(2)}`,
+            },
+          });
+        }
+
+        case "general_query": {
+          // For general questions, use Claude with business context
+          const allItemsForContext = await db.select().from(schema.items);
+          const lowStock = allItemsForContext.filter((i: any) => (i.quantityAvailable ?? 0) <= (i.reorderPoint ?? 0));
+          
+          const contextResponse = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": anthropicKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 500,
+              system: `You are an AI assistant for Sticker Burr Roller inventory management. Answer concisely for voice/SMS.
+              
+Current inventory snapshot:
+- Total SKUs: ${allItemsForContext.length}
+- Low stock items: ${lowStock.length}
+- Low stock SKUs: ${lowStock.slice(0, 10).map((i: any) => `${i.sku} (${i.quantityAvailable} left)`).join(', ')}`,
+              messages: [{ role: "user", content: request }],
+            }),
+          });
+
+          const contextData = await contextResponse.json();
+          const answer = contextData.content?.[0]?.text || "I couldn't process that request.";
+          
+          return res.json({
+            status: "success",
+            intent: "general_query",
+            data: { response: answer },
+          });
+        }
+
+        default: {
+          return res.json({
+            status: "success",
+            intent: intent || "unknown",
+            message: `I understood your request as "${intent}" but that action isn't fully implemented yet. Try asking about inventory, orders, or refunds.`,
+          });
+        }
+      }
+
+    } catch (error) {
+      return handleError(res, error, "UNIFIED_ACTION_ERROR");
+    }
+  });
+
   app.use("/api/ghl-agent", router);
   
   console.log("[GHL Agent API] Routes registered at /api/ghl-agent/*");

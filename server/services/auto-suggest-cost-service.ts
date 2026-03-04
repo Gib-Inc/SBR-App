@@ -435,8 +435,7 @@ Your response (number only or "null"):`;
    */
   private static async callOpenAI(apiKey: string, prompt: string): Promise<string | null> {
     // Route to Anthropic - OpenAI is no longer used
-    const anthropicKey = process.env.ANTHROPIC_API_KEY || apiKey;
-    return this.callAnthropic(anthropicKey, prompt);
+    return this.callAnthropic(apiKey, prompt);
   }
 
   /**
@@ -444,15 +443,14 @@ Your response (number only or "null"):`;
    */
   private static async callAnthropic(apiKey: string, prompt: string): Promise<string | null> {
     try {
-      const effectiveKey = apiKey || process.env.ANTHROPIC_API_KEY;
-      if (!effectiveKey) {
-        throw new Error("No Anthropic API key available");
+      if (!apiKey) {
+        throw new Error("No Anthropic API key available. Add your key in Settings → LLM Configuration.");
       }
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": effectiveKey,
+          "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({

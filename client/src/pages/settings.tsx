@@ -356,6 +356,8 @@ function LLMSettings() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [maskedApiKey, setMaskedApiKey] = useState("");
+  const [isEditingApiKey, setIsEditingApiKey] = useState(false);
+  const [newApiKey, setNewApiKey] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
   const [isEditingWebhookSecret, setIsEditingWebhookSecret] = useState(false);
   const [hasWebhookSecret, setHasWebhookSecret] = useState(false);
@@ -390,9 +392,11 @@ function LLMSettings() {
       const provider = settings.llmProvider === 'custom' ? 'claude' : (settings.llmProvider || 'claude');
       setLlmProvider(provider);
       
-      // API key comes from env secret, just display masked value
+      // API key from database (source of truth)
       setHasApiKey(!!settings.hasApiKey);
       setMaskedApiKey(settings.apiKeyMasked || '');
+      setNewApiKey('');
+      setIsEditingApiKey(false);
       
       // Webhook secret from database
       setHasWebhookSecret(!!settings.hasWebhookSigningSecret);
@@ -449,12 +453,18 @@ function LLMSettings() {
       llmTemperature,
       llmMaxTokens,
     };
+    // Include API key if user entered a new value
+    if (newApiKey.trim()) {
+      updates.llmApiKey = newApiKey.trim();
+    }
     // Only include webhook secret if user entered a new value
     if (webhookSecret.trim()) {
       updates.openaiWebhookSecret = webhookSecret.trim();
     }
     await saveSettingMutation.mutateAsync(updates);
-    // Clear webhook input after save - re-fetch will update masked value
+    // Clear editing states after save - re-fetch will update masked values
+    setNewApiKey('');
+    setIsEditingApiKey(false);
     setWebhookSecret('');
     setIsEditingWebhookSecret(false);
   };
@@ -549,23 +559,51 @@ function LLMSettings() {
             <div className="flex items-center gap-2">
               <Input
                 id="llm-api-key"
-                type="text"
-                readOnly
-                value={hasApiKey ? maskedApiKey : "Not configured"}
-                className={hasApiKey ? "" : "text-muted-foreground"}
+                type={isEditingApiKey ? "password" : "text"}
+                readOnly={!isEditingApiKey}
+                placeholder={hasApiKey ? undefined : "sk-ant-..."}
+                value={isEditingApiKey ? newApiKey : (hasApiKey ? maskedApiKey : "")}
+                onClick={() => {
+                  if (!isEditingApiKey) {
+                    setIsEditingApiKey(true);
+                    setNewApiKey('');
+                  }
+                }}
+                onChange={(e) => setNewApiKey(e.target.value)}
+                onBlur={() => {
+                  if (!newApiKey.trim()) {
+                    setIsEditingApiKey(false);
+                  }
+                }}
+                className={!hasApiKey && !isEditingApiKey ? "text-muted-foreground" : ""}
                 data-testid="input-llm-api-key"
+                autoComplete="off"
+                data-lpignore="true"
+                data-1p-ignore="true"
               />
-              {hasApiKey && (
+              {hasApiKey && !isEditingApiKey && (
                 <Badge variant="outline" className="shrink-0">
                   <CheckCircle2 className="mr-1 h-3 w-3 text-green-500" />
                   Configured
                 </Badge>
               )}
+              {isEditingApiKey && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setIsEditingApiKey(false);
+                    setNewApiKey('');
+                  }}
+                >
+                  Cancel
+                </Button>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
               {hasApiKey 
-                ? "API key is managed via environment variables (ANTHROPIC_API_KEY)" 
-                : "Add ANTHROPIC_API_KEY in your environment variables to configure"}
+                ? "Click the field to update your API key" 
+                : "Paste your Anthropic API key to enable AI features"}
             </p>
           </div>
 

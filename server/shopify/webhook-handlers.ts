@@ -544,6 +544,85 @@ export async function handleOrderFulfilled(
       });
       
       console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
+
+      // ─── BOM SUBTRACTION: Subtract raw materials for each fulfilled line item ───
+      // When a finished product ships, look up its Bill of Materials and subtract
+      // the required components from raw material inventory automatically.
+      // NOTE: If Clarence also logs production via the Production Screen, components
+      // are subtracted there too. Use ONE path operationally — not both.
+      try {
+        const lineItems = payload.line_items || [];
+        const inventoryMovement = new InventoryMovement(storage);
+        let bomSubtractionsApplied = 0;
+        let bomWarnings: string[] = [];
+
+        for (const lineItem of lineItems) {
+          const sku = lineItem.sku;
+          const qtyFulfilled = lineItem.quantity || 1;
+
+          if (!sku) {
+            bomWarnings.push(`Line item "${lineItem.title || lineItem.name || 'unknown'}" has no SKU — skipped BOM subtraction`);
+            continue;
+          }
+
+          // Find the product by SKU — try shopifySku first, then house sku
+          let product = await storage.findProductByShopifySku(sku);
+          if (!product) {
+            product = await storage.getItemBySku(sku);
+          }
+
+          if (!product) {
+            bomWarnings.push(`SKU ${sku} not found in database — skipped BOM subtraction`);
+            continue;
+          }
+
+          if (product.type !== 'finished_product') {
+            continue; // Only finished products have BOMs
+          }
+
+          // Look up the BOM for this finished product
+          const bom = await storage.getBillOfMaterialsByProductId(product.id);
+          if (!bom || bom.length === 0) {
+            bomWarnings.push(`No BOM defined for ${sku} (${product.name}) — raw materials NOT subtracted`);
+            continue;
+          }
+
+          // Subtract each component based on BOM × quantity fulfilled
+          for (const bomEntry of bom) {
+            const requiredQty = bomEntry.quantityRequired * qtyFulfilled;
+
+            const result = await inventoryMovement.apply({
+              eventType: "BOM_CONSUMPTION",
+              itemId: bomEntry.componentId,
+              quantity: requiredQty,
+              location: "N/A",
+              source: "SHOPIFY",
+              orderId: String(orderId),
+              channel: "shopify",
+              userId,
+              notes: `BOM consumption: ${requiredQty} units consumed for ${qtyFulfilled}x ${sku} (Order ${orderName})`,
+            });
+
+            if (result.success) {
+              bomSubtractionsApplied++;
+            } else {
+              bomWarnings.push(`Failed to subtract component ${result.sku} for ${sku}: ${result.error}`);
+            }
+          }
+        }
+
+        if (bomSubtractionsApplied > 0) {
+          console.log(`[Shopify Webhook] BOM subtraction: ${bomSubtractionsApplied} component(s) subtracted for order ${orderName}`);
+        }
+        if (bomWarnings.length > 0) {
+          console.warn(`[Shopify Webhook] BOM warnings for order ${orderName}:`, bomWarnings);
+        }
+      } catch (bomError: any) {
+        // BOM subtraction failure should NOT block order fulfillment processing
+        console.error(`[Shopify Webhook] BOM subtraction error for order ${orderName}:`, bomError);
+      }
+      // ─── END BOM SUBTRACTION ───
+
       return { success: true, message: `Order ${orderName} fulfilled, status: ${newStatus}` };
     }
     

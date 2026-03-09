@@ -120,6 +120,8 @@ import {
   type ApiKey,
   type AppSetting,
   type InsertApiKey,
+  type InventoryAdjustment,
+  type InsertInventoryAdjustment,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -624,6 +626,10 @@ export interface IStorage {
   createApiKey(apiKey: InsertApiKey): Promise<ApiKey>;
   updateApiKeyLastUsed(id: string): Promise<void>;
   deleteApiKeyByName(name: string): Promise<boolean>;
+
+  // Inventory Adjustments (Manual Counts)
+  createInventoryAdjustment(adj: InsertInventoryAdjustment): Promise<InventoryAdjustment>;
+  getInventoryAdjustments(filters?: { submittedBy?: string; after?: Date; before?: Date; limit?: number }): Promise<InventoryAdjustment[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -3863,6 +3869,14 @@ export class MemStorage implements IStorage {
   }
   async deleteApiKeyByName(name: string): Promise<boolean> {
     return false;
+  }
+
+  // Inventory Adjustments (stub for MemStorage)
+  async createInventoryAdjustment(adj: InsertInventoryAdjustment): Promise<InventoryAdjustment> {
+    return { ...adj, id: randomUUID(), createdAt: new Date() } as InventoryAdjustment;
+  }
+  async getInventoryAdjustments(filters?: any): Promise<InventoryAdjustment[]> {
+    return [];
   }
 }
 
@@ -7270,6 +7284,37 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.apiKeys.name, name))
       .returning();
     return result.length > 0;
+  }
+
+  // ── Inventory Adjustments (Manual Counts) ──
+
+  async createInventoryAdjustment(adj: InsertInventoryAdjustment): Promise<InventoryAdjustment> {
+    const result = await this.db.insert(schema.inventoryAdjustments).values(adj).returning();
+    return result[0];
+  }
+
+  async getInventoryAdjustments(filters?: { submittedBy?: string; after?: Date; before?: Date; limit?: number }): Promise<InventoryAdjustment[]> {
+    let query = this.db.select().from(schema.inventoryAdjustments);
+    const conditions: any[] = [];
+
+    if (filters?.submittedBy) {
+      conditions.push(eq(schema.inventoryAdjustments.submittedBy, filters.submittedBy));
+    }
+    if (filters?.after) {
+      conditions.push(gte(schema.inventoryAdjustments.createdAt, filters.after));
+    }
+    if (filters?.before) {
+      conditions.push(lte(schema.inventoryAdjustments.createdAt, filters.before));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions)) as any;
+    }
+
+    const results = await (query as any)
+      .orderBy(desc(schema.inventoryAdjustments.createdAt))
+      .limit(filters?.limit || 100);
+    return results;
   }
 }
 

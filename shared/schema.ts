@@ -2552,3 +2552,29 @@ export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
 });
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type ApiKey = typeof apiKeys.$inferSelect;
+
+// ============================================================================
+// INVENTORY ADJUSTMENTS (Manual Counts by Sammie / Clarence)
+// ============================================================================
+
+export const inventoryAdjustments = pgTable("inventory_adjustments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  sku: text("sku").notNull(),
+  expectedQty: integer("expected_qty").notNull(), // What the app showed at time of count
+  actualQty: integer("actual_qty").notNull(), // What was physically counted
+  difference: integer("difference").notNull(), // actual - expected (auto-calculated)
+  adjustmentType: text("adjustment_type").notNull().default("WEEKLY_COUNT"), // WEEKLY_COUNT, SPOT_CHECK, CYCLE_COUNT
+  location: text("location").default("N/A"), // HILDALE, PIVOT, N/A
+  submittedBy: text("submitted_by").notNull(), // Name: "Sammie", "Clarence"
+  notes: text("notes"),
+  applied: boolean("applied").notNull().default(true), // Whether the adjustment was applied to live stock
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+});
+
+export const insertInventoryAdjustmentSchema = createInsertSchema(inventoryAdjustments).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertInventoryAdjustment = z.infer<typeof insertInventoryAdjustmentSchema>;
+export type InventoryAdjustment = typeof inventoryAdjustments.$inferSelect;

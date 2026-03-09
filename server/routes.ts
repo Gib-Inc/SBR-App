@@ -19876,5 +19876,178 @@ Generate only the email body text, no subject line.`;
     }
   })();
   
+  // ─────────── INVENTORY ADJUSTMENTS (Manual Counts) ───────────
+
+  // Submit a single manual count
+  app.post("/api/inventory-adjustments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, actualQty, submittedBy, adjustmentType, location, notes } = req.body;
+
+      if (!itemId || actualQty === undefined || !submittedBy) {
+        return res.status(400).json({ error: "itemId, actualQty, and submittedBy are required" });
+      }
+
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(404).json({ error: `Item ${itemId} not found` });
+      }
+
+      // Determine expected quantity based on item type and location
+      const isFinished = item.type === "finished_product";
+      const loc = location || (isFinished ? "PIVOT" : "N/A");
+      let expectedQty: number;
+
+      if (isFinished) {
+        expectedQty = loc === "HILDALE" ? (item.hildaleQty ?? 0) : (item.availableForSaleQty ?? 0);
+      } else {
+        expectedQty = item.currentStock ?? 0;
+      }
+
+      const difference = actualQty - expectedQty;
+
+      // Apply the adjustment to live inventory via InventoryMovement
+      const inventoryMovement = new InventoryMovement(storage);
+      let applied = true;
+
+      if (difference !== 0) {
+        const moveResult = await inventoryMovement.apply({
+          eventType: "MANUAL_COUNT",
+          itemId,
+          quantity: difference,
+          location: loc as any,
+          source: "USER",
+          userId: req.session.userId,
+          userName: submittedBy,
+          notes: `Manual count by ${submittedBy}: expected ${expectedQty}, counted ${actualQty}, adjusted ${difference > 0 ? '+' : ''}${difference}`,
+        });
+
+        if (!moveResult.success) {
+          applied = false;
+          console.warn(`[ManualCount] Movement failed for ${item.sku}: ${moveResult.error}`);
+        }
+      }
+
+      // Record the adjustment
+      const adjustment = await storage.createInventoryAdjustment({
+        itemId,
+        sku: item.sku,
+        expectedQty,
+        actualQty,
+        difference,
+        adjustmentType: adjustmentType || "WEEKLY_COUNT",
+        location: loc,
+        submittedBy,
+        notes: notes || null,
+        applied,
+      });
+
+      res.status(201).json(adjustment);
+    } catch (error: any) {
+      console.error("[InventoryAdjustment] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to record adjustment" });
+    }
+  });
+
+  // Submit multiple counts at once (bulk)
+  app.post("/api/inventory-adjustments/bulk", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { counts, submittedBy, adjustmentType } = req.body;
+
+      if (!Array.isArray(counts) || counts.length === 0 || !submittedBy) {
+        return res.status(400).json({ error: "counts array and submittedBy are required" });
+      }
+
+      const results: Array<{ itemId: string; sku: string; success: boolean; difference: number; error?: string }> = [];
+      const inventoryMovement = new InventoryMovement(storage);
+
+      for (const count of counts) {
+        const { itemId, actualQty, location, notes } = count;
+
+        try {
+          const item = await storage.getItem(itemId);
+          if (!item) {
+            results.push({ itemId, sku: "unknown", success: false, difference: 0, error: "Item not found" });
+            continue;
+          }
+
+          const isFinished = item.type === "finished_product";
+          const loc = location || (isFinished ? "PIVOT" : "N/A");
+          let expectedQty: number;
+
+          if (isFinished) {
+            expectedQty = loc === "HILDALE" ? (item.hildaleQty ?? 0) : (item.availableForSaleQty ?? 0);
+          } else {
+            expectedQty = item.currentStock ?? 0;
+          }
+
+          const difference = actualQty - expectedQty;
+          let applied = true;
+
+          if (difference !== 0) {
+            const moveResult = await inventoryMovement.apply({
+              eventType: "MANUAL_COUNT",
+              itemId,
+              quantity: difference,
+              location: loc as any,
+              source: "USER",
+              userId: req.session.userId,
+              userName: submittedBy,
+              notes: `Manual count by ${submittedBy}: expected ${expectedQty}, counted ${actualQty}, adjusted ${difference > 0 ? '+' : ''}${difference}`,
+            });
+
+            if (!moveResult.success) {
+              applied = false;
+            }
+          }
+
+          await storage.createInventoryAdjustment({
+            itemId,
+            sku: item.sku,
+            expectedQty,
+            actualQty,
+            difference,
+            adjustmentType: adjustmentType || "WEEKLY_COUNT",
+            location: loc,
+            submittedBy,
+            notes: notes || null,
+            applied,
+          });
+
+          results.push({ itemId, sku: item.sku, success: true, difference });
+        } catch (err: any) {
+          results.push({ itemId, sku: "unknown", success: false, difference: 0, error: err.message });
+        }
+      }
+
+      const successCount = results.filter(r => r.success).length;
+      res.status(201).json({
+        total: counts.length,
+        success: successCount,
+        failed: counts.length - successCount,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[InventoryAdjustment] Bulk error:", error);
+      res.status(500).json({ error: error.message || "Failed to process bulk adjustments" });
+    }
+  });
+
+  // Get adjustment history
+  app.get("/api/inventory-adjustments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { submittedBy, after, before, limit } = req.query;
+      const adjustments = await storage.getInventoryAdjustments({
+        submittedBy: submittedBy as string | undefined,
+        after: after ? new Date(after as string) : undefined,
+        before: before ? new Date(before as string) : undefined,
+        limit: limit ? parseInt(limit as string) : undefined,
+      });
+      res.json(adjustments);
+    } catch (error: any) {
+      console.error("[InventoryAdjustment] Error fetching:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch adjustments" });
+    }
+  });
+
   return httpServer;
 }

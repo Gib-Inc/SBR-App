@@ -95,7 +95,9 @@ export type InventoryEventType =
   | "MANUAL_ADJUSTMENT"
   | "PRODUCTION_COMPLETED"
   | "EXTENSIV_SYNC"
-  | "TRANSFER";
+  | "TRANSFER"
+  | "BOM_CONSUMPTION"
+  | "MANUAL_COUNT";
 
 export interface InventoryMovementParams {
   eventType: InventoryEventType;
@@ -323,6 +325,32 @@ export class InventoryMovement {
             }
           }
           break;
+
+        case "BOM_CONSUMPTION":
+          // Triggered by Shopify fulfilled webhook — subtracts raw materials based on BOM
+          // Only applies to components (raw materials), not finished products
+          // NOTE: If Clarence also logs production via the Production Screen, raw materials
+          // would be subtracted there too. Operationally, use ONE path — not both.
+          if (!isFinished) {
+            quantityDelta = -params.quantity;
+            updates.currentStock = Math.max(0, beforeState.currentStock - params.quantity);
+          }
+          break;
+
+        case "MANUAL_COUNT":
+          // Physical count adjustment — quantity is the DIFFERENCE (actual - expected)
+          // Can be positive (found more than expected) or negative (found less)
+          quantityDelta = params.quantity;
+          if (isFinished) {
+            if (location === "HILDALE") {
+              updates.hildaleQty = Math.max(0, beforeState.hildaleQty + params.quantity);
+            } else {
+              updates.availableForSaleQty = Math.max(0, beforeState.availableForSaleQty + params.quantity);
+            }
+          } else {
+            updates.currentStock = Math.max(0, beforeState.currentStock + params.quantity);
+          }
+          break;
       }
 
       if (Object.keys(updates).length > 0) {
@@ -376,6 +404,8 @@ export class InventoryMovement {
         PRODUCTION_COMPLETED: "PRODUCTION_COMPLETED",
         EXTENSIV_SYNC: "INTEGRATION_SYNC",
         TRANSFER: "INVENTORY_TRANSFERRED",
+        BOM_CONSUMPTION: "BOM_CONSUMPTION",
+        MANUAL_COUNT: "MANUAL_COUNT",
       };
 
       const entityTypeMap: Record<InventoryEventType, string> = {
@@ -389,6 +419,8 @@ export class InventoryMovement {
         PRODUCTION_COMPLETED: "ITEM",
         EXTENSIV_SYNC: "ITEM",
         TRANSFER: "ITEM",
+        BOM_CONSUMPTION: "ITEM",
+        MANUAL_COUNT: "ITEM",
       };
 
       const entityId = params.orderId || params.poId || params.returnId || params.itemId;
@@ -473,6 +505,10 @@ export class InventoryMovement {
         return `Extensiv sync: ${item.sku} pivot qty updated by ${quantityDelta}`;
       case "TRANSFER":
         return `Transfer: ${absQty} ${item.sku} moved`;
+      case "BOM_CONSUMPTION":
+        return `BOM consumption: ${absQty} ${item.sku} subtracted (order fulfillment)`;
+      case "MANUAL_COUNT":
+        return `Manual count: ${item.sku} ${direction} by ${absQty} at ${params.location || 'warehouse'}`;
       default:
         return `Inventory ${direction} by ${absQty} for ${item.sku}`;
     }

@@ -188,8 +188,47 @@ export type InsertBillOfMaterials = z.infer<typeof insertBillOfMaterialsSchema>;
 export type BillOfMaterials = typeof billOfMaterials.$inferSelect;
 
 // ============================================================================
-// SUPPLIERS
+// PRODUCTION RUNS — history of every batch build Clarence executes
 // ============================================================================
+
+export const productionRuns = pgTable("production_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runNumber: text("run_number").notNull().unique(), // e.g. PR-2026-0001
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  createdBy: text("created_by"), // userId of whoever triggered the build
+  createdByName: text("created_by_name"), // snapshot of name at time of build
+  notes: text("notes"),
+  // Aggregates (denormalized for fast display)
+  totalProductsBuilt: integer("total_products_built").notNull().default(0), // distinct product types
+  totalUnitsBuilt: integer("total_units_built").notNull().default(0),       // sum of all quantities
+  status: text("status").notNull().default("COMPLETED"), // COMPLETED | PARTIAL | FAILED
+});
+
+export const insertProductionRunSchema = createInsertSchema(productionRuns).omit({ id: true, createdAt: true });
+export type InsertProductionRun = z.infer<typeof insertProductionRunSchema>;
+export type ProductionRun = typeof productionRuns.$inferSelect;
+
+export const productionRunLines = pgTable("production_run_lines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  runId: varchar("run_id").notNull().references(() => productionRuns.id),
+  productId: varchar("product_id").notNull().references(() => items.id),
+  productName: text("product_name").notNull(), // snapshot at time of build
+  productSku: text("product_sku").notNull(),   // snapshot at time of build
+  quantityBuilt: integer("quantity_built").notNull(),
+  // Snapshot of components consumed for this line (for audit — even if BOM changes later)
+  componentsConsumed: jsonb("components_consumed"), // Array of { name, sku, qty }
+  buildCostSnapshot: real("build_cost_snapshot"), // total $ cost at time of build
+  success: boolean("success").notNull().default(true),
+  errorMessage: text("error_message"),
+}, (table) => ({
+  runIdIdx: index("production_run_lines_run_id_idx").on(table.runId),
+}));
+
+export const insertProductionRunLineSchema = createInsertSchema(productionRunLines).omit({ id: true });
+export type InsertProductionRunLine = z.infer<typeof insertProductionRunLineSchema>;
+export type ProductionRunLine = typeof productionRunLines.$inferSelect;
+
+
 
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

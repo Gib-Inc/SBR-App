@@ -122,6 +122,10 @@ import {
   type InsertApiKey,
   type InventoryAdjustment,
   type InsertInventoryAdjustment,
+  type ProductionRun,
+  type InsertProductionRun,
+  type ProductionRunLine,
+  type InsertProductionRunLine,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -192,6 +196,13 @@ export interface IStorage {
   getBillOfMaterialsByProductId(finishedProductId: string): Promise<BillOfMaterials[]>;
   createBillOfMaterials(bom: InsertBillOfMaterials): Promise<BillOfMaterials>;
   deleteBillOfMaterials(id: string): Promise<boolean>;
+
+  // Production runs
+  createProductionRun(run: InsertProductionRun): Promise<ProductionRun>;
+  createProductionRunLine(line: InsertProductionRunLine): Promise<ProductionRunLine>;
+  getProductionRuns(limit?: number): Promise<ProductionRun[]>;
+  getProductionRunLines(runId: string): Promise<ProductionRunLine[]>;
+  getNextProductionRunNumber(): Promise<string>;
 
   // Suppliers
   getAllSuppliers(): Promise<Supplier[]>;
@@ -1348,6 +1359,21 @@ export class MemStorage implements IStorage {
   async deleteBillOfMaterials(id: string): Promise<boolean> {
     return this.billOfMaterials.delete(id);
   }
+
+  // Production Runs (in-memory stubs — app uses PostgresStorage in production)
+  async getNextProductionRunNumber(): Promise<string> {
+    return `PR-${new Date().getFullYear()}-0001`;
+  }
+  async createProductionRun(run: InsertProductionRun): Promise<ProductionRun> {
+    const id = randomUUID();
+    return { id, createdAt: new Date(), ...run } as ProductionRun;
+  }
+  async createProductionRunLine(line: InsertProductionRunLine): Promise<ProductionRunLine> {
+    const id = randomUUID();
+    return { id, ...line } as ProductionRunLine;
+  }
+  async getProductionRuns(): Promise<ProductionRun[]> { return []; }
+  async getProductionRunLines(): Promise<ProductionRunLine[]> { return []; }
 
   // Suppliers
   async getAllSuppliers(): Promise<Supplier[]> {
@@ -4294,6 +4320,46 @@ export class PostgresStorage implements IStorage {
   async deleteBillOfMaterials(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.billOfMaterials).where(eq(schema.billOfMaterials.id, id)).returning();
     return results.length > 0;
+  }
+
+  // Production Runs
+  async getNextProductionRunNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const runs = await this.db
+      .select({ runNumber: schema.productionRuns.runNumber })
+      .from(schema.productionRuns)
+      .where(drizzleSql`run_number LIKE ${`PR-${year}-%`}`)
+      .orderBy(desc(schema.productionRuns.createdAt))
+      .limit(1);
+    if (runs.length === 0) return `PR-${year}-0001`;
+    const last = runs[0].runNumber;
+    const seq = parseInt(last.split("-")[2] || "0") + 1;
+    return `PR-${year}-${String(seq).padStart(4, "0")}`;
+  }
+
+  async createProductionRun(run: InsertProductionRun): Promise<ProductionRun> {
+    const results = await this.db.insert(schema.productionRuns).values(run).returning();
+    return results[0];
+  }
+
+  async createProductionRunLine(line: InsertProductionRunLine): Promise<ProductionRunLine> {
+    const results = await this.db.insert(schema.productionRunLines).values(line).returning();
+    return results[0];
+  }
+
+  async getProductionRuns(limit: number = 50): Promise<ProductionRun[]> {
+    return await this.db
+      .select()
+      .from(schema.productionRuns)
+      .orderBy(desc(schema.productionRuns.createdAt))
+      .limit(limit);
+  }
+
+  async getProductionRunLines(runId: string): Promise<ProductionRunLine[]> {
+    return await this.db
+      .select()
+      .from(schema.productionRunLines)
+      .where(eq(schema.productionRunLines.runId, runId));
   }
 
   // Suppliers

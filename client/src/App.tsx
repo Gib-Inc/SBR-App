@@ -22,6 +22,7 @@ import { ScanProvider } from "@/contexts/scan-context";
 import { ScanButton } from "@/components/scan-button";
 import { SyncProgressPanel } from "@/components/sync-progress-panel";
 import Products from "@/pages/products";
+import Production from "@/pages/production";
 import Barcodes from "@/pages/barcodes";
 import AIAgent from "@/pages/ai";
 import AppFlow from "@/pages/app-flow";
@@ -116,6 +117,7 @@ function AuthenticatedApp() {
                   <Switch>
                     <Route path="/" component={Reports} />
                     <Route path="/products" component={Products} />
+                    <Route path="/production" component={Production} />
                     <Route path="/barcodes" component={Barcodes} />
                     <Route path="/suppliers" component={Suppliers} />
                     <Route path="/purchase-orders" component={PurchaseOrders} />

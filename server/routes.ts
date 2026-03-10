@@ -11120,7 +11120,7 @@ Notes: ${po.notes || 'None'}
   // Batch production - produce multiple products at once
   app.post("/api/production/batch-build", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { builds } = req.body;
+      const { builds, notes } = req.body;
 
       if (!Array.isArray(builds) || builds.length === 0) {
         return res.status(400).json({ 
@@ -11129,62 +11129,214 @@ Notes: ${po.notes || 'None'}
       }
 
       const results: Array<{ productId: string; success: boolean; error?: string; transaction?: any }> = [];
+      const runLineData: Array<{
+        productId: string; productName: string; productSku: string;
+        quantityBuilt: number; componentsConsumed: any[]; buildCostSnapshot: number | null;
+        success: boolean; errorMessage?: string;
+      }> = [];
 
       for (const build of builds) {
         const { finishedProductId, quantity } = build;
 
         if (!finishedProductId || quantity === undefined || quantity <= 0) {
-          results.push({
-            productId: finishedProductId || "unknown",
-            success: false,
-            error: "Invalid finishedProductId or quantity",
-          });
+          results.push({ productId: finishedProductId || "unknown", success: false, error: "Invalid finishedProductId or quantity" });
           continue;
         }
+
+        // Snapshot product + BOM before building (for history record)
+        const product = await storage.getItem(finishedProductId);
+        const bom = product ? await storage.getBillOfMaterialsByProductId(finishedProductId) : [];
+        const componentsConsumed: Array<{ name: string; sku: string; qty: number }> = [];
+        let buildCostSnapshot: number | null = 0;
+
+        for (const entry of bom) {
+          const comp = await storage.getItem(entry.componentId);
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQty = entry.quantityRequired * (1 + wastage / 100) * quantity;
+          componentsConsumed.push({ name: comp?.name ?? entry.componentId, sku: comp?.sku ?? "", qty: Math.round(effectiveQty * 1000) / 1000 });
+          if (comp?.defaultPurchaseCost != null && buildCostSnapshot !== null) {
+            buildCostSnapshot += effectiveQty * comp.defaultPurchaseCost;
+          } else {
+            buildCostSnapshot = null;
+          }
+        }
+        if (buildCostSnapshot !== null) buildCostSnapshot = Math.round(buildCostSnapshot * 100) / 100;
 
         try {
           const result = await transactionService.applyProduction({
             finishedProductId,
             quantity,
-            notes: `Batch production run`,
+            notes: notes || `Batch production run`,
             createdBy: req.session.userId || "system",
           });
 
           if (!result.success) {
-            results.push({
-              productId: finishedProductId,
-              success: false,
-              error: result.error,
-            });
+            results.push({ productId: finishedProductId, success: false, error: result.error });
+            runLineData.push({ productId: finishedProductId, productName: product?.name ?? finishedProductId, productSku: product?.sku ?? "", quantityBuilt: quantity, componentsConsumed, buildCostSnapshot, success: false, errorMessage: result.error });
           } else {
-            results.push({
-              productId: finishedProductId,
-              success: true,
-              transaction: result.transaction,
-            });
+            results.push({ productId: finishedProductId, success: true, transaction: result.transaction });
+            runLineData.push({ productId: finishedProductId, productName: product?.name ?? finishedProductId, productSku: product?.sku ?? "", quantityBuilt: quantity, componentsConsumed, buildCostSnapshot, success: true });
           }
         } catch (prodErr: any) {
-          results.push({
-            productId: finishedProductId,
-            success: false,
-            error: prodErr.message || "Production failed",
-          });
+          results.push({ productId: finishedProductId, success: false, error: prodErr.message || "Production failed" });
+          runLineData.push({ productId: finishedProductId, productName: product?.name ?? finishedProductId, productSku: product?.sku ?? "", quantityBuilt: quantity, componentsConsumed, buildCostSnapshot, success: false, errorMessage: prodErr.message });
         }
       }
 
       const successCount = results.filter((r) => r.success).length;
       const failCount = results.filter((r) => !r.success).length;
 
+      // Record the production run (even partial ones — for accountability)
+      let productionRun = null;
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        const runNumber = await storage.getNextProductionRunNumber();
+        productionRun = await storage.createProductionRun({
+          runNumber,
+          createdBy: req.session.userId || "system",
+          createdByName: user?.email ?? "Unknown",
+          notes: notes || null,
+          totalProductsBuilt: successCount,
+          totalUnitsBuilt: runLineData.filter(l => l.success).reduce((s, l) => s + l.quantityBuilt, 0),
+          status: failCount === 0 ? "COMPLETED" : successCount > 0 ? "PARTIAL" : "FAILED",
+        });
+        for (const line of runLineData) {
+          await storage.createProductionRunLine({
+            runId: productionRun.id,
+            productId: line.productId,
+            productName: line.productName,
+            productSku: line.productSku,
+            quantityBuilt: line.quantityBuilt,
+            componentsConsumed: line.componentsConsumed,
+            buildCostSnapshot: line.buildCostSnapshot,
+            success: line.success,
+            errorMessage: line.errorMessage ?? null,
+          });
+        }
+      } catch (runErr: any) {
+        console.warn("[Production] Failed to record production run history:", runErr.message);
+      }
+
       res.status(successCount > 0 ? 201 : 400).json({
         success: successCount > 0,
         produced: results.filter((r) => r.success),
         failed: results.filter((r) => !r.success),
         results,
+        productionRun,
         summary: { successCount, failCount, totalRequested: builds.length },
       });
     } catch (error: any) {
       console.error("[Transaction] Error processing batch production:", error);
       res.status(500).json({ error: error.message || "Failed to process batch production" });
+    }
+  });
+
+  // GET /api/production/runs — recent production run history
+  app.get("/api/production/runs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const runs = await storage.getProductionRuns(limit);
+      // Attach lines to each run
+      const runsWithLines = await Promise.all(
+        runs.map(async (run) => ({
+          ...run,
+          lines: await storage.getProductionRunLines(run.id),
+        }))
+      );
+      res.json(runsWithLines);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch production runs" });
+    }
+  });
+
+  // GET /api/production/plan — for each finished product: how many can we build now,
+  // and what components are short if we want to hit a target quantity.
+  //
+  // Teaching note: this is a "what-if" calculation — it doesn't change any data.
+  // It reads the current stock snapshot and the BOM, then does arithmetic.
+  // ?target=450 asks "what do we need to build 450 units?"
+  app.get("/api/production/plan", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const targetQty = parseInt(req.query.target as string) || 0;
+      const allItems = await storage.getItemsWithBOMCounts();
+      const finishedProducts = allItems.filter(i => i.type === "finished_product");
+
+      const plan = await Promise.all(finishedProducts.map(async (product) => {
+        const bom = await storage.getBillOfMaterialsByProductId(product.id);
+
+        if (!bom || bom.length === 0) {
+          return {
+            productId: product.id,
+            productName: product.name,
+            productSku: product.sku,
+            hildaleQty: product.hildaleQty ?? 0,
+            canBuildNow: 0,
+            limitingComponent: null,
+            components: [],
+            targetQty,
+            shortages: [],
+            hasBOM: false,
+          };
+        }
+
+        // Calculate how many units we can build with current stock
+        let canBuildNow = Infinity;
+        let limitingComponent: string | null = null;
+
+        const components = await Promise.all(bom.map(async (entry) => {
+          const comp = await storage.getItem(entry.componentId);
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQtyPerUnit = entry.quantityRequired * (1 + wastage / 100);
+          const onHand = comp?.currentStock ?? 0;
+          const canMake = effectiveQtyPerUnit > 0 ? Math.floor(onHand / effectiveQtyPerUnit) : Infinity;
+
+          if (canMake < canBuildNow) {
+            canBuildNow = canMake;
+            limitingComponent = comp?.name ?? entry.componentId;
+          }
+
+          const needed = targetQty > 0 ? Math.ceil(effectiveQtyPerUnit * targetQty) : 0;
+          const shortage = targetQty > 0 ? Math.max(0, needed - onHand) : 0;
+
+          return {
+            componentId: entry.componentId,
+            componentName: comp?.name ?? "Unknown",
+            componentSku: comp?.sku ?? "",
+            qtyPerUnit: entry.quantityRequired,
+            wastagePercent: wastage,
+            effectiveQtyPerUnit: Math.round(effectiveQtyPerUnit * 1000) / 1000,
+            onHand,
+            canMake,
+            neededForTarget: needed,
+            shortage,
+            unitCost: comp?.defaultPurchaseCost ?? null,
+            shortageCost: shortage > 0 && comp?.defaultPurchaseCost ? Math.round(shortage * comp.defaultPurchaseCost * 100) / 100 : 0,
+          };
+        }));
+
+        if (canBuildNow === Infinity) canBuildNow = 0;
+
+        const shortages = components.filter(c => c.shortage > 0);
+        const totalShortageCost = shortages.reduce((s, c) => s + (c.shortageCost ?? 0), 0);
+
+        return {
+          productId: product.id,
+          productName: product.name,
+          productSku: product.sku,
+          hildaleQty: product.hildaleQty ?? 0,
+          canBuildNow,
+          limitingComponent,
+          components,
+          targetQty,
+          shortages,
+          totalShortageCost: Math.round(totalShortageCost * 100) / 100,
+          hasBOM: true,
+        };
+      }));
+
+      res.json({ plan, targetQty });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to generate production plan" });
     }
   });
 

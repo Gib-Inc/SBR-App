@@ -7190,6 +7190,37 @@ TOTAL: $${subtotal.toFixed(2)}
           const existingOrder = existingOrders[0];
 
           if (existingOrder) {
+            // BOM CONSUMPTION: Fire when order first transitions to SHIPPED or DELIVERED
+            // We check the PREVIOUS status — if it wasn't already shipped, and now it is,
+            // that's the moment we deduct raw materials. This prevents double-deduction
+            // if Amazon syncs the same SHIPPED order multiple times.
+            const wasAlreadyShipped = ['SHIPPED', 'DELIVERED'].includes(existingOrder.status || '');
+            const isNowShipped = ['SHIPPED', 'DELIVERED'].includes(orderData.status || '');
+            if (!wasAlreadyShipped && isNowShipped) {
+              try {
+                const { consumeBomForFulfilledOrder } = await import("./services/bom-consumption-service");
+                const lineItems = orderData.lineItems.map((li: any) => ({
+                  sku: li.sku as string,
+                  qtyFulfilled: (li.quantity as number) || 1,
+                }));
+                const bomResult = await consumeBomForFulfilledOrder(
+                  lineItems,
+                  existingOrder.id,
+                  "AMAZON",
+                  storage,
+                  userId
+                );
+                if (bomResult.componentsSubtracted > 0) {
+                  console.log(`[Amazon Sync] BOM consumption: ${bomResult.componentsSubtracted} component(s) subtracted for order ${orderData.externalOrderId}`);
+                }
+                if (bomResult.warnings.length > 0) {
+                  console.warn(`[Amazon Sync] BOM warnings for order ${orderData.externalOrderId}:`, bomResult.warnings);
+                }
+              } catch (bomErr: any) {
+                console.error(`[Amazon Sync] BOM consumption error for order ${orderData.externalOrderId}:`, bomErr);
+              }
+            }
+
             // Update existing order with new fields including shipping address
             await storage.updateSalesOrder(existingOrder.id, {
               status: orderData.status,
@@ -16984,6 +17015,35 @@ Generate only the email body text, no subject line.`;
       const updatedOrder = await storage.updateSalesOrder(id, { 
         status: 'SHIPPED',
       });
+
+      // ─── BOM CONSUMPTION: deduct raw materials based on what was just fulfilled ───
+      // Teaching note: we import the service inline here (lazy import) so we don't
+      // have to add it to the top of the massive routes.ts file. Same effect.
+      try {
+        const { consumeBomForFulfilledOrder } = await import("./services/bom-consumption-service");
+        const lineItems = lines.map((l: any) => ({
+          sku: l.sku as string,
+          qtyFulfilled: l.qtyOrdered as number,
+        }));
+        const channel = order.channel || "DIRECT";
+        const bomResult = await consumeBomForFulfilledOrder(
+          lineItems,
+          id,
+          channel,
+          storage,
+          req.session.userId
+        );
+        if (bomResult.componentsSubtracted > 0) {
+          console.log(`[Fulfill] BOM consumption: ${bomResult.componentsSubtracted} component(s) subtracted for order ${id}`);
+        }
+        if (bomResult.warnings.length > 0) {
+          console.warn(`[Fulfill] BOM warnings for order ${id}:`, bomResult.warnings);
+        }
+      } catch (bomErr: any) {
+        // Non-fatal — order is still marked fulfilled even if BOM deduction fails
+        console.error(`[Fulfill] BOM consumption error for order ${id}:`, bomErr);
+      }
+      // ─── END BOM CONSUMPTION ───
 
       // Return updated order with lines
       const updatedLines = await storage.getSalesOrderLines(id);

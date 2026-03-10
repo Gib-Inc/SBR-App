@@ -9,6 +9,7 @@ import { logService } from '../services/log-service';
 import { InventoryMovement } from '../services/inventory-movement';
 import { triggerShortageAlertsForOrder, triggerHildaleFulfillmentAlert } from '../services/ghl-stock-alert-service';
 import { ShopifyInventorySyncService } from '../services/shopify-inventory-sync-service';
+import { consumeBomForFulfilledOrder } from '../services/bom-consumption-service';
 
 export interface WebhookHandlerResult {
   success: boolean;
@@ -546,76 +547,28 @@ export async function handleOrderFulfilled(
       console.log(`[Shopify Webhook] Order ${existingOrder.id} status: ${newStatus} (shipment: ${shipmentStatus || 'not tracked'})`);
 
       // ─── BOM SUBTRACTION: Subtract raw materials for each fulfilled line item ───
-      // When a finished product ships, look up its Bill of Materials and subtract
-      // the required components from raw material inventory automatically.
-      // NOTE: If Clarence also logs production via the Production Screen, components
-      // are subtracted there too. Use ONE path operationally — not both.
       try {
-        const lineItems = payload.line_items || [];
-        const inventoryMovement = new InventoryMovement(storage);
-        let bomSubtractionsApplied = 0;
-        let bomWarnings: string[] = [];
+        const lineItems = (payload.line_items || []).map((li: any) => ({
+          sku: li.sku as string,
+          qtyFulfilled: (li.quantity as number) || 1,
+        }));
 
-        for (const lineItem of lineItems) {
-          const sku = lineItem.sku;
-          const qtyFulfilled = lineItem.quantity || 1;
+        const bomResult = await consumeBomForFulfilledOrder(
+          lineItems,
+          String(orderId),
+          "SHOPIFY",
+          storage,
+          userId
+        );
 
-          if (!sku) {
-            bomWarnings.push(`Line item "${lineItem.title || lineItem.name || 'unknown'}" has no SKU — skipped BOM subtraction`);
-            continue;
-          }
-
-          // Find the product by SKU — try shopifySku first, then house sku
-          let product = await storage.findProductByShopifySku(sku);
-          if (!product) {
-            product = await storage.getItemBySku(sku);
-          }
-
-          if (!product) {
-            bomWarnings.push(`SKU ${sku} not found in database — skipped BOM subtraction`);
-            continue;
-          }
-
-          if (product.type !== 'finished_product') {
-            continue; // Only finished products have BOMs
-          }
-
-          // Look up the BOM for this finished product
-          const bom = await storage.getBillOfMaterialsByProductId(product.id);
-          if (!bom || bom.length === 0) {
-            bomWarnings.push(`No BOM defined for ${sku} (${product.name}) — raw materials NOT subtracted`);
-            continue;
-          }
-
-          // Subtract each component based on BOM × quantity fulfilled
-          for (const bomEntry of bom) {
-            const requiredQty = bomEntry.quantityRequired * qtyFulfilled;
-
-            const result = await inventoryMovement.apply({
-              eventType: "BOM_CONSUMPTION",
-              itemId: bomEntry.componentId,
-              quantity: requiredQty,
-              location: "N/A",
-              source: "SHOPIFY",
-              orderId: String(orderId),
-              channel: "shopify",
-              userId,
-              notes: `BOM consumption: ${requiredQty} units consumed for ${qtyFulfilled}x ${sku} (Order ${orderName})`,
-            });
-
-            if (result.success) {
-              bomSubtractionsApplied++;
-            } else {
-              bomWarnings.push(`Failed to subtract component ${result.sku} for ${sku}: ${result.error}`);
-            }
-          }
+        if (bomResult.componentsSubtracted > 0) {
+          console.log(`[Shopify Webhook] BOM subtraction: ${bomResult.componentsSubtracted} component(s) subtracted for order ${orderName}`);
         }
-
-        if (bomSubtractionsApplied > 0) {
-          console.log(`[Shopify Webhook] BOM subtraction: ${bomSubtractionsApplied} component(s) subtracted for order ${orderName}`);
+        if (bomResult.warnings.length > 0) {
+          console.warn(`[Shopify Webhook] BOM warnings for order ${orderName}:`, bomResult.warnings);
         }
-        if (bomWarnings.length > 0) {
-          console.warn(`[Shopify Webhook] BOM warnings for order ${orderName}:`, bomWarnings);
+        if (bomResult.errors.length > 0) {
+          console.warn(`[Shopify Webhook] BOM errors for order ${orderName}:`, bomResult.errors);
         }
       } catch (bomError: any) {
         // BOM subtraction failure should NOT block order fulfillment processing

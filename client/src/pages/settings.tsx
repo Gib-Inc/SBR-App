@@ -1359,6 +1359,11 @@ function TeamManagement() {
                             <Crown className="h-3 w-3" /> Admin
                           </Badge>
                         )}
+                        {u.role === "warehouse" && (
+                          <Badge variant="outline" className="text-xs gap-1 shrink-0 text-amber-700 dark:text-amber-400 border-amber-400">
+                            Warehouse
+                          </Badge>
+                        )}
                         {u.id === currentUser?.id && (
                           <Badge variant="outline" className="text-xs shrink-0">You</Badge>
                         )}
@@ -1378,6 +1383,7 @@ function TeamManagement() {
                         <SelectContent>
                           <SelectItem value="admin">Admin</SelectItem>
                           <SelectItem value="member">Member</SelectItem>
+                          <SelectItem value="warehouse">Warehouse</SelectItem>
                         </SelectContent>
                       </Select>
                       <Button

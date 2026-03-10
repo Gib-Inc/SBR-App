@@ -404,3 +404,12 @@ export async function triggerAISystemReview(options?: {
 export async function triggerExtensivSync(): Promise<void> {
   return performExtensivSync();
 }
+
+/**
+ * Restart the schedule for a single channel (e.g. after sync interval update).
+ * For simplicity, this refreshes the full scheduler — all channels restart
+ * with their current DB settings.
+ */
+export async function restartChannelSchedule(_channelId: string): Promise<void> {
+  await refreshScheduler();
+}

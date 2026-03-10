@@ -126,6 +126,10 @@ import {
   type InsertProductionRun,
   type ProductionRunLine,
   type InsertProductionRunLine,
+  type CycleCountSession,
+  type InsertCycleCountSession,
+  type CycleCountEntry,
+  type InsertCycleCountEntry,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -203,6 +207,16 @@ export interface IStorage {
   getProductionRuns(limit?: number): Promise<ProductionRun[]>;
   getProductionRunLines(runId: string): Promise<ProductionRunLine[]>;
   getNextProductionRunNumber(): Promise<string>;
+
+  // Cycle counts
+  createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
+  getCycleCountSessions(limit?: number): Promise<CycleCountSession[]>;
+  getCycleCountSession(id: string): Promise<CycleCountSession | undefined>;
+  updateCycleCountSession(id: string, data: Partial<CycleCountSession>): Promise<CycleCountSession | undefined>;
+  createCycleCountEntry(entry: InsertCycleCountEntry): Promise<CycleCountEntry>;
+  getCycleCountEntries(sessionId: string): Promise<CycleCountEntry[]>;
+  updateCycleCountEntry(id: string, data: Partial<CycleCountEntry>): Promise<CycleCountEntry | undefined>;
+  getNextCycleCountSessionNumber(): Promise<string>;
 
   // Suppliers
   getAllSuppliers(): Promise<Supplier[]>;
@@ -1374,6 +1388,16 @@ export class MemStorage implements IStorage {
   }
   async getProductionRuns(): Promise<ProductionRun[]> { return []; }
   async getProductionRunLines(): Promise<ProductionRunLine[]> { return []; }
+
+  // Cycle Count stubs
+  async getNextCycleCountSessionNumber(): Promise<string> { return `CC-${new Date().getFullYear()}-0001`; }
+  async createCycleCountSession(s: InsertCycleCountSession): Promise<CycleCountSession> { return { id: randomUUID(), createdAt: new Date(), committedAt: null, ...s } as CycleCountSession; }
+  async getCycleCountSessions(): Promise<CycleCountSession[]> { return []; }
+  async getCycleCountSession(): Promise<CycleCountSession | undefined> { return undefined; }
+  async updateCycleCountSession(): Promise<CycleCountSession | undefined> { return undefined; }
+  async createCycleCountEntry(e: InsertCycleCountEntry): Promise<CycleCountEntry> { return { id: randomUUID(), ...e } as CycleCountEntry; }
+  async getCycleCountEntries(): Promise<CycleCountEntry[]> { return []; }
+  async updateCycleCountEntry(): Promise<CycleCountEntry | undefined> { return undefined; }
 
   // Suppliers
   async getAllSuppliers(): Promise<Supplier[]> {
@@ -4360,6 +4384,57 @@ export class PostgresStorage implements IStorage {
       .select()
       .from(schema.productionRunLines)
       .where(eq(schema.productionRunLines.runId, runId));
+  }
+
+  // Cycle Count Sessions
+  async getNextCycleCountSessionNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const sessions = await this.db
+      .select({ sessionNumber: schema.cycleCountSessions.sessionNumber })
+      .from(schema.cycleCountSessions)
+      .where(drizzleSql`session_number LIKE ${`CC-${year}-%`}`)
+      .orderBy(desc(schema.cycleCountSessions.createdAt))
+      .limit(1);
+    if (sessions.length === 0) return `CC-${year}-0001`;
+    const seq = parseInt(sessions[0].sessionNumber.split("-")[2] || "0") + 1;
+    return `CC-${year}-${String(seq).padStart(4, "0")}`;
+  }
+
+  async createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession> {
+    const results = await this.db.insert(schema.cycleCountSessions).values(session).returning();
+    return results[0];
+  }
+
+  async getCycleCountSessions(limit: number = 50): Promise<CycleCountSession[]> {
+    return await this.db
+      .select()
+      .from(schema.cycleCountSessions)
+      .orderBy(desc(schema.cycleCountSessions.createdAt))
+      .limit(limit);
+  }
+
+  async getCycleCountSession(id: string): Promise<CycleCountSession | undefined> {
+    const results = await this.db.select().from(schema.cycleCountSessions).where(eq(schema.cycleCountSessions.id, id));
+    return results[0];
+  }
+
+  async updateCycleCountSession(id: string, data: Partial<CycleCountSession>): Promise<CycleCountSession | undefined> {
+    const results = await this.db.update(schema.cycleCountSessions).set(data).where(eq(schema.cycleCountSessions.id, id)).returning();
+    return results[0];
+  }
+
+  async createCycleCountEntry(entry: InsertCycleCountEntry): Promise<CycleCountEntry> {
+    const results = await this.db.insert(schema.cycleCountEntries).values(entry).returning();
+    return results[0];
+  }
+
+  async getCycleCountEntries(sessionId: string): Promise<CycleCountEntry[]> {
+    return await this.db.select().from(schema.cycleCountEntries).where(eq(schema.cycleCountEntries.sessionId, sessionId));
+  }
+
+  async updateCycleCountEntry(id: string, data: Partial<CycleCountEntry>): Promise<CycleCountEntry | undefined> {
+    const results = await this.db.update(schema.cycleCountEntries).set(data).where(eq(schema.cycleCountEntries.id, id)).returning();
+    return results[0];
   }
 
   // Suppliers

@@ -42,3 +42,42 @@ CREATE TABLE IF NOT EXISTS production_run_lines (
 );
 
 CREATE INDEX IF NOT EXISTS production_run_lines_run_id_idx ON production_run_lines(run_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Block 3: Operations Cleanup
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- 5. Cycle count sessions
+CREATE TABLE IF NOT EXISTS cycle_count_sessions (
+  id                VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_number    TEXT NOT NULL UNIQUE,          -- e.g. CC-2026-0001
+  status            TEXT NOT NULL DEFAULT 'OPEN',  -- OPEN | COMMITTED | CANCELLED
+  notes             TEXT,
+  created_by        TEXT,
+  created_by_name   TEXT,
+  created_at        TIMESTAMP NOT NULL DEFAULT now(),
+  committed_at      TIMESTAMP,
+  committed_by      TEXT,
+  total_entries     INTEGER NOT NULL DEFAULT 0,
+  total_variances   INTEGER NOT NULL DEFAULT 0
+);
+
+-- 6. Cycle count entries — one row per component per session
+CREATE TABLE IF NOT EXISTS cycle_count_entries (
+  id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id  VARCHAR NOT NULL REFERENCES cycle_count_sessions(id),
+  item_id     VARCHAR NOT NULL REFERENCES items(id),
+  item_name   TEXT NOT NULL,
+  item_sku    TEXT NOT NULL,
+  system_qty  INTEGER NOT NULL,  -- what the app showed when session was created
+  counted_qty INTEGER,           -- NULL until Clarence enters it
+  variance    INTEGER,           -- counted_qty - system_qty
+  notes       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS cycle_count_entries_session_id_idx ON cycle_count_entries(session_id);
+
+-- No schema changes needed for:
+-- Block 3c: Direct Orders  — uses existing sales_orders table with channel='DIRECT'
+-- Block 3d: Amazon sync    — uses existing channels.sync_interval_hours column
+-- Block 3e: User roles     — role column is TEXT already, 'warehouse' just works

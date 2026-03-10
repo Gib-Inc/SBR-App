@@ -2625,3 +2625,43 @@ export const insertInventoryAdjustmentSchema = createInsertSchema(inventoryAdjus
 });
 export type InsertInventoryAdjustment = z.infer<typeof insertInventoryAdjustmentSchema>;
 export type InventoryAdjustment = typeof inventoryAdjustments.$inferSelect;
+
+// ============================================================================
+// CYCLE COUNT — physical shelf-walk sessions
+// ============================================================================
+
+export const cycleCountSessions = pgTable("cycle_count_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionNumber: text("session_number").notNull().unique(), // CC-2026-0001
+  status: text("status").notNull().default("OPEN"), // OPEN | COMMITTED | CANCELLED
+  notes: text("notes"),
+  createdBy: text("created_by"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  committedAt: timestamp("committed_at"),
+  committedBy: text("committed_by"),
+  totalEntries: integer("total_entries").notNull().default(0),
+  totalVariances: integer("total_variances").notNull().default(0), // entries with actualQty != systemQty
+});
+
+export const insertCycleCountSessionSchema = createInsertSchema(cycleCountSessions).omit({ id: true, createdAt: true });
+export type InsertCycleCountSession = z.infer<typeof insertCycleCountSessionSchema>;
+export type CycleCountSession = typeof cycleCountSessions.$inferSelect;
+
+export const cycleCountEntries = pgTable("cycle_count_entries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull().references(() => cycleCountSessions.id),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  itemName: text("item_name").notNull(), // snapshot
+  itemSku: text("item_sku").notNull(),   // snapshot
+  systemQty: integer("system_qty").notNull(), // what the app showed at time of session creation
+  countedQty: integer("counted_qty"),         // null = not yet counted
+  variance: integer("variance"),              // countedQty - systemQty (null until counted)
+  notes: text("notes"),
+}, (table) => ({
+  sessionIdIdx: index("cycle_count_entries_session_id_idx").on(table.sessionId),
+}));
+
+export const insertCycleCountEntrySchema = createInsertSchema(cycleCountEntries).omit({ id: true });
+export type InsertCycleCountEntry = z.infer<typeof insertCycleCountEntrySchema>;
+export type CycleCountEntry = typeof cycleCountEntries.$inferSelect;

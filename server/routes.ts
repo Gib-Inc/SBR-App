@@ -17,6 +17,7 @@ import { GoHighLevelClient } from "./services/gohighlevel-client";
 // PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
 import { requireAuth } from "./middleware/auth";
+import { requireRole } from "./middleware/requireRole";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import multer from "multer";
@@ -580,7 +581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/admin/users/:id/role", requireAuth, async (req: Request, res: Response) => {
     try {
       const { role } = req.body;
-      if (!["admin", "member"].includes(role)) {
+      if (!["admin", "member", "warehouse"].includes(role)) {
         return res.status(400).json({ error: "Role must be 'admin' or 'member'" });
       }
       const user = await storage.updateUser(req.params.id, { role });
@@ -11337,6 +11338,271 @@ Notes: ${po.notes || 'None'}
       res.json({ plan, targetQty });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to generate production plan" });
+    }
+  });
+
+  // ============================================================================
+  // CYCLE COUNTS (#7) — physical shelf-walk sessions
+  // ============================================================================
+
+  // POST /api/cycle-counts — create a new session, pre-populate all components
+  app.post("/api/cycle-counts", requireAuth, requireRole(["admin", "member"]), async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      const sessionNumber = await storage.getNextCycleCountSessionNumber();
+      const session = await storage.createCycleCountSession({
+        sessionNumber,
+        status: "OPEN",
+        notes: req.body.notes || null,
+        createdBy: req.session.userId || "system",
+        createdByName: user?.email ?? "Unknown",
+        totalEntries: 0,
+        totalVariances: 0,
+      });
+
+      // Pre-populate entries for all components (raw materials only — those tracked internally)
+      const allItems = await storage.getItemsWithBOMCounts();
+      const components = allItems.filter(i => i.type === "component");
+      for (const item of components) {
+        await storage.createCycleCountEntry({
+          sessionId: session.id,
+          itemId: item.id,
+          itemName: item.name,
+          itemSku: item.sku,
+          systemQty: item.currentStock ?? 0,
+          countedQty: null,
+          variance: null,
+          notes: null,
+        });
+      }
+
+      // Update totalEntries on session
+      await storage.updateCycleCountSession(session.id, { totalEntries: components.length });
+
+      const entries = await storage.getCycleCountEntries(session.id);
+      res.status(201).json({ ...session, totalEntries: components.length, entries });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create cycle count" });
+    }
+  });
+
+  // GET /api/cycle-counts — list sessions
+  app.get("/api/cycle-counts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const sessions = await storage.getCycleCountSessions();
+      res.json(sessions);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch cycle counts" });
+    }
+  });
+
+  // GET /api/cycle-counts/:id — session + all entries
+  app.get("/api/cycle-counts/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getCycleCountSession(req.params.id);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      const entries = await storage.getCycleCountEntries(req.params.id);
+      res.json({ ...session, entries });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch cycle count" });
+    }
+  });
+
+  // PATCH /api/cycle-counts/:sessionId/entries/:entryId — update counted qty
+  app.patch("/api/cycle-counts/:sessionId/entries/:entryId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { countedQty, notes } = req.body;
+      if (countedQty === undefined || countedQty === null || isNaN(parseInt(countedQty))) {
+        return res.status(400).json({ error: "countedQty is required" });
+      }
+      const qty = parseInt(countedQty);
+      const entry = await storage.updateCycleCountEntry(req.params.entryId, {
+        countedQty: qty,
+        variance: qty, // will compute against systemQty below
+        notes: notes ?? undefined,
+      });
+      if (!entry) return res.status(404).json({ error: "Entry not found" });
+      // Compute actual variance
+      const variance = qty - entry.systemQty;
+      const updated = await storage.updateCycleCountEntry(req.params.entryId, { variance });
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to update entry" });
+    }
+  });
+
+  // POST /api/cycle-counts/:id/commit — apply all variances as inventory adjustments
+  // Teaching note: This is the "point of no return" — once committed, each variance
+  // fires an inventory adjustment that changes live stock numbers.
+  // We only commit entries that HAVE been counted (countedQty != null).
+  app.post("/api/cycle-counts/:id/commit", requireAuth, requireRole(["admin", "member"]), async (req: Request, res: Response) => {
+    try {
+      const session = await storage.getCycleCountSession(req.params.id);
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (session.status !== "OPEN") return res.status(400).json({ error: "Session is already committed or cancelled" });
+
+      const entries = await storage.getCycleCountEntries(req.params.id);
+      const counted = entries.filter(e => e.countedQty !== null);
+
+      const user = await storage.getUser(req.session.userId!);
+      let adjustmentsApplied = 0;
+      let totalVariances = 0;
+
+      for (const entry of counted) {
+        const variance = (entry.countedQty ?? 0) - entry.systemQty;
+        if (variance !== 0) {
+          // Apply as ADJUST transaction to raw material stock
+          await storage.createInventoryAdjustment({
+            itemId: entry.itemId,
+            sku: entry.itemSku,
+            expectedQty: entry.systemQty,
+            actualQty: entry.countedQty ?? 0,
+            difference: variance,
+            adjustmentType: "CYCLE_COUNT",
+            location: "N/A",
+            submittedBy: user?.email ?? "Unknown",
+            notes: `Cycle count ${session.sessionNumber}${entry.notes ? ": " + entry.notes : ""}`,
+            applied: true,
+          });
+
+          // Update item currentStock directly
+          const item = await storage.getItem(entry.itemId);
+          if (item) {
+            await storage.updateItem(entry.itemId, {
+              currentStock: entry.countedQty ?? 0,
+            });
+          }
+          totalVariances++;
+        }
+        adjustmentsApplied++;
+      }
+
+      // Mark session committed
+      await storage.updateCycleCountSession(req.params.id, {
+        status: "COMMITTED",
+        committedAt: new Date(),
+        committedBy: req.session.userId || "system",
+        totalVariances,
+      });
+
+      res.json({ success: true, adjustmentsApplied, totalVariances });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to commit cycle count" });
+    }
+  });
+
+  // ============================================================================
+  // CHANNEL SYNC INTERVAL (#5) — update Amazon sync frequency
+  // ============================================================================
+
+  // PATCH /api/channels/:id/sync-interval
+  app.patch("/api/channels/:id/sync-interval", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const { syncIntervalHours } = req.body;
+      if (!syncIntervalHours || isNaN(syncIntervalHours) || syncIntervalHours < 1 || syncIntervalHours > 168) {
+        return res.status(400).json({ error: "syncIntervalHours must be between 1 and 168" });
+      }
+      const channel = await storage.getChannel(req.params.id);
+      if (!channel) return res.status(404).json({ error: "Channel not found" });
+      const updated = await storage.updateChannel(req.params.id, { syncIntervalHours: parseInt(syncIntervalHours) });
+
+      // Restart the scheduler for this channel so new interval takes effect immediately
+      try {
+        const { restartChannelSchedule } = await import("./scheduler-service");
+        await restartChannelSchedule(req.params.id);
+      } catch (schedErr: any) {
+        console.warn("[Channel] Could not restart scheduler:", schedErr.message);
+      }
+
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to update sync interval" });
+    }
+  });
+
+  // ============================================================================
+  // DIRECT ORDERS (#10) — streamlined Hildale order creation
+  // ============================================================================
+
+  // POST /api/direct-orders — create a DIRECT channel sales order (Clarence packs it himself)
+  // Simplified wrapper around the regular sales order endpoint: always DIRECT channel,
+  // fulfillmentSource HILDALE, status ORDERED, no externalOrderId needed.
+  app.post("/api/direct-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { customerName, customerEmail, customerPhone, notes, lines } = req.body;
+      if (!customerName) return res.status(400).json({ error: "customerName is required" });
+      if (!Array.isArray(lines) || lines.length === 0) return res.status(400).json({ error: "At least one line item is required" });
+
+      const order = {
+        channel: "DIRECT",
+        customerName,
+        customerEmail: customerEmail || null,
+        customerPhone: customerPhone || null,
+        notes: notes || null,
+        status: "ORDERED",
+        fulfillmentSource: "HILDALE",
+        totalAmount: lines.reduce((s: number, l: any) => s + (l.unitPrice ?? 0) * l.qtyOrdered, 0),
+        currency: "USD",
+        componentsUsed: 0,
+        productionStatus: "ready",
+        isHistorical: false,
+        returnStatus: "NONE",
+        totalReturnQty: 0,
+        totalRefundAmount: 0,
+        isDamaged: false,
+      };
+
+      // Re-use the existing create sales order logic via internal call
+      req.body = { order, lines };
+      // Forward to the main sales order creation handler by building a new internal request
+      const fullOrder = await (async () => {
+        const { insertSalesOrderSchema, insertSalesOrderLineSchema } = await import("@shared/schema");
+        const validatedOrder = insertSalesOrderSchema.parse(order);
+        const createdOrder = await storage.createSalesOrder(validatedOrder);
+
+        const createdLines = [];
+        const affectedProductIds = new Set<string>();
+
+        for (const lineData of lines) {
+          const product = await storage.getItem(lineData.productId);
+          if (!product) throw new Error(`Product not found: ${lineData.productId}`);
+          const availableStock = (product.hildaleQty ?? 0);
+          const qtyAllocated = Math.min(lineData.qtyOrdered, availableStock);
+          const backorderQty = Math.max(0, lineData.qtyOrdered - qtyAllocated);
+          const validated = insertSalesOrderLineSchema.parse({
+            ...lineData,
+            salesOrderId: createdOrder.id,
+            qtyAllocated,
+            backorderQty,
+            qtyShipped: 0,
+          });
+          const line = await storage.createSalesOrderLine(validated);
+          createdLines.push(line);
+          affectedProductIds.add(lineData.productId);
+        }
+
+        for (const productId of Array.from(affectedProductIds)) {
+          await storage.refreshBackorderSnapshot(productId);
+        }
+
+        return { order: createdOrder, lines: createdLines };
+      })();
+
+      res.status(201).json(fullOrder);
+    } catch (error: any) {
+      console.error("[DirectOrder] Error:", error.message);
+      res.status(500).json({ error: error.message || "Failed to create direct order" });
+    }
+  });
+
+  // GET /api/direct-orders — list DIRECT channel orders
+  app.get("/api/direct-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allOrders = await storage.getAllSalesOrders();
+      const directOrders = allOrders.filter((o: any) => o.channel === "DIRECT");
+      res.json(directOrders);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch direct orders" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -28,6 +28,16 @@ const mainMenuItems = [
     title: "Production",
     url: "/production",
     icon: Factory,
+  },
+  {
+    title: "Cycle Count",
+    url: "/cycle-count",
+    icon: ClipboardCheck,
+  },
+  {
+    title: "Direct Orders",
+    url: "/direct-orders",
+    icon: PackageCheck,
   },
   {
     title: "Barcodes",

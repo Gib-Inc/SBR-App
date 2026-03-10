@@ -62,18 +62,23 @@ export class ImportService {
   suggestColumnMappings(headers: string[]): ColumnMapping {
     const mapping: ColumnMapping = {};
     const fieldMappings: { [key: string]: string[] } = {
-      name: ["name", "product name", "item name", "title", "description"],
-      sku: ["sku", "product code", "item code", "part number", "item number"],
-      barcodeValue: ["barcode", "barcode value", "upc", "ean", "gtin", "code", "barcode_value"],
+      name: ["name", "product name", "item name", "title", "description", "material name"],
+      sku: ["sku", "product code", "item code", "part number", "item number", "sbr convention sku", "house sku"],
+      upc: ["upc", "upc code", "gtin", "upc/gtin"],
+      category: ["category", "cat", "group", "item category", "product category"],
+      supplierName: ["supplier", "supplier name", "vendor", "vendor name"],
+      supplierSku: ["supplier sku", "vendor sku", "supplier part #", "supplier part number", "vendor part #", "supplier part", "vendor part"],
+      unitCost: ["unit cost", "cost", "price", "price per unit ($)", "unit price", "landed cost ($)", "price per unit"],
+      barcodeValue: ["barcode", "barcode value", "ean", "code", "barcode_value"],
       productKind: ["product kind", "type", "product type", "kind", "product_kind"],
-      barcodeUsage: ["barcode usage", "usage", "barcode_usage"],
+      barcodeUsage: ["barcode usage", "barcode_usage"],
       barcodeFormat: ["barcode format", "format", "symbology", "barcode_format"],
-      barcodeSource: ["barcode source", "source", "barcode_source"],
+      barcodeSource: ["barcode source", "barcode_source"],
       externalSystem: ["external system", "system", "source system", "external_system"],
       externalId: ["external id", "external_id", "external reference", "external ref"],
-      currentStock: ["current stock", "stock", "quantity", "qty", "current_stock"],
+      currentStock: ["current stock", "stock", "quantity", "qty", "current_stock", "on hand", "on hand\n(3/4/26)"],
       minStock: ["min stock", "minimum stock", "min_stock", "reorder point"],
-      dailyUsage: ["daily usage", "usage", "daily_usage", "avg usage"],
+      dailyUsage: ["daily usage", "daily_usage", "avg usage"],
       unit: ["unit", "uom", "unit of measure"],
       location: ["location", "warehouse", "bin"],
     };
@@ -109,7 +114,26 @@ export class ImportService {
             item[schemaField] = parseInt(value, 10) || 0;
             break;
           case "dailyUsage":
-            item[schemaField] = parseFloat(value) || 0;
+          case "unitCost":
+            item[schemaField as "dailyUsage"] = parseFloat(value) || 0;
+            break;
+          case "upc":
+            // Store UPC both as upc field and barcodeValue for barcode system
+            (item as any).upc = String(value).trim();
+            if (!item.barcodeValue) {
+              item.barcodeValue = String(value).trim();
+              item.barcodeFormat = "EAN13";
+              item.barcodeUsage = "EXTERNAL_GS1";
+            }
+            break;
+          case "category":
+            (item as any).category = String(value).trim();
+            break;
+          case "supplierName":
+            (item as any)._supplierName = String(value).trim();
+            break;
+          case "supplierSku":
+            (item as any)._supplierSku = String(value).trim();
             break;
           case "productKind":
             // Normalize productKind values - handle both type values and productKind values
@@ -426,9 +450,13 @@ export class ImportService {
         if (match.matched && match.matchedItem) {
           await this.storage.updateItem(match.matchedItem.id, item);
           result.updated++;
+          // Link supplier if provided
+          await this._linkSupplier(match.matchedItem.id, item);
         } else {
-          await this.storage.createItem(item as InsertItem);
+          const created = await this.storage.createItem(item as InsertItem);
           result.inserted++;
+          // Link supplier if provided
+          await this._linkSupplier(created.id, item);
         }
       } catch (error: any) {
         result.failed++;
@@ -445,5 +473,44 @@ export class ImportService {
     }
 
     return result;
+  }
+
+  // Find-or-create a supplier by name, then link to item as designated supplier
+  private async _linkSupplier(itemId: string, item: any): Promise<void> {
+    const supplierName: string | undefined = item._supplierName;
+    if (!supplierName) return;
+
+    try {
+      // Find existing supplier by name (case-insensitive)
+      const allSuppliers = await this.storage.getAllSuppliers();
+      let supplier = allSuppliers.find(
+        (s: any) => s.name.toLowerCase() === supplierName.toLowerCase()
+      );
+
+      // Create if not found
+      if (!supplier) {
+        supplier = await this.storage.createSupplier({
+          name: supplierName,
+          supplierType: "supplier",
+        } as any);
+      }
+
+      // Check if link already exists
+      const existingLinks = await this.storage.getSupplierItemsByItemId(itemId);
+      const alreadyLinked = existingLinks.find((l: any) => l.supplierId === supplier!.id);
+      if (alreadyLinked) return;
+
+      // Create supplier item link
+      await this.storage.createSupplierItem({
+        itemId,
+        supplierId: supplier.id,
+        supplierSku: item._supplierSku || null,
+        price: item.unitCost ?? null,
+        isDesignatedSupplier: true,
+      } as any);
+    } catch (err) {
+      // Non-fatal — item was still imported
+      console.warn(`[ImportService] Could not link supplier "${supplierName}" to item ${itemId}:`, err);
+    }
   }
 }

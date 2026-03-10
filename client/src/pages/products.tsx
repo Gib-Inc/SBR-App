@@ -60,6 +60,17 @@ interface ChannelColumnVisibility {
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "bom-channel-column-visibility";
 
+const SBR_CATEGORIES = [
+  "Catch Baskets",
+  "Foam Rollers",
+  "Frames",
+  "Hardware",
+  "Packaging",
+  "Raw Materials",
+  "Screens & Sleeves",
+  "Other",
+];
+
 function getDefaultColumnVisibility(): ChannelColumnVisibility {
   return {
     shopifySku: true,
@@ -173,9 +184,30 @@ function StockInventoryRow({
       {/* Category column (flat list mode) */}
       {showCategory && (
         <td className="px-3 align-middle whitespace-nowrap">
-          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
-            {item.category || "Uncategorized"}
-          </span>
+          {editingField === "category" ? (
+            <div className="flex items-center gap-1">
+              <select
+                className="h-7 rounded border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                autoFocus
+                onBlur={() => { if (editValue) saveEdit(); else cancelEdit(); }}
+              >
+                <option value="">Select...</option>
+                {SBR_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <button onClick={saveEdit} className="text-green-600"><Check className="h-3.5 w-3.5" /></button>
+              <button onClick={cancelEdit} className="text-muted-foreground"><X className="h-3.5 w-3.5" /></button>
+            </div>
+          ) : (
+            <span
+              className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium cursor-pointer hover:bg-muted/80"
+              onClick={() => startEdit("category", item.category || "")}
+              title="Click to change category"
+            >
+              {item.category || <span className="text-amber-500">Set category</span>}
+            </span>
+          )}
         </td>
       )}
 
@@ -245,10 +277,36 @@ function StockInventoryRow({
 
       {/* UPC */}
       <td className="px-3 align-middle whitespace-nowrap">
-        {missingUpc
-          ? <MissingBadge label="UPC" />
-          : <span className="font-mono text-xs">{item.upc}</span>
-        }
+        {editingField === "upc" ? (
+          <div className="flex items-center gap-1">
+            <input
+              className="h-7 w-32 rounded border border-border bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Enter UPC..."
+              autoFocus
+            />
+            <button onClick={saveEdit} className="text-green-600"><Check className="h-3.5 w-3.5" /></button>
+            <button onClick={cancelEdit} className="text-muted-foreground"><X className="h-3.5 w-3.5" /></button>
+          </div>
+        ) : missingUpc ? (
+          <span
+            className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400 text-xs cursor-pointer hover:underline"
+            onClick={() => startEdit("upc", "")}
+            title="Click to add UPC"
+          >
+            <AlertCircle className="h-3 w-3" />
+            <span>Add UPC</span>
+          </span>
+        ) : (
+          <span
+            className="font-mono text-xs cursor-pointer hover:underline"
+            onClick={() => startEdit("upc", item.upc)}
+          >
+            {item.upc}
+          </span>
+        )}
       </td>
 
       {/* Unit Cost */}
@@ -1751,14 +1809,9 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
                   <SelectValue placeholder="Select a category..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Frames">Frames</SelectItem>
-                  <SelectItem value="Catch Baskets">Catch Baskets</SelectItem>
-                  <SelectItem value="Foam Rollers">Foam Rollers</SelectItem>
-                  <SelectItem value="Screens & Sleeves">Screens &amp; Sleeves</SelectItem>
-                  <SelectItem value="Hardware">Hardware</SelectItem>
-                  <SelectItem value="Packaging">Packaging</SelectItem>
-                  <SelectItem value="Raw Materials">Raw Materials</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
+                  {SBR_CATEGORIES.map(c => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -2621,7 +2674,7 @@ export default function BOM() {
                       {/* Category header row */}
                       <tr key={`cat-header-${cat}`} className="bg-muted/30 border-b border-t">
                         <td
-                          colSpan={13}
+                          colSpan={14}
                           className="px-3 py-1.5"
                         >
                           <div className="flex items-center gap-2">
@@ -2637,7 +2690,7 @@ export default function BOM() {
                         <StockInventoryRow
                           key={item.id}
                           item={item}
-                          showCategory={false}
+                          showCategory={true}
                           onUpdate={handleUpdate}
                           onDelete={handleDelete}
                           onReorder={setReorderItem}

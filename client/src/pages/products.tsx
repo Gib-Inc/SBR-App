@@ -95,6 +95,271 @@ function saveColumnVisibility(visibility: ChannelColumnVisibility) {
   }
 }
 
+// Dedicated clean row for Stock Inventory with missing data indicators
+function StockInventoryRow({
+  item,
+  showCategory,
+  onDelete,
+  onUpdate,
+  onReorder,
+  onCostSettings,
+  aiRecommendations,
+  safetyStockDays,
+}: {
+  item: any;
+  showCategory: boolean;
+  onDelete: (item: any) => void;
+  onUpdate: (id: string, field: string, value: string | number, onSuccess: () => void, onError: () => void) => void;
+  onReorder?: (item: any) => void;
+  onCostSettings?: (item: any) => void;
+  aiRecommendations?: any[];
+  safetyStockDays?: number;
+}) {
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const startEdit = (field: string, val: string | number) => {
+    setEditingField(field);
+    setEditValue(String(val || ""));
+  };
+  const cancelEdit = () => { setEditingField(null); setEditValue(""); };
+  const saveEdit = () => {
+    if (!editingField) return;
+    const isNumeric = editingField === "currentStock";
+    const val = isNumeric ? Number(editValue) : editValue.trim();
+    if (isNumeric && isNaN(val as number)) return;
+    if (!isNumeric && !val) return;
+    onUpdate(item.id, editingField, val as string | number, () => { setEditingField(null); setEditValue(""); }, () => {});
+  };
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") saveEdit();
+    else if (e.key === "Escape") cancelEdit();
+  };
+
+  const missingSupplier = !item.primarySupplier?.supplierName;
+  const missingCost = !item.primarySupplier?.unitCost;
+  const missingVendorSku = !item.primarySupplier?.supplierSku;
+  const missingUpc = !item.upc;
+
+  const totalFields = 4;
+  const filledFields = [!missingSupplier, !missingCost, !missingVendorSku, !missingUpc].filter(Boolean).length;
+  const completePct = Math.round((filledFields / totalFields) * 100);
+
+  const MissingBadge = ({ label }: { label: string }) => (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400 text-xs cursor-help">
+            <AlertCircle className="h-3 w-3" />
+            <span>Missing</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent><p className="text-xs">{label} not set</p></TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+
+  const itemRecommendation = aiRecommendations?.filter(
+    (r: any) => r.itemId === item.id && r.status === "pending"
+  ).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+  const bufferDays = safetyStockDays ?? 21;
+  const dailyUsage = item.dailyUsage || 0;
+  const currentStock = item.currentStock ?? 0;
+  const safetyStockGap = Math.max(0, Math.ceil(dailyUsage * bufferDays - currentStock));
+
+  return (
+    <tr className="h-11 border-b hover:bg-muted/20 transition-colors" data-testid={`row-stock-${item.id}`}>
+      {/* Category column (flat list mode) */}
+      {showCategory && (
+        <td className="px-3 align-middle whitespace-nowrap">
+          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
+            {item.category || "Uncategorized"}
+          </span>
+        </td>
+      )}
+
+      {/* Name */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        <div className="flex items-center gap-2">
+          {editingField === "name" ? (
+            <div className="flex items-center gap-1">
+              <input
+                className="h-7 w-40 rounded border border-border bg-background px-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                autoFocus
+              />
+              <button onClick={saveEdit} className="text-green-600 hover:text-green-700"><Check className="h-4 w-4" /></button>
+              <button onClick={cancelEdit} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+            </div>
+          ) : (
+            <span
+              className="cursor-pointer hover:underline text-sm font-medium"
+              onClick={() => startEdit("name", item.name)}
+            >
+              {item.name}
+            </span>
+          )}
+          {/* Completeness dot */}
+          {completePct < 100 && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={`h-2 w-2 rounded-full flex-shrink-0 cursor-help ${completePct === 0 ? "bg-red-500" : completePct < 75 ? "bg-amber-500" : "bg-yellow-400"}`} />
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs">{filledFields}/{totalFields} key fields filled ({completePct}%)</p>
+                  {missingSupplier && <p className="text-xs text-amber-400">· Supplier missing</p>}
+                  {missingCost && <p className="text-xs text-amber-400">· Unit cost missing</p>}
+                  {missingVendorSku && <p className="text-xs text-amber-400">· Vendor SKU missing</p>}
+                  {missingUpc && <p className="text-xs text-amber-400">· UPC missing</p>}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
+      </td>
+
+      {/* SKU */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        <span className="font-mono text-xs text-muted-foreground">{item.sku || "—"}</span>
+      </td>
+
+      {/* Supplier */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        {missingSupplier
+          ? <MissingBadge label="Supplier" />
+          : <span className="text-sm">{item.primarySupplier.supplierName}</span>
+        }
+      </td>
+
+      {/* Vendor SKU */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        {missingVendorSku
+          ? <MissingBadge label="Vendor SKU" />
+          : <span className="font-mono text-xs">{item.primarySupplier.supplierSku}</span>
+        }
+      </td>
+
+      {/* UPC */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        {missingUpc
+          ? <MissingBadge label="UPC" />
+          : <span className="font-mono text-xs">{item.upc}</span>
+        }
+      </td>
+
+      {/* Unit Cost */}
+      <td className="px-3 align-middle whitespace-nowrap text-right">
+        {missingCost
+          ? <MissingBadge label="Unit cost" />
+          : <span className="text-sm font-mono">${item.primarySupplier.unitCost.toFixed(2)}</span>
+        }
+      </td>
+
+      {/* Safety Stock Gap */}
+      <td className="px-3 align-middle whitespace-nowrap text-right">
+        {safetyStockGap > 0
+          ? <span className="text-amber-600 dark:text-amber-400 font-medium text-sm">{safetyStockGap}</span>
+          : <span className="text-green-600 dark:text-green-400 text-sm">0</span>
+        }
+      </td>
+
+      {/* MOQ */}
+      <td className="px-3 align-middle whitespace-nowrap text-right">
+        <span className="text-sm">{item.primarySupplier?.minimumOrderQuantity || <span className="text-muted-foreground">—</span>}</span>
+      </td>
+
+      {/* Lead Time */}
+      <td className="px-3 align-middle whitespace-nowrap text-right">
+        <span className="text-sm">
+          {item.primarySupplier?.leadTimeDays
+            ? `${item.primarySupplier.leadTimeDays}d`
+            : <span className="text-muted-foreground">—</span>
+          }
+        </span>
+      </td>
+
+      {/* Stock */}
+      <td className="px-3 align-middle whitespace-nowrap text-right">
+        {editingField === "currentStock" ? (
+          <div className="flex items-center justify-end gap-1">
+            <input
+              type="number"
+              className="h-7 w-20 rounded border border-border bg-background px-2 text-sm text-right font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              autoFocus
+            />
+            <button onClick={saveEdit} className="text-green-600"><Check className="h-4 w-4" /></button>
+            <button onClick={cancelEdit} className="text-muted-foreground"><X className="h-4 w-4" /></button>
+          </div>
+        ) : (
+          <span
+            className="cursor-pointer font-mono text-sm hover:underline"
+            onClick={() => startEdit("currentStock", currentStock)}
+          >
+            {currentStock}
+          </span>
+        )}
+      </td>
+
+      {/* AI Reorder */}
+      <td className="px-3 align-middle whitespace-nowrap">
+        {itemRecommendation ? (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => onReorder?.(item)}
+                  className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  <Brain className="h-3.5 w-3.5" />
+                  Order {itemRecommendation.recommendedOrderQty}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent><p className="text-xs max-w-48">{itemRecommendation.reason || "AI reorder recommendation"}</p></TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+
+      {/* Actions */}
+      <td className="sticky right-0 z-10 bg-card px-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
+        <div className="flex items-center justify-end gap-1">
+          {onCostSettings && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onCostSettings(item)}>
+                    <DollarSign className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent><p className="text-xs">Cost settings</p></TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(item)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent><p className="text-xs">Delete item</p></TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
 function ItemTableRow({ 
   item, 
   onDelete, 
@@ -1481,13 +1746,21 @@ function CreateItemDialog({ isOpen, onClose, isFinished }: { isOpen: boolean; on
           {!isFinished && (
             <div className="space-y-2">
               <Label htmlFor="category">Category</Label>
-              <Input
-                id="category"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="e.g., Hardware, Springs, Nuts"
-                data-testid="input-create-category"
-              />
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger id="category" data-testid="input-create-category">
+                  <SelectValue placeholder="Select a category..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Frames">Frames</SelectItem>
+                  <SelectItem value="Catch Baskets">Catch Baskets</SelectItem>
+                  <SelectItem value="Foam Rollers">Foam Rollers</SelectItem>
+                  <SelectItem value="Screens & Sleeves">Screens &amp; Sleeves</SelectItem>
+                  <SelectItem value="Hardware">Hardware</SelectItem>
+                  <SelectItem value="Packaging">Packaging</SelectItem>
+                  <SelectItem value="Raw Materials">Raw Materials</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           )}
           
@@ -1681,6 +1954,9 @@ function InventoryChangeReasonDialog({
 
 export default function BOM() {
   const [searchQuery, setSearchQuery] = useState("");
+  const [stockSortField, setStockSortField] = useState<string>("category");
+  const [stockSortDir, setStockSortDir] = useState<"asc" | "desc">("asc");
+  const [groupByCategory, setGroupByCategory] = useState(true);
   const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
@@ -1789,6 +2065,64 @@ export default function BOM() {
 
   const finishedProducts = filteredItems.filter((item: any) => item.type === "finished_product");
   const stockInventory = filteredItems.filter((item: any) => item.type === "component");
+
+  // Sort stock inventory
+  const sortedStockInventory = [...stockInventory].sort((a: any, b: any) => {
+    let aVal: any, bVal: any;
+    if (stockSortField === "category") {
+      aVal = (a.category || "Uncategorized").toLowerCase();
+      bVal = (b.category || "Uncategorized").toLowerCase();
+      if (aVal === bVal) {
+        aVal = a.name.toLowerCase();
+        bVal = b.name.toLowerCase();
+        return aVal.localeCompare(bVal);
+      }
+    } else if (stockSortField === "name") {
+      aVal = a.name.toLowerCase();
+      bVal = b.name.toLowerCase();
+    } else if (stockSortField === "supplier") {
+      aVal = (a.primarySupplier?.supplierName || "").toLowerCase();
+      bVal = (b.primarySupplier?.supplierName || "").toLowerCase();
+    } else if (stockSortField === "cost") {
+      aVal = a.primarySupplier?.unitCost ?? 0;
+      bVal = b.primarySupplier?.unitCost ?? 0;
+    } else if (stockSortField === "stock") {
+      aVal = a.currentStock ?? 0;
+      bVal = b.currentStock ?? 0;
+    } else {
+      aVal = a.name.toLowerCase();
+      bVal = b.name.toLowerCase();
+    }
+    const cmp = typeof aVal === "string" ? aVal.localeCompare(bVal) : (aVal - bVal);
+    return stockSortDir === "asc" ? cmp : -cmp;
+  });
+
+  // Group by category
+  const stockByCategory: Record<string, any[]> = {};
+  for (const item of sortedStockInventory) {
+    const cat = item.category || "Uncategorized";
+    if (!stockByCategory[cat]) stockByCategory[cat] = [];
+    stockByCategory[cat].push(item);
+  }
+  const categoryOrder = Object.keys(stockByCategory).sort((a, b) => {
+    if (a === "Uncategorized") return 1;
+    if (b === "Uncategorized") return -1;
+    return a.localeCompare(b);
+  });
+
+  const handleStockSort = (field: string) => {
+    if (stockSortField === field) {
+      setStockSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setStockSortField(field);
+      setStockSortDir("asc");
+    }
+  };
+
+  const SortIcon = ({ field }: { field: string }) => {
+    if (stockSortField !== field) return <span className="ml-1 text-muted-foreground/40">↕</span>;
+    return <span className="ml-1">{stockSortDir === "asc" ? "↑" : "↓"}</span>;
+  };
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, updates }: { id: string; updates: any }) => {
@@ -2201,9 +2535,22 @@ export default function BOM() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Stock Inventory</h2>
-            <p className="text-sm text-muted-foreground">Components and raw materials</p>
+            <p className="text-sm text-muted-foreground">
+              Components and raw materials · {sortedStockInventory.length} items
+              {sortedStockInventory.filter((i: any) => !i.primarySupplier?.supplierName || !i.primarySupplier?.unitCost).length > 0 && (
+                <span className="ml-2 text-amber-600 dark:text-amber-400 font-medium">
+                  ⚠ {sortedStockInventory.filter((i: any) => !i.primarySupplier?.supplierName || !i.primarySupplier?.unitCost).length} items with missing data
+                </span>
+              )}
+            </p>
           </div>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
+            <button
+              onClick={() => setGroupByCategory(g => !g)}
+              className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${groupByCategory ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground hover:text-foreground"}`}
+            >
+              {groupByCategory ? "Grouped" : "Flat List"}
+            </button>
             <Button
               size="sm"
               onClick={() => setIsCreateStockDialogOpen(true)}
@@ -2218,7 +2565,7 @@ export default function BOM() {
           <div className="flex h-48 items-center justify-center">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
           </div>
-        ) : stockInventory.length === 0 ? (
+        ) : sortedStockInventory.length === 0 ? (
           <Card>
             <CardContent className="flex h-48 flex-col items-center justify-center gap-2">
               <Package className="h-12 w-12 text-muted-foreground" />
@@ -2232,32 +2579,90 @@ export default function BOM() {
             <table className="w-full table-auto">
               <thead className="bg-muted/50">
                 <tr className="border-b">
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Name</th>
+                  {groupByCategory && <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px text-muted-foreground">Category</th>}
+                  <th
+                    className="p-3 text-left text-sm font-medium whitespace-nowrap cursor-pointer select-none hover:bg-muted/80"
+                    onClick={() => handleStockSort("name")}
+                  >
+                    Name <SortIcon field="name" />
+                  </th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">SKU</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier</th>
-                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Supplier SKU</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Unit Cost</th>
+                  <th
+                    className="p-3 text-left text-sm font-medium whitespace-nowrap w-px cursor-pointer select-none hover:bg-muted/80"
+                    onClick={() => handleStockSort("supplier")}
+                  >
+                    Supplier <SortIcon field="supplier" />
+                  </th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Vendor SKU</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">UPC</th>
+                  <th
+                    className="p-3 text-right text-sm font-medium whitespace-nowrap w-px cursor-pointer select-none hover:bg-muted/80"
+                    onClick={() => handleStockSort("cost")}
+                  >
+                    Unit Cost <SortIcon field="cost" />
+                  </th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Safety Stock Gap</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Supplier MOQ</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">MOQ</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
-                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Stock</th>
+                  <th
+                    className="p-3 text-right text-sm font-medium whitespace-nowrap w-px cursor-pointer select-none hover:bg-muted/80"
+                    onClick={() => handleStockSort("stock")}
+                  >
+                    Stock <SortIcon field="stock" />
+                  </th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">AI Reorder</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {stockInventory.map((item: any) => (
-                  <ItemTableRow
-                    key={item.id}
-                    item={item}
-                    onUpdate={handleUpdate}
-                    onDelete={handleDelete}
-                    onReorder={setReorderItem}
-                    onCostSettings={setCostSettingsItem}
-                    aiRecommendations={aiRecommendations}
-                    safetyStockDays={safetyStockDays}
-                  />
-                ))}
+                {groupByCategory ? (
+                  categoryOrder.map((cat) => (
+                    <>
+                      {/* Category header row */}
+                      <tr key={`cat-header-${cat}`} className="bg-muted/30 border-b border-t">
+                        <td
+                          colSpan={13}
+                          className="px-3 py-1.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{cat}</span>
+                            <span className="text-xs text-muted-foreground">({stockByCategory[cat].length})</span>
+                            {stockByCategory[cat].some((i: any) => !i.primarySupplier?.supplierName || !i.primarySupplier?.unitCost || !i.primarySupplier?.supplierSku) && (
+                              <span className="text-xs text-amber-600 dark:text-amber-400">· missing data</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {stockByCategory[cat].map((item: any) => (
+                        <StockInventoryRow
+                          key={item.id}
+                          item={item}
+                          showCategory={false}
+                          onUpdate={handleUpdate}
+                          onDelete={handleDelete}
+                          onReorder={setReorderItem}
+                          onCostSettings={setCostSettingsItem}
+                          aiRecommendations={aiRecommendations}
+                          safetyStockDays={safetyStockDays}
+                        />
+                      ))}
+                    </>
+                  ))
+                ) : (
+                  sortedStockInventory.map((item: any) => (
+                    <StockInventoryRow
+                      key={item.id}
+                      item={item}
+                      showCategory={true}
+                      onUpdate={handleUpdate}
+                      onDelete={handleDelete}
+                      onReorder={setReorderItem}
+                      onCostSettings={setCostSettingsItem}
+                      aiRecommendations={aiRecommendations}
+                      safetyStockDays={safetyStockDays}
+                    />
+                  ))
+                )}
               </tbody>
             </table>
           </div>

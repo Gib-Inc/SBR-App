@@ -115,6 +115,8 @@ export const items = pgTable("items", {
   extensivWarehouseId: text("extensiv_warehouse_id"), // Extensiv warehouse ID override for this item
   // UPC/GTIN for product identification
   upc: text("upc"), // GS1/UPC/GTIN barcode (unique when present, recommended for finished products)
+  // Category for grouping/sorting in inventory views
+  category: text("category"), // e.g. 'Frames', 'Hardware', 'Packaging', 'Foam Rollers', 'Screens & Sleeves', 'Raw Materials', 'Catch Baskets', 'Other'
   // QuickBooks integration fields (for demand history sync)
   quickbooksItemId: text("quickbooks_item_id"), // QB itemRef.id for mapped products
   quickbooksItemName: text("quickbooks_item_name"), // QB item display name (for debugging)

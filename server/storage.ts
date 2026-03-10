@@ -4056,12 +4056,27 @@ export class PostgresStorage implements IStorage {
         if (row.items.type === "finished_product") {
           const forecast = await this.calculateProductionForecast(row.items.id);
           const totalOwned = (row.items.pivotQty ?? 0) + (row.items.hildaleQty ?? 0);
+
+          // Calculate BOM build cost: sum of (effectiveQty × component cost) per BOM line
+          let bomBuildCost: number | null = 0;
+          const bomEntries = await this.getBillOfMaterialsByProductId(row.items.id);
+          for (const entry of bomEntries) {
+            const component = await this.getItem(entry.componentId);
+            const wastage = (entry as any).wastagePercent ?? 0;
+            const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+            const unitCost = component?.defaultPurchaseCost ?? null;
+            if (unitCost === null) { bomBuildCost = null; break; }
+            bomBuildCost! += effectiveQty * unitCost;
+          }
+          if (bomBuildCost !== null) bomBuildCost = Math.round(bomBuildCost * 100) / 100;
+
           return {
             ...row.items,
             componentsCount: row.componentsCount,
             forecastQty: forecast,
             totalOwned,
             primarySupplier,
+            bomBuildCost,
           };
         }
         // For components (non-finished products), return undefined instead of 0

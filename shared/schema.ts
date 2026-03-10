@@ -117,6 +117,8 @@ export const items = pgTable("items", {
   upc: text("upc"), // GS1/UPC/GTIN barcode (unique when present, recommended for finished products)
   // Category for grouping/sorting in inventory views
   category: text("category"), // e.g. 'Frames', 'Hardware', 'Packaging', 'Foam Rollers', 'Screens & Sleeves', 'Raw Materials', 'Catch Baskets', 'Other'
+  // Selling price (retail/MSRP) — used to calculate gross margin vs. BOM build cost
+  sellingPrice: real("selling_price"), // What SBR charges customers (USD)
   // QuickBooks integration fields (for demand history sync)
   quickbooksItemId: text("quickbooks_item_id"), // QB itemRef.id for mapped products
   quickbooksItemName: text("quickbooks_item_name"), // QB item display name (for debugging)
@@ -173,6 +175,10 @@ export const billOfMaterials = pgTable("bill_of_materials", {
   finishedProductId: varchar("finished_product_id").notNull().references(() => items.id),
   componentId: varchar("component_id").notNull().references(() => items.id),
   quantityRequired: integer("quantity_required").notNull(),
+  // Wastage/yield factor — accounts for material loss, rejects, cutting waste
+  // e.g. wastagePercent = 5 means you consume 5% more than quantityRequired per build
+  // effectiveQty = quantityRequired * (1 + wastagePercent / 100)
+  wastagePercent: real("wastage_percent").notNull().default(0),
 }, (table) => ({
   finishedProductIdIdx: index("bill_of_materials_finished_product_id_idx").on(table.finishedProductId),
 }));

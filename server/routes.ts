@@ -4321,6 +4321,7 @@ TOTAL: $${subtotal.toFixed(2)}
           finishedProductId: req.params.itemId,
           componentId: component.componentId,
           quantityRequired: component.quantity,
+          wastagePercent: component.wastagePercent ?? 0,
         });
         newBOM.push(entry);
       }
@@ -4356,6 +4357,88 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete BOM entry" });
+    }
+  });
+
+  // GET /api/bom/:itemId/cost-rollup
+  // Calculates total build cost and gross margin for a finished product.
+  //
+  // Teaching note: This is a "derived" or "computed" value — we don't store it
+  // in the database because it would go stale whenever component prices change.
+  // Instead we calculate it fresh on demand by joining BOM entries + component costs.
+  //
+  // Formula per component:
+  //   effectiveQty = quantityRequired × (1 + wastagePercent / 100)
+  //   lineCost     = effectiveQty × component.defaultPurchaseCost
+  // Total build cost = sum of all lineCosts
+  // Gross margin     = sellingPrice − totalBuildCost
+  // Margin %         = (grossMargin / sellingPrice) × 100
+  app.get("/api/bom/:itemId/cost-rollup", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const product = await storage.getItem(req.params.itemId);
+      if (!product) return res.status(404).json({ error: "Product not found" });
+
+      const bom = await storage.getBillOfMaterialsByProductId(req.params.itemId);
+
+      const lines: Array<{
+        componentId: string;
+        componentName: string;
+        componentSku: string;
+        quantityRequired: number;
+        wastagePercent: number;
+        effectiveQty: number;
+        unitCost: number | null;
+        lineCost: number | null;
+        missingCost: boolean;
+      }> = [];
+
+      let totalBuildCost = 0;
+      let hasMissingCosts = false;
+
+      for (const entry of bom) {
+        const component = await storage.getItem(entry.componentId);
+        const wastage = (entry as any).wastagePercent ?? 0;
+        const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+        const unitCost = component?.defaultPurchaseCost ?? null;
+        const lineCost = unitCost !== null ? effectiveQty * unitCost : null;
+
+        if (lineCost === null) hasMissingCosts = true;
+        else totalBuildCost += lineCost;
+
+        lines.push({
+          componentId: entry.componentId,
+          componentName: component?.name ?? "Unknown",
+          componentSku: component?.sku ?? "",
+          quantityRequired: entry.quantityRequired,
+          wastagePercent: wastage,
+          effectiveQty: Math.round(effectiveQty * 1000) / 1000,
+          unitCost,
+          lineCost: lineCost !== null ? Math.round(lineCost * 100) / 100 : null,
+          missingCost: unitCost === null,
+        });
+      }
+
+      const sellingPrice = (product as any).sellingPrice ?? null;
+      const grossMargin = sellingPrice !== null && !hasMissingCosts
+        ? sellingPrice - totalBuildCost
+        : null;
+      const marginPercent = grossMargin !== null && sellingPrice && sellingPrice > 0
+        ? (grossMargin / sellingPrice) * 100
+        : null;
+
+      res.json({
+        productId: product.id,
+        productName: product.name,
+        productSku: product.sku,
+        sellingPrice,
+        totalBuildCost: hasMissingCosts ? null : Math.round(totalBuildCost * 100) / 100,
+        grossMargin: grossMargin !== null ? Math.round(grossMargin * 100) / 100 : null,
+        marginPercent: marginPercent !== null ? Math.round(marginPercent * 10) / 10 : null,
+        hasMissingCosts,
+        lines,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to calculate cost rollup" });
     }
   });
 

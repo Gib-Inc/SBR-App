@@ -913,6 +913,57 @@ function ItemTableRow({
         </td>
       )}
 
+      {/* Sell Price Column — inline editable, finished products only */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle whitespace-nowrap text-right">
+          {editingField === "sellingPrice" ? (
+            <div className="flex items-center gap-1 justify-end">
+              <span className="text-muted-foreground text-sm">$</span>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
+                className="h-7 w-24 text-right text-sm"
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" onClick={saveEdit} className="h-7 w-7"><Check className="h-3 w-3" /></Button>
+              <Button size="icon" variant="ghost" onClick={cancelEdit} className="h-7 w-7"><X className="h-3 w-3" /></Button>
+            </div>
+          ) : (
+            <div
+              className="cursor-pointer rounded px-2 py-1 hover-elevate text-right text-sm"
+              onClick={() => startEdit("sellingPrice", item.sellingPrice ?? "")}
+              data-testid={`text-selling-price-${item.id}`}
+            >
+              {item.sellingPrice != null
+                ? `$${Number(item.sellingPrice).toFixed(2)}`
+                : <span className="text-muted-foreground italic">Set price</span>}
+            </div>
+          )}
+        </td>
+      )}
+
+      {/* Margin Column — calculated from sellingPrice vs bomBuildCost, read-only */}
+      {item.type === "finished_product" && (
+        <td className="px-3 align-middle whitespace-nowrap text-right text-sm">
+          {item.sellingPrice != null && item.bomBuildCost != null ? (() => {
+            const margin = item.sellingPrice - item.bomBuildCost;
+            const pct = item.sellingPrice > 0 ? (margin / item.sellingPrice) * 100 : 0;
+            const color = pct >= 40 ? "text-green-600 dark:text-green-400"
+              : pct >= 20 ? "text-yellow-600 dark:text-yellow-400"
+              : "text-red-600 dark:text-red-400";
+            return (
+              <span className={color} title={`Build cost: $${item.bomBuildCost.toFixed(2)}`}>
+                {pct.toFixed(1)}%
+              </span>
+            );
+          })() : <span className="text-muted-foreground">—</span>}
+        </td>
+      )}
+
       {/* Backorders Column (only for finished products) */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap">
@@ -1032,12 +1083,22 @@ function BOMDialog({
   allItems: any[];
 }) {
   const { toast } = useToast();
-  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number }>>([]);
+  const [bomComponents, setBomComponents] = useState<Array<{ componentId: string; quantity: number; wastagePercent: number }>>([]);
   const [hasChanges, setHasChanges] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const { data: bomData, isLoading } = useQuery({
     queryKey: ["/api/bom", item?.id],
+    enabled: !!item?.id && isOpen,
+  });
+
+  const { data: costRollup } = useQuery({
+    queryKey: ["/api/bom", item?.id, "cost-rollup"],
+    queryFn: async () => {
+      const res = await fetch(`/api/bom/${item.id}/cost-rollup`, { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json();
+    },
     enabled: !!item?.id && isOpen,
   });
 
@@ -1047,7 +1108,8 @@ function BOMDialog({
       if (bomData && Array.isArray(bomData) && bomData.length > 0) {
         const transformed = bomData.map((bom: any) => ({
           componentId: bom.componentId,
-          quantity: bom.quantityRequired
+          quantity: bom.quantityRequired,
+          wastagePercent: bom.wastagePercent ?? 0,
         }));
         setBomComponents(transformed);
       } else {
@@ -1068,8 +1130,12 @@ function BOMDialog({
   }, [isOpen]);
 
   const updateBOMMutation = useMutation({
-    mutationFn: async (components: Array<{ componentId: string; quantity: number }>) => {
-      const response = await apiRequest("POST", `/api/bom/${item.id}`, { components });
+    mutationFn: async (components: Array<{ componentId: string; quantity: number; wastagePercent: number }>) => {
+      const response = await apiRequest("POST", `/api/bom/${item.id}`, { components: components.map(c => ({
+        componentId: c.componentId,
+        quantity: c.quantity,
+        wastagePercent: c.wastagePercent,
+      })) });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: "Failed to update BOM" }));
         throw new Error(errorData.error || "Failed to update BOM");
@@ -1079,6 +1145,7 @@ function BOMDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/bom", item.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/bom", item.id, "cost-rollup"] });
       setHasChanges(false);
       toast({
         title: "Success",
@@ -1096,7 +1163,7 @@ function BOMDialog({
   });
 
   const addComponent = () => {
-    setBomComponents([...bomComponents, { componentId: "", quantity: 1 }]);
+    setBomComponents([...bomComponents, { componentId: "", quantity: 1, wastagePercent: 0 }]);
     setHasChanges(true);
   };
 
@@ -1177,13 +1244,13 @@ function BOMDialog({
                 </CardContent>
               </Card>
             ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
+              <div className="space-y-3 max-h-72 overflow-y-auto">
                 {bomComponents.map((component, index) => {
                   const isInvalid = !component.componentId || component.quantity <= 0;
                   return (
-                    <div key={index} className="flex items-end gap-3">
-                      <div className="flex-1 space-y-2">
-                        <Label>Component</Label>
+                    <div key={index} className="flex items-end gap-2">
+                      <div className="flex-1 space-y-1">
+                        <Label className="text-xs">Component</Label>
                         <Select
                           value={component.componentId}
                           onValueChange={(value) => updateComponent(index, "componentId", value)}
@@ -1204,8 +1271,8 @@ function BOMDialog({
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="w-32 space-y-2">
-                        <Label>Quantity</Label>
+                      <div className="w-24 space-y-1">
+                        <Label className="text-xs">Qty</Label>
                         <Input
                           type="number"
                           min="1"
@@ -1219,6 +1286,25 @@ function BOMDialog({
                           data-testid={`input-bom-quantity-${index}`}
                         />
                       </div>
+                      <div className="w-24 space-y-1">
+                        <Label className="text-xs flex items-center gap-1">
+                          Waste %
+                          <span className="text-muted-foreground cursor-help" title="Extra material consumed per unit. E.g. 5 = 5% more than qty required.">ⓘ</span>
+                        </Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.5"
+                          value={component.wastagePercent ?? 0}
+                          onChange={(e) => {
+                            const parsed = parseFloat(e.target.value);
+                            updateComponent(index, "wastagePercent", isNaN(parsed) ? 0 : parsed);
+                          }}
+                          disabled={updateBOMMutation.isPending}
+                          data-testid={`input-bom-wastage-${index}`}
+                        />
+                      </div>
                       <Button
                         type="button"
                         variant="ghost"
@@ -1226,12 +1312,47 @@ function BOMDialog({
                         onClick={() => removeComponent(index)}
                         disabled={updateBOMMutation.isPending}
                         data-testid={`button-remove-bom-component-${index}`}
+                        className="mb-0.5"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Cost Rollup Panel */}
+            {costRollup && (
+              <div className="rounded-lg border bg-muted/40 p-3 space-y-2 text-sm">
+                <div className="flex items-center justify-between font-medium">
+                  <span>Cost Summary</span>
+                  {costRollup.hasMissingCosts && (
+                    <span className="text-xs text-amber-600 dark:text-amber-400">⚠ Some component costs missing</span>
+                  )}
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Build cost</span>
+                  <span className="font-mono">
+                    {costRollup.totalBuildCost != null ? `$${costRollup.totalBuildCost.toFixed(2)}` : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Sell price</span>
+                  <span className="font-mono">
+                    {costRollup.sellingPrice != null ? `$${costRollup.sellingPrice.toFixed(2)}` : <span className="italic">Not set</span>}
+                  </span>
+                </div>
+                {costRollup.grossMargin != null && (
+                  <>
+                    <div className="border-t pt-2 flex justify-between font-medium">
+                      <span>Gross margin</span>
+                      <span className={`font-mono ${costRollup.marginPercent >= 40 ? "text-green-600 dark:text-green-400" : costRollup.marginPercent >= 20 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}`}>
+                        ${costRollup.grossMargin.toFixed(2)} ({costRollup.marginPercent.toFixed(1)}%)
+                      </span>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -2560,6 +2681,8 @@ export default function BOM() {
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Extensiv</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Available for Sale</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Days to Stockout</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Sell Price</th>
+                  <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Margin</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Backorders</th>
                   <th className="sticky right-0 z-10 bg-card p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>

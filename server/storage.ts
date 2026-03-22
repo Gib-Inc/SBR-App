@@ -130,6 +130,12 @@ import {
   type InsertCycleCountSession,
   type CycleCountEntry,
   type InsertCycleCountEntry,
+  type MarketingCampaign,
+  type InsertMarketingCampaign,
+  type ContentPipelineItem,
+  type InsertContentPipelineItem,
+  type ContentPipelineLog,
+  type InsertContentPipelineLog,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -655,6 +661,24 @@ export interface IStorage {
   // Inventory Adjustments (Manual Counts)
   createInventoryAdjustment(adj: InsertInventoryAdjustment): Promise<InventoryAdjustment>;
   getInventoryAdjustments(filters?: { submittedBy?: string; after?: Date; before?: Date; limit?: number }): Promise<InventoryAdjustment[]>;
+
+  // Marketing Campaigns
+  createMarketingCampaign(campaign: InsertMarketingCampaign): Promise<MarketingCampaign>;
+  getMarketingCampaigns(limit?: number): Promise<MarketingCampaign[]>;
+  getMarketingCampaign(id: string): Promise<MarketingCampaign | undefined>;
+  updateMarketingCampaign(id: string, data: Partial<InsertMarketingCampaign>): Promise<MarketingCampaign | undefined>;
+  deleteMarketingCampaign(id: string): Promise<boolean>;
+
+  // Content Pipeline
+  createContentPipelineItem(item: InsertContentPipelineItem): Promise<ContentPipelineItem>;
+  getContentPipelineItems(filters?: { campaignId?: string; status?: string; avatar?: string; limit?: number }): Promise<ContentPipelineItem[]>;
+  getContentPipelineItem(id: string): Promise<ContentPipelineItem | undefined>;
+  updateContentPipelineItem(id: string, data: Partial<ContentPipelineItem>): Promise<ContentPipelineItem | undefined>;
+  deleteContentPipelineItem(id: string): Promise<boolean>;
+
+  // Content Pipeline Logs
+  createContentPipelineLog(log: InsertContentPipelineLog): Promise<ContentPipelineLog>;
+  getContentPipelineLogs(pipelineItemId: string): Promise<ContentPipelineLog[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -3928,6 +3952,30 @@ export class MemStorage implements IStorage {
   async getInventoryAdjustments(filters?: any): Promise<InventoryAdjustment[]> {
     return [];
   }
+
+  // Marketing Campaigns (stub for MemStorage)
+  async createMarketingCampaign(campaign: InsertMarketingCampaign): Promise<MarketingCampaign> {
+    return { ...campaign, id: randomUUID(), createdAt: new Date(), updatedAt: new Date() } as MarketingCampaign;
+  }
+  async getMarketingCampaigns(limit?: number): Promise<MarketingCampaign[]> { return []; }
+  async getMarketingCampaign(id: string): Promise<MarketingCampaign | undefined> { return undefined; }
+  async updateMarketingCampaign(id: string, data: Partial<InsertMarketingCampaign>): Promise<MarketingCampaign | undefined> { return undefined; }
+  async deleteMarketingCampaign(id: string): Promise<boolean> { return false; }
+
+  // Content Pipeline (stub for MemStorage)
+  async createContentPipelineItem(item: InsertContentPipelineItem): Promise<ContentPipelineItem> {
+    return { ...item, id: randomUUID(), createdAt: new Date(), updatedAt: new Date() } as ContentPipelineItem;
+  }
+  async getContentPipelineItems(filters?: any): Promise<ContentPipelineItem[]> { return []; }
+  async getContentPipelineItem(id: string): Promise<ContentPipelineItem | undefined> { return undefined; }
+  async updateContentPipelineItem(id: string, data: Partial<ContentPipelineItem>): Promise<ContentPipelineItem | undefined> { return undefined; }
+  async deleteContentPipelineItem(id: string): Promise<boolean> { return false; }
+
+  // Content Pipeline Logs (stub for MemStorage)
+  async createContentPipelineLog(log: InsertContentPipelineLog): Promise<ContentPipelineLog> {
+    return { ...log, id: randomUUID(), createdAt: new Date() } as ContentPipelineLog;
+  }
+  async getContentPipelineLogs(pipelineItemId: string): Promise<ContentPipelineLog[]> { return []; }
 }
 
 export class PostgresStorage implements IStorage {
@@ -7471,6 +7519,91 @@ export class PostgresStorage implements IStorage {
       .orderBy(desc(schema.inventoryAdjustments.createdAt))
       .limit(filters?.limit || 100);
     return results;
+  }
+
+  // ── Marketing Campaigns ──
+
+  async createMarketingCampaign(campaign: InsertMarketingCampaign): Promise<MarketingCampaign> {
+    const result = await this.db.insert(schema.marketingCampaigns).values(campaign).returning();
+    return result[0];
+  }
+
+  async getMarketingCampaigns(limit?: number): Promise<MarketingCampaign[]> {
+    return await this.db.select().from(schema.marketingCampaigns)
+      .orderBy(desc(schema.marketingCampaigns.createdAt))
+      .limit(limit || 50);
+  }
+
+  async getMarketingCampaign(id: string): Promise<MarketingCampaign | undefined> {
+    const result = await this.db.select().from(schema.marketingCampaigns)
+      .where(eq(schema.marketingCampaigns.id, id));
+    return result[0];
+  }
+
+  async updateMarketingCampaign(id: string, data: Partial<InsertMarketingCampaign>): Promise<MarketingCampaign | undefined> {
+    const result = await this.db.update(schema.marketingCampaigns)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.marketingCampaigns.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteMarketingCampaign(id: string): Promise<boolean> {
+    const result = await this.db.delete(schema.marketingCampaigns)
+      .where(eq(schema.marketingCampaigns.id, id))
+      .returning();
+    return result.length > 0;
+  }
+
+  // ── Content Pipeline ──
+
+  async createContentPipelineItem(item: InsertContentPipelineItem): Promise<ContentPipelineItem> {
+    const result = await this.db.insert(schema.contentPipelineItems).values(item).returning();
+    return result[0];
+  }
+
+  async getContentPipelineItems(filters?: { campaignId?: string; status?: string; avatar?: string; limit?: number }): Promise<ContentPipelineItem[]> {
+    let query = this.db.select().from(schema.contentPipelineItems);
+    const conditions: any[] = [];
+    if (filters?.campaignId) conditions.push(eq(schema.contentPipelineItems.campaignId, filters.campaignId));
+    if (filters?.status) conditions.push(eq(schema.contentPipelineItems.status, filters.status));
+    if (filters?.avatar) conditions.push(eq(schema.contentPipelineItems.avatar, filters.avatar));
+    if (conditions.length > 0) query = query.where(and(...conditions)) as any;
+    return await (query as any).orderBy(desc(schema.contentPipelineItems.createdAt)).limit(filters?.limit || 50);
+  }
+
+  async getContentPipelineItem(id: string): Promise<ContentPipelineItem | undefined> {
+    const result = await this.db.select().from(schema.contentPipelineItems)
+      .where(eq(schema.contentPipelineItems.id, id));
+    return result[0];
+  }
+
+  async updateContentPipelineItem(id: string, data: Partial<ContentPipelineItem>): Promise<ContentPipelineItem | undefined> {
+    const result = await this.db.update(schema.contentPipelineItems)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.contentPipelineItems.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteContentPipelineItem(id: string): Promise<boolean> {
+    const result = await this.db.delete(schema.contentPipelineItems)
+      .where(eq(schema.contentPipelineItems.id, id))
+      .returning();
+    return result.length > 0;
+  }
+
+  // ── Content Pipeline Logs ──
+
+  async createContentPipelineLog(log: InsertContentPipelineLog): Promise<ContentPipelineLog> {
+    const result = await this.db.insert(schema.contentPipelineLogs).values(log).returning();
+    return result[0];
+  }
+
+  async getContentPipelineLogs(pipelineItemId: string): Promise<ContentPipelineLog[]> {
+    return await this.db.select().from(schema.contentPipelineLogs)
+      .where(eq(schema.contentPipelineLogs.pipelineItemId, pipelineItemId))
+      .orderBy(schema.contentPipelineLogs.agentNumber);
   }
 }
 

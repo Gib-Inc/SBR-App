@@ -70,6 +70,8 @@ import { logService } from "./services/log-service";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
+import { runD1Pipeline, runSingleAgent } from "./services/zobot-pipeline";
+import { insertMarketingCampaignSchema, insertContentPipelineItemSchema } from "@shared/schema";
 
 const SALT_ROUNDS = 10;
 
@@ -20607,6 +20609,161 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[InventoryAdjustment] Error fetching:", error);
       res.status(500).json({ error: error.message || "Failed to fetch adjustments" });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // ZOBOT MARKETING — Content Pipeline (D1 Pipeline)
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── Marketing Campaigns ──
+
+  app.post("/api/marketing/campaigns", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const data = insertMarketingCampaignSchema.parse(req.body);
+      const campaign = await storage.createMarketingCampaign(data);
+      res.status(201).json(campaign);
+    } catch (error: any) {
+      console.error("[Marketing] Create campaign error:", error);
+      res.status(400).json({ error: error.message || "Failed to create campaign" });
+    }
+  });
+
+  app.get("/api/marketing/campaigns", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+      const campaigns = await storage.getMarketingCampaigns(limit);
+      res.json(campaigns);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/marketing/campaigns/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const campaign = await storage.getMarketingCampaign(req.params.id);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+      res.json(campaign);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/marketing/campaigns/:id", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const campaign = await storage.updateMarketingCampaign(req.params.id, req.body);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+      res.json(campaign);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/marketing/campaigns/:id", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const deleted = await storage.deleteMarketingCampaign(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Campaign not found" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── Content Pipeline Items ──
+
+  app.post("/api/marketing/pipeline", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const data = insertContentPipelineItemSchema.parse(req.body);
+      const item = await storage.createContentPipelineItem(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      console.error("[Marketing] Create pipeline item error:", error);
+      res.status(400).json({ error: error.message || "Failed to create pipeline item" });
+    }
+  });
+
+  app.get("/api/marketing/pipeline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { campaignId, status, avatar, limit } = req.query;
+      const items = await storage.getContentPipelineItems({
+        campaignId: campaignId as string | undefined,
+        status: status as string | undefined,
+        avatar: avatar as string | undefined,
+        limit: limit ? parseInt(limit as string) : undefined,
+      });
+      res.json(items);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/marketing/pipeline/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const item = await storage.getContentPipelineItem(req.params.id);
+      if (!item) return res.status(404).json({ error: "Pipeline item not found" });
+      res.json(item);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/marketing/pipeline/:id", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const deleted = await storage.deleteContentPipelineItem(req.params.id);
+      if (!deleted) return res.status(404).json({ error: "Pipeline item not found" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── D1 Pipeline Execution ──
+
+  // Run full pipeline (all 6 agents)
+  app.post("/api/marketing/pipeline/:id/run", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const item = await storage.getContentPipelineItem(req.params.id);
+      if (!item) return res.status(404).json({ error: "Pipeline item not found" });
+
+      const { avatar, funnelStage, archetype, platform } = req.body;
+      const result = await runD1Pipeline(req.params.id, item.title, {
+        avatar, funnelStage, archetype, platform,
+      });
+
+      if (result.success) {
+        res.json({ success: true, item: result.item });
+      } else {
+        res.status(422).json({ success: false, error: result.error, item: result.item });
+      }
+    } catch (error: any) {
+      console.error("[ZoBot] Pipeline run error:", error);
+      res.status(500).json({ error: error.message || "Pipeline execution failed" });
+    }
+  });
+
+  // Run single agent step
+  app.post("/api/marketing/pipeline/:id/agent/:agentNumber", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const agentNumber = parseInt(req.params.agentNumber);
+      if (agentNumber < 1 || agentNumber > 6) {
+        return res.status(400).json({ error: "Agent number must be 1-6" });
+      }
+
+      const result = await runSingleAgent(req.params.id, agentNumber, req.body.input);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ZoBot] Single agent error:", error);
+      res.status(500).json({ error: error.message || "Agent execution failed" });
+    }
+  });
+
+  // Get pipeline logs for an item
+  app.get("/api/marketing/pipeline/:id/logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const logs = await storage.getContentPipelineLogs(req.params.id);
+      res.json(logs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 

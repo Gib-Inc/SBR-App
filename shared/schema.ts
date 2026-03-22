@@ -2665,3 +2665,80 @@ export const cycleCountEntries = pgTable("cycle_count_entries", {
 export const insertCycleCountEntrySchema = createInsertSchema(cycleCountEntries).omit({ id: true });
 export type InsertCycleCountEntry = z.infer<typeof insertCycleCountEntrySchema>;
 export type CycleCountEntry = typeof cycleCountEntries.$inferSelect;
+
+// ============================================================================
+// ZOBOT MARKETING — Content Pipeline (D1 Pipeline)
+// ============================================================================
+
+export const marketingCampaigns = pgTable("marketing_campaigns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  campaignType: text("campaign_type").notNull(), // SEASONAL, PRODUCT_LAUNCH, EVERGREEN, RETARGETING, B2B
+  status: text("status").notNull().default("DRAFT"), // DRAFT, ACTIVE, PAUSED, COMPLETED, ARCHIVED
+  startDate: timestamp("start_date"),
+  endDate: timestamp("end_date"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+
+export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaigns).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMarketingCampaign = z.infer<typeof insertMarketingCampaignSchema>;
+export type MarketingCampaign = typeof marketingCampaigns.$inferSelect;
+
+export const contentPipelineItems = pgTable("content_pipeline_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  campaignId: varchar("campaign_id").references(() => marketingCampaigns.id),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("INTAKE"), // INTAKE, BRIEF, SCRIPT, VISUAL, DISTRIBUTION, REVIEW, APPROVED, REJECTED, PUBLISHED
+  avatar: text("avatar"), // DOG_OWNER, BAREFOOT_FAMILY, TIME_CONSCIOUS, PREVENTION_THINKER, ACREAGE_OWNER, SKEPTIC
+  funnelStage: text("funnel_stage"), // COLD, WARM, HOT
+  archetype: text("archetype"), // AHA_MECHANICS, ORIGIN_STORY, SATAN_SPAWN
+  platform: text("platform"), // TIKTOK, INSTAGRAM, YOUTUBE, EMAIL, PINTEREST, FACEBOOK
+  conversionFramework: text("conversion_framework"), // PAS, AIDA
+  psychologyModel: text("psychology_model"), // LOSS_AVERSION, IKEA_EFFECT, ZEIGARNIK, etc.
+  hookCategory: text("hook_category"), // PAIN, TIME_SAVING, CONTRARIAN, CURIOSITY, TESTIMONIAL
+  primaryObjection: text("primary_objection"),
+  paidPotential: boolean("paid_potential").default(false),
+  // Agent outputs stored as JSON
+  intakeOutput: jsonb("intake_output"), // Agent 1 output
+  briefOutput: jsonb("brief_output"), // Agent 2 output
+  scriptOutput: jsonb("script_output"), // Agent 3 output
+  visualOutput: jsonb("visual_output"), // Agent 4 output
+  distributionOutput: jsonb("distribution_output"), // Agent 5 output
+  reviewOutput: jsonb("review_output"), // Agent 6 output
+  reviewScore: integer("review_score"), // Agent 6 quality gate score (0-10)
+  reviewNotes: text("review_notes"),
+  pipelineStopReason: text("pipeline_stop_reason"), // If PIPELINE_STOP triggered
+  escalationRoute: text("escalation_route"), // Who to escalate to
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  campaignIdIdx: index("content_pipeline_campaign_id_idx").on(table.campaignId),
+  statusIdx: index("content_pipeline_status_idx").on(table.status),
+}));
+
+export const insertContentPipelineItemSchema = createInsertSchema(contentPipelineItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertContentPipelineItem = z.infer<typeof insertContentPipelineItemSchema>;
+export type ContentPipelineItem = typeof contentPipelineItems.$inferSelect;
+
+export const contentPipelineLogs = pgTable("content_pipeline_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  pipelineItemId: varchar("pipeline_item_id").notNull().references(() => contentPipelineItems.id),
+  agentNumber: integer("agent_number").notNull(), // 1-6
+  agentName: text("agent_name").notNull(), // INTAKE, BRIEF_WRITER, SCRIPT_WRITER, VISUAL_DIRECTOR, DISTRIBUTION, BRAND_REVIEWER
+  input: jsonb("input"),
+  output: jsonb("output"),
+  durationMs: integer("duration_ms"),
+  status: text("status").notNull().default("SUCCESS"), // SUCCESS, ERROR, PIPELINE_STOP
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  pipelineItemIdIdx: index("content_pipeline_logs_item_id_idx").on(table.pipelineItemId),
+}));
+
+export const insertContentPipelineLogSchema = createInsertSchema(contentPipelineLogs).omit({ id: true, createdAt: true });
+export type InsertContentPipelineLog = z.infer<typeof insertContentPipelineLogSchema>;
+export type ContentPipelineLog = typeof contentPipelineLogs.$inferSelect;

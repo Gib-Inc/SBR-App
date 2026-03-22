@@ -41,6 +41,7 @@ import LegalEULA from "@/pages/legal-eula";
 import LegalPrivacy from "@/pages/legal-privacy";
 import AcceptInvite from "@/pages/accept-invite";
 import ResetPassword from "@/pages/reset-password";
+import Marketing from "@/pages/marketing";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -128,6 +129,7 @@ function AuthenticatedApp() {
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
+                    <Route path="/marketing" component={Marketing} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

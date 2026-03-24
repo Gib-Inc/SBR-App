@@ -6,22 +6,22 @@
         "rule": {
           "interval": [
             {
-              "triggerAtHour": 6,
+              "triggerAtHour": 7,
               "triggerAtMinute": 0
             }
           ]
         }
       },
       "id": "trigger-cron",
-      "name": "6AM Daily Trigger",
+      "name": "7AM Daily Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [0, 300],
-      "notes": "Fires at 6:00 AM daily (MST). Zo checks traps first thing."
+      "notes": "Fires at 7:00 AM MST daily. Context doc confirms target: 'Replace with automated 7am SMS report via n8n -> GHL -> Zo's phone.' Replaces Zo's manual Voxer copy-paste routine."
     },
     {
       "parameters": {
-        "url": "https://googleads.googleapis.com/v18/customers/{{$vars.GOOGLE_ADS_CUSTOMER_ID}}/googleAds:searchStream",
+        "url": "=https://googleads.googleapis.com/v18/customers/{{$vars.GOOGLE_ADS_CUSTOMER_ID}}/googleAds:searchStream",
         "authentication": "oAuth2",
         "sendHeaders": true,
         "headerParameters": {
@@ -38,7 +38,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.name, campaign.status, metrics.cost_micros, metrics.conversions_value, metrics.conversions, metrics.clicks, metrics.impressions, metrics.interactions, metrics.interaction_rate, metrics.cost_per_conversion FROM campaign WHERE segments.date BETWEEN '${new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]}' AND '${new Date(Date.now() - 86400000).toISOString().split('T')[0]}' AND campaign.status = 'ENABLED' ORDER BY metrics.cost_micros DESC` }) }}",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.name, campaign.status, metrics.cost_micros, metrics.conversions_value, metrics.conversions, metrics.clicks, metrics.impressions, metrics.interactions, metrics.interaction_rate, metrics.cost_per_conversion, metrics.all_conversions_value FROM campaign WHERE segments.date BETWEEN '${new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]}' AND '${new Date(Date.now() - 86400000).toISOString().split('T')[0]}' AND campaign.status = 'ENABLED' ORDER BY metrics.cost_micros DESC` }) }}",
         "options": {
           "response": {
             "response": {
@@ -58,11 +58,11 @@
           "name": "Google Ads OAuth2"
         }
       },
-      "notes": "Pulls MTD campaign data via Google Ads API. Zo tracks: spend, conv value (sales), ROAS, conversion rates per campaign. He noted 6 active campaigns, some at 30:1 ROAS, newer ones at 10:1. MTD example: $3,200 spend / $38-43K sales."
+      "notes": "Pulls MTD campaign data via Google Ads API v18. Zo confirmed 6 active campaigns. Baseline (March 24): $3,200 spend / $43,000 sales. ROAS range: mature campaigns 30:1, newer campaigns 10:1. Conversion rates: top performers in 4%+, bottom below 1%. Query excludes current day (Zo's practice: 'I don't ever do month to date including the day cause it's not over')."
     },
     {
       "parameters": {
-        "url": "https://advertising-api.amazon.com/sp/campaigns/report",
+        "url": "https://advertising-api.amazon.com/reporting/reports",
         "authentication": "oAuth2",
         "sendHeaders": true,
         "headerParameters": {
@@ -74,12 +74,16 @@
             {
               "name": "Amazon-Advertising-API-Scope",
               "value": "={{$vars.AMAZON_ADS_PROFILE_ID}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/vnd.createasyncreport.v3+json"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ reportDate: new Date(Date.now() - 86400000).toISOString().split('T')[0], metrics: ['impressions', 'clicks', 'cost', 'attributedSales14d', 'attributedConversions14d', 'attributedUnitsOrdered14d'] }) }}",
+        "jsonBody": "={{ JSON.stringify({ name: 'MTD SP Campaign Report', startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0], endDate: new Date(Date.now() - 86400000).toISOString().split('T')[0], configuration: { adProduct: 'SPONSORED_PRODUCTS', groupBy: ['campaign'], columns: ['impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSold14d'], reportTypeId: 'spCampaigns', timeUnit: 'SUMMARY', format: 'JSON' } }) }}",
         "options": {
           "response": {
             "response": {
@@ -99,19 +103,18 @@
           "name": "Amazon Ads OAuth2"
         }
       },
-      "notes": "Pulls Amazon Advertising data. Zo tracks: attributed sales ($70K/30d example), ad spend ($3,400), ACOS vs TACOS. TACOS includes organic traffic driven by Google/FB/TikTok spillover. He noted conversion rates and traffic volume."
+      "notes": "Pulls Amazon Sponsored Products MTD via Reporting API v3. Zo checks ACOS (ad spend / attributed sales) vs TACOS (ad spend / total sales including organic). Baseline (March 24, 30d): $3,400 spend / $70,000 attributed sales. Significant organic lift from Google/Facebook/TikTok spillover. Account: Giant Horizons."
     },
     {
       "parameters": {
         "resource": "order",
         "operation": "getAll",
-        "returnAll": false,
-        "limit": 100,
+        "returnAll": true,
         "options": {
           "createdAtMin": "={{ new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() }}",
           "createdAtMax": "={{ new Date().toISOString() }}",
           "status": "any",
-          "fields": "id,name,created_at,total_price,financial_status,fulfillment_status,source_name,line_items"
+          "fields": "id,name,created_at,total_price,financial_status,fulfillment_status,source_name,referring_site,line_items,refunds,cancelled_at"
         }
       },
       "id": "node-shopify",
@@ -125,7 +128,7 @@
           "name": "SBR Shopify"
         }
       },
-      "notes": "START HERE — credential already configured. Pulls MTD orders from Shopify. Zo checks: gross sales, order count, checkout conversion rate (usually 20-30%), return rate, YoY comparison. Also tracks source breakdown (direct, Amazon, TikTok, 'no referrer' anomaly)."
+      "notes": "START HERE — credential already configured. Pulls all MTD orders with full detail. Zo checks: gross sales, order count, checkout conversion rate (BASELINE: 27-30%, FLAGGED at 16% on March 24), return rate (elevated, monitoring), source breakdown. CRITICAL: Track referring_site to monitor the attribution anomaly. Zo's words: 'We don't even know what's going on here' re: bulk revenue from unidentified referrer. Also pulls refunds and cancellations for return rate calculation."
     },
     {
       "parameters": {
@@ -147,7 +150,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 2048, system: `You are the Morning Trap Runner for Sticker Burr Roller (SBR). You produce Zo\\'s daily KPI briefing. Voice rules: contractions always, no em dashes, short sentences, warm and direct. Never hype. No banned phrases (game-changer, revolutionary, unlock, leverage, seamless, incredible, amazing, powerful, supercharge). Format as an SMS-length morning briefing Zo reads at 6 AM. Include: 1) Google Ads MTD (spend, sales, ROAS, top/bottom campaign) 2) Amazon MTD (attributed sales, ACOS, TACOS, organic signal) 3) Shopify MTD (gross sales, orders, conversion rate, return rate, YoY delta) 4) Combined ad spend total vs combined revenue 5) One flag if anything looks off (conversion drop, ROAS dip, spend spike) 6) One opportunity if data suggests it. Keep it under 400 words. No greeting. Start with the date and go.`, messages: [{ role: 'user', content: `Here is today\\'s trap check data. Analyze and produce the morning briefing.\\n\\nGOOGLE ADS MTD:\\n${JSON.stringify($('Google Ads — MTD Campaigns').item.json)}\\n\\nAMAZON ADS MTD:\\n${JSON.stringify($('Amazon Ads — MTD Performance').item.json)}\\n\\nSHOPIFY MTD:\\nTotal orders: ${$('Shopify — MTD Orders + Analytics').all().length}\\nGross sales: $${$('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0).toFixed(2)}\\nOrder details: ${JSON.stringify($('Shopify — MTD Orders + Analytics').all().slice(0, 20).map(o => ({ name: o.json.name, total: o.json.total_price, source: o.json.source_name, status: o.json.financial_status })))}` }] }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 2048, system: `You are the Morning Trap Runner for Sticker Burr Roller (SBR), Hildale, Utah. You produce Zo's daily KPI briefing sent at 7 AM MST via SMS.\\n\\nVOICE RULES (non-negotiable):\\n- Contractions always. Didn't, won't, it's. Never formal.\\n- No em dashes. Period or comma only.\\n- Short sentences. One idea per sentence.\\n- Max one exclamation mark total.\\n- Plain-spoken. Knowledgeable neighbor tone. Never hype.\\n- BANNED: game-changer, revolutionary, unlock, leverage, seamless, incredible, amazing, powerful, supercharge\\n\\nBRIEFING FORMAT (SMS-optimized, under 400 words):\\n\\n[DATE] TRAP CHECK\\n\\nGOOGLE ADS MTD\\nSpend: $X | Sales: $X | ROAS: X:1\\nTop campaign: [name] at [ROAS]\\nBottom campaign: [name] at [ROAS]\\nConversion rates: [range]\\n\\nAMAZON MTD\\nAd spend: $X | Attributed sales: $X\\nACOS: X% | TACOS: X%\\nOrganic signal: [strong/normal/weak]\\n\\nSHOPIFY MTD\\nGross sales: $X | Orders: X\\nCheckout conversion: X%\\nReturn rate: X%\\nYoY: +/-X%\\n\\nCOMBINED\\nTotal ad spend: $X | Total revenue: $X\\nBlended ROAS: X:1\\n\\nFLAGS (if any):\\n[One line per issue. Be specific.]\\n\\nOPPORTUNITY (if any):\\n[One actionable insight.]\\n\\nGo win your ground war.\\n\\nCRITICAL BENCHMARKS (flag deviations):\\n- Shopify checkout conversion: BASELINE 27-30%. Flag below 20%. ALERT below 16%.\\n- Google ROAS mature campaigns: BASELINE 30:1. Flag below 15:1.\\n- Google ROAS new campaigns: BASELINE 10:1. Flag below 5:1.\\n- Combined monthly ad spend: BASELINE under $7K. Flag above $10K.\\n- Amazon TACOS: Flag above 8%.\\n- Return rate: Flag if above prior month average.\\n\\nATTRIBUTION ANOMALY (always report):\\nShopify shows bulk revenue from unidentified referrer source. Zo says: 'We don't even know what's going on here.' Track and report the percentage of revenue with no referrer. This affects ROAS calculations across all channels.\\n\\nSOURCE BREAKDOWN (always include):\\nBreak Shopify orders by source_name. Report: Direct, Amazon, TikTok, Google, Facebook, and 'No Referrer' as separate lines with order count and revenue.\\n\\nESCALATION ROUTING (include if flag is raised):\\n- Checkout conversion drop -> Christopher + Kevin\\n- ROAS collapse -> Kevin + Zo\\n- Ad spend spike -> Christopher (budget approval)\\n- Return rate spike -> Sammie (fulfillment)\\n- Attribution anomaly worsening -> Matt (system architecture)\\n\\n2026 TARGETS FOR CONTEXT:\\nRevenue target: $4,500,000. Net margin target: 13.4%.\\nAd spend ceiling: keep well below 2025's 29.1% of revenue ($908K was unsustainable).\\n\\nNever fail silently. If data is missing or an API returned an error, say exactly what's missing and who needs to fix it. Route access blockers to Matt.`, messages: [{ role: 'user', content: `MORNING TRAP CHECK DATA — ${new Date().toISOString().split('T')[0]}\\n\\n=== GOOGLE ADS MTD ===\\n${JSON.stringify($('Google Ads — MTD Campaigns').item.json, null, 2)}\\n\\n=== AMAZON ADS MTD ===\\n${JSON.stringify($('Amazon Ads — MTD Performance').item.json, null, 2)}\\n\\n=== SHOPIFY MTD ===\\nTotal orders: ${$('Shopify — MTD Orders + Analytics').all().length}\\nGross sales: $${$('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0).toFixed(2)}\\nRefunded orders: ${$('Shopify — MTD Orders + Analytics').all().filter(o => o.json.financial_status === 'refunded' || o.json.financial_status === 'partially_refunded').length}\\nCancelled orders: ${$('Shopify — MTD Orders + Analytics').all().filter(o => o.json.cancelled_at).length}\\n\\nSource breakdown:\\n${JSON.stringify($('Shopify — MTD Orders + Analytics').all().reduce((acc, o) => { const src = o.json.source_name || 'no_referrer'; acc[src] = acc[src] || { orders: 0, revenue: 0 }; acc[src].orders++; acc[src].revenue += parseFloat(o.json.total_price || '0'); return acc; }, {}), null, 2)}\\n\\nReferring sites (top 20):\\n${JSON.stringify($('Shopify — MTD Orders + Analytics').all().reduce((acc, o) => { const ref = o.json.referring_site || 'none'; acc[ref] = (acc[ref] || 0) + 1; return acc; }, {}), null, 2)}\\n\\nRecent orders (last 10):\\n${JSON.stringify($('Shopify — MTD Orders + Analytics').all().slice(-10).map(o => ({ name: o.json.name, total: o.json.total_price, source: o.json.source_name, referrer: o.json.referring_site, status: o.json.financial_status })), null, 2)}` }] }) }}",
         "options": {
           "response": {
             "response": {
@@ -167,7 +170,7 @@
           "name": "Anthropic API Key"
         }
       },
-      "notes": "Claude analyzes all 3 data sources and produces Zo's morning SMS briefing. Uses SBR brand voice. Flags anomalies (Zo noted checkout conversion dropped from ~27% to 16%, return rate was up, 'no referrer' traffic anomaly). Under 400 words."
+      "notes": "Claude produces Zo's morning SMS briefing. Full SBR brand voice encoded. Knows all benchmarks from March 24 baseline. Tracks the attribution anomaly. Reports source breakdown every time. Includes escalation routing (Christopher for budget, Kevin for ROAS, Sammie for returns, Matt for system issues). Never fails silently per Zo's requirement."
     },
     {
       "parameters": {
@@ -198,7 +201,7 @@
           "name": "GoHighLevel API"
         }
       },
-      "notes": "Sends the morning briefing to Zo via GHL SMS. Replaces his manual Voxer copy-paste routine. Uses GHL Conversations API v2. Requires: ZO_GHL_CONTACT_ID (from sbr-product-marketing-context.md), GHL Location API key with conversations.message.write scope."
+      "notes": "Sends morning briefing to Zo via GHL SMS. Replaces manual Voxer routine. GHL Conversations API v2. To find ZO_GHL_CONTACT_ID: search GHL contacts for Zo by name or phone. GHL Location API key needs conversations.message.write scope. Company phone: (435) 383-4377."
     },
     {
       "parameters": {
@@ -224,7 +227,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ run_date: new Date().toISOString().split('T')[0], google_ads_raw: $('Google Ads — MTD Campaigns').item.json, amazon_ads_raw: $('Amazon Ads — MTD Performance').item.json, shopify_order_count: $('Shopify — MTD Orders + Analytics').all().length, shopify_gross_sales: $('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0), claude_briefing: $('Claude — Morning Briefing').item.json.content[0].text, sms_sent: true, sms_sent_at: new Date().toISOString() }) }}"
+        "jsonBody": "={{ JSON.stringify({ run_date: new Date().toISOString().split('T')[0], google_ads_raw: $('Google Ads — MTD Campaigns').item.json, amazon_ads_raw: $('Amazon Ads — MTD Performance').item.json, shopify_order_count: $('Shopify — MTD Orders + Analytics').all().length, shopify_gross_sales: $('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0), shopify_source_breakdown: $('Shopify — MTD Orders + Analytics').all().reduce((acc, o) => { const src = o.json.source_name || 'no_referrer'; acc[src] = acc[src] || { orders: 0, revenue: 0 }; acc[src].orders++; acc[src].revenue += parseFloat(o.json.total_price || '0'); return acc; }, {}), shopify_refund_count: $('Shopify — MTD Orders + Analytics').all().filter(o => o.json.financial_status === 'refunded' || o.json.financial_status === 'partially_refunded').length, claude_briefing: $('Claude — Morning Briefing').item.json.content[0].text, sms_sent: true, sms_sent_at: new Date().toISOString() }) }}"
       },
       "id": "node-supabase-log",
       "name": "Supabase — Log Run",
@@ -237,11 +240,11 @@
           "name": "Supabase Service Key"
         }
       },
-      "notes": "Logs the full trap run to Supabase for historical tracking. Table: morning_trap_runs. Stores raw API responses, computed totals, Claude's briefing text, and SMS delivery status. This gives Zo a searchable history of every morning check."
+      "notes": "Logs the full trap run to Supabase. Now includes source breakdown and refund count for tracking the attribution anomaly and return rate over time. Table: morning_trap_runs."
     }
   ],
   "connections": {
-    "6AM Daily Trigger": {
+    "7AM Daily Trigger": {
       "main": [
         [
           { "node": "Google Ads — MTD Campaigns", "type": "main", "index": 0 },

@@ -4,13 +4,26 @@
 create table if not exists morning_trap_runs (
   id uuid primary key default gen_random_uuid(),
   run_date date not null,
+
+  -- Google Ads MTD
   google_ads_raw jsonb,
+
+  -- Amazon Ads MTD
   amazon_ads_raw jsonb,
+
+  -- Shopify MTD
   shopify_order_count integer,
   shopify_gross_sales numeric(12,2),
+  shopify_source_breakdown jsonb,  -- { "web": { orders: N, revenue: N }, "no_referrer": { ... } }
+  shopify_refund_count integer default 0,
+
+  -- Claude briefing
   claude_briefing text,
+
+  -- SMS delivery
   sms_sent boolean default false,
   sms_sent_at timestamptz,
+
   created_at timestamptz default now()
 );
 

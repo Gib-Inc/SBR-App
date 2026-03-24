@@ -1,0 +1,296 @@
+{
+  "name": "Morning Trap Runner — SBR Daily KPI",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "trigger-cron",
+      "name": "6AM Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "notes": "Fires at 6:00 AM daily (MST). Zo checks traps first thing."
+    },
+    {
+      "parameters": {
+        "url": "https://googleads.googleapis.com/v18/customers/{{$vars.GOOGLE_ADS_CUSTOMER_ID}}/googleAds:searchStream",
+        "authentication": "oAuth2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "developer-token",
+              "value": "={{$vars.GOOGLE_ADS_DEVELOPER_TOKEN}}"
+            },
+            {
+              "name": "login-customer-id",
+              "value": "={{$vars.GOOGLE_ADS_MCC_ID}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.name, campaign.status, metrics.cost_micros, metrics.conversions_value, metrics.conversions, metrics.clicks, metrics.impressions, metrics.interactions, metrics.interaction_rate, metrics.cost_per_conversion FROM campaign WHERE segments.date BETWEEN '${new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]}' AND '${new Date(Date.now() - 86400000).toISOString().split('T')[0]}' AND campaign.status = 'ENABLED' ORDER BY metrics.cost_micros DESC` }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "node-google-ads",
+      "name": "Google Ads — MTD Campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, 100],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "GOOGLE_ADS_OAUTH2_CREDENTIAL_ID",
+          "name": "Google Ads OAuth2"
+        }
+      },
+      "notes": "Pulls MTD campaign data via Google Ads API. Zo tracks: spend, conv value (sales), ROAS, conversion rates per campaign. He noted 6 active campaigns, some at 30:1 ROAS, newer ones at 10:1. MTD example: $3,200 spend / $38-43K sales."
+    },
+    {
+      "parameters": {
+        "url": "https://advertising-api.amazon.com/sp/campaigns/report",
+        "authentication": "oAuth2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Amazon-Advertising-API-ClientId",
+              "value": "={{$vars.AMAZON_ADS_CLIENT_ID}}"
+            },
+            {
+              "name": "Amazon-Advertising-API-Scope",
+              "value": "={{$vars.AMAZON_ADS_PROFILE_ID}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ reportDate: new Date(Date.now() - 86400000).toISOString().split('T')[0], metrics: ['impressions', 'clicks', 'cost', 'attributedSales14d', 'attributedConversions14d', 'attributedUnitsOrdered14d'] }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "node-amazon-ads",
+      "name": "Amazon Ads — MTD Performance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, 300],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "AMAZON_ADS_OAUTH2_CREDENTIAL_ID",
+          "name": "Amazon Ads OAuth2"
+        }
+      },
+      "notes": "Pulls Amazon Advertising data. Zo tracks: attributed sales ($70K/30d example), ad spend ($3,400), ACOS vs TACOS. TACOS includes organic traffic driven by Google/FB/TikTok spillover. He noted conversion rates and traffic volume."
+    },
+    {
+      "parameters": {
+        "resource": "order",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 100,
+        "options": {
+          "createdAtMin": "={{ new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() }}",
+          "createdAtMax": "={{ new Date().toISOString() }}",
+          "status": "any",
+          "fields": "id,name,created_at,total_price,financial_status,fulfillment_status,source_name,line_items"
+        }
+      },
+      "id": "node-shopify",
+      "name": "Shopify — MTD Orders + Analytics",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "position": [300, 500],
+      "credentials": {
+        "shopifyApi": {
+          "id": "SHOPIFY_CREDENTIAL_ID",
+          "name": "SBR Shopify"
+        }
+      },
+      "notes": "START HERE — credential already configured. Pulls MTD orders from Shopify. Zo checks: gross sales, order count, checkout conversion rate (usually 20-30%), return rate, YoY comparison. Also tracks source breakdown (direct, Amazon, TikTok, 'no referrer' anomaly)."
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 2048, system: `You are the Morning Trap Runner for Sticker Burr Roller (SBR). You produce Zo\\'s daily KPI briefing. Voice rules: contractions always, no em dashes, short sentences, warm and direct. Never hype. No banned phrases (game-changer, revolutionary, unlock, leverage, seamless, incredible, amazing, powerful, supercharge). Format as an SMS-length morning briefing Zo reads at 6 AM. Include: 1) Google Ads MTD (spend, sales, ROAS, top/bottom campaign) 2) Amazon MTD (attributed sales, ACOS, TACOS, organic signal) 3) Shopify MTD (gross sales, orders, conversion rate, return rate, YoY delta) 4) Combined ad spend total vs combined revenue 5) One flag if anything looks off (conversion drop, ROAS dip, spend spike) 6) One opportunity if data suggests it. Keep it under 400 words. No greeting. Start with the date and go.`, messages: [{ role: 'user', content: `Here is today\\'s trap check data. Analyze and produce the morning briefing.\\n\\nGOOGLE ADS MTD:\\n${JSON.stringify($('Google Ads — MTD Campaigns').item.json)}\\n\\nAMAZON ADS MTD:\\n${JSON.stringify($('Amazon Ads — MTD Performance').item.json)}\\n\\nSHOPIFY MTD:\\nTotal orders: ${$('Shopify — MTD Orders + Analytics').all().length}\\nGross sales: $${$('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0).toFixed(2)}\\nOrder details: ${JSON.stringify($('Shopify — MTD Orders + Analytics').all().slice(0, 20).map(o => ({ name: o.json.name, total: o.json.total_price, source: o.json.source_name, status: o.json.financial_status })))}` }] }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "node-claude-analysis",
+      "name": "Claude — Morning Briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC_API_CREDENTIAL_ID",
+          "name": "Anthropic API Key"
+        }
+      },
+      "notes": "Claude analyzes all 3 data sources and produces Zo's morning SMS briefing. Uses SBR brand voice. Flags anomalies (Zo noted checkout conversion dropped from ~27% to 16%, return rate was up, 'no referrer' traffic anomaly). Under 400 words."
+    },
+    {
+      "parameters": {
+        "url": "https://services.leadconnectorhq.com/conversations/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Version",
+              "value": "2021-04-15"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ type: 'SMS', contactId: $vars.ZO_GHL_CONTACT_ID, message: $('Claude — Morning Briefing').item.json.content[0].text }) }}"
+      },
+      "id": "node-ghl-sms",
+      "name": "GHL SMS — Send to Zo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GHL_API_CREDENTIAL_ID",
+          "name": "GoHighLevel API"
+        }
+      },
+      "notes": "Sends the morning briefing to Zo via GHL SMS. Replaces his manual Voxer copy-paste routine. Uses GHL Conversations API v2. Requires: ZO_GHL_CONTACT_ID (from sbr-product-marketing-context.md), GHL Location API key with conversations.message.write scope."
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.SUPABASE_URL}}/rest/v1/morning_trap_runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{$vars.SUPABASE_ANON_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ run_date: new Date().toISOString().split('T')[0], google_ads_raw: $('Google Ads — MTD Campaigns').item.json, amazon_ads_raw: $('Amazon Ads — MTD Performance').item.json, shopify_order_count: $('Shopify — MTD Orders + Analytics').all().length, shopify_gross_sales: $('Shopify — MTD Orders + Analytics').all().reduce((sum, o) => sum + parseFloat(o.json.total_price || '0'), 0), claude_briefing: $('Claude — Morning Briefing').item.json.content[0].text, sms_sent: true, sms_sent_at: new Date().toISOString() }) }}"
+      },
+      "id": "node-supabase-log",
+      "name": "Supabase — Log Run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "SUPABASE_AUTH_CREDENTIAL_ID",
+          "name": "Supabase Service Key"
+        }
+      },
+      "notes": "Logs the full trap run to Supabase for historical tracking. Table: morning_trap_runs. Stores raw API responses, computed totals, Claude's briefing text, and SMS delivery status. This gives Zo a searchable history of every morning check."
+    }
+  ],
+  "connections": {
+    "6AM Daily Trigger": {
+      "main": [
+        [
+          { "node": "Google Ads — MTD Campaigns", "type": "main", "index": 0 },
+          { "node": "Amazon Ads — MTD Performance", "type": "main", "index": 0 },
+          { "node": "Shopify — MTD Orders + Analytics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Google Ads — MTD Campaigns": {
+      "main": [
+        [
+          { "node": "Claude — Morning Briefing", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Amazon Ads — MTD Performance": {
+      "main": [
+        [
+          { "node": "Claude — Morning Briefing", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Shopify — MTD Orders + Analytics": {
+      "main": [
+        [
+          { "node": "Claude — Morning Briefing", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Morning Briefing": {
+      "main": [
+        [
+          { "node": "GHL SMS — Send to Zo", "type": "main", "index": 0 },
+          { "node": "Supabase — Log Run", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Denver"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "SBR" },
+    { "name": "morning-ops" },
+    { "name": "zo-daily" }
+  ],
+  "pinData": {}
+}

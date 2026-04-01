@@ -51,11 +51,24 @@ export async function runTrapCheck(options?: {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const yesterday = new Date(now.getTime() - 86400000);
 
+  // Google Ads with token refresh retry
+  async function pullGoogleWithRetry(): Promise<AdSnapshot> {
+    if (!cfg.googleAds.customerId) throw new Error('Google Ads customer ID not configured');
+    try {
+      return await pullGoogleAds(cfg.googleAds.customerId, monthStart, yesterday);
+    } catch (err: any) {
+      if ((err.message?.includes('401') || err.message?.includes('token')) && cfg.googleAds.refreshToken) {
+        console.log('[TrapRunner] Google Ads token expired, refreshing...');
+        await googleAdsClient.refreshAccessToken();
+        return await pullGoogleAds(cfg.googleAds.customerId, monthStart, yesterday);
+      }
+      throw err;
+    }
+  }
+
   // Pull all three in parallel
   const [googleResult, metaResult, shopifyResult] = await Promise.allSettled([
-    cfg.googleAds.customerId
-      ? pullGoogleAds(cfg.googleAds.customerId, monthStart, yesterday)
-      : Promise.reject('Google Ads customer ID not configured'),
+    pullGoogleWithRetry(),
     cfg.metaAds.accountId
       ? pullMetaAds(cfg.metaAds.accountId, monthStart, yesterday)
       : Promise.reject('Meta Ads account ID not configured'),

@@ -84,6 +84,28 @@ export async function rebuildCopyRoots(): Promise<number> {
     const sorted = [...group.rows].sort((a, b) => (b.performanceScore || 0) - (a.performanceScore || 0));
     const top = sorted[0];
 
+    // Generate Claude insight for this pattern group
+    let insight: string | null = null;
+    try {
+      const systemPrompt = 'You are an ad copy analyst for Sticker Burr Roller (SBR). Contractions always. Short sentences. No hype. One actionable insight per response. Under 80 words.';
+      const analysisPrompt = `Analyze this copy pattern:
+Framework: ${group.key.framework || 'unknown'}
+Channel: ${group.key.channel || 'unknown'}
+Content type: ${group.key.contentType || 'unknown'}
+Schwartz level: ${group.key.schwartzLevel || 'unknown'}
+Cialdini trigger: ${group.key.cialdiniTrigger || 'unknown'}
+Sample size: ${group.rows.length}
+Avg ROAS: ${avgRoas.toFixed(2)}
+Avg CTR: ${(avgCtr * 100).toFixed(2)}%
+Top headline: "${top?.headline || 'none'}"
+Top hook: "${top?.body?.substring(0, 100) || 'none'}"
+
+What pattern explains why this combination works or doesn't? One sentence on what to do next.`;
+      insight = await generateBriefing(systemPrompt, analysisPrompt);
+    } catch (err: any) {
+      console.warn(`[CopyRoots] Claude insight failed for ${group.key.framework}/${group.key.channel}:`, err.message);
+    }
+
     await db.insert(copyRoots).values({
       framework: group.key.framework,
       schwartzLevel: group.key.schwartzLevel,
@@ -95,6 +117,7 @@ export async function rebuildCopyRoots(): Promise<number> {
       sampleSize: group.rows.length,
       topPerformingHeadline: top?.headline || null,
       topPerformingHook: top?.body?.substring(0, 100) || null,
+      insight,
       updatedAt: new Date(),
     }).returning();
 

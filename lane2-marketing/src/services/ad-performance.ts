@@ -103,9 +103,7 @@ export async function recordPerformanceForCopy(
   channel: string,
   metrics: { impressions: number; clicks: number; conversions: number; spend: number; revenue: number },
 ) {
-  const roas = parseFloat(metrics.spend as any) > 0
-    ? parseFloat(metrics.revenue as any) / parseFloat(metrics.spend as any)
-    : 0;
+  const roas = metrics.spend > 0 ? metrics.revenue / metrics.spend : 0;
   const ctr = metrics.impressions > 0 ? metrics.clicks / metrics.impressions : 0;
 
   return createCopyPerformance({

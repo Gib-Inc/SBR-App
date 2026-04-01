@@ -200,9 +200,7 @@ export class MorningTrapService {
       recordsUpdated: smsSent ? 1 : 0,
     });
 
-    console.log(`[MorningTrap] Trap check complete. SMS sent: ${smsSent}`);
-
-    return {
+    const result: TrapCheckResult = {
       success: true,
       briefing,
       smsSent,
@@ -221,6 +219,14 @@ export class MorningTrapService {
       },
       runDate,
     };
+
+    // Fire webhook to n8n (non-blocking)
+    this.fireWebhook(result, shopifyData, googleAdsData).catch(err => {
+      console.warn('[MorningTrap] Webhook dispatch failed (non-blocking):', err.message);
+    });
+
+    console.log(`[MorningTrap] Trap check complete. SMS sent: ${smsSent}`);
+    return result;
   }
 
   /**
@@ -531,5 +537,55 @@ export class MorningTrapService {
    */
   static async getRunHistory(userId: string, limit: number = 30): Promise<any[]> {
     return storage.getMorningTrapRuns(userId, limit);
+  }
+
+  /**
+   * Fire webhook to n8n after each trap check.
+   * Reads N8N_WEBHOOK_URL from env. If not set, silently skips.
+   * Non-blocking — caller catches errors.
+   */
+  private static async fireWebhook(
+    result: TrapCheckResult,
+    shopifyData: ShopifyTrapData | null,
+    googleAdsData: GoogleAdsTrapData | null,
+  ): Promise<void> {
+    const webhookUrl = process.env.N8N_WEBHOOK_URL;
+    if (!webhookUrl) return;
+
+    const payload = {
+      event: 'morning_trap_complete',
+      timestamp: new Date().toISOString(),
+      runDate: result.runDate,
+      briefing: result.briefing,
+      smsSent: result.smsSent,
+      dataSources: result.dataSources,
+      shopify: shopifyData ? {
+        orderCount: shopifyData.orderCount,
+        grossSales: shopifyData.grossSales,
+        refundedOrders: shopifyData.refundedOrders,
+        cancelledOrders: shopifyData.cancelledOrders,
+        sourceBreakdown: shopifyData.sourceBreakdown,
+      } : null,
+      googleAds: googleAdsData ? {
+        totalSpend: googleAdsData.totalSpend,
+        totalRevenue: googleAdsData.totalRevenue,
+        totalConversions: googleAdsData.totalConversions,
+        roas: googleAdsData.roas,
+        campaigns: googleAdsData.campaigns,
+      } : null,
+    };
+
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Webhook returned ${response.status}: ${await response.text()}`);
+    }
+
+    console.log(`[MorningTrap] Webhook fired to n8n (${response.status})`);
   }
 }

@@ -42,6 +42,15 @@ import {
   Send,
   Shield,
   AlertTriangle,
+  Radio,
+  RefreshCw,
+  MessageSquare,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  ShoppingCart,
+  BarChart3,
+  Calendar,
 } from "lucide-react";
 
 // ── Types ──
@@ -640,6 +649,337 @@ function PipelineDetailDialog({ item, onClose }: { item: ContentPipelineItem | n
   );
 }
 
+// ── Morning Trap Tab ──
+
+interface MorningTrapRun {
+  id: string;
+  userId: string;
+  runDate: string;
+  googleAdsRaw: any;
+  shopifyOrderCount: number;
+  shopifyGrossSales: string;
+  shopifySourceBreakdown: Record<string, { orders: number; revenue: number }> | null;
+  shopifyRefundCount: number;
+  claudeBriefing: string | null;
+  smsSent: boolean;
+  smsSentAt: string | null;
+  createdAt: string;
+}
+
+interface TrapCheckResult {
+  success: boolean;
+  briefing: string | null;
+  smsSent: boolean;
+  smsError?: string;
+  dataSources: {
+    googleAds: { success: boolean; error?: string; data?: any };
+    shopify: { success: boolean; error?: string; data?: any };
+  };
+  runDate: string;
+}
+
+function MorningTrapTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [selectedRun, setSelectedRun] = useState<MorningTrapRun | null>(null);
+
+  const { data: latest, isLoading: latestLoading } = useQuery<MorningTrapRun>({
+    queryKey: ["/api/marketing/trap-check/latest"],
+  });
+
+  const { data: history = [], isLoading: historyLoading } = useQuery<MorningTrapRun[]>({
+    queryKey: ["/api/marketing/trap-check/history"],
+  });
+
+  const runMutation = useMutation({
+    mutationFn: async (sendSms: boolean) => {
+      const res = await apiRequest("POST", "/api/marketing/trap-check", { sendSms });
+      return res.json() as Promise<TrapCheckResult>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/marketing/trap-check/latest"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketing/trap-check/history"] });
+      if (data.success) {
+        toast({
+          title: "Trap check complete",
+          description: data.smsSent ? "Briefing sent to Zo via SMS" : "Briefing generated (SMS not sent)",
+        });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Trap check failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const displayRun = selectedRun || latest;
+
+  const formatCurrency = (val: string | number) => {
+    const num = typeof val === "string" ? parseFloat(val) : val;
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(num || 0);
+  };
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const formatTime = (dateStr: string) => {
+    return new Date(dateStr).toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header with actions */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Radio className="h-5 w-5 text-green-600" />
+          <div>
+            <h3 className="font-medium">Morning Trap Runner</h3>
+            <p className="text-sm text-muted-foreground">
+              Daily KPI briefing. Pulls Google Ads, Shopify, sends to Zo at 7 AM MST.
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => runMutation.mutate(false)}
+            disabled={runMutation.isPending}
+          >
+            {runMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Run Now (no SMS)
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => runMutation.mutate(true)}
+            disabled={runMutation.isPending}
+          >
+            {runMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <MessageSquare className="mr-2 h-4 w-4" />
+            )}
+            Run + Send SMS
+          </Button>
+        </div>
+      </div>
+
+      {/* Just-ran result */}
+      {runMutation.data && (
+        <Card className="border-green-200 bg-green-50/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-4 text-sm">
+              <Badge variant={runMutation.data.success ? "default" : "destructive"}>
+                {runMutation.data.success ? "Success" : "Failed"}
+              </Badge>
+              <div className="flex gap-4">
+                {Object.entries(runMutation.data.dataSources).map(([name, src]) => (
+                  <span key={name} className="flex items-center gap-1">
+                    {src.success ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5 text-red-500" />
+                    )}
+                    {name}
+                  </span>
+                ))}
+              </div>
+              {runMutation.data.smsSent ? (
+                <Badge variant="outline" className="text-green-700 border-green-300">SMS Sent</Badge>
+              ) : runMutation.data.smsError ? (
+                <span className="text-xs text-red-600">{runMutation.data.smsError}</span>
+              ) : null}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Briefing display */}
+        <div className="lg:col-span-2 space-y-4">
+          {latestLoading ? (
+            <Card>
+              <CardContent className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </CardContent>
+            </Card>
+          ) : displayRun?.claudeBriefing ? (
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <BarChart3 className="h-4 w-4" />
+                    {formatDate(displayRun.runDate)} Briefing
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    {displayRun.smsSent && (
+                      <Badge variant="outline" className="text-green-700 border-green-300 text-xs">
+                        SMS sent {displayRun.smsSentAt ? formatTime(displayRun.smsSentAt) : ""}
+                      </Badge>
+                    )}
+                    <Badge variant="secondary" className="text-xs">
+                      {formatTime(displayRun.createdAt)}
+                    </Badge>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground bg-muted/50 rounded-lg p-4 max-h-[600px] overflow-y-auto">
+                  {displayRun.claudeBriefing}
+                </pre>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <Radio className="h-12 w-12 text-muted-foreground mb-4" />
+                <p className="text-muted-foreground font-medium">No trap checks run yet</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Click "Run Now" to generate the first briefing, or wait for the 7 AM automatic run.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Quick stats cards from the latest run */}
+          {displayRun && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Card>
+                <CardContent className="pt-4 pb-3">
+                  <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                    <ShoppingCart className="h-3.5 w-3.5" />
+                    Shopify Orders
+                  </div>
+                  <div className="text-2xl font-semibold">{displayRun.shopifyOrderCount}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-4 pb-3">
+                  <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                    <DollarSign className="h-3.5 w-3.5" />
+                    Gross Sales
+                  </div>
+                  <div className="text-2xl font-semibold">{formatCurrency(displayRun.shopifyGrossSales)}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-4 pb-3">
+                  <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                    <TrendingDown className="h-3.5 w-3.5" />
+                    Refunds
+                  </div>
+                  <div className="text-2xl font-semibold">{displayRun.shopifyRefundCount}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="pt-4 pb-3">
+                  <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
+                    <TrendingUp className="h-3.5 w-3.5" />
+                    Google Ads
+                  </div>
+                  <div className="text-2xl font-semibold">
+                    {displayRun.googleAdsRaw?.error
+                      ? "N/A"
+                      : displayRun.googleAdsRaw?.totalSpend != null
+                        ? formatCurrency(displayRun.googleAdsRaw.totalSpend)
+                        : "N/A"
+                    }
+                  </div>
+                  <div className="text-xs text-muted-foreground">spend MTD</div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Source breakdown */}
+          {displayRun?.shopifySourceBreakdown && Object.keys(displayRun.shopifySourceBreakdown).length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Source Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {Object.entries(displayRun.shopifySourceBreakdown)
+                    .sort(([, a], [, b]) => b.revenue - a.revenue)
+                    .map(([source, data]) => (
+                      <div key={source} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-xs font-mono">{source}</Badge>
+                          <span className="text-muted-foreground">{data.orders} orders</span>
+                        </div>
+                        <span className="font-medium">{formatCurrency(data.revenue)}</span>
+                      </div>
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+
+        {/* History sidebar */}
+        <div>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Calendar className="h-4 w-4" />
+                Run History
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              {historyLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : history.length === 0 ? (
+                <p className="text-sm text-muted-foreground px-4 py-6 text-center">No history yet</p>
+              ) : (
+                <div className="max-h-[500px] overflow-y-auto">
+                  {history.map((run) => (
+                    <button
+                      key={run.id}
+                      onClick={() => setSelectedRun(run.id === selectedRun?.id ? null : run)}
+                      className={`w-full text-left px-4 py-3 border-b last:border-b-0 hover:bg-muted/50 transition-colors ${
+                        selectedRun?.id === run.id ? "bg-muted" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">{formatDate(run.runDate)}</span>
+                        <div className="flex items-center gap-1.5">
+                          {run.smsSent && (
+                            <MessageSquare className="h-3 w-3 text-green-600" />
+                          )}
+                          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                        <span>{run.shopifyOrderCount} orders</span>
+                        <span>{formatCurrency(run.shopifyGrossSales)}</span>
+                        <span>{formatTime(run.createdAt)}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ──
 
 export default function Marketing() {
@@ -670,11 +1010,15 @@ export default function Marketing() {
         ))}
       </div>
 
-      <Tabs defaultValue="pipeline">
+      <Tabs defaultValue="trap-check">
         <TabsList>
+          <TabsTrigger value="trap-check">Morning Trap</TabsTrigger>
           <TabsTrigger value="pipeline">Content Pipeline</TabsTrigger>
           <TabsTrigger value="campaigns">Campaigns</TabsTrigger>
         </TabsList>
+        <TabsContent value="trap-check">
+          <MorningTrapTab />
+        </TabsContent>
         <TabsContent value="pipeline">
           <PipelineTab />
         </TabsContent>

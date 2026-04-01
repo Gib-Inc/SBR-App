@@ -136,6 +136,8 @@ import {
   type InsertContentPipelineItem,
   type ContentPipelineLog,
   type InsertContentPipelineLog,
+  type MorningTrapRun,
+  type InsertMorningTrapRun,
   isPOStatusTerminal,
   isSalesOrderStatusTerminal,
   isReturnStatusTerminal,
@@ -679,6 +681,11 @@ export interface IStorage {
   // Content Pipeline Logs
   createContentPipelineLog(log: InsertContentPipelineLog): Promise<ContentPipelineLog>;
   getContentPipelineLogs(pipelineItemId: string): Promise<ContentPipelineLog[]>;
+
+  // Morning Trap Runs
+  createMorningTrapRun(run: InsertMorningTrapRun): Promise<MorningTrapRun>;
+  getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]>;
+  getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -3976,6 +3983,13 @@ export class MemStorage implements IStorage {
     return { ...log, id: randomUUID(), createdAt: new Date() } as ContentPipelineLog;
   }
   async getContentPipelineLogs(pipelineItemId: string): Promise<ContentPipelineLog[]> { return []; }
+
+  // Morning Trap Runs (stub for MemStorage)
+  async createMorningTrapRun(run: InsertMorningTrapRun): Promise<MorningTrapRun> {
+    return { ...run, id: randomUUID(), createdAt: new Date() } as MorningTrapRun;
+  }
+  async getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]> { return []; }
+  async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> { return undefined; }
 }
 
 export class PostgresStorage implements IStorage {
@@ -7604,6 +7618,28 @@ export class PostgresStorage implements IStorage {
     return await this.db.select().from(schema.contentPipelineLogs)
       .where(eq(schema.contentPipelineLogs.pipelineItemId, pipelineItemId))
       .orderBy(schema.contentPipelineLogs.agentNumber);
+  }
+
+  // ── Morning Trap Runs ──
+
+  async createMorningTrapRun(run: InsertMorningTrapRun): Promise<MorningTrapRun> {
+    const result = await this.db.insert(schema.morningTrapRuns).values(run).returning();
+    return result[0];
+  }
+
+  async getMorningTrapRuns(userId: string, limit: number = 30): Promise<MorningTrapRun[]> {
+    return await this.db.select().from(schema.morningTrapRuns)
+      .where(eq(schema.morningTrapRuns.userId, userId))
+      .orderBy(desc(schema.morningTrapRuns.runDate))
+      .limit(limit);
+  }
+
+  async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> {
+    const result = await this.db.select().from(schema.morningTrapRuns)
+      .where(eq(schema.morningTrapRuns.userId, userId))
+      .orderBy(desc(schema.morningTrapRuns.runDate))
+      .limit(1);
+    return result[0];
   }
 }
 

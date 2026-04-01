@@ -2,7 +2,7 @@ import { storage } from "../storage";
 import type { InsertAuditLog, AuditLog } from "@shared/schema";
 import { wsLogsService } from "./websocket-logs";
 
-export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'META_ADS' | 'GOOGLE_ADS' | 'SYSTEM' | 'USER';
+export type AuditSource = 'SHOPIFY' | 'AMAZON' | 'EXTENSIV' | 'GHL' | 'QUICKBOOKS' | 'PHANTOMBUSTER' | 'META_ADS' | 'GOOGLE_ADS' | 'MORNING_TRAP' | 'SYSTEM' | 'USER';
 export type AuditStatus = 'INFO' | 'WARNING' | 'ERROR';
 export type AuditEventType = 
   | 'PO_CREATED'

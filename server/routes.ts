@@ -72,6 +72,7 @@ import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
 import { runD1Pipeline, runSingleAgent } from "./services/zobot-pipeline";
 import { insertMarketingCampaignSchema, insertContentPipelineItemSchema } from "@shared/schema";
+import { MorningTrapService } from "./services/morning-trap-service";
 
 const SALT_ROUNDS = 10;
 
@@ -20762,6 +20763,47 @@ Generate only the email body text, no subject line.`;
     try {
       const logs = await storage.getContentPipelineLogs(req.params.id);
       res.json(logs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── Morning Trap Runner — Zo's daily KPI briefing ──
+
+  // Run trap check manually (or triggered by scheduler)
+  app.post("/api/marketing/trap-check", requireAuth, requireRole(["admin"]), async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const { sendSms, zoContactId } = req.body || {};
+      const result = await MorningTrapService.runTrapCheck(userId, { sendSms, zoContactId });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[MorningTrap] Trap check error:", error);
+      res.status(500).json({ success: false, error: error.message || "Trap check failed" });
+    }
+  });
+
+  // Get trap check history
+  app.get("/api/marketing/trap-check/history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const limit = parseInt(req.query.limit as string) || 30;
+      const runs = await MorningTrapService.getRunHistory(userId, limit);
+      res.json(runs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get latest trap check
+  app.get("/api/marketing/trap-check/latest", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const latest = await storage.getLatestMorningTrapRun(userId);
+      if (!latest) {
+        return res.json({ message: "No trap checks run yet" });
+      }
+      res.json(latest);
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

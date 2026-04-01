@@ -2742,3 +2742,38 @@ export const contentPipelineLogs = pgTable("content_pipeline_logs", {
 export const insertContentPipelineLogSchema = createInsertSchema(contentPipelineLogs).omit({ id: true, createdAt: true });
 export type InsertContentPipelineLog = z.infer<typeof insertContentPipelineLogSchema>;
 export type ContentPipelineLog = typeof contentPipelineLogs.$inferSelect;
+
+// ============================================================================
+// MORNING TRAP RUNS — Zo's daily KPI briefing history
+// ============================================================================
+
+export const morningTrapRuns = pgTable("morning_trap_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  runDate: timestamp("run_date").notNull(),
+
+  // Google Ads MTD
+  googleAdsRaw: jsonb("google_ads_raw"),
+
+  // Shopify MTD
+  shopifyOrderCount: integer("shopify_order_count").default(0),
+  shopifyGrossSales: numeric("shopify_gross_sales", { precision: 12, scale: 2 }).default("0"),
+  shopifySourceBreakdown: jsonb("shopify_source_breakdown"),
+  shopifyRefundCount: integer("shopify_refund_count").default(0),
+
+  // Claude briefing
+  claudeBriefing: text("claude_briefing"),
+
+  // SMS delivery
+  smsSent: boolean("sms_sent").default(false),
+  smsSentAt: timestamp("sms_sent_at"),
+
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  runDateIdx: index("morning_trap_runs_date_idx").on(table.runDate),
+  userIdIdx: index("morning_trap_runs_user_id_idx").on(table.userId),
+}));
+
+export const insertMorningTrapRunSchema = createInsertSchema(morningTrapRuns).omit({ id: true, createdAt: true });
+export type InsertMorningTrapRun = z.infer<typeof insertMorningTrapRunSchema>;
+export type MorningTrapRun = typeof morningTrapRuns.$inferSelect;

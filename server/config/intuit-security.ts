@@ -46,14 +46,18 @@ function loadEncryptionKey(): Buffer {
   }
   
   if (keyHex.length !== 64) {
-    throw new Error(
+    console.error(
       `[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ` +
       `Got ${keyHex.length} characters. Generate with: openssl rand -hex 32`
     );
+    console.warn('[Intuit Security] Using fallback key — QuickBooks token encryption will not be secure');
+    return Buffer.alloc(32, 0);
   }
-  
+
   if (!/^[0-9a-fA-F]+$/.test(keyHex)) {
-    throw new Error('[Intuit Security] QB_ENCRYPTION_KEY must contain only hexadecimal characters');
+    console.error('[Intuit Security] QB_ENCRYPTION_KEY must contain only hexadecimal characters');
+    console.warn('[Intuit Security] Using fallback key — QuickBooks token encryption will not be secure');
+    return Buffer.alloc(32, 0);
   }
   
   return Buffer.from(keyHex, 'hex');

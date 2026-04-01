@@ -1,0 +1,163 @@
+{
+  "name": "Trap Check → Visual Reports",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trap-check-inbound",
+        "responseMode": "onReceived",
+        "responseCode": 200,
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Railway Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "trap-check-inbound",
+      "notes": "Receives POST from Railway morning-trap-service.ts after each trap check. Payload: { event, timestamp, runDate, briefing, smsSent, dataSources, shopify, googleAds }. Copy this webhook URL and set it as N8N_WEBHOOK_URL on Railway."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform raw webhook into structured report data\nconst data = $input.first().json;\n\nconst shopify = data.shopify || {};\nconst google = data.googleAds || {};\nconst sources = data.dataSources || {};\n\n// Shopify metrics\nconst orders = shopify.orderCount || 0;\nconst grossSales = shopify.grossSales || 0;\nconst refunds = shopify.refundedOrders || 0;\nconst cancelled = shopify.cancelledOrders || 0;\nconst refundRate = orders > 0 ? ((refunds / orders) * 100).toFixed(1) : '0';\n\n// Source breakdown\nconst sourceBreakdown = shopify.sourceBreakdown || {};\nconst sourceRows = Object.entries(sourceBreakdown)\n  .map(([name, d]) => ({ name, orders: d.orders, revenue: d.revenue }))\n  .sort((a, b) => b.revenue - a.revenue);\n\n// Google Ads metrics\nconst adSpend = google.totalSpend || 0;\nconst adRevenue = google.totalRevenue || 0;\nconst adConversions = google.totalConversions || 0;\nconst adRoas = google.roas || 0;\nconst campaigns = (google.campaigns || []).slice(0, 6);\n\n// Combined\nconst totalRevenue = grossSales;\nconst blendedRoas = adSpend > 0 ? (totalRevenue / adSpend).toFixed(1) : 'N/A';\n\n// Flags\nconst flags = [];\nif (parseFloat(refundRate) > 5) flags.push(`Refund rate at ${refundRate}% — route to Sammie`);\nif (adSpend > 10000) flags.push(`Ad spend above $10K ceiling — route to Christopher`);\nif (adRoas > 0 && adRoas < 5) flags.push(`ROAS below 5:1 — route to Kevin + Zo`);\n\n// No-referrer tracking (attribution anomaly)\nconst noRefOrders = sourceBreakdown['web']?.orders || sourceBreakdown['unknown']?.orders || 0;\nconst noRefRevenue = sourceBreakdown['web']?.revenue || sourceBreakdown['unknown']?.revenue || 0;\nconst noRefPct = orders > 0 ? ((noRefOrders / orders) * 100).toFixed(0) : '0';\n\nreturn [{\n  json: {\n    runDate: data.runDate,\n    briefing: data.briefing,\n    smsSent: data.smsSent,\n    timestamp: data.timestamp,\n    orders,\n    grossSales: grossSales.toFixed(2),\n    refunds,\n    refundRate,\n    cancelled,\n    adSpend: adSpend.toFixed(2),\n    adRevenue: adRevenue.toFixed(2),\n    adConversions,\n    adRoas: adRoas.toFixed(1),\n    blendedRoas,\n    campaigns,\n    sourceRows,\n    flags,\n    noRefPct,\n    noRefRevenue: noRefRevenue.toFixed(2),\n    googleOk: sources.google?.ok || false,\n    metaOk: sources.meta?.ok || false,\n    shopifyOk: sources.shopify?.ok || false,\n  }\n}];"
+      },
+      "id": "transform-data",
+      "name": "Transform Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Structures raw webhook payload into report-ready metrics. Computes refund rate, blended ROAS, flags anomalies, sorts source breakdown by revenue. Tracks the attribution anomaly (no-referrer %)."
+    },
+    {
+      "parameters": {
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 1024, system: `You analyze SBR daily marketing data and produce three outputs. Voice: contractions always, short sentences, no hype, no em dashes. Period or comma only.\\n\\n1. EXECUTIVE SUMMARY: 3 bullet points, biggest movers today. Under 60 words total.\\n2. WEEK-OVER-WEEK INSIGHT: One sentence comparing today to the trend. If this is the first data point, say so.\\n3. ACTION ITEM: One specific thing someone should do today, with the person's name (Christopher, Kevin, Zo, Sammie, or Matt).\\n\\nRespond as JSON: { \"summary\": [\"bullet1\", \"bullet2\", \"bullet3\"], \"weekInsight\": \"string\", \"actionItem\": \"string\", \"actionOwner\": \"string\" }`, messages: [{ role: 'user', content: `Daily data for ${$json.runDate}:\\n\\nShopify: ${$json.orders} orders, $${$json.grossSales} gross, ${$json.refunds} refunds (${$json.refundRate}%)\\nGoogle Ads: $${$json.adSpend} spend, $${$json.adRevenue} revenue, ${$json.adRoas}:1 ROAS\\nBlended ROAS: ${$json.blendedRoas}:1\\nAttribution anomaly: ${$json.noRefPct}% of orders from unidentified source ($${$json.noRefRevenue})\\nSource breakdown: ${JSON.stringify($json.sourceRows)}\\nCampaigns: ${JSON.stringify($json.campaigns)}\\nFlags: ${$json.flags.length > 0 ? $json.flags.join('; ') : 'None'}` }] }) }}",
+        "options": {
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "claude-insights",
+      "name": "Claude — Visual Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ANTHROPIC_API_CREDENTIAL_ID",
+          "name": "Anthropic API Key"
+        }
+      },
+      "notes": "Claude produces structured JSON: 3 executive summary bullets, week-over-week insight, and one named action item. This feeds the HTML template."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge transformed data with Claude insights\nconst data = $('Transform Data').first().json;\nconst raw = $('Claude — Visual Insights').first().json;\n\nlet insights;\ntry {\n  const text = raw.content?.[0]?.text || '{}';\n  insights = JSON.parse(text.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim());\n} catch (e) {\n  insights = { summary: ['Data available but insight generation failed.'], weekInsight: 'N/A', actionItem: 'Check Claude API connection.', actionOwner: 'Matt' };\n}\n\n// Status dots\nconst dot = (ok) => ok ? '🟢' : '🔴';\n\n// Campaign rows HTML\nconst campaignHtml = data.campaigns.length > 0\n  ? data.campaigns.map(c => `<tr><td style=\"padding:6px 12px;border-bottom:1px solid #eee\">${c.name}</td><td style=\"padding:6px 12px;border-bottom:1px solid #eee;text-align:right\">$${c.spend.toFixed(0)}</td><td style=\"padding:6px 12px;border-bottom:1px solid #eee;text-align:right\">$${c.revenue.toFixed(0)}</td><td style=\"padding:6px 12px;border-bottom:1px solid #eee;text-align:right\">${c.roas.toFixed(1)}:1</td></tr>`).join('')\n  : '<tr><td colspan=\"4\" style=\"padding:12px;color:#999\">Google Ads not connected</td></tr>';\n\n// Source rows HTML\nconst sourceHtml = data.sourceRows.map(s => `<tr><td style=\"padding:6px 12px;border-bottom:1px solid #eee\">${s.name}</td><td style=\"padding:6px 12px;border-bottom:1px solid #eee;text-align:right\">${s.orders}</td><td style=\"padding:6px 12px;border-bottom:1px solid #eee;text-align:right\">$${s.revenue.toFixed(0)}</td></tr>`).join('');\n\n// Flag pills\nconst flagHtml = data.flags.length > 0\n  ? data.flags.map(f => `<div style=\"background:#FEF2F2;border:1px solid #FECACA;border-radius:6px;padding:8px 12px;margin:4px 0;color:#991B1B;font-size:13px\">${f}</div>`).join('')\n  : '<div style=\"background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:8px 12px;color:#166534;font-size:13px\">All clear. No flags today.</div>';\n\n// Summary bullets\nconst summaryHtml = (insights.summary || []).map(b => `<li style=\"margin:4px 0;color:#1F2937\">${b}</li>`).join('');\n\nconst html = `<!DOCTYPE html>\n<html>\n<head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n<body style=\"margin:0;padding:0;background:#F9FAFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif\">\n<div style=\"max-width:640px;margin:0 auto;padding:20px\">\n\n  <!-- Header -->\n  <div style=\"background:#111827;border-radius:12px 12px 0 0;padding:24px;color:white\">\n    <h1 style=\"margin:0;font-size:20px;font-weight:600\">SBR Daily Report</h1>\n    <p style=\"margin:4px 0 0;color:#9CA3AF;font-size:14px\">${data.runDate} &bull; Morning Trap Check</p>\n  </div>\n\n  <!-- KPI Cards -->\n  <div style=\"background:white;padding:20px;display:flex;flex-wrap:wrap;gap:12px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <div style=\"flex:1;min-width:130px;background:#F9FAFB;border-radius:8px;padding:16px;text-align:center\">\n      <div style=\"font-size:12px;color:#6B7280;text-transform:uppercase;letter-spacing:0.5px\">Orders</div>\n      <div style=\"font-size:28px;font-weight:700;color:#111827;margin:4px 0\">${data.orders}</div>\n      <div style=\"font-size:11px;color:#9CA3AF\">MTD</div>\n    </div>\n    <div style=\"flex:1;min-width:130px;background:#F9FAFB;border-radius:8px;padding:16px;text-align:center\">\n      <div style=\"font-size:12px;color:#6B7280;text-transform:uppercase;letter-spacing:0.5px\">Revenue</div>\n      <div style=\"font-size:28px;font-weight:700;color:#059669;margin:4px 0\">$${data.grossSales}</div>\n      <div style=\"font-size:11px;color:#9CA3AF\">Shopify gross</div>\n    </div>\n    <div style=\"flex:1;min-width:130px;background:#F9FAFB;border-radius:8px;padding:16px;text-align:center\">\n      <div style=\"font-size:12px;color:#6B7280;text-transform:uppercase;letter-spacing:0.5px\">Ad Spend</div>\n      <div style=\"font-size:28px;font-weight:700;color:#DC2626;margin:4px 0\">$${data.adSpend}</div>\n      <div style=\"font-size:11px;color:#9CA3AF\">Google MTD</div>\n    </div>\n    <div style=\"flex:1;min-width:130px;background:#F9FAFB;border-radius:8px;padding:16px;text-align:center\">\n      <div style=\"font-size:12px;color:#6B7280;text-transform:uppercase;letter-spacing:0.5px\">ROAS</div>\n      <div style=\"font-size:28px;font-weight:700;color:#7C3AED;margin:4px 0\">${data.adRoas}:1</div>\n      <div style=\"font-size:11px;color:#9CA3AF\">Google Ads</div>\n    </div>\n  </div>\n\n  <!-- Data Source Status -->\n  <div style=\"background:white;padding:12px 20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB;display:flex;gap:16px;font-size:12px;color:#6B7280\">\n    <span>${dot(data.shopifyOk)} Shopify</span>\n    <span>${dot(data.googleOk)} Google Ads</span>\n    <span>${dot(data.metaOk)} Meta Ads</span>\n    <span>${data.smsSent ? '${dot(true)} SMS sent to Zo' : '${dot(false)} SMS not sent'}</span>\n  </div>\n\n  <!-- Executive Summary -->\n  <div style=\"background:white;padding:20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <h2 style=\"margin:0 0 12px;font-size:15px;color:#374151;font-weight:600\">Executive Summary</h2>\n    <ul style=\"margin:0;padding-left:20px;font-size:14px;line-height:1.6\">${summaryHtml}</ul>\n    <p style=\"margin:12px 0 0;font-size:13px;color:#6B7280;font-style:italic\">${insights.weekInsight || ''}</p>\n  </div>\n\n  <!-- Action Item -->\n  <div style=\"background:#EFF6FF;padding:16px 20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <div style=\"font-size:12px;color:#1D4ED8;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px\">Action Item → ${insights.actionOwner || 'Team'}</div>\n    <div style=\"font-size:14px;color:#1E3A5F\">${insights.actionItem || 'No action needed today.'}</div>\n  </div>\n\n  <!-- Flags -->\n  <div style=\"background:white;padding:20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <h2 style=\"margin:0 0 8px;font-size:15px;color:#374151;font-weight:600\">Flags</h2>\n    ${flagHtml}\n  </div>\n\n  <!-- Source Breakdown -->\n  <div style=\"background:white;padding:20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <h2 style=\"margin:0 0 12px;font-size:15px;color:#374151;font-weight:600\">Revenue by Source</h2>\n    <div style=\"font-size:12px;color:#9CA3AF;margin-bottom:8px\">${data.noRefPct}% from unidentified referrer ($${data.noRefRevenue})</div>\n    <table style=\"width:100%;border-collapse:collapse;font-size:13px\">\n      <thead><tr style=\"background:#F9FAFB\"><th style=\"padding:8px 12px;text-align:left;color:#6B7280;font-weight:500\">Source</th><th style=\"padding:8px 12px;text-align:right;color:#6B7280;font-weight:500\">Orders</th><th style=\"padding:8px 12px;text-align:right;color:#6B7280;font-weight:500\">Revenue</th></tr></thead>\n      <tbody>${sourceHtml}</tbody>\n    </table>\n  </div>\n\n  <!-- Campaign Performance -->\n  <div style=\"background:white;padding:20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <h2 style=\"margin:0 0 12px;font-size:15px;color:#374151;font-weight:600\">Google Ads Campaigns</h2>\n    <table style=\"width:100%;border-collapse:collapse;font-size:13px\">\n      <thead><tr style=\"background:#F9FAFB\"><th style=\"padding:8px 12px;text-align:left;color:#6B7280;font-weight:500\">Campaign</th><th style=\"padding:8px 12px;text-align:right;color:#6B7280;font-weight:500\">Spend</th><th style=\"padding:8px 12px;text-align:right;color:#6B7280;font-weight:500\">Revenue</th><th style=\"padding:8px 12px;text-align:right;color:#6B7280;font-weight:500\">ROAS</th></tr></thead>\n      <tbody>${campaignHtml}</tbody>\n    </table>\n  </div>\n\n  <!-- Briefing -->\n  <div style=\"background:white;padding:20px;border-left:1px solid #E5E7EB;border-right:1px solid #E5E7EB\">\n    <h2 style=\"margin:0 0 12px;font-size:15px;color:#374151;font-weight:600\">Full Briefing</h2>\n    <pre style=\"background:#F9FAFB;padding:16px;border-radius:8px;font-size:12px;line-height:1.5;white-space:pre-wrap;color:#374151;margin:0;font-family:'SF Mono',Monaco,Consolas,monospace\">${data.briefing || 'No briefing generated.'}</pre>\n  </div>\n\n  <!-- Footer -->\n  <div style=\"background:#111827;border-radius:0 0 12px 12px;padding:16px 24px;color:#9CA3AF;font-size:12px;text-align:center\">\n    Sticker Burr Roller &bull; Morning Trap Runner &bull; Go win your ground war.\n  </div>\n\n</div>\n</body>\n</html>`;\n\nreturn [{ json: { ...data, ...insights, html, subject: `SBR Daily Report — ${data.runDate} — $${data.grossSales} revenue, ${data.orders} orders` } }];"
+      },
+      "id": "build-html",
+      "name": "Build Visual Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300],
+      "notes": "Merges Claude insights with transformed data into a full HTML email report. Dark header, 4 KPI cards (orders, revenue, ad spend, ROAS), data source status dots, executive summary bullets, named action item, flags with color coding, source breakdown table, campaign table, full briefing text. Mobile-responsive inline CSS."
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$vars.SENDGRID_FROM_EMAIL || 'reports@stickerburroller.com'}}",
+        "toEmail": "={{$vars.REPORT_RECIPIENTS}}",
+        "subject": "={{$json.subject}}",
+        "emailType": "html",
+        "html": "={{$json.html}}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Email Report → Team",
+      "type": "n8n-nodes-base.sendGrid" ,
+      "typeVersion": 1,
+      "position": [1050, 200],
+      "credentials": {
+        "sendGridApi": {
+          "id": "SENDGRID_CREDENTIAL_ID",
+          "name": "SendGrid"
+        }
+      },
+      "notes": "Sends the visual HTML report to the team. Set REPORT_RECIPIENTS variable in n8n (comma-separated emails). Uses SendGrid — the SBR app already has SENDGRID_API_KEY configured."
+    },
+    {
+      "parameters": {
+        "url": "={{$vars.GOOGLE_SHEETS_APPEND_URL || ''}}",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [[ $('Transform Data').first().json.runDate, $('Transform Data').first().json.orders, $('Transform Data').first().json.grossSales, $('Transform Data').first().json.refunds, $('Transform Data').first().json.refundRate, $('Transform Data').first().json.adSpend, $('Transform Data').first().json.adRevenue, $('Transform Data').first().json.adRoas, $('Transform Data').first().json.blendedRoas, $('Transform Data').first().json.noRefPct, $json.actionItem || '', $json.actionOwner || '' ]] }) }}",
+        "options": {}
+      },
+      "id": "sheets-log",
+      "name": "Google Sheets → Daily Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 400],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2"
+        }
+      },
+      "notes": "Appends one row per day to a Google Sheet. Columns: Date, Orders, Revenue, Refunds, Refund%, Ad Spend, Ad Revenue, ROAS, Blended ROAS, No-Referrer%, Action Item, Owner. This gives the team a running spreadsheet they can chart themselves. Set GOOGLE_SHEETS_APPEND_URL variable to: https://sheets.googleapis.com/v4/spreadsheets/{SHEET_ID}/values/Sheet1!A:L:append?valueInputOption=USER_ENTERED"
+    }
+  ],
+  "connections": {
+    "Railway Webhook": {
+      "main": [
+        [
+          { "node": "Transform Data", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Transform Data": {
+      "main": [
+        [
+          { "node": "Claude — Visual Insights", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Visual Insights": {
+      "main": [
+        [
+          { "node": "Build Visual Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Build Visual Report": {
+      "main": [
+        [
+          { "node": "Email Report → Team", "type": "main", "index": 0 },
+          { "node": "Google Sheets → Daily Log", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Denver"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "SBR" },
+    { "name": "visual-reports" },
+    { "name": "zo-daily" }
+  ],
+  "pinData": {}
+}

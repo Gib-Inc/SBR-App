@@ -3,6 +3,7 @@ import { refreshAdPerformanceData, refreshSalesData } from "./channel-ingestion-
 import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
+import { MorningTrapService } from "./services/morning-trap-service";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -24,6 +25,7 @@ const channelSchedules: Map<string, ChannelSchedule> = new Map();
 let forecastContextTimer: NodeJS.Timeout | null = null;
 let aiSystemReviewTimer: NodeJS.Timeout | null = null;
 let extensivSyncTimer: NodeJS.Timeout | null = null;
+let morningTrapTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -194,6 +196,61 @@ async function performAISystemReview(): Promise<void> {
 }
 
 /**
+ * Morning Trap Runner — Zo's daily KPI briefing
+ * Runs at 7 AM MST daily. Pulls all marketing/sales data, generates Claude briefing, texts Zo.
+ */
+async function performMorningTrapCheck(): Promise<void> {
+  console.log("[Scheduler] Starting Morning Trap Check...");
+  const startTime = Date.now();
+
+  try {
+    // Get admin users to run trap check for
+    const allUsers = await storage.getAllUsers();
+    const adminUser = allUsers.find(u => u.role === 'admin');
+
+    if (!adminUser) {
+      console.warn("[Scheduler] No admin user found for morning trap check");
+      return;
+    }
+
+    const result = await MorningTrapService.runTrapCheck(adminUser.id, { sendSms: true });
+    const duration = Date.now() - startTime;
+
+    if (result.success) {
+      console.log(`[Scheduler] Morning Trap Check completed in ${duration}ms. SMS sent: ${result.smsSent}`);
+      if (result.smsError) {
+        console.warn(`[Scheduler] Morning Trap SMS issue: ${result.smsError}`);
+      }
+    } else {
+      console.warn(`[Scheduler] Morning Trap Check completed with issues in ${duration}ms`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Error during Morning Trap Check:", error);
+  }
+}
+
+/**
+ * Calculate milliseconds until next 7 AM MST (UTC-7)
+ */
+function msUntilNext7amMST(): number {
+  const now = new Date();
+  // MST is UTC-7
+  const mstOffset = -7 * 60; // minutes
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const mstMinutes = utcMinutes + mstOffset;
+
+  // Target: 7:00 AM MST = 7*60 = 420 minutes into the MST day
+  const targetMstMinutes = 7 * 60;
+
+  let minutesUntil = targetMstMinutes - mstMinutes;
+  if (minutesUntil <= 0) {
+    minutesUntil += 24 * 60; // Next day
+  }
+
+  return minutesUntil * 60 * 1000;
+}
+
+/**
  * Starts the scheduler for all enabled channels.
  * Reads channel configurations and schedules individual timers.
  */
@@ -265,6 +322,29 @@ export async function startScheduler(): Promise<void> {
       });
     }, EXTENSIV_SYNC_INTERVAL_HOURS * 60 * 60 * 1000);
 
+    // Schedule Morning Trap Check (daily at 7 AM MST)
+    if (morningTrapTimer) {
+      clearTimeout(morningTrapTimer);
+    }
+
+    const msUntil7am = msUntilNext7amMST();
+    const hoursUntil = (msUntil7am / (1000 * 60 * 60)).toFixed(1);
+    console.log(`[Scheduler] Morning Trap Check scheduled. Next run in ${hoursUntil} hours (7 AM MST)`);
+
+    // Use setTimeout for first run at 7 AM, then setInterval for daily after that
+    morningTrapTimer = setTimeout(() => {
+      performMorningTrapCheck().catch(err => {
+        console.error("[Scheduler] Morning Trap Check failed:", err);
+      });
+
+      // After first run, repeat every 24 hours
+      morningTrapTimer = setInterval(() => {
+        performMorningTrapCheck().catch(err => {
+          console.error("[Scheduler] Scheduled Morning Trap Check failed:", err);
+        });
+      }, 24 * 60 * 60 * 1000);
+    }, msUntil7am);
+
     console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
   } catch (error) {
     console.error("[Scheduler] Failed to start scheduler:", error);
@@ -297,6 +377,13 @@ export function stopScheduler(): void {
   if (extensivSyncTimer) {
     clearInterval(extensivSyncTimer);
     extensivSyncTimer = null;
+  }
+
+  // Stop Morning Trap timer
+  if (morningTrapTimer) {
+    clearTimeout(morningTrapTimer);
+    clearInterval(morningTrapTimer);
+    morningTrapTimer = null;
   }
 
   console.log("[Scheduler] All schedulers stopped");

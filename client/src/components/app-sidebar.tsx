@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -68,6 +68,11 @@ const mainMenuItems = [
     title: "AI Agent",
     url: "/ai",
     icon: Brain,
+  },
+  {
+    title: "Marketing",
+    url: "/marketing",
+    icon: Megaphone,
   },
   {
     title: "App Flow",

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex, date } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex, date, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2665,3 +2665,193 @@ export const cycleCountEntries = pgTable("cycle_count_entries", {
 export const insertCycleCountEntrySchema = createInsertSchema(cycleCountEntries).omit({ id: true });
 export type InsertCycleCountEntry = z.infer<typeof insertCycleCountEntrySchema>;
 export type CycleCountEntry = typeof cycleCountEntries.$inferSelect;
+
+// ============================================================================
+// ZOBOT MARKETING — Content Pipeline (D1 Pipeline)
+// ============================================================================
+
+export const marketingCampaigns = pgTable("marketing_campaigns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  campaignType: text("campaign_type").notNull(), // SEASONAL, PRODUCT_LAUNCH, EVERGREEN, RETARGETING, B2B
+  status: text("status").notNull().default("DRAFT"), // DRAFT, ACTIVE, PAUSED, COMPLETED, ARCHIVED
+  startDate: timestamp("start_date"),
+  endDate: timestamp("end_date"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+});
+
+export const insertMarketingCampaignSchema = createInsertSchema(marketingCampaigns).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertMarketingCampaign = z.infer<typeof insertMarketingCampaignSchema>;
+export type MarketingCampaign = typeof marketingCampaigns.$inferSelect;
+
+export const contentPipelineItems = pgTable("content_pipeline_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  campaignId: varchar("campaign_id").references(() => marketingCampaigns.id),
+  title: text("title").notNull(),
+  status: text("status").notNull().default("INTAKE"), // INTAKE, BRIEF, SCRIPT, VISUAL, DISTRIBUTION, REVIEW, APPROVED, REJECTED, PUBLISHED
+  avatar: text("avatar"), // DOG_OWNER, BAREFOOT_FAMILY, TIME_CONSCIOUS, PREVENTION_THINKER, ACREAGE_OWNER, SKEPTIC
+  funnelStage: text("funnel_stage"), // COLD, WARM, HOT
+  archetype: text("archetype"), // AHA_MECHANICS, ORIGIN_STORY, SATAN_SPAWN
+  platform: text("platform"), // TIKTOK, INSTAGRAM, YOUTUBE, EMAIL, PINTEREST, FACEBOOK
+  conversionFramework: text("conversion_framework"), // PAS, AIDA
+  psychologyModel: text("psychology_model"), // LOSS_AVERSION, IKEA_EFFECT, ZEIGARNIK, etc.
+  hookCategory: text("hook_category"), // PAIN, TIME_SAVING, CONTRARIAN, CURIOSITY, TESTIMONIAL
+  primaryObjection: text("primary_objection"),
+  paidPotential: boolean("paid_potential").default(false),
+  // Agent outputs stored as JSON
+  intakeOutput: jsonb("intake_output"), // Agent 1 output
+  briefOutput: jsonb("brief_output"), // Agent 2 output
+  scriptOutput: jsonb("script_output"), // Agent 3 output
+  visualOutput: jsonb("visual_output"), // Agent 4 output
+  distributionOutput: jsonb("distribution_output"), // Agent 5 output
+  reviewOutput: jsonb("review_output"), // Agent 6 output
+  reviewScore: integer("review_score"), // Agent 6 quality gate score (0-10)
+  reviewNotes: text("review_notes"),
+  pipelineStopReason: text("pipeline_stop_reason"), // If PIPELINE_STOP triggered
+  escalationRoute: text("escalation_route"), // Who to escalate to
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  campaignIdIdx: index("content_pipeline_campaign_id_idx").on(table.campaignId),
+  statusIdx: index("content_pipeline_status_idx").on(table.status),
+}));
+
+export const insertContentPipelineItemSchema = createInsertSchema(contentPipelineItems).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertContentPipelineItem = z.infer<typeof insertContentPipelineItemSchema>;
+export type ContentPipelineItem = typeof contentPipelineItems.$inferSelect;
+
+export const contentPipelineLogs = pgTable("content_pipeline_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  pipelineItemId: varchar("pipeline_item_id").notNull().references(() => contentPipelineItems.id),
+  agentNumber: integer("agent_number").notNull(), // 1-6
+  agentName: text("agent_name").notNull(), // INTAKE, BRIEF_WRITER, SCRIPT_WRITER, VISUAL_DIRECTOR, DISTRIBUTION, BRAND_REVIEWER
+  input: jsonb("input"),
+  output: jsonb("output"),
+  durationMs: integer("duration_ms"),
+  status: text("status").notNull().default("SUCCESS"), // SUCCESS, ERROR, PIPELINE_STOP
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  pipelineItemIdIdx: index("content_pipeline_logs_item_id_idx").on(table.pipelineItemId),
+}));
+
+export const insertContentPipelineLogSchema = createInsertSchema(contentPipelineLogs).omit({ id: true, createdAt: true });
+export type InsertContentPipelineLog = z.infer<typeof insertContentPipelineLogSchema>;
+export type ContentPipelineLog = typeof contentPipelineLogs.$inferSelect;
+
+// ============================================================================
+// MORNING TRAP RUNS — Zo's daily KPI briefing history
+// ============================================================================
+
+export const morningTrapRuns = pgTable("morning_trap_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  runDate: timestamp("run_date").notNull(),
+
+  // Google Ads MTD
+  googleAdsRaw: jsonb("google_ads_raw"),
+
+  // Shopify MTD
+  shopifyOrderCount: integer("shopify_order_count").default(0),
+  shopifyGrossSales: numeric("shopify_gross_sales", { precision: 12, scale: 2 }).default("0"),
+  shopifySourceBreakdown: jsonb("shopify_source_breakdown"),
+  shopifyRefundCount: integer("shopify_refund_count").default(0),
+
+  // Claude briefing
+  claudeBriefing: text("claude_briefing"),
+
+  // SMS delivery
+  smsSent: boolean("sms_sent").default(false),
+  smsSentAt: timestamp("sms_sent_at"),
+
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  runDateIdx: index("morning_trap_runs_date_idx").on(table.runDate),
+  userIdIdx: index("morning_trap_runs_user_id_idx").on(table.userId),
+}));
+
+export const insertMorningTrapRunSchema = createInsertSchema(morningTrapRuns).omit({ id: true, createdAt: true });
+export type InsertMorningTrapRun = z.infer<typeof insertMorningTrapRunSchema>;
+export type MorningTrapRun = typeof morningTrapRuns.$inferSelect;
+
+// ============================================================================
+// COPY INTELLIGENCE LAYER (lane2-marketing)
+// ============================================================================
+
+// ── copy_assets — every piece of copy before it goes live ──
+
+export const copyAssets = pgTable("copy_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  contentType: text("content_type").notNull(),       // VIDEO_SCRIPT, AD_COPY, EMAIL, SMS, CAPTION
+  channel: text("channel").notNull(),                 // TIKTOK, INSTAGRAM, YOUTUBE, EMAIL, META_AD, GOOGLE_AD
+  body: text("body").notNull(),
+  headline: text("headline"),
+  schwartzLevel: text("schwartz_level"),              // UNAWARE, PROBLEM_AWARE, SOLUTION_AWARE, PRODUCT_AWARE, MOST_AWARE
+  framework: text("framework"),                       // AIDA, PAS, BAB, HOOK_STORY_OFFER, 4Ps
+  cialdiniTrigger: text("cialdini_trigger"),           // SCARCITY, SOCIAL_PROOF, AUTHORITY, RECIPROCITY, COMMITMENT, LIKING
+  primaryObjection: text("primary_objection"),         // PRICE, SKEPTICISM, TIMING, SIZE, WEIGHT
+  createdBy: text("created_by"),                       // zo, kevin, carpe_diem, ai_agent
+}, (table) => ({
+  channelIdx: index("copy_assets_channel_idx").on(table.channel),
+  contentTypeIdx: index("copy_assets_content_type_idx").on(table.contentType),
+  createdAtIdx: index("copy_assets_created_at_idx").on(table.createdAt),
+}));
+
+export const insertCopyAssetSchema = createInsertSchema(copyAssets).omit({ id: true, createdAt: true });
+export type InsertCopyAsset = z.infer<typeof insertCopyAssetSchema>;
+export type CopyAsset = typeof copyAssets.$inferSelect;
+
+// ── copy_performance — results from Meta/Google matched to copy ──
+
+export const copyPerformance = pgTable("copy_performance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  copyAssetId: varchar("copy_asset_id").notNull().references(() => copyAssets.id),
+  measuredAt: timestamp("measured_at").notNull().default(sql`now()`),
+  channel: text("channel").notNull(),                 // META, GOOGLE, TIKTOK
+  impressions: integer("impressions").default(0),
+  clicks: integer("clicks").default(0),
+  conversions: integer("conversions").default(0),
+  spend: numeric("spend", { precision: 12, scale: 2 }).default("0"),
+  revenue: numeric("revenue", { precision: 12, scale: 2 }).default("0"),
+  roas: real("roas").default(0),
+  ctr: real("ctr").default(0),
+  performanceScore: real("performance_score"),         // 0-100, computed by Claude
+}, (table) => ({
+  copyAssetIdIdx: index("copy_perf_asset_id_idx").on(table.copyAssetId),
+  channelIdx: index("copy_perf_channel_idx").on(table.channel),
+  measuredAtIdx: index("copy_perf_measured_at_idx").on(table.measuredAt),
+}));
+
+export const insertCopyPerformanceSchema = createInsertSchema(copyPerformance).omit({ id: true });
+export type InsertCopyPerformance = z.infer<typeof insertCopyPerformanceSchema>;
+export type CopyPerformance = typeof copyPerformance.$inferSelect;
+
+// ── copy_roots — living intelligence layer, patterns from what converts ──
+
+export const copyRoots = pgTable("copy_roots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  framework: text("framework"),
+  schwartzLevel: text("schwartz_level"),
+  cialdiniTrigger: text("cialdini_trigger"),
+  channel: text("channel"),
+  contentType: text("content_type"),
+  avgRoas: real("avg_roas").default(0),
+  avgCtr: real("avg_ctr").default(0),
+  sampleSize: integer("sample_size").default(0),
+  topPerformingHeadline: text("top_performing_headline"),
+  topPerformingHook: text("top_performing_hook"),
+  insight: text("insight"),                            // Claude-generated pattern insight
+}, (table) => ({
+  frameworkIdx: index("copy_roots_framework_idx").on(table.framework),
+  channelIdx: index("copy_roots_channel_idx").on(table.channel),
+}));
+
+export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: true });
+export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
+export type CopyRoot = typeof copyRoots.$inferSelect;

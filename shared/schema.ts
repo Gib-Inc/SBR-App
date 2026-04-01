@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex, date } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, real, timestamp, boolean, index, jsonb, uniqueIndex, date, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2777,3 +2777,81 @@ export const morningTrapRuns = pgTable("morning_trap_runs", {
 export const insertMorningTrapRunSchema = createInsertSchema(morningTrapRuns).omit({ id: true, createdAt: true });
 export type InsertMorningTrapRun = z.infer<typeof insertMorningTrapRunSchema>;
 export type MorningTrapRun = typeof morningTrapRuns.$inferSelect;
+
+// ============================================================================
+// COPY INTELLIGENCE LAYER (lane2-marketing)
+// ============================================================================
+
+// ── copy_assets — every piece of copy before it goes live ──
+
+export const copyAssets = pgTable("copy_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  contentType: text("content_type").notNull(),       // VIDEO_SCRIPT, AD_COPY, EMAIL, SMS, CAPTION
+  channel: text("channel").notNull(),                 // TIKTOK, INSTAGRAM, YOUTUBE, EMAIL, META_AD, GOOGLE_AD
+  body: text("body").notNull(),
+  headline: text("headline"),
+  schwartzLevel: text("schwartz_level"),              // UNAWARE, PROBLEM_AWARE, SOLUTION_AWARE, PRODUCT_AWARE, MOST_AWARE
+  framework: text("framework"),                       // AIDA, PAS, BAB, HOOK_STORY_OFFER, 4Ps
+  cialdiniTrigger: text("cialdini_trigger"),           // SCARCITY, SOCIAL_PROOF, AUTHORITY, RECIPROCITY, COMMITMENT, LIKING
+  primaryObjection: text("primary_objection"),         // PRICE, SKEPTICISM, TIMING, SIZE, WEIGHT
+  createdBy: text("created_by"),                       // zo, kevin, carpe_diem, ai_agent
+}, (table) => ({
+  channelIdx: index("copy_assets_channel_idx").on(table.channel),
+  contentTypeIdx: index("copy_assets_content_type_idx").on(table.contentType),
+  createdAtIdx: index("copy_assets_created_at_idx").on(table.createdAt),
+}));
+
+export const insertCopyAssetSchema = createInsertSchema(copyAssets).omit({ id: true, createdAt: true });
+export type InsertCopyAsset = z.infer<typeof insertCopyAssetSchema>;
+export type CopyAsset = typeof copyAssets.$inferSelect;
+
+// ── copy_performance — results from Meta/Google matched to copy ──
+
+export const copyPerformance = pgTable("copy_performance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  copyAssetId: varchar("copy_asset_id").notNull().references(() => copyAssets.id),
+  measuredAt: timestamp("measured_at").notNull().default(sql`now()`),
+  channel: text("channel").notNull(),                 // META, GOOGLE, TIKTOK
+  impressions: integer("impressions").default(0),
+  clicks: integer("clicks").default(0),
+  conversions: integer("conversions").default(0),
+  spend: numeric("spend", { precision: 12, scale: 2 }).default("0"),
+  revenue: numeric("revenue", { precision: 12, scale: 2 }).default("0"),
+  roas: real("roas").default(0),
+  ctr: real("ctr").default(0),
+  performanceScore: real("performance_score"),         // 0-100, computed by Claude
+}, (table) => ({
+  copyAssetIdIdx: index("copy_perf_asset_id_idx").on(table.copyAssetId),
+  channelIdx: index("copy_perf_channel_idx").on(table.channel),
+  measuredAtIdx: index("copy_perf_measured_at_idx").on(table.measuredAt),
+}));
+
+export const insertCopyPerformanceSchema = createInsertSchema(copyPerformance).omit({ id: true });
+export type InsertCopyPerformance = z.infer<typeof insertCopyPerformanceSchema>;
+export type CopyPerformance = typeof copyPerformance.$inferSelect;
+
+// ── copy_roots — living intelligence layer, patterns from what converts ──
+
+export const copyRoots = pgTable("copy_roots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  framework: text("framework"),
+  schwartzLevel: text("schwartz_level"),
+  cialdiniTrigger: text("cialdini_trigger"),
+  channel: text("channel"),
+  contentType: text("content_type"),
+  avgRoas: real("avg_roas").default(0),
+  avgCtr: real("avg_ctr").default(0),
+  sampleSize: integer("sample_size").default(0),
+  topPerformingHeadline: text("top_performing_headline"),
+  topPerformingHook: text("top_performing_hook"),
+  insight: text("insight"),                            // Claude-generated pattern insight
+}, (table) => ({
+  frameworkIdx: index("copy_roots_framework_idx").on(table.framework),
+  channelIdx: index("copy_roots_channel_idx").on(table.channel),
+}));
+
+export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: true });
+export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
+export type CopyRoot = typeof copyRoots.$inferSelect;

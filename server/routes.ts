@@ -20338,6 +20338,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── Marketing: ROAS Guardian ──
+  app.get("/api/marketing/roas", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, channel } = req.query as { startDate?: string; endDate?: string; channel?: string };
+      const rows = await storage.getRoasGuardian({ startDate, endDate, channel });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing ROAS] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ROAS data" });
+    }
+  });
+
   const httpServer = createServer(app);
   
   // Initialize WebSocket for real-time logs

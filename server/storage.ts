@@ -686,6 +686,9 @@ export interface IStorage {
   createMorningTrapRun(run: InsertMorningTrapRun): Promise<MorningTrapRun>;
   getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]>;
   getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined>;
+
+  // Marketing — ROAS Guardian view
+  getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -3990,6 +3993,10 @@ export class MemStorage implements IStorage {
   }
   async getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]> { return []; }
   async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> { return undefined; }
+
+  async getRoasGuardian(_params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    return [];
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -7640,6 +7647,16 @@ export class PostgresStorage implements IStorage {
       .orderBy(desc(schema.morningTrapRuns.runDate))
       .limit(1);
     return result[0];
+  }
+
+  async getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    const start = params?.startDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const end   = params?.endDate   ?? new Date().toISOString().slice(0, 10);
+    const channel = params?.channel;
+    const rows = channel
+      ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
+      : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
+    return (rows as any).rows ?? (rows as any);
   }
 }
 

@@ -11,6 +11,7 @@ type SnapshotRow = {
   sku: string;
   name: string | null;
   qty: number;
+  promised?: number;
   source: string;
 };
 
@@ -28,10 +29,13 @@ export default function Inventory() {
 
   // Group by SKU so we can show Pyvott + Hildale side by side
   const bySku = useMemo(() => {
-    const map = new Map<string, { sku: string; name: string; pyvott: number; hildale: number; total: number }>();
+    const map = new Map<string, { sku: string; name: string; pyvott: number; hildale: number; promised: number; total: number }>();
     for (const r of rows) {
-      const existing = map.get(r.sku) ?? { sku: r.sku, name: r.name ?? "", pyvott: 0, hildale: 0, total: 0 };
-      if (r.location === "Pyvott") existing.pyvott = r.qty;
+      const existing = map.get(r.sku) ?? { sku: r.sku, name: r.name ?? "", pyvott: 0, hildale: 0, promised: 0, total: 0 };
+      if (r.location === "Pyvott") {
+        existing.pyvott = r.qty;
+        existing.promised = r.promised ?? 0;
+      }
       if (r.location === "Hildale") existing.hildale = r.qty;
       existing.total = existing.pyvott + existing.hildale;
       if (!existing.name && r.name) existing.name = r.name;
@@ -160,6 +164,7 @@ export default function Inventory() {
                 <TableHead>Product</TableHead>
                 <TableHead className="text-right">Pyvott</TableHead>
                 <TableHead className="text-right">Hildale</TableHead>
+                <TableHead className="text-right">Promised</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
@@ -176,6 +181,7 @@ export default function Inventory() {
                     <TableCell className="max-w-md">{s.name}</TableCell>
                     <TableCell className="text-right">{s.pyvott.toLocaleString()}</TableCell>
                     <TableCell className="text-right">{s.hildale.toLocaleString()}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">{s.promised.toLocaleString()}</TableCell>
                     <TableCell className="text-right font-semibold">
                       {s.total.toLocaleString()}
                     </TableCell>

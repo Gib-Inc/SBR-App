@@ -7689,6 +7689,7 @@ export class PostgresStorage implements IStorage {
         REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
         name,
         COALESCE(extensiv_on_hand_snapshot, 0) AS qty,
+        GREATEST(COALESCE(extensiv_on_hand_snapshot, 0) - COALESCE(available_for_sale_qty, 0), 0) AS promised,
         'extensiv_live' AS source
       FROM items
       WHERE extensiv_sku IS NOT NULL
@@ -7699,7 +7700,7 @@ export class PostgresStorage implements IStorage {
     let snapshotRows: any[] = [];
     if (hildaleDate) {
       const snapResult: any = await this.db.execute(drizzleSql`
-        SELECT snapshot_date::text AS snapshot_date, location, sku, name, qty, source
+        SELECT snapshot_date::text AS snapshot_date, location, sku, name, qty, 0 AS promised, source
         FROM inventory_snapshots
         WHERE snapshot_date = ${hildaleDate}::date
           AND location <> 'Pyvott'

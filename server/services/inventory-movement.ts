@@ -222,10 +222,28 @@ export class InventoryMovement {
           break;
 
         case "SALES_ORDER_SHIPPED":
-          // No-op for finished products - stock already decremented at SALES_ORDER_CREATED
-          // NEVER touches hildaleQty - this is an absolute rule
-          if (!isFinished) {
-            // For components (rare direct sales), decrement currentStock
+          // Finished products: Pivot ships are a no-op because pivotQty is read-only
+          // from Extensiv (EXTENSIV_SYNC will catch up). Hildale ships decrement
+          // hildaleQty because nothing else will.
+          if (isFinished) {
+            if (location === "HILDALE") {
+              if (beforeState.hildaleQty < params.quantity) {
+                return {
+                  success: false,
+                  itemId: params.itemId,
+                  sku: item.sku,
+                  beforeQty: beforeState.hildaleQty,
+                  afterQty: beforeState.hildaleQty,
+                  quantityChanged: 0,
+                  error: `Insufficient Hildale stock for ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+                };
+              }
+              quantityDelta = -params.quantity;
+              updates.hildaleQty = beforeState.hildaleQty - params.quantity;
+            }
+            // PIVOT: no-op — Extensiv sync is source of truth for pivotQty
+          } else {
+            // Components: decrement currentStock
             quantityDelta = -params.quantity;
             if (beforeState.currentStock >= params.quantity) {
               updates.currentStock = beforeState.currentStock - params.quantity;
@@ -241,7 +259,6 @@ export class InventoryMovement {
               };
             }
           }
-          // For finished products: quantityDelta stays 0, no updates to any qty fields
           break;
 
         case "SALES_ORDER_CANCELLED":

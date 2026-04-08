@@ -7699,12 +7699,25 @@ export class PostgresStorage implements IStorage {
     // Hildale (and any other non-Pyvott) rows from PDF snapshots
     let snapshotRows: any[] = [];
     if (hildaleDate) {
+      // Hildale display qty = PDF baseline + items.hildale_qty (live delta).
+      // The delta starts at 0 after a PDF upload and moves with ships (down),
+      // production (up), and returns (up). LEFT JOIN on normalized SKU so that
+      // snapshot rows without a matching item still render with delta = 0.
       const snapResult: any = await this.db.execute(drizzleSql`
-        SELECT snapshot_date::text AS snapshot_date, location, sku, name, qty, 0 AS promised, source
-        FROM inventory_snapshots
-        WHERE snapshot_date = ${hildaleDate}::date
-          AND location <> 'Pyvott'
-        ORDER BY location, sku
+        SELECT
+          s.snapshot_date::text AS snapshot_date,
+          s.location,
+          s.sku,
+          s.name,
+          (s.qty + COALESCE(i.hildale_qty, 0))::int AS qty,
+          0 AS promised,
+          s.source
+        FROM inventory_snapshots s
+        LEFT JOIN items i
+          ON REGEXP_REPLACE(i.sku, '^SKU:\\s*', '') = s.sku
+        WHERE s.snapshot_date = ${hildaleDate}::date
+          AND s.location <> 'Pyvott'
+        ORDER BY s.location, s.sku
       `);
       snapshotRows = snapResult.rows ?? snapResult ?? [];
     }

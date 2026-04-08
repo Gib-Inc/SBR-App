@@ -192,9 +192,8 @@ export default function Inventory() {
 
       {/* Source footnote */}
       <p className="text-xs text-muted-foreground">
-        Data source: manual PDF uploads. Live Extensiv/Pyvott sync is pending —
-        credentials need to be added to <code>integration_configs</code> before
-        auto-sync can populate this view.
+        Pyvott column is live from Extensiv (updates on each sync). Hildale
+        column is from the most recent manual PDF upload.
       </p>
     </div>
   );

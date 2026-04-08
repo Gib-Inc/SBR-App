@@ -20350,6 +20350,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Inventory snapshots — PDF-backed Pyvott / Hildale view
+  // Returns the most recent snapshot by default, or a specific date via ?date=YYYY-MM-DD
+  app.get("/api/inventory/snapshot", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { date } = req.query as { date?: string };
+      const rows = await storage.getInventorySnapshot({ date });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing Inventory] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch inventory snapshot" });
+    }
+  });
+
   const httpServer = createServer(app);
   
   // Initialize WebSocket for real-time logs

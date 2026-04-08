@@ -689,6 +689,7 @@ export interface IStorage {
 
   // Marketing — ROAS Guardian view
   getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
+  getInventorySnapshot(params?: { date?: string }): Promise<any[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -3995,6 +3996,10 @@ export class MemStorage implements IStorage {
   async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> { return undefined; }
 
   async getRoasGuardian(_params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    return [];
+  }
+
+  async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
     return [];
   }
 }
@@ -7656,6 +7661,22 @@ export class PostgresStorage implements IStorage {
     const rows = channel
       ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
       : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
+    return (rows as any).rows ?? (rows as any);
+  }
+
+  async getInventorySnapshot(params?: { date?: string }): Promise<any[]> {
+    // If no date provided, pick the most recent snapshot_date in the table
+    const targetDate = params?.date
+      ? params.date
+      : (((await this.db.execute(drizzleSql`SELECT MAX(snapshot_date)::text AS d FROM inventory_snapshots`)) as any).rows?.[0]?.d
+         ?? ((await this.db.execute(drizzleSql`SELECT MAX(snapshot_date)::text AS d FROM inventory_snapshots`)) as any)[0]?.d);
+    if (!targetDate) return [];
+    const rows = await this.db.execute(drizzleSql`
+      SELECT snapshot_date::text AS snapshot_date, location, sku, name, qty, source
+      FROM inventory_snapshots
+      WHERE snapshot_date = ${targetDate}::date
+      ORDER BY location, sku
+    `);
     return (rows as any).rows ?? (rows as any);
   }
 }

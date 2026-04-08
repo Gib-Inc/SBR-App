@@ -42,6 +42,7 @@ import LegalPrivacy from "@/pages/legal-privacy";
 import AcceptInvite from "@/pages/accept-invite";
 import ResetPassword from "@/pages/reset-password";
 import Marketing from "@/pages/marketing";
+import Inventory from "@/pages/inventory";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -130,6 +131,7 @@ function AuthenticatedApp() {
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
                     <Route path="/marketing" component={Marketing} />
+                    <Route path="/inventory" component={Inventory} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

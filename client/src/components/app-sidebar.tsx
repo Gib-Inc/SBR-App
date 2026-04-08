@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -73,6 +73,11 @@ const mainMenuItems = [
     title: "Marketing",
     url: "/marketing",
     icon: Megaphone,
+  },
+  {
+    title: "Inventory",
+    url: "/inventory",
+    icon: Warehouse,
   },
   {
     title: "App Flow",

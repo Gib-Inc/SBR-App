@@ -4729,11 +4729,12 @@ export default function AIAgent() {
     const authWindow = window.open("about:blank", "_blank", "width=600,height=700");
     try {
       const response = await apiRequest("GET", "/api/ads/google/auth-url");
-      if (response.authUrl && authWindow) {
-        authWindow.location.href = response.authUrl;
-      } else if (response.authUrl) {
+      const data = await response.json();
+      if (data.authUrl && authWindow) {
+        authWindow.location.href = data.authUrl;
+      } else if (data.authUrl) {
         // Fallback: if popup was still blocked, navigate in current tab
-        window.location.href = response.authUrl;
+        window.location.href = data.authUrl;
       }
     } catch (error: any) {
       if (authWindow) authWindow.close();

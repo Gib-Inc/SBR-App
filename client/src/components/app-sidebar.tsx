@@ -13,77 +13,32 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
-const mainMenuItems = [
-  {
-    title: "Reports",
-    url: "/",
-    icon: BarChart3,
-  },
-  {
-    title: "Products",
-    url: "/products",
-    icon: Package,
-  },
-  {
-    title: "Production",
-    url: "/production",
-    icon: Factory,
-  },
-  {
-    title: "Cycle Count",
-    url: "/cycle-count",
-    icon: ClipboardCheck,
-  },
-  {
-    title: "Direct Orders",
-    url: "/direct-orders",
-    icon: PackageCheck,
-  },
-  {
-    title: "Barcodes",
-    url: "/barcodes",
-    icon: Barcode,
-  },
-  {
-    title: "Suppliers",
-    url: "/suppliers",
-    icon: Building2,
-  },
-  {
-    title: "Purchase Orders",
-    url: "/purchase-orders",
-    icon: ClipboardList,
-  },
-  {
-    title: "Sales Orders",
-    url: "/sales-orders",
-    icon: ShoppingCart,
-  },
-  {
-    title: "Returns",
-    url: "/returns",
-    icon: PackageOpen,
-  },
-  {
-    title: "AI Agent",
-    url: "/ai",
-    icon: Brain,
-  },
-  {
-    title: "Marketing",
-    url: "/marketing",
-    icon: Megaphone,
-  },
-  {
-    title: "Inventory",
-    url: "/inventory",
-    icon: Warehouse,
-  },
-  {
-    title: "App Flow",
-    url: "/app-flow",
-    icon: Workflow,
-  },
+// Sidebar items organized into logical groups so the list stays
+// scannable even on smaller screens.  Each group gets its own label.
+const overviewItems = [
+  { title: "Reports",    url: "/",            icon: BarChart3  },
+  { title: "Inventory",  url: "/inventory",   icon: Warehouse  },
+  { title: "Marketing",  url: "/marketing",   icon: Megaphone  },
+];
+
+const operationsItems = [
+  { title: "Products",       url: "/products",        icon: Package       },
+  { title: "Production",     url: "/production",      icon: Factory       },
+  { title: "Cycle Count",    url: "/cycle-count",     icon: ClipboardCheck },
+  { title: "Direct Orders",  url: "/direct-orders",   icon: PackageCheck  },
+  { title: "Barcodes",       url: "/barcodes",        icon: Barcode       },
+];
+
+const orderItems = [
+  { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
+  { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
+  { title: "Sales Orders",     url: "/sales-orders",     icon: ShoppingCart  },
+  { title: "Returns",          url: "/returns",          icon: PackageOpen   },
+];
+
+const toolItems = [
+  { title: "AI Agent",  url: "/ai",        icon: Brain    },
+  { title: "App Flow",  url: "/app-flow",  icon: Workflow },
 ];
 
 export function AppSidebar() {
@@ -103,26 +58,34 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {mainMenuItems.map((item) => {
-                const isActive = location === item.url;
-                return (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton asChild isActive={isActive}>
-                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase()}`}>
-                        <item.icon className="h-5 w-5" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {/* Helper that renders a group of sidebar links */}
+        {[
+          { label: "Overview",   items: overviewItems   },
+          { label: "Operations", items: operationsItems },
+          { label: "Orders",     items: orderItems      },
+          { label: "Tools",      items: toolItems       },
+        ].map((group) => (
+          <SidebarGroup key={group.label}>
+            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => {
+                  const isActive = location === item.url;
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton asChild isActive={isActive}>
+                        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
+                          <item.icon className="h-5 w-5" />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>

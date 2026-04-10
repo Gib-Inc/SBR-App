@@ -141,6 +141,48 @@ export class ShopifyClient {
   }
 
   /**
+   * Fetch orders from Shopify that are NOT yet fulfilled.
+   * This is the source of truth — if Shopify says it's unfulfilled, it genuinely needs shipping.
+   * Returns raw Shopify order objects with full fulfillment details.
+   *
+   * fulfillment_status filter values:
+   *   "unfulfilled" - no items fulfilled
+   *   "partial"     - some items fulfilled
+   *   "any"         - all statuses (default in Shopify)
+   */
+  async fetchUnfulfilledOrders(maxOrders: number = 250): Promise<any[]> {
+    const allOrders: any[] = [];
+    const pageSize = Math.min(250, maxOrders);
+
+    // Fetch BOTH unfulfilled and partially fulfilled orders
+    for (const status of ['unfulfilled', 'partial']) {
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/orders.json?fulfillment_status=${status}&status=open&limit=${pageSize}&fields=id,name,order_number,email,fulfillment_status,financial_status,fulfillments,line_items,created_at,total_price,currency,customer,shipping_address,source_name,cancelled_at,tags,note`;
+
+      while (nextPageUrl && allOrders.length < maxOrders) {
+        const response = await fetch(nextPageUrl, { headers: this.getHeaders() });
+
+        if (!response.ok) {
+          console.error(`[Shopify] Failed to fetch ${status} orders: ${response.status}`);
+          break;
+        }
+
+        const data = await response.json();
+        const orders = data.orders || [];
+        allOrders.push(...orders);
+
+        // Check for next page via Link header
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+
+        if (orders.length < pageSize) break;
+      }
+    }
+
+    console.log(`[Shopify] Fetched ${allOrders.length} unfulfilled/partial orders directly from Shopify`);
+    return allOrders;
+  }
+
+  /**
    * Test the API connection by fetching shop info
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {

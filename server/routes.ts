@@ -17149,60 +17149,168 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // In-house shipping queue — orders that need to be shipped from Hildale
-  // Returns ONLY orders that genuinely still need action:
-  //  - fulfillmentSource = HILDALE
-  //  - status is NOT terminal (DELIVERED, REFUNDED, CANCELLED) and NOT already SHIPPED
-  //  - has at least 1 unit still unshipped (qtyOrdered - qtyShipped > 0)
+  // In-house shipping queue — VERIFIED against Shopify & Extensiv
+  // SOURCE OF TRUTH: Shopify's fulfillment_status, NOT our local DB status
+  // Flow:
+  //  1. Ask Shopify: "What orders are still unfulfilled?"
+  //  2. Match those against our DB to find Hildale-routed orders
+  //  3. For orders not in Shopify results, check our DB as fallback (Amazon, etc.)
+  //  4. Cross-check Extensiv activity to exclude anything Pyvott shipped
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
   app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
     try {
-      const allOrders = await storage.getAllSalesOrders();
+      // ── Step 1: Get Shopify client ─────────────────────────────
+      let shopDomain: string | null = null;
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
 
-      // Exclude terminal statuses AND shipped — only show orders that truly need action
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        if (domain && accessToken) {
+          shopDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-01";
+        if (domain && accessToken) {
+          shopDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+        }
+      }
+
+      // ── Step 2: Ask Shopify for unfulfilled orders ─────────────
+      // This is the source of truth. If Shopify says it's fulfilled, it IS fulfilled.
+      const shopifyUnfulfilledIds = new Set<string>();
+      const shopifyOrderDetails = new Map<string, any>();
+      let shopifyVerified = false;
+
+      if (shopifyClient) {
+        try {
+          const unfulfilled = await shopifyClient.fetchUnfulfilledOrders(500);
+          for (const so of unfulfilled) {
+            const sid = String(so.id);
+            shopifyUnfulfilledIds.add(sid);
+            shopifyOrderDetails.set(sid, so);
+          }
+          shopifyVerified = true;
+          console.log(`[In-House Shipping] Shopify reports ${unfulfilled.length} unfulfilled orders`);
+        } catch (err: any) {
+          console.error("[In-House Shipping] Shopify API error, falling back to local DB:", err.message);
+        }
+      }
+
+      // ── Step 3: Get Extensiv shipment activity ─────────────────
+      const extensivShippedIds = new Set<string>();
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+          }
+
+          if (extensivClient) {
+            const sixtyDaysAgo = new Date();
+            sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+            const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 500);
+            for (const act of activity) {
+              if (act.type === 'SHIPMENT' && act.externalOrderId) {
+                extensivShippedIds.add(act.externalOrderId);
+              }
+            }
+            console.log(`[In-House Shipping] Extensiv shows ${extensivShippedIds.size} shipments in last 60 days`);
+            break;
+          }
+        }
+      } catch (err: any) {
+        console.error("[In-House Shipping] Extensiv check failed (non-blocking):", err.message);
+      }
+
+      // ── Step 4: Build the verified queue ───────────────────────
+      const allOrders = await storage.getAllSalesOrders();
       const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
-      const inHouseOrders = allOrders.filter(o =>
+
+      // Get Hildale-routed orders that our DB says are still pending
+      const candidates = allOrders.filter(o =>
         o.fulfillmentSource === 'HILDALE' && !excludeStatuses.includes(o.status)
       );
 
-      // Enrich with line items and calculate unshipped quantities
-      const enriched = await Promise.all(inHouseOrders.map(async (order) => {
+      // Now verify each candidate against Shopify + Extensiv
+      const verified: any[] = [];
+      let droppedByShopify = 0;
+      let droppedByExtensiv = 0;
+      let droppedByQty = 0;
+
+      for (const order of candidates) {
+        // If we got Shopify data, ONLY include orders Shopify confirms are unfulfilled
+        if (shopifyVerified && order.externalOrderId) {
+          if (!shopifyUnfulfilledIds.has(order.externalOrderId)) {
+            droppedByShopify++;
+            // Also update our local DB so next load is faster
+            try {
+              await storage.updateSalesOrder(order.id, { status: 'SHIPPED' });
+            } catch { /* non-blocking */ }
+            continue;
+          }
+        }
+
+        // Check if Extensiv already shipped it
+        if (order.externalOrderId && extensivShippedIds.has(order.externalOrderId)) {
+          droppedByExtensiv++;
+          try {
+            await storage.updateSalesOrder(order.id, { status: 'SHIPPED' });
+          } catch { /* non-blocking */ }
+          continue;
+        }
+
+        // Get line items and check if there are actually units to ship
         const lines = await storage.getSalesOrderLines(order.id);
         const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
         const totalShipped = lines.reduce((sum: number, l: any) => sum + (l.qtyShipped || 0), 0);
         const totalUnshipped = totalOrdered - totalShipped;
-        return {
+
+        if (totalUnshipped <= 0) {
+          droppedByQty++;
+          continue;
+        }
+
+        verified.push({
           ...order,
           lines,
           totalOrdered,
           totalShipped,
           totalUnshipped,
-        };
-      }));
+        });
+      }
 
-      // CRITICAL: Filter out orders where everything is already shipped (Qty 0)
-      const needsAction = enriched.filter(o => o.totalUnshipped > 0);
+      // Sort by order date (oldest first)
+      verified.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
 
-      // Sort by order date (oldest first — ship the oldest orders first)
-      needsAction.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
-
-      // Get Shopify shop domain for admin links
-      let shopDomain: string | null = null;
-      try {
-        const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
-        for (const config of shopifyConfigs) {
-          const domain = (config.config as any)?.shopDomain;
-          if (domain) { shopDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, ''); break; }
-        }
-        if (!shopDomain) shopDomain = process.env.SHOPIFY_SHOP_DOMAIN || null;
-      } catch { /* ignore — admin links are nice-to-have */ }
+      console.log(`[In-House Shipping] Result: ${verified.length} need action (dropped: ${droppedByShopify} Shopify-fulfilled, ${droppedByExtensiv} Extensiv-shipped, ${droppedByQty} zero-qty)`);
 
       res.json({
-        orders: needsAction,
+        orders: verified,
         summary: {
-          total: needsAction.length,
-          totalUnitsToShip: needsAction.reduce((s, o) => s + o.totalUnshipped, 0),
-          filtered: enriched.length - needsAction.length, // how many were auto-excluded (Qty 0 or already shipped)
+          total: verified.length,
+          totalUnitsToShip: verified.reduce((s: number, o: any) => s + o.totalUnshipped, 0),
+          verified: shopifyVerified,
+          droppedByShopify,
+          droppedByExtensiv,
+          droppedByQty,
         },
         shopDomain,
       });

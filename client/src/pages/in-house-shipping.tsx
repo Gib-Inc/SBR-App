@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -62,7 +62,10 @@ interface InHouseData {
   summary: {
     total: number;
     totalUnitsToShip: number;
-    filtered?: number; // orders auto-excluded because they had 0 qty or were already shipped
+    verified?: boolean; // true if Shopify was checked as source of truth
+    droppedByShopify?: number;
+    droppedByExtensiv?: number;
+    droppedByQty?: number;
   };
   shopDomain?: string | null;
 }
@@ -110,7 +113,6 @@ export default function InHouseShipping() {
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; errors: string[] } | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
-  const hasAutoSynced = useRef(false);
 
   const { data, isLoading, error } = useQuery<InHouseData>({
     queryKey: ["/api/sales-orders/in-house"],
@@ -140,14 +142,6 @@ export default function InHouseShipping() {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     },
   });
-
-  // Auto-sync with Shopify & Extensiv on first page load to clean up stale orders
-  useEffect(() => {
-    if (data && !hasAutoSynced.current && data.orders.length > 0) {
-      hasAutoSynced.current = true;
-      syncMutation.mutate();
-    }
-  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dismiss mutation — marks orders as already shipped WITHOUT touching inventory
   const dismissMutation = useMutation({
@@ -360,17 +354,33 @@ export default function InHouseShipping() {
         </Card>
       )}
 
-      {/* Stale orders warning */}
-      {staleOrders.length > 0 && !syncResult && (
+      {/* Verification status banner */}
+      {summary.verified && (summary.droppedByShopify || 0) + (summary.droppedByExtensiv || 0) > 0 && !syncResult && (
+        <Card className="border-green-500/50 bg-green-500/5">
+          <CardContent className="py-3 flex items-start gap-3">
+            <CheckCircle2 className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium">
+                Verified against Shopify & Extensiv
+              </p>
+              <p className="text-muted-foreground">
+                {(summary.droppedByShopify || 0) > 0 && `${summary.droppedByShopify} already fulfilled in Shopify. `}
+                {(summary.droppedByExtensiv || 0) > 0 && `${summary.droppedByExtensiv} shipped by Extensiv/Pyvott. `}
+                {(summary.droppedByQty || 0) > 0 && `${summary.droppedByQty} had no remaining items. `}
+                Only verified orders are shown below.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {summary.verified === false && (
         <Card className="border-amber-500/50 bg-amber-500/5">
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium">
-                {staleOrders.length} order{staleOrders.length !== 1 ? 's' : ''} older than 10 days
-              </p>
+              <p className="font-medium">Could not verify with Shopify</p>
               <p className="text-muted-foreground">
-                These were likely already shipped. Click "Sync with Shopify & Extensiv" to auto-close any that are fulfilled.
+                Showing orders from local database. Some may already be shipped. Click "Sync" to try again.
               </p>
             </div>
           </CardContent>
@@ -397,17 +407,20 @@ export default function InHouseShipping() {
             <CardTitle className="text-3xl">{summary.totalUnitsToShip}</CardTitle>
           </CardHeader>
         </Card>
-        {staleOrders.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription className="flex items-center gap-1">
-                <Clock className="h-3.5 w-3.5" />
-                Likely Shipped
-              </CardDescription>
-              <CardTitle className="text-3xl text-amber-500">{staleOrders.length}</CardTitle>
-            </CardHeader>
-          </Card>
-        )}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1">
+              {summary.verified ? (
+                <><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Verified</>
+              ) : (
+                <><AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Unverified</>
+              )}
+            </CardDescription>
+            <CardTitle className="text-sm text-muted-foreground mt-1">
+              {summary.verified ? "Shopify + Extensiv" : "Local DB only"}
+            </CardTitle>
+          </CardHeader>
+        </Card>
       </div>
 
       {/* Batch action bar */}

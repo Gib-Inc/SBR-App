@@ -20375,6 +20375,48 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // In-house shipping queue — orders that need to be shipped from Hildale
+  // Returns orders where fulfillmentSource = HILDALE and status is not yet fully shipped
+  app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allOrders = await storage.getAllSalesOrders();
+      // Filter to Hildale-fulfilled orders that aren't completed yet
+      const pendingStatuses = ['DRAFT', 'ORDERED', 'PENDING', 'PURCHASED', 'PARTIALLY_FULFILLED'];
+      const inHouseOrders = allOrders.filter(o =>
+        o.fulfillmentSource === 'HILDALE' && pendingStatuses.includes(o.status)
+      );
+
+      // Enrich with line items so we can show what needs shipping
+      const enriched = await Promise.all(inHouseOrders.map(async (order) => {
+        const lines = await storage.getSalesOrderLines(order.id);
+        const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
+        const totalShipped = lines.reduce((sum: number, l: any) => sum + (l.qtyShipped || 0), 0);
+        const totalUnshipped = totalOrdered - totalShipped;
+        return {
+          ...order,
+          lines,
+          totalOrdered,
+          totalShipped,
+          totalUnshipped,
+        };
+      }));
+
+      // Sort by order date (oldest first — ship the oldest orders first)
+      enriched.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
+
+      res.json({
+        orders: enriched,
+        summary: {
+          total: enriched.length,
+          totalUnitsToShip: enriched.reduce((s, o) => s + o.totalUnshipped, 0),
+        },
+      });
+    } catch (error: any) {
+      console.error("[In-House Shipping] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch in-house orders" });
+    }
+  });
+
   // Sales velocity — total units sold per SKU over last N days (default 90)
   // Used by the Inventory page to sort by best sellers
   app.get("/api/inventory/sales-velocity", requireAuth, async (req: Request, res: Response) => {

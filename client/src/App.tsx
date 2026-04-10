@@ -44,6 +44,7 @@ import ResetPassword from "@/pages/reset-password";
 import Marketing from "@/pages/marketing";
 import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
+import InHouseShipping from "@/pages/in-house-shipping";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -134,6 +135,7 @@ function AuthenticatedApp() {
                     <Route path="/marketing" component={Marketing} />
                     <Route path="/inventory" component={Inventory} />
                     <Route path="/raw-materials" component={RawMaterials} />
+                    <Route path="/in-house-shipping" component={InHouseShipping} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

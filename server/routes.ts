@@ -17475,6 +17475,181 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── DIAGNOSTIC endpoint — shows exactly what Shopify + Extensiv return ──
+  // GET /api/sales-orders/in-house/diagnose
+  // Hit this to see WHY orders aren't getting purged
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.get("/api/sales-orders/in-house/diagnose", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const diag: any = {
+        timestamp: new Date().toISOString(),
+        shopify: { connected: false, error: null as string | null, sampleOrders: [] as any[] },
+        extensiv: { connected: false, ordersEndpoint: null as any, activityEndpoint: null as any, error: null as string | null },
+        database: { totalOrders: 0, hildaleOrders: 0, candidates: 0, sampleCandidates: [] as any[] },
+        idFormatCheck: { dbFormat: '', shopifyFormat: '', match: false },
+      };
+
+      // 1. Check database
+      const allOrders = await storage.getAllSalesOrders();
+      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
+      const hildaleOrders = allOrders.filter(o => o.fulfillmentSource === 'HILDALE');
+      const candidates = hildaleOrders.filter(o => !excludeStatuses.includes(o.status));
+
+      diag.database.totalOrders = allOrders.length;
+      diag.database.hildaleOrders = hildaleOrders.length;
+      diag.database.candidates = candidates.length;
+      diag.database.sampleCandidates = candidates.slice(0, 5).map(o => ({
+        id: o.id,
+        externalOrderId: o.externalOrderId,
+        status: o.status,
+        fulfillmentSource: o.fulfillmentSource,
+        customerName: o.customerName,
+        orderDate: o.orderDate,
+      }));
+
+      // 2. Check Shopify connection + fetch a sample order
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      diag.shopify.configCount = shopifyConfigs.length;
+
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        diag.shopify.domain = domain;
+        diag.shopify.hasAccessToken = !!accessToken;
+        diag.shopify.apiVersion = apiVersion;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          diag.shopify.connected = true;
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        diag.shopify.envDomain = domain || '(not set)';
+        diag.shopify.envHasToken = !!accessToken;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken);
+          diag.shopify.connected = true;
+          diag.shopify.source = 'env';
+        }
+      }
+
+      // Fetch a few sample orders from Shopify to verify IDs match
+      if (shopifyClient && candidates.length > 0) {
+        const sampleIds = candidates.slice(0, 3).map(o => o.externalOrderId).filter(Boolean) as string[];
+        diag.idFormatCheck.dbFormat = sampleIds[0] || '(none)';
+
+        try {
+          const shopifyOrders = await shopifyClient.fetchOrdersByIds(sampleIds);
+          diag.shopify.fetchedCount = shopifyOrders.length;
+          diag.shopify.requestedIds = sampleIds;
+
+          if (shopifyOrders.length > 0) {
+            diag.idFormatCheck.shopifyFormat = String(shopifyOrders[0].id);
+            diag.idFormatCheck.match = sampleIds.includes(String(shopifyOrders[0].id));
+          }
+
+          // Show raw Shopify data for first 3 orders so we can see fulfillment status
+          diag.shopify.sampleOrders = shopifyOrders.slice(0, 3).map((so: any) => ({
+            id: so.id,
+            name: so.name,
+            fulfillment_status: so.fulfillment_status,
+            financial_status: so.financial_status,
+            cancelled_at: so.cancelled_at,
+            tags: so.tags,
+            note: (so.note || '').substring(0, 200),
+            fulfillments_count: (so.fulfillments || []).length,
+            fulfillments: (so.fulfillments || []).map((f: any) => ({
+              id: f.id,
+              status: f.status,
+              tracking_number: f.tracking_number,
+              line_items_count: (f.line_items || []).length,
+              total_fulfilled_qty: (f.line_items || []).reduce((s: number, li: any) => s + (li.quantity || 0), 0),
+            })),
+            line_items_count: (so.line_items || []).length,
+            total_ordered_qty: (so.line_items || []).reduce((s: number, li: any) => s + (li.quantity || 0), 0),
+            created_at: so.created_at,
+          }));
+        } catch (err: any) {
+          diag.shopify.error = err.message;
+        }
+      }
+
+      // 3. Check Extensiv
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        diag.extensiv.configCount = extensivConfigs.length;
+
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          diag.extensiv.baseUrl = baseUrl;
+          diag.extensiv.hasClientId = !!clientId;
+          diag.extensiv.hasClientSecret = !!clientSecret;
+          diag.extensiv.hasOrgKey = !!orgKey;
+
+          let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+          }
+
+          if (extensivClient) {
+            diag.extensiv.connected = true;
+
+            // Try /orders endpoint
+            try {
+              const recentOrders = await extensivClient.fetchRecentOrders(5);
+              diag.extensiv.ordersEndpoint = {
+                success: true,
+                count: recentOrders.length,
+                sampleKeys: recentOrders.length > 0 ? Object.keys(recentOrders[0]) : [],
+                sample: recentOrders.slice(0, 2).map((o: any) => ({
+                  ReferenceNum: o.ReferenceNum || o.referenceNum,
+                  OrderStatus: o.OrderStatus || o.orderStatus || o.status,
+                  ReadOnly: o.ReadOnly ? { OrderId: o.ReadOnly.OrderId, CreationDate: o.ReadOnly.CreationDate } : null,
+                  rawKeys: Object.keys(o),
+                })),
+              };
+            } catch (err: any) {
+              diag.extensiv.ordersEndpoint = { success: false, error: err.message };
+            }
+
+            // Try /activity endpoint
+            try {
+              const sixtyDaysAgo = new Date();
+              sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+              const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 10);
+              diag.extensiv.activityEndpoint = {
+                success: true,
+                count: activity.length,
+                sample: activity.slice(0, 3),
+              };
+            } catch (err: any) {
+              diag.extensiv.activityEndpoint = { success: false, error: err.message };
+            }
+
+            break;
+          }
+        }
+      } catch (err: any) {
+        diag.extensiv.error = err.message;
+      }
+
+      res.json(diag);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Sync in-house orders with Shopify AND Extensiv to auto-close orders already shipped/fulfilled
   // POST /api/sales-orders/in-house/sync
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id

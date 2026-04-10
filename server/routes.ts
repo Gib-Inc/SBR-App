@@ -20388,6 +20388,95 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Raw Materials dashboard — Clarence's view of what to order
+  // Combines: item stock, BOM usage across products, and 90-day sales velocity
+  app.get("/api/raw-materials/dashboard", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allItems = await storage.getItemsWithBOMCounts();
+      const components = allItems.filter(i => i.type === "component");
+      const finishedProducts = allItems.filter(i => i.type === "finished_product");
+
+      // Get sales velocity for finished products (last 90 days)
+      const velocity = await storage.getSkuSalesVelocity(90);
+      const velocityMap = new Map(velocity.map(v => [v.sku, v.unitsSold]));
+
+      // Build a map: componentId → { totalDailyUsage, usedIn[] }
+      const componentUsage = new Map<string, { totalDailyUsage: number; usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[] }>();
+
+      for (const product of finishedProducts) {
+        const bom = await storage.getBillOfMaterialsByProductId(product.id);
+        if (!bom || bom.length === 0) continue;
+
+        const unitsSold90d = velocityMap.get(product.sku) || 0;
+        const dailySales = unitsSold90d / 90;
+
+        for (const entry of bom) {
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+          const dailyComponentUsage = effectiveQty * dailySales;
+
+          const existing = componentUsage.get(entry.componentId) ?? { totalDailyUsage: 0, usedIn: [] };
+          existing.totalDailyUsage += dailyComponentUsage;
+          existing.usedIn.push({
+            productName: product.name,
+            productSku: product.sku,
+            qtyPerUnit: entry.quantityRequired,
+            dailySales: Math.round(dailySales * 100) / 100,
+          });
+          componentUsage.set(entry.componentId, existing);
+        }
+      }
+
+      // Build dashboard rows
+      const dashboard = components.map(comp => {
+        const usage = componentUsage.get(comp.id) ?? { totalDailyUsage: 0, usedIn: [] };
+        const onHand = comp.currentStock ?? 0;
+        const dailyUsage = Math.round(usage.totalDailyUsage * 100) / 100;
+        const daysOfSupply = dailyUsage > 0 ? Math.round(onHand / dailyUsage) : 999;
+        const minStock = comp.minStock ?? 0;
+
+        // Recommend ordering enough for 30 days of supply, minus current stock
+        const targetDays = 30;
+        const orderQty = dailyUsage > 0 ? Math.max(0, Math.ceil(dailyUsage * targetDays) - onHand) : 0;
+        const orderCost = orderQty > 0 && comp.defaultPurchaseCost ? Math.round(orderQty * comp.defaultPurchaseCost * 100) / 100 : null;
+
+        return {
+          id: comp.id,
+          name: comp.name,
+          sku: comp.sku,
+          category: comp.category ?? "Other",
+          unit: comp.unit ?? "units",
+          onHand,
+          minStock,
+          dailyUsage,
+          daysOfSupply,
+          orderQty,
+          orderCost,
+          unitCost: comp.defaultPurchaseCost ?? null,
+          usedIn: usage.usedIn,
+        };
+      });
+
+      // Sort: items needing orders first (lowest days of supply), then alphabetical
+      dashboard.sort((a, b) => a.daysOfSupply - b.daysOfSupply || a.name.localeCompare(b.name));
+
+      const totalOrderCost = dashboard.reduce((sum, d) => sum + (d.orderCost ?? 0), 0);
+
+      res.json({
+        materials: dashboard,
+        summary: {
+          totalComponents: dashboard.length,
+          needsOrder: dashboard.filter(d => d.orderQty > 0).length,
+          criticalLow: dashboard.filter(d => d.daysOfSupply < 7 && d.dailyUsage > 0).length,
+          totalOrderCost: Math.round(totalOrderCost * 100) / 100,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Raw Materials] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch raw materials dashboard" });
+    }
+  });
+
   // Inventory snapshots — PDF-backed Pyvott / Hildale view
   // Returns the most recent snapshot by default, or a specific date via ?date=YYYY-MM-DD
   app.get("/api/inventory/snapshot", requireAuth, async (req: Request, res: Response) => {

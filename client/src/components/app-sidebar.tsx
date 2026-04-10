@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -22,11 +22,12 @@ const overviewItems = [
 ];
 
 const operationsItems = [
-  { title: "Products",       url: "/products",        icon: Package       },
-  { title: "Production",     url: "/production",      icon: Factory       },
-  { title: "Cycle Count",    url: "/cycle-count",     icon: ClipboardCheck },
-  { title: "Direct Orders",  url: "/direct-orders",   icon: PackageCheck  },
-  { title: "Barcodes",       url: "/barcodes",        icon: Barcode       },
+  { title: "Products",        url: "/products",        icon: Package        },
+  { title: "Raw Materials",   url: "/raw-materials",   icon: Boxes          },
+  { title: "Production",      url: "/production",      icon: Factory        },
+  { title: "Cycle Count",     url: "/cycle-count",     icon: ClipboardCheck },
+  { title: "Direct Orders",   url: "/direct-orders",   icon: PackageCheck   },
+  { title: "Barcodes",        url: "/barcodes",        icon: Barcode        },
 ];
 
 const orderItems = [

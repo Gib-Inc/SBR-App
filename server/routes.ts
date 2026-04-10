@@ -20375,6 +20375,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Sales velocity — total units sold per SKU over last N days (default 90)
+  // Used by the Inventory page to sort by best sellers
+  app.get("/api/inventory/sales-velocity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = parseInt(req.query.days as string) || 90;
+      const velocity = await storage.getSkuSalesVelocity(days);
+      res.json(velocity);
+    } catch (error: any) {
+      console.error("[Inventory] Error fetching sales velocity:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch sales velocity" });
+    }
+  });
+
   // Inventory snapshots — PDF-backed Pyvott / Hildale view
   // Returns the most recent snapshot by default, or a specific date via ?date=YYYY-MM-DD
   app.get("/api/inventory/snapshot", requireAuth, async (req: Request, res: Response) => {

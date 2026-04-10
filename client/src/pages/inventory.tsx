@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2 } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, TrendingUp } from "lucide-react";
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -13,6 +13,11 @@ type SnapshotRow = {
   qty: number;
   promised?: number;
   source: string;
+};
+
+type SkuVelocity = {
+  sku: string;
+  unitsSold: number;
 };
 
 // A SKU is "low stock" if combined qty across locations falls below this number.
@@ -25,13 +30,29 @@ export default function Inventory() {
     queryKey: ["/api/inventory/snapshot"],
   });
 
+  // Fetch sales velocity (last 90 days) for best-seller sorting
+  const { data: velocityData } = useQuery<SkuVelocity[]>({
+    queryKey: ["/api/inventory/sales-velocity"],
+  });
+
   const rows = data ?? [];
+  const velocity = velocityData ?? [];
+
+  // Build a lookup map: SKU → unitsSold (for sorting)
+  const velocityMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const v of velocity) {
+      map.set(v.sku, v.unitsSold);
+    }
+    return map;
+  }, [velocity]);
 
   // Group by SKU so we can show Pyvott + Hildale side by side
+  // Sorted by best sellers (most units sold in last 90 days) first
   const bySku = useMemo(() => {
-    const map = new Map<string, { sku: string; name: string; pyvott: number; hildale: number; promised: number; total: number }>();
+    const map = new Map<string, { sku: string; name: string; pyvott: number; hildale: number; promised: number; total: number; unitsSold: number }>();
     for (const r of rows) {
-      const existing = map.get(r.sku) ?? { sku: r.sku, name: r.name ?? "", pyvott: 0, hildale: 0, promised: 0, total: 0 };
+      const existing = map.get(r.sku) ?? { sku: r.sku, name: r.name ?? "", pyvott: 0, hildale: 0, promised: 0, total: 0, unitsSold: velocityMap.get(r.sku) ?? 0 };
       if (r.location === "Pyvott") {
         existing.pyvott = r.qty;
         existing.promised = r.promised ?? 0;
@@ -41,8 +62,9 @@ export default function Inventory() {
       if (!existing.name && r.name) existing.name = r.name;
       map.set(r.sku, existing);
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [rows]);
+    // Sort by units sold (best sellers first), then by total stock as tiebreaker
+    return Array.from(map.values()).sort((a, b) => b.unitsSold - a.unitsSold || b.total - a.total);
+  }, [rows, velocityMap]);
 
   // Top-line KPIs
   const kpis = useMemo(() => {
@@ -153,7 +175,7 @@ export default function Inventory() {
             Stock by SKU
           </CardTitle>
           <CardDescription>
-            {kpis.skuCount} SKUs tracked. Sorted by total units on hand.
+            {kpis.skuCount} SKUs tracked. Sorted by best sellers (last 90 days).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -162,6 +184,7 @@ export default function Inventory() {
               <TableRow>
                 <TableHead>SKU</TableHead>
                 <TableHead>Product</TableHead>
+                <TableHead className="text-right">Sold (90d)</TableHead>
                 <TableHead className="text-right">Pyvott</TableHead>
                 <TableHead className="text-right">Hildale</TableHead>
                 <TableHead className="text-right">Promised</TableHead>
@@ -179,6 +202,9 @@ export default function Inventory() {
                   <TableRow key={s.sku} data-testid={`row-sku-${s.sku}`}>
                     <TableCell className="font-mono text-xs">{s.sku}</TableCell>
                     <TableCell className="max-w-md">{s.name}</TableCell>
+                    <TableCell className="text-right font-semibold text-primary">
+                      {s.unitsSold > 0 ? s.unitsSold.toLocaleString() : "–"}
+                    </TableCell>
                     <TableCell className="text-right">{s.pyvott.toLocaleString()}</TableCell>
                     <TableCell className="text-right">{s.hildale.toLocaleString()}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{s.promised.toLocaleString()}</TableCell>

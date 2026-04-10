@@ -466,6 +466,9 @@ export interface IStorage {
   updateSalesOrder(id: string, order: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined>;
   deleteSalesOrder(id: string): Promise<boolean>;
 
+  // Sales velocity — total units sold per SKU (for best-seller sorting)
+  getSkuSalesVelocity(sinceDaysAgo?: number): Promise<{ sku: string; unitsSold: number }[]>;
+
   // Sales Order Lines
   getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]>;
   getSalesOrderLine(id: string): Promise<SalesOrderLine | undefined>;
@@ -2980,6 +2983,18 @@ export class MemStorage implements IStorage {
 
   async deleteSalesOrder(id: string): Promise<boolean> {
     return this.salesOrders.delete(id);
+  }
+
+  async getSkuSalesVelocity(sinceDaysAgo: number = 90): Promise<{ sku: string; unitsSold: number }[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - sinceDaysAgo);
+    const skuMap = new Map<string, number>();
+    for (const line of this.salesOrderLines.values()) {
+      skuMap.set(line.sku, (skuMap.get(line.sku) || 0) + (line.qtyOrdered || 0));
+    }
+    return Array.from(skuMap.entries())
+      .map(([sku, unitsSold]) => ({ sku, unitsSold }))
+      .sort((a, b) => b.unitsSold - a.unitsSold);
   }
 
   // Sales Order Lines
@@ -6104,6 +6119,24 @@ export class PostgresStorage implements IStorage {
   async deleteSalesOrder(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.salesOrders).where(eq(schema.salesOrders.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getSkuSalesVelocity(sinceDaysAgo: number = 90): Promise<{ sku: string; unitsSold: number }[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - sinceDaysAgo);
+
+    const results = await this.db
+      .select({
+        sku: schema.salesOrderLines.sku,
+        unitsSold: drizzleSql<number>`COALESCE(SUM(${schema.salesOrderLines.qtyOrdered}), 0)`.as('units_sold'),
+      })
+      .from(schema.salesOrderLines)
+      .innerJoin(schema.salesOrders, eq(schema.salesOrderLines.salesOrderId, schema.salesOrders.id))
+      .where(gte(schema.salesOrders.orderDate, cutoff))
+      .groupBy(schema.salesOrderLines.sku)
+      .orderBy(drizzleSql`units_sold DESC`);
+
+    return results.map(r => ({ sku: r.sku, unitsSold: Number(r.unitsSold) }));
   }
 
   // Sales Order Lines

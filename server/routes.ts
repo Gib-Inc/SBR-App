@@ -9799,49 +9799,64 @@ Notes: ${po.notes || 'None'}
         googleAdsClient.setRefreshToken(tokenResponse.refresh_token);
       }
       
-      const customers = await googleAdsClient.listAccessibleCustomers();
-      
-      if (customers.length === 0) {
-        return res.redirect("/settings?error=no_ad_accounts");
+      // Try to list customers, but don't let it block saving tokens
+      // The developer token may not be set yet, which causes listAccessibleCustomers to fail
+      let customer: { customerId: string; descriptiveName: string } | null = null;
+      let customerListError: string | null = null;
+
+      try {
+        const customers = await googleAdsClient.listAccessibleCustomers();
+        if (customers.length > 0) {
+          customer = customers[0];
+        }
+      } catch (listError: any) {
+        console.warn("[Google Ads] Could not list customers (developer token may be missing):", listError.message);
+        customerListError = listError.message;
       }
-      
-      // Use first customer (or could show selection UI)
-      const customer = customers[0];
-      
-      // Store in database
+
+      // Always save tokens - even if we couldn't list customers
+      // This way the OAuth connection is preserved and will work once the developer token is added
+      const accountId = customer?.customerId || 'pending_setup';
+      const accountName = customer?.descriptiveName || 'Google Ads (needs developer token)';
+
       let config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
-      
+
       if (config) {
         await storage.updateAdPlatformConfig(config.id, {
-          accountId: customer.customerId,
-          accountName: customer.descriptiveName,
+          accountId,
+          accountName,
           accessToken: tokenResponse.access_token,
           refreshToken: tokenResponse.refresh_token,
           accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
-          isConnected: true,
+          isConnected: customer !== null, // Only fully connected if we got customer info
         });
       } else {
         await storage.createAdPlatformConfig({
           userId,
           platform: 'GOOGLE',
-          accountId: customer.customerId,
-          accountName: customer.descriptiveName,
+          accountId,
+          accountName,
           accessToken: tokenResponse.access_token,
           refreshToken: tokenResponse.refresh_token,
           accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
-          isConnected: true,
+          isConnected: customer !== null,
         });
       }
 
       // Log connection
       await AuditLogger.logAdPlatformConnected({
         platform: 'GOOGLE',
-        accountId: customer.customerId,
-        accountName: customer.descriptiveName,
+        accountId,
+        accountName,
         userId,
       });
 
-      res.redirect("/settings?google_connected=true");
+      if (customer) {
+        res.redirect("/settings?google_connected=true");
+      } else {
+        // Tokens saved but developer token is needed to complete setup
+        res.redirect("/settings?google_connected=partial&info=tokens_saved_need_developer_token");
+      }
     } catch (error: any) {
       console.error("[Google Ads] OAuth callback error:", error);
       res.redirect(`/settings?error=${encodeURIComponent(error.message || 'oauth_failed')}`);

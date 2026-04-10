@@ -5250,7 +5250,11 @@ export default function AIAgent() {
       description: "Google ad performance & shopping",
       icon: TrendingUp,
       configured: googleAdsConfig?.isConnected ?? false,
-      status: googleAdsConfig?.isConnected ? "connected" : "not_configured",
+      status: googleAdsConfig?.isConnected
+        ? "connected"
+        : googleAdsConfig?.accessToken
+          ? "partially_configured"
+          : "not_configured",
       hasConfigDialog: false,
       isOAuth: true,
       accountName: googleAdsConfig?.accountName,
@@ -5331,6 +5335,8 @@ export default function AIAgent() {
                               variant={
                                 (source as any).isV2Placeholder
                                   ? "secondary"
+                                  : source.status === "partially_configured"
+                                  ? "secondary"
                                   : !source.configured
                                   ? "outline"
                                   : source.status === "success" || source.status === "connected"
@@ -5343,6 +5349,8 @@ export default function AIAgent() {
                             >
                               {(source as any).isV2Placeholder
                                 ? "V2 Planned"
+                                : source.status === "partially_configured"
+                                ? "OAuth Saved - Needs Dev Token"
                                 : !source.configured
                                 ? "Not Configured"
                                 : source.status === "success" || source.status === "connected"

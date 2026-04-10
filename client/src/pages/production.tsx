@@ -152,7 +152,10 @@ function PlanTab() {
     </div>
   );
 
-  const plan = data?.plan ?? [];
+  const allPlan = data?.plan ?? [];
+  // Only show products that have a BOM — items without one aren't manufactured
+  const plan = allPlan.filter(p => p.hasBOM);
+  const noBomCount = allPlan.length - plan.length;
 
   return (
     <div className="space-y-6">
@@ -322,7 +325,17 @@ function PlanTab() {
             </div>
           );
         })}
+        {plan.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            No products have a Bill of Materials set up yet. Add BOMs in the Products page to enable production planning.
+          </div>
+        )}
       </div>
+      {noBomCount > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {noBomCount} product{noBomCount !== 1 ? "s" : ""} without a BOM hidden. Set up BOMs in the Products page to include them.
+        </p>
+      )}
     </div>
   );
 }

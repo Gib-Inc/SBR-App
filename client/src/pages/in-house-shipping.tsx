@@ -29,7 +29,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import {
   Truck, Package, ExternalLink, CheckCircle2, Loader2,
-  AlertTriangle, Clock, RefreshCw, Tag,
+  AlertTriangle, Clock, RefreshCw, Tag, Check, ArchiveX,
 } from "lucide-react";
 
 interface OrderLine {
@@ -133,6 +133,32 @@ export default function InHouseShipping() {
     },
     onError: (err: any) => {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Dismiss mutation — marks orders as already shipped WITHOUT touching inventory
+  const dismissMutation = useMutation({
+    mutationFn: async (orderIds: string[]) => {
+      const res = await apiRequest("POST", "/api/sales-orders/in-house/dismiss", {
+        orderIds,
+        reason: "manual audit",
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Dismiss failed");
+      }
+      return res.json() as Promise<{ dismissed: number; total: number; errors: string[]; message: string }>;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders/in-house"] });
+      setSelectedIds(new Set());
+      toast({
+        title: "Orders cleared",
+        description: result.message,
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to dismiss", description: err.message, variant: "destructive" });
     },
   });
 
@@ -387,6 +413,16 @@ export default function InHouseShipping() {
                 <Truck className="h-4 w-4" />
                 Ship {selectedIds.size} Order{selectedIds.size !== 1 ? "s" : ""}
               </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="gap-2"
+                onClick={() => dismissMutation.mutate(Array.from(selectedIds))}
+                disabled={dismissMutation.isPending}
+              >
+                <Check className="h-4 w-4" />
+                {dismissMutation.isPending ? "Clearing…" : `Already Shipped (${selectedIds.size})`}
+              </Button>
               {shopDomain && (
                 <Button
                   size="sm"
@@ -536,7 +572,23 @@ export default function InHouseShipping() {
                                 </Tooltip>
                               )}
 
-                              {/* Ship button */}
+                              {/* Already Shipped — dismiss without touching inventory */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="icon"
+                                    variant="ghost"
+                                    className="h-8 w-8 text-muted-foreground hover:text-green-500"
+                                    onClick={() => dismissMutation.mutate([order.id])}
+                                    disabled={dismissMutation.isPending}
+                                  >
+                                    <Check className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Already shipped — remove from list (no inventory change)</TooltipContent>
+                              </Tooltip>
+
+                              {/* Ship button — marks shipped AND subtracts inventory */}
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
@@ -549,7 +601,7 @@ export default function InHouseShipping() {
                                     <span className="hidden sm:inline">Ship</span>
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Mark as shipped (updates Hildale inventory)</TooltipContent>
+                                <TooltipContent>Ship now — updates Hildale inventory counts</TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
                           </div>
@@ -660,10 +712,10 @@ export default function InHouseShipping() {
         </DialogContent>
       </Dialog>
 
-      <p className="text-xs text-muted-foreground">
-        Orders routed to Hildale because Pyvott was out of stock. Use "Sync with Shopify" to clean up orders already shipped.
-        Select orders → "Create Labels in Shopify" opens them in Shopify admin for label printing.
-      </p>
+      <div className="text-xs text-muted-foreground space-y-1">
+        <p><strong>Ship</strong> = ship now and subtract from Hildale inventory. <strong>✓</strong> = already shipped elsewhere, just clear it from the list.</p>
+        <p>"Sync with Shopify" auto-checks Shopify for orders already fulfilled. "Already Shipped" lets you manually clear them.</p>
+      </div>
     </div>
   );
 }

@@ -17350,6 +17350,51 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Dismiss / mark in-house orders as already shipped (does NOT subtract inventory)
+  // POST /api/sales-orders/in-house/dismiss
+  // Body: { orderIds: string[], reason?: string }
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/dismiss", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { orderIds, reason } = req.body as { orderIds: string[]; reason?: string };
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ error: "orderIds array is required" });
+      }
+
+      let dismissed = 0;
+      const errors: string[] = [];
+
+      for (const orderId of orderIds) {
+        try {
+          const order = await storage.getSalesOrder(orderId);
+          if (!order) {
+            errors.push(`Order ${orderId} not found`);
+            continue;
+          }
+          // Update status to SHIPPED without touching inventory
+          await storage.updateSalesOrder(orderId, {
+            status: 'SHIPPED',
+          });
+          dismissed++;
+          console.log(`[In-House Dismiss] Order ${orderId} marked as shipped (reason: ${reason || 'manual dismiss'})`);
+        } catch (err: any) {
+          errors.push(`Order ${orderId}: ${err.message}`);
+        }
+      }
+
+      res.json({
+        dismissed,
+        total: orderIds.length,
+        errors,
+        message: `${dismissed} order${dismissed !== 1 ? 's' : ''} marked as already shipped.`,
+      });
+    } catch (error: any) {
+      console.error("[In-House Dismiss] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to dismiss orders" });
+    }
+  });
+
   // Get single sales order with all details
   // GET /api/sales-orders/:id
   app.get("/api/sales-orders/:id", requireAuth, async (req: Request, res: Response) => {

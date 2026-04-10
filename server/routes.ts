@@ -17150,16 +17150,17 @@ Generate only the email body text, no subject line.`;
   });
 
   // In-house shipping queue — VERIFIED against Shopify & Extensiv
-  // SOURCE OF TRUTH: Shopify's fulfillment_status, NOT our local DB status
-  // Flow:
-  //  1. Ask Shopify: "What orders are still unfulfilled?"
-  //  2. Match those against our DB to find Hildale-routed orders
-  //  3. For orders not in Shopify results, check our DB as fallback (Amazon, etc.)
-  //  4. Cross-check Extensiv activity to exclude anything Pyvott shipped
+  //
+  // SOURCE OF TRUTH: For each candidate order, we fetch it DIRECTLY from Shopify
+  // and check its fulfillments array + fulfillment_status. If Shopify shows ANY
+  // fulfillment (Pyvott, manual, anyone), the order is dropped from the queue.
+  //
+  // Also checks: Extensiv activity, Shopify tags (sent-to-wms), and line item qtys.
+  //
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
   app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
     try {
-      // ── Step 1: Get Shopify client ─────────────────────────────
+      // ── Step 1: Get Shopify + Extensiv clients ─────────────────
       let shopDomain: string | null = null;
       let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
 
@@ -17184,28 +17185,39 @@ Generate only the email body text, no subject line.`;
         }
       }
 
-      // ── Step 2: Ask Shopify for unfulfilled orders ─────────────
-      // This is the source of truth. If Shopify says it's fulfilled, it IS fulfilled.
-      const shopifyUnfulfilledIds = new Set<string>();
-      const shopifyOrderDetails = new Map<string, any>();
+      // ── Step 2: Get candidate orders from our DB ───────────────
+      const allOrders = await storage.getAllSalesOrders();
+      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
+      const candidates = allOrders.filter(o =>
+        o.fulfillmentSource === 'HILDALE' && !excludeStatuses.includes(o.status)
+      );
+
+      // ── Step 3: Fetch EACH candidate directly from Shopify ─────
+      // This is the bulletproof check — we look at each order's actual
+      // fulfillments array, fulfillment_status, financial_status, tags, etc.
       let shopifyVerified = false;
+      const shopifyMap = new Map<string, any>(); // externalOrderId → Shopify order
 
       if (shopifyClient) {
-        try {
-          const unfulfilled = await shopifyClient.fetchUnfulfilledOrders(500);
-          for (const so of unfulfilled) {
-            const sid = String(so.id);
-            shopifyUnfulfilledIds.add(sid);
-            shopifyOrderDetails.set(sid, so);
+        const idsToCheck = candidates
+          .map(o => o.externalOrderId)
+          .filter((id): id is string => !!id);
+
+        if (idsToCheck.length > 0) {
+          try {
+            const shopifyOrders = await shopifyClient.fetchOrdersByIds(idsToCheck);
+            for (const so of shopifyOrders) {
+              shopifyMap.set(String(so.id), so);
+            }
+            shopifyVerified = true;
+            console.log(`[In-House Shipping] Fetched ${shopifyOrders.length} of ${idsToCheck.length} orders from Shopify for verification`);
+          } catch (err: any) {
+            console.error("[In-House Shipping] Shopify fetch error:", err.message);
           }
-          shopifyVerified = true;
-          console.log(`[In-House Shipping] Shopify reports ${unfulfilled.length} unfulfilled orders`);
-        } catch (err: any) {
-          console.error("[In-House Shipping] Shopify API error, falling back to local DB:", err.message);
         }
       }
 
-      // ── Step 3: Get Extensiv shipment activity ─────────────────
+      // ── Step 4: Check Extensiv activity ────────────────────────
       const extensivShippedIds = new Set<string>();
       try {
         const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
@@ -17232,7 +17244,7 @@ Generate only the email body text, no subject line.`;
                 extensivShippedIds.add(act.externalOrderId);
               }
             }
-            console.log(`[In-House Shipping] Extensiv shows ${extensivShippedIds.size} shipments in last 60 days`);
+            console.log(`[In-House Shipping] Extensiv: ${extensivShippedIds.size} shipments in last 60 days`);
             break;
           }
         }
@@ -17240,44 +17252,83 @@ Generate only the email body text, no subject line.`;
         console.error("[In-House Shipping] Extensiv check failed (non-blocking):", err.message);
       }
 
-      // ── Step 4: Build the verified queue ───────────────────────
-      const allOrders = await storage.getAllSalesOrders();
-      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
-
-      // Get Hildale-routed orders that our DB says are still pending
-      const candidates = allOrders.filter(o =>
-        o.fulfillmentSource === 'HILDALE' && !excludeStatuses.includes(o.status)
-      );
-
-      // Now verify each candidate against Shopify + Extensiv
+      // ── Step 5: Verify each order ──────────────────────────────
       const verified: any[] = [];
       let droppedByShopify = 0;
       let droppedByExtensiv = 0;
       let droppedByQty = 0;
 
       for (const order of candidates) {
-        // If we got Shopify data, ONLY include orders Shopify confirms are unfulfilled
+        // --- Shopify verification: check the ACTUAL order data ---
         if (shopifyVerified && order.externalOrderId) {
-          if (!shopifyUnfulfilledIds.has(order.externalOrderId)) {
+          const shopifyOrder = shopifyMap.get(order.externalOrderId);
+
+          if (shopifyOrder) {
+            const fulfillmentStatus = shopifyOrder.fulfillment_status; // null, "partial", "fulfilled"
+            const financialStatus = shopifyOrder.financial_status || '';
+            const fulfillments = shopifyOrder.fulfillments || [];
+            const tags = (shopifyOrder.tags || '').toLowerCase();
+            const isCancelled = !!shopifyOrder.cancelled_at;
+
+            // DROP if: fully fulfilled, cancelled, refunded, or has fulfillments from anyone
+            const isFullyFulfilled = fulfillmentStatus === 'fulfilled';
+            const hasFulfillments = fulfillments.length > 0;
+            const isRefunded = financialStatus === 'refunded';
+            const isSentToWms = tags.includes('sent-to-wms');
+
+            // If Shopify says fulfilled, or there are ANY fulfillment records — it's been handled
+            if (isFullyFulfilled || isCancelled || isRefunded) {
+              droppedByShopify++;
+              const newStatus = isCancelled ? 'CANCELLED' : isRefunded ? 'REFUNDED' : 'SHIPPED';
+              try { await storage.updateSalesOrder(order.id, { status: newStatus }); } catch {}
+              continue;
+            }
+
+            // If there are fulfillment records (even partial), check if ALL line items are covered
+            if (hasFulfillments) {
+              // Count total fulfilled qty across all fulfillments
+              let fulfilledQty = 0;
+              for (const f of fulfillments) {
+                for (const li of (f.line_items || [])) {
+                  fulfilledQty += li.quantity || 0;
+                }
+              }
+              // Count total ordered qty from Shopify line items
+              let orderedQty = 0;
+              for (const li of (shopifyOrder.line_items || [])) {
+                orderedQty += li.quantity || 0;
+              }
+              // If everything is fulfilled, drop it
+              if (fulfilledQty >= orderedQty) {
+                droppedByShopify++;
+                try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
+                continue;
+              }
+            }
+
+            // If tagged sent-to-wms AND has fulfillments, Pyvott handled it
+            if (isSentToWms && hasFulfillments) {
+              droppedByShopify++;
+              try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
+              continue;
+            }
+          }
+          // If the order isn't even in Shopify anymore (deleted/archived), drop it
+          else {
             droppedByShopify++;
-            // Also update our local DB so next load is faster
-            try {
-              await storage.updateSalesOrder(order.id, { status: 'SHIPPED' });
-            } catch { /* non-blocking */ }
+            try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
             continue;
           }
         }
 
-        // Check if Extensiv already shipped it
+        // --- Extensiv verification ---
         if (order.externalOrderId && extensivShippedIds.has(order.externalOrderId)) {
           droppedByExtensiv++;
-          try {
-            await storage.updateSalesOrder(order.id, { status: 'SHIPPED' });
-          } catch { /* non-blocking */ }
+          try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
           continue;
         }
 
-        // Get line items and check if there are actually units to ship
+        // --- Qty verification ---
         const lines = await storage.getSalesOrderLines(order.id);
         const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
         const totalShipped = lines.reduce((sum: number, l: any) => sum + (l.qtyShipped || 0), 0);
@@ -17300,7 +17351,7 @@ Generate only the email body text, no subject line.`;
       // Sort by order date (oldest first)
       verified.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
 
-      console.log(`[In-House Shipping] Result: ${verified.length} need action (dropped: ${droppedByShopify} Shopify-fulfilled, ${droppedByExtensiv} Extensiv-shipped, ${droppedByQty} zero-qty)`);
+      console.log(`[In-House Shipping] Result: ${verified.length} need action (dropped: ${droppedByShopify} Shopify, ${droppedByExtensiv} Extensiv, ${droppedByQty} zero-qty, of ${candidates.length} candidates)`);
 
       res.json({
         orders: verified,
@@ -17311,6 +17362,7 @@ Generate only the email body text, no subject line.`;
           droppedByShopify,
           droppedByExtensiv,
           droppedByQty,
+          candidatesChecked: candidates.length,
         },
         shopDomain,
       });

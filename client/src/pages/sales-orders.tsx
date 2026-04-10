@@ -63,6 +63,7 @@ import {
   Zap,
   Archive,
   RefreshCcw,
+  Undo2,
 } from "lucide-react";
 
 function GhlConversationIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -1016,6 +1017,28 @@ export default function SalesOrders() {
                             </Tooltip>
                           )}
 
+                          {/* Create Return Label in Shopify */}
+                          {order.sourceUrl && order.channel === 'SHOPIFY' && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // Append /return to the Shopify admin order URL
+                                    const returnUrl = order.sourceUrl!.replace(/\/?$/, '') + '/return';
+                                    window.open(returnUrl, "_blank", "noopener,noreferrer");
+                                  }}
+                                  data-testid={`button-return-label-${order.id}`}
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Create Return Label in Shopify</TooltipContent>
+                            </Tooltip>
+                          )}
+
                           {/* GHL Conversation Button */}
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1314,6 +1337,19 @@ export default function SalesOrders() {
                     )}
                   </Tooltip>
                 ))}
+                {selectedOrder.sourceUrl && selectedOrder.channel === 'SHOPIFY' && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const returnUrl = selectedOrder.sourceUrl!.replace(/\/?$/, '') + '/return';
+                      window.open(returnUrl, "_blank", "noopener,noreferrer");
+                    }}
+                    data-testid="button-shopify-return-label"
+                  >
+                    <Undo2 className="h-4 w-4 mr-2" />
+                    Return Label
+                  </Button>
+                )}
                 {canFulfill && (
                   <Button
                     variant="default"

@@ -69,9 +69,12 @@ interface InHouseData {
 interface SyncResult {
   synced: number;
   closed: number;
+  closedByShopify?: number;
+  closedByExtensiv?: number;
+  extensivChecked?: number;
   total: number;
   errors: string[];
-  details: Array<{ orderId: string; externalId: string; oldStatus: string; newStatus: string }>;
+  details: Array<{ orderId: string; externalId: string; oldStatus: string; newStatus: string; source?: string }>;
   message: string;
 }
 
@@ -312,7 +315,7 @@ export default function InHouseShipping() {
           className="gap-2 self-start"
         >
           <RefreshCw className={`h-4 w-4 ${syncMutation.isPending ? "animate-spin" : ""}`} />
-          {syncMutation.isPending ? "Syncing…" : "Sync with Shopify"}
+          {syncMutation.isPending ? "Syncing…" : "Sync with Shopify & Extensiv"}
         </Button>
       </div>
 
@@ -328,6 +331,7 @@ export default function InHouseShipping() {
                   {syncResult.details.slice(0, 5).map(d => (
                     <div key={d.orderId}>
                       Order {d.externalId}: {d.oldStatus} → {d.newStatus}
+                      {d.source && <span className="text-xs ml-1">({d.source})</span>}
                     </div>
                   ))}
                   {syncResult.details.length > 5 && (
@@ -356,7 +360,7 @@ export default function InHouseShipping() {
                 {staleOrders.length} order{staleOrders.length !== 1 ? 's' : ''} older than 10 days
               </p>
               <p className="text-muted-foreground">
-                These were likely already shipped. Click "Sync with Shopify" to auto-close any that are fulfilled.
+                These were likely already shipped. Click "Sync with Shopify & Extensiv" to auto-close any that are fulfilled.
               </p>
             </div>
           </CardContent>
@@ -714,7 +718,7 @@ export default function InHouseShipping() {
 
       <div className="text-xs text-muted-foreground space-y-1">
         <p><strong>Ship</strong> = ship now and subtract from Hildale inventory. <strong>✓</strong> = already shipped elsewhere, just clear it from the list.</p>
-        <p>"Sync with Shopify" auto-checks Shopify for orders already fulfilled. "Already Shipped" lets you manually clear them.</p>
+        <p>"Sync with Shopify & Extensiv" checks both systems for orders already fulfilled. "Already Shipped" lets you manually clear them.</p>
       </div>
     </div>
   );

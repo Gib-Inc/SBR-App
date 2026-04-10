@@ -17205,7 +17205,7 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // Sync in-house orders with Shopify to auto-close orders already shipped/fulfilled
+  // Sync in-house orders with Shopify AND Extensiv to auto-close orders already shipped/fulfilled
   // POST /api/sales-orders/in-house/sync
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
   app.post("/api/sales-orders/in-house/sync", requireAuth, async (req: Request, res: Response) => {
@@ -17218,101 +17218,156 @@ Generate only the email body text, no subject line.`;
       );
 
       if (inHouseOrders.length === 0) {
-        return res.json({ synced: 0, closed: 0, errors: [], message: "No pending in-house orders to sync" });
+        return res.json({ synced: 0, closed: 0, extensivChecked: 0, errors: [], message: "No pending in-house orders to sync" });
       }
 
-      // 2. Get Shopify client from integration config (same pattern as reconciliation scheduler)
+      // ── SHOPIFY SYNC ──────────────────────────────────────────
+      // 2. Get Shopify client from integration config
       const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
-      let client: InstanceType<typeof ShopifyClient> | null = null;
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
 
       for (const config of shopifyConfigs) {
         const shopDomain = (config.config as any)?.shopDomain;
         const accessToken = config.apiKey;
         const apiVersion = (config.config as any)?.apiVersion || "2024-01";
         if (shopDomain && accessToken) {
-          client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+          shopifyClient = new ShopifyClient(shopDomain, accessToken, apiVersion);
           break;
         }
       }
-
-      // Fallback to env vars if no integration config
-      if (!client) {
+      if (!shopifyClient) {
         const shopDomain = process.env.SHOPIFY_SHOP_DOMAIN;
         const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
         const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-01";
         if (shopDomain && accessToken) {
-          client = new ShopifyClient(shopDomain, accessToken, apiVersion);
+          shopifyClient = new ShopifyClient(shopDomain, accessToken, apiVersion);
         }
       }
 
-      if (!client) {
-        return res.status(400).json({ error: "No Shopify API configuration found" });
+      // 3. Fetch orders from Shopify
+      let shopifyMap = new Map<string, any>();
+      if (shopifyClient) {
+        try {
+          const externalIds = inHouseOrders.map(o => o.externalOrderId!);
+          const shopifyOrders = await shopifyClient.fetchOrdersByIds(externalIds);
+          for (const so of shopifyOrders) {
+            shopifyMap.set(String(so.id), so);
+          }
+          console.log(`[In-House Sync] Fetched ${shopifyOrders.length} orders from Shopify`);
+        } catch (err: any) {
+          console.error("[In-House Sync] Shopify fetch error (continuing with Extensiv):", err.message);
+        }
       }
 
-      // 3. Fetch these orders from Shopify using public API method
-      const externalIds = inHouseOrders.map(o => o.externalOrderId!);
-      const shopifyOrders = await client.fetchOrdersByIds(externalIds);
+      // ── EXTENSIV SYNC ─────────────────────────────────────────
+      // 4. Get Extensiv client and check recent shipment activity
+      let extensivShipments = new Map<string, any>();
+      let extensivChecked = 0;
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
 
-      // 4. Build lookup: Shopify order ID → Shopify order data
-      const shopifyMap = new Map<string, any>();
-      for (const so of shopifyOrders) {
-        shopifyMap.set(String(so.id), so);
-      }
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
 
-      // 5. Check each in-house order against Shopify and update if status changed
-      let closed = 0;
-      let synced = 0;
-      const errors: string[] = [];
-      const syncDetails: Array<{ orderId: string; externalId: string; oldStatus: string; newStatus: string }> = [];
-
-      for (const order of inHouseOrders) {
-        const shopifyOrder = shopifyMap.get(order.externalOrderId!);
-        if (!shopifyOrder) continue;
-
-        synced++;
-
-        // Determine new status from Shopify data
-        const financialStatus = shopifyOrder.financial_status || '';
-        const fulfillmentStatus = shopifyOrder.fulfillment_status || '';
-        const fulfillments = shopifyOrder.fulfillments || [];
-
-        // Extract best shipment_status from fulfillments
-        let bestShipmentStatus: string | null = null;
-        const statusPriority: Record<string, number> = {
-          'delivered': 5, 'out_for_delivery': 4, 'in_transit': 3,
-          'confirmed': 2, 'label_printed': 1, 'label_purchased': 1
-        };
-        for (const f of fulfillments) {
-          const ss = f.shipment_status;
-          if (ss && (!bestShipmentStatus || (statusPriority[ss] || 0) > (statusPriority[bestShipmentStatus] || 0))) {
-            bestShipmentStatus = ss;
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+            break;
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+            break;
           }
         }
 
-        // Map to our internal status
-        let newStatus = order.status; // default: no change
-        if (financialStatus === 'refunded') {
-          newStatus = 'REFUNDED';
-        } else if (financialStatus === 'voided' || shopifyOrder.cancelled_at) {
-          newStatus = 'CANCELLED';
-        } else if (bestShipmentStatus === 'delivered') {
-          newStatus = 'DELIVERED';
-        } else if (bestShipmentStatus) {
-          newStatus = 'SHIPPED';
-        } else if (fulfillmentStatus === 'fulfilled') {
-          newStatus = 'SHIPPED'; // fulfilled but no shipment tracking
+        if (extensivClient) {
+          // Fetch recent shipment activity (last 60 days to catch stale orders)
+          const sixtyDaysAgo = new Date();
+          sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+          const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 500);
+
+          // Build lookup by externalOrderId for cross-reference
+          for (const act of activity) {
+            if (act.type === 'SHIPMENT' && act.externalOrderId) {
+              extensivShipments.set(act.externalOrderId, act);
+            }
+          }
+          extensivChecked = activity.length;
+          console.log(`[In-House Sync] Fetched ${activity.length} activities from Extensiv, found ${extensivShipments.size} shipments`);
+        } else {
+          console.log("[In-House Sync] No Extensiv config found, skipping Extensiv cross-reference");
+        }
+      } catch (err: any) {
+        console.error("[In-House Sync] Extensiv fetch error (continuing with Shopify data):", err.message);
+      }
+
+      // ── RECONCILE ─────────────────────────────────────────────
+      // 5. Check each order against both Shopify and Extensiv
+      let closed = 0;
+      let synced = 0;
+      let closedByShopify = 0;
+      let closedByExtensiv = 0;
+      const errors: string[] = [];
+      const syncDetails: Array<{ orderId: string; externalId: string; oldStatus: string; newStatus: string; source: string }> = [];
+
+      for (const order of inHouseOrders) {
+        let newStatus = order.status;
+        let source = '';
+
+        // Check Shopify first (most reliable)
+        const shopifyOrder = shopifyMap.get(order.externalOrderId!);
+        if (shopifyOrder) {
+          synced++;
+
+          const financialStatus = shopifyOrder.financial_status || '';
+          const fulfillmentStatus = shopifyOrder.fulfillment_status || '';
+          const fulfillments = shopifyOrder.fulfillments || [];
+
+          // Extract best shipment_status
+          let bestShipmentStatus: string | null = null;
+          const statusPriority: Record<string, number> = {
+            'delivered': 5, 'out_for_delivery': 4, 'in_transit': 3,
+            'confirmed': 2, 'label_printed': 1, 'label_purchased': 1
+          };
+          for (const f of fulfillments) {
+            const ss = f.shipment_status;
+            if (ss && (!bestShipmentStatus || (statusPriority[ss] || 0) > (statusPriority[bestShipmentStatus] || 0))) {
+              bestShipmentStatus = ss;
+            }
+          }
+
+          if (financialStatus === 'refunded') {
+            newStatus = 'REFUNDED'; source = 'Shopify';
+          } else if (financialStatus === 'voided' || shopifyOrder.cancelled_at) {
+            newStatus = 'CANCELLED'; source = 'Shopify';
+          } else if (bestShipmentStatus === 'delivered') {
+            newStatus = 'DELIVERED'; source = 'Shopify';
+          } else if (bestShipmentStatus) {
+            newStatus = 'SHIPPED'; source = 'Shopify';
+          } else if (fulfillmentStatus === 'fulfilled') {
+            newStatus = 'SHIPPED'; source = 'Shopify';
+          }
         }
 
-        // Only update if status actually changed to a "closed" state
+        // If Shopify didn't resolve it, check Extensiv
+        if (newStatus === order.status && order.externalOrderId) {
+          const extensivShipment = extensivShipments.get(order.externalOrderId);
+          if (extensivShipment) {
+            newStatus = 'SHIPPED';
+            source = 'Extensiv';
+          }
+        }
+
+        // Update if status changed
         if (newStatus !== order.status) {
           try {
-            // Extract delivery date if delivered
             let deliveredAt: Date | undefined;
-            if (newStatus === 'DELIVERED' && fulfillments.length > 0) {
-              const lastFulfillment = fulfillments[fulfillments.length - 1];
-              if (lastFulfillment.updated_at) {
-                deliveredAt = new Date(lastFulfillment.updated_at);
-              }
+            if (newStatus === 'DELIVERED' && shopifyOrder?.fulfillments?.length > 0) {
+              const lastFulfillment = shopifyOrder.fulfillments[shopifyOrder.fulfillments.length - 1];
+              if (lastFulfillment.updated_at) deliveredAt = new Date(lastFulfillment.updated_at);
             }
 
             await storage.updateSalesOrder(order.id, {
@@ -17320,11 +17375,14 @@ Generate only the email body text, no subject line.`;
               ...(deliveredAt ? { deliveredAt } : {}),
             });
             closed++;
+            if (source === 'Shopify') closedByShopify++;
+            if (source === 'Extensiv') closedByExtensiv++;
             syncDetails.push({
               orderId: order.id,
               externalId: order.externalOrderId!,
               oldStatus: order.status,
               newStatus,
+              source,
             });
           } catch (err: any) {
             errors.push(`Order ${order.externalOrderId}: ${err.message}`);
@@ -17332,21 +17390,36 @@ Generate only the email body text, no subject line.`;
         }
       }
 
-      console.log(`[In-House Sync] Synced ${synced} orders, closed ${closed}, errors: ${errors.length}`);
+      console.log(`[In-House Sync] Done: ${synced} checked, ${closed} closed (Shopify: ${closedByShopify}, Extensiv: ${closedByExtensiv}), ${errors.length} errors`);
+
+      // Build readable message
+      const parts: string[] = [];
+      if (closed > 0) {
+        parts.push(`Updated ${closed} order${closed !== 1 ? 's' : ''}`);
+        const sources: string[] = [];
+        if (closedByShopify > 0) sources.push(`${closedByShopify} via Shopify`);
+        if (closedByExtensiv > 0) sources.push(`${closedByExtensiv} via Extensiv`);
+        if (sources.length > 0) parts.push(`(${sources.join(', ')})`);
+      } else {
+        parts.push(`Checked ${synced} orders against Shopify`);
+        if (extensivChecked > 0) parts.push(`and ${extensivShipments.size} Extensiv shipments`);
+        parts.push('— none have been shipped yet');
+      }
 
       res.json({
         synced,
         closed,
+        closedByShopify,
+        closedByExtensiv,
+        extensivChecked: extensivShipments.size,
         total: inHouseOrders.length,
         errors,
         details: syncDetails,
-        message: closed > 0
-          ? `Updated ${closed} order${closed !== 1 ? 's' : ''} — they were already shipped/delivered/cancelled in Shopify.`
-          : `Checked ${synced} orders — none have been shipped in Shopify yet.`,
+        message: parts.join(' '),
       });
     } catch (error: any) {
       console.error("[In-House Sync] Error:", error);
-      res.status(500).json({ error: error.message || "Failed to sync with Shopify" });
+      res.status(500).json({ error: error.message || "Failed to sync with Shopify & Extensiv" });
     }
   });
 

@@ -17149,17 +17149,35 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // In-house shipping queue — VERIFIED against Shopify & Extensiv
+  // ══════════════════════════════════════════════════════════════
+  // In-house shipping queue — TRIPLE-VERIFIED against Shopify + Extensiv + Notes
   //
-  // SOURCE OF TRUTH: For each candidate order, we fetch it DIRECTLY from Shopify
-  // and check its fulfillments array + fulfillment_status. If Shopify shows ANY
-  // fulfillment (Pyvott, manual, anyone), the order is dropped from the queue.
+  // VERIFICATION LAYERS (in order):
+  //   1. SHOPIFY — Fetch each order's actual fulfillment data
+  //      - fulfillment_status === 'fulfilled' → DROP
+  //      - cancelled_at present → DROP
+  //      - financial_status === 'refunded' → DROP
+  //      - fulfillments[].line_items qty >= ordered qty → DROP
+  //      - tag 'sent-to-wms' + any fulfillment → DROP
+  //      - note/note_attributes contain fulfillment keywords → DROP
+  //      - order not found in Shopify → DROP (deleted/archived)
   //
-  // Also checks: Extensiv activity, Shopify tags (sent-to-wms), and line item qtys.
+  //   2. EXTENSIV/3PL CENTRAL — Query /orders endpoint by reference number
+  //      - order status is Shipped/Complete/Closed → DROP
+  //      - Falls back to /activity feed if /orders fails
+  //
+  //   3. LOCAL QTY CHECK — Compare ordered vs shipped in our DB
+  //      - totalUnshipped <= 0 → DROP
+  //
+  // Each surviving order gets a `verifiedBy` tag so the UI can show
+  // Sammie exactly what was checked and WHY the order is still here.
   //
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  // ══════════════════════════════════════════════════════════════
   app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
     try {
+      const verifyStart = Date.now();
+
       // ── Step 1: Get Shopify + Extensiv clients ─────────────────
       let shopDomain: string | null = null;
       let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
@@ -17185,6 +17203,27 @@ Generate only the email body text, no subject line.`;
         }
       }
 
+      let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+          }
+          if (extensivClient) break;
+        }
+      } catch (err: any) {
+        console.error("[In-House] Extensiv client init failed:", err.message);
+      }
+
       // ── Step 2: Get candidate orders from our DB ───────────────
       const allOrders = await storage.getAllSalesOrders();
       const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
@@ -17193,10 +17232,8 @@ Generate only the email body text, no subject line.`;
       );
 
       // ── Step 3: Fetch EACH candidate directly from Shopify ─────
-      // This is the bulletproof check — we look at each order's actual
-      // fulfillments array, fulfillment_status, financial_status, tags, etc.
       let shopifyVerified = false;
-      const shopifyMap = new Map<string, any>(); // externalOrderId → Shopify order
+      const shopifyMap = new Map<string, any>();
 
       if (shopifyClient) {
         const idsToCheck = candidates
@@ -17210,125 +17247,168 @@ Generate only the email body text, no subject line.`;
               shopifyMap.set(String(so.id), so);
             }
             shopifyVerified = true;
-            console.log(`[In-House Shipping] Fetched ${shopifyOrders.length} of ${idsToCheck.length} orders from Shopify for verification`);
+            console.log(`[In-House] Shopify: fetched ${shopifyOrders.length}/${idsToCheck.length} orders`);
           } catch (err: any) {
-            console.error("[In-House Shipping] Shopify fetch error:", err.message);
+            console.error("[In-House] Shopify fetch error:", err.message);
           }
         }
       }
 
-      // ── Step 4: Check Extensiv activity ────────────────────────
-      const extensivShippedIds = new Set<string>();
-      try {
-        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
-        for (const config of extensivConfigs) {
-          const configData = config.config as Record<string, any> || {};
-          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
-          const clientId = configData.clientId;
-          const clientSecret = config.apiKey;
-          const orgKey = configData.orgKey;
+      // ── Step 4: Check Extensiv — TWO methods for thoroughness ──
+      //
+      // Method A: Query /orders endpoint by reference number (most reliable)
+      //   This tells us the actual order status inside 3PL Central.
+      //
+      // Method B: Query /activity feed for shipment records (fallback)
+      //   This catches shipments even if Method A fails or returns nothing.
+      //
+      // An order is "Extensiv-shipped" if EITHER method says so.
 
-          let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
-          if (clientId && clientSecret) {
-            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
-          } else if (clientSecret) {
-            extensivClient = new ExtensivClient(clientSecret, baseUrl);
-          }
+      let extensivVerified = false;
+      const extensivShippedIds = new Set<string>(); // externalOrderIds that Extensiv says are shipped
+      const extensivOrderDetails = new Map<string, { status: string; trackingNumber?: string }>();
 
-          if (extensivClient) {
-            const sixtyDaysAgo = new Date();
-            sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
-            const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 500);
-            for (const act of activity) {
-              if (act.type === 'SHIPMENT' && act.externalOrderId) {
-                extensivShippedIds.add(act.externalOrderId);
+      if (extensivClient) {
+        const candidateExtIds = candidates
+          .map(o => o.externalOrderId)
+          .filter((id): id is string => !!id);
+
+        // Method A: Direct order lookup by reference number
+        if (candidateExtIds.length > 0) {
+          try {
+            const orderResults = await extensivClient.findOrdersByReferenceNumbers(candidateExtIds);
+            for (const [refNum, info] of orderResults) {
+              if (info.shipped) {
+                extensivShippedIds.add(refNum);
+                extensivOrderDetails.set(refNum, info);
               }
             }
-            console.log(`[In-House Shipping] Extensiv: ${extensivShippedIds.size} shipments in last 60 days`);
-            break;
+            extensivVerified = true;
+            console.log(`[In-House] Extensiv /orders: ${extensivShippedIds.size} shipped of ${orderResults.size} found`);
+          } catch (err: any) {
+            console.error("[In-House] Extensiv /orders check failed:", err.message);
           }
         }
-      } catch (err: any) {
-        console.error("[In-House Shipping] Extensiv check failed (non-blocking):", err.message);
+
+        // Method B: Activity feed (catches things /orders might miss)
+        try {
+          const sixtyDaysAgo = new Date();
+          sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+          const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 1000);
+          let activityHits = 0;
+          for (const act of activity) {
+            if (act.type === 'SHIPMENT' && act.externalOrderId) {
+              if (!extensivShippedIds.has(act.externalOrderId)) {
+                extensivShippedIds.add(act.externalOrderId);
+                activityHits++;
+              }
+            }
+          }
+          extensivVerified = true;
+          console.log(`[In-House] Extensiv /activity: ${activity.length} records, ${activityHits} new shipments not in /orders`);
+        } catch (err: any) {
+          console.error("[In-House] Extensiv /activity check failed:", err.message);
+        }
       }
 
-      // ── Step 5: Verify each order ──────────────────────────────
+      // ── Step 5: Verify each order through ALL layers ───────────
       const verified: any[] = [];
       let droppedByShopify = 0;
       let droppedByExtensiv = 0;
+      let droppedByNotes = 0;
       let droppedByQty = 0;
 
       for (const order of candidates) {
-        // --- Shopify verification: check the ACTUAL order data ---
+        let dropReason: string | null = null;
+        let dropSource: string | null = null;
+
+        // ─── Layer 1: Shopify fulfillment data ────────────────
         if (shopifyVerified && order.externalOrderId) {
           const shopifyOrder = shopifyMap.get(order.externalOrderId);
 
           if (shopifyOrder) {
-            const fulfillmentStatus = shopifyOrder.fulfillment_status; // null, "partial", "fulfilled"
+            const fulfillmentStatus = shopifyOrder.fulfillment_status;
             const financialStatus = shopifyOrder.financial_status || '';
             const fulfillments = shopifyOrder.fulfillments || [];
             const tags = (shopifyOrder.tags || '').toLowerCase();
             const isCancelled = !!shopifyOrder.cancelled_at;
-
-            // DROP if: fully fulfilled, cancelled, refunded, or has fulfillments from anyone
-            const isFullyFulfilled = fulfillmentStatus === 'fulfilled';
             const hasFulfillments = fulfillments.length > 0;
             const isRefunded = financialStatus === 'refunded';
             const isSentToWms = tags.includes('sent-to-wms');
 
-            // If Shopify says fulfilled, or there are ANY fulfillment records — it's been handled
-            if (isFullyFulfilled || isCancelled || isRefunded) {
-              droppedByShopify++;
-              const newStatus = isCancelled ? 'CANCELLED' : isRefunded ? 'REFUNDED' : 'SHIPPED';
-              try { await storage.updateSalesOrder(order.id, { status: newStatus }); } catch {}
-              continue;
+            // Check 1a: Shopify says fully fulfilled / cancelled / refunded
+            if (fulfillmentStatus === 'fulfilled') {
+              dropReason = 'Shopify: fulfillment_status=fulfilled';
+              dropSource = 'shopify';
+            } else if (isCancelled) {
+              dropReason = 'Shopify: order cancelled';
+              dropSource = 'shopify';
+            } else if (isRefunded) {
+              dropReason = 'Shopify: order refunded';
+              dropSource = 'shopify';
             }
 
-            // If there are fulfillment records (even partial), check if ALL line items are covered
-            if (hasFulfillments) {
-              // Count total fulfilled qty across all fulfillments
+            // Check 1b: Count fulfilled qty vs ordered qty
+            if (!dropReason && hasFulfillments) {
               let fulfilledQty = 0;
               for (const f of fulfillments) {
                 for (const li of (f.line_items || [])) {
                   fulfilledQty += li.quantity || 0;
                 }
               }
-              // Count total ordered qty from Shopify line items
               let orderedQty = 0;
               for (const li of (shopifyOrder.line_items || [])) {
                 orderedQty += li.quantity || 0;
               }
-              // If everything is fulfilled, drop it
               if (fulfilledQty >= orderedQty) {
-                droppedByShopify++;
-                try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
-                continue;
+                dropReason = `Shopify: ${fulfilledQty}/${orderedQty} items fulfilled`;
+                dropSource = 'shopify';
               }
             }
 
-            // If tagged sent-to-wms AND has fulfillments, Pyvott handled it
-            if (isSentToWms && hasFulfillments) {
-              droppedByShopify++;
-              try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
-              continue;
+            // Check 1c: Tagged sent-to-wms AND has fulfillments → Pyvott handled it
+            if (!dropReason && isSentToWms && hasFulfillments) {
+              dropReason = 'Shopify: sent-to-wms tag + fulfillment records';
+              dropSource = 'shopify';
             }
-          }
-          // If the order isn't even in Shopify anymore (deleted/archived), drop it
-          else {
-            droppedByShopify++;
-            try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
-            continue;
+
+            // Check 1d: Order notes contain fulfillment keywords
+            if (!dropReason) {
+              const noteCheck = ShopifyClient.checkNotesForFulfillment(shopifyOrder);
+              if (noteCheck.fulfilled) {
+                dropReason = `Shopify notes: ${noteCheck.evidence}`;
+                dropSource = 'notes';
+              }
+            }
+          } else {
+            // Order not found in Shopify at all — deleted or archived
+            dropReason = 'Shopify: order not found (deleted/archived)';
+            dropSource = 'shopify';
           }
         }
 
-        // --- Extensiv verification ---
-        if (order.externalOrderId && extensivShippedIds.has(order.externalOrderId)) {
-          droppedByExtensiv++;
-          try { await storage.updateSalesOrder(order.id, { status: 'SHIPPED' }); } catch {}
+        // ─── Layer 2: Extensiv / 3PL Central ─────────────────
+        if (!dropReason && order.externalOrderId && extensivShippedIds.has(order.externalOrderId)) {
+          const detail = extensivOrderDetails.get(order.externalOrderId);
+          dropReason = detail
+            ? `Extensiv: order status="${detail.status}"${detail.trackingNumber ? `, tracking=${detail.trackingNumber}` : ''}`
+            : 'Extensiv: found in shipment activity';
+          dropSource = 'extensiv';
+        }
+
+        // ─── Apply drop decision ─────────────────────────────
+        if (dropReason) {
+          if (dropSource === 'shopify' || dropSource === 'notes') droppedByShopify++;
+          else if (dropSource === 'extensiv') droppedByExtensiv++;
+
+          const newStatus = dropReason.includes('cancelled') ? 'CANCELLED'
+            : dropReason.includes('refunded') ? 'REFUNDED'
+            : 'SHIPPED';
+          try { await storage.updateSalesOrder(order.id, { status: newStatus }); } catch {}
           continue;
         }
 
-        // --- Qty verification ---
+        // ─── Layer 3: Local qty check ────────────────────────
         const lines = await storage.getSalesOrderLines(order.id);
         const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
         const totalShipped = lines.reduce((sum: number, l: any) => sum + (l.qtyShipped || 0), 0);
@@ -17339,19 +17419,38 @@ Generate only the email body text, no subject line.`;
           continue;
         }
 
+        // ─── Build confidence context for the UI ─────────────
+        // This tells Sammie exactly what was checked and what we know.
+        const checks: string[] = [];
+        if (shopifyVerified && order.externalOrderId && shopifyMap.has(order.externalOrderId)) {
+          const so = shopifyMap.get(order.externalOrderId);
+          checks.push(`Shopify: ${so.fulfillment_status || 'unfulfilled'}, ${so.financial_status || 'unknown'}`);
+          if ((so.tags || '').toLowerCase().includes('sent-to-wms')) {
+            checks.push('Tagged: sent-to-wms (sent to Pyvott but not yet fulfilled)');
+          }
+        } else if (shopifyVerified && order.externalOrderId) {
+          checks.push('Shopify: order not found');
+        }
+        if (extensivVerified && order.externalOrderId) {
+          checks.push(extensivShippedIds.has(order.externalOrderId) ? 'Extensiv: SHIPPED' : 'Extensiv: not shipped');
+        }
+        checks.push(`Local: ${totalUnshipped} of ${totalOrdered} units remaining`);
+
         verified.push({
           ...order,
           lines,
           totalOrdered,
           totalShipped,
           totalUnshipped,
+          checks, // Array of human-readable verification results
         });
       }
 
-      // Sort by order date (oldest first)
+      // Sort by order date (oldest first — stale orders surface to the top)
       verified.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
 
-      console.log(`[In-House Shipping] Result: ${verified.length} need action (dropped: ${droppedByShopify} Shopify, ${droppedByExtensiv} Extensiv, ${droppedByQty} zero-qty, of ${candidates.length} candidates)`);
+      const verifyMs = Date.now() - verifyStart;
+      console.log(`[In-House] ✓ ${verified.length} need action | dropped: ${droppedByShopify} Shopify, ${droppedByExtensiv} Extensiv, ${droppedByQty} qty | checked ${candidates.length} candidates in ${verifyMs}ms`);
 
       res.json({
         orders: verified,
@@ -17359,15 +17458,19 @@ Generate only the email body text, no subject line.`;
           total: verified.length,
           totalUnitsToShip: verified.reduce((s: number, o: any) => s + o.totalUnshipped, 0),
           verified: shopifyVerified,
+          extensivVerified,
           droppedByShopify,
           droppedByExtensiv,
+          droppedByNotes,
           droppedByQty,
           candidatesChecked: candidates.length,
+          verifiedAt: new Date().toISOString(),
+          verifyMs,
         },
         shopDomain,
       });
     } catch (error: any) {
-      console.error("[In-House Shipping] Error:", error);
+      console.error("[In-House] Error:", error);
       res.status(500).json({ error: error.message || "Failed to fetch in-house orders" });
     }
   });

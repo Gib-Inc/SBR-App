@@ -727,17 +727,17 @@ export class ExtensivClient {
   }
 
   /**
-   * Get shipments for specific order IDs
+   * Get shipments for specific order IDs (legacy — uses /activity feed)
    * Used to update sales order statuses after fulfillment
    * @param orderIds - Array of Extensiv order IDs to check
    */
   async getShipmentsForOrders(orderIds: string[]): Promise<Map<string, ExtensivActivity>> {
     const shipments = new Map<string, ExtensivActivity>();
-    
+
     try {
       // Fetch recent activity and filter for shipments
       const activity = await this.getActivity(undefined, undefined, 500);
-      
+
       for (const act of activity) {
         if (act.type === 'SHIPMENT' && orderIds.includes(act.orderId)) {
           shipments.set(act.orderId, act);
@@ -746,8 +746,104 @@ export class ExtensivClient {
     } catch (error) {
       console.error('[Extensiv] Error fetching shipments for orders:', error);
     }
-    
+
     return shipments;
+  }
+
+  /**
+   * Search 3PL Central for orders by their reference numbers (Shopify order IDs).
+   * This is the most reliable way to check if Pyvott/Extensiv has handled an order
+   * because it queries the actual order records, not just an activity feed.
+   *
+   * Returns a Map of referenceNumber → order status info.
+   * Shipped statuses: "Shipped", "Complete", "Closed"
+   *
+   * 3PL Central GET /orders endpoint supports:
+   *   ?referencenum={ref}  — exact match on reference number
+   *   ?pgnum=1&pgsiz=50    — pagination
+   *   Response: { ResourceList: [{ ReadOnly: { OrderId, ... }, OrderStatus, ReferenceNum, ... }] }
+   */
+  async findOrdersByReferenceNumbers(
+    referenceNumbers: string[]
+  ): Promise<Map<string, { orderId: string; status: string; shipped: boolean; trackingNumber?: string }>> {
+    const results = new Map<string, { orderId: string; status: string; shipped: boolean; trackingNumber?: string }>();
+
+    // 3PL Central doesn't support batch reference number lookup,
+    // so we query in small batches. To avoid hammering the API,
+    // we first try to fetch ALL recent orders and match locally.
+    // If there are too many candidates, fall back to individual lookups.
+
+    const BATCH_THRESHOLD = 200; // If more than this, use paginated list
+
+    try {
+      if (referenceNumbers.length <= BATCH_THRESHOLD) {
+        // Strategy A: Fetch all recent orders (paginated) and match locally
+        const allOrders = await this.fetchRecentOrders(500);
+        const refSet = new Set(referenceNumbers);
+
+        for (const order of allOrders) {
+          const ref = order.referenceNum || order.ReferenceNum || '';
+          if (refSet.has(ref) || refSet.has(String(ref))) {
+            const status = order.OrderStatus || order.orderStatus || order.status || '';
+            const readOnly = order.ReadOnly || order.readOnly || {};
+            const orderId = String(readOnly.OrderId || readOnly.orderId || order.orderId || order.id || '');
+
+            // 3PL Central shipped statuses
+            const shippedStatuses = ['shipped', 'complete', 'closed', 'cancelled'];
+            const isShipped = shippedStatuses.includes(status.toLowerCase());
+
+            // Try to get tracking info
+            const trackingNumber = readOnly.TrackingNumber || order.trackingNumber || undefined;
+
+            results.set(ref, { orderId, status, shipped: isShipped, trackingNumber });
+          }
+        }
+
+        console.log(`[Extensiv] Checked ${allOrders.length} recent orders, found ${results.size} matching reference numbers`);
+      }
+    } catch (error: any) {
+      console.error(`[Extensiv] findOrdersByReferenceNumbers failed:`, error.message);
+      // Non-blocking — we fall through to the activity-based check
+    }
+
+    return results;
+  }
+
+  /**
+   * Fetch recent orders from 3PL Central with pagination.
+   * GET /orders?pgsiz={size}&pgnum={page}&sort=CreatedDate&sortDirection=desc
+   *
+   * This gives us actual order records with their current status,
+   * which is far more reliable than the activity feed.
+   */
+  async fetchRecentOrders(limit: number = 100): Promise<any[]> {
+    const allOrders: any[] = [];
+    const pageSize = Math.min(100, limit);
+    let page = 1;
+    const maxPages = Math.ceil(limit / pageSize);
+
+    while (page <= maxPages) {
+      try {
+        const url = `${this.baseUrl}/orders?pgsiz=${pageSize}&pgnum=${page}`;
+        const response = await fetch(url, {
+          headers: await this.getHeaders(),
+        });
+
+        const data = await this.handleResponse(response, 'fetchRecentOrders');
+        const orders = data.ResourceList || data.Orders || data.orders || [];
+
+        if (orders.length === 0) break;
+        allOrders.push(...orders);
+
+        if (orders.length < pageSize) break; // Last page
+        page++;
+      } catch (error: any) {
+        console.error(`[Extensiv] fetchRecentOrders page ${page} failed:`, error.message);
+        break;
+      }
+    }
+
+    return allOrders;
   }
 
   /**

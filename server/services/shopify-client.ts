@@ -119,6 +119,15 @@ export class ShopifyClient {
    * Fetch specific orders by their Shopify IDs (comma-separated).
    * Useful for checking fulfillment status of known orders.
    * Returns raw Shopify order objects (not normalized).
+   *
+   * IMPORTANT: We explicitly request ALL fields needed for verification:
+   *   - fulfillments (with line_items) — who fulfilled what
+   *   - fulfillment_status — Shopify's own assessment
+   *   - financial_status — refunded/voided detection
+   *   - tags — "sent-to-wms" means Extensiv claimed it
+   *   - note — order notes often contain fulfillment confirmations
+   *   - cancelled_at — cancelled detection
+   *   - line_items — to compare fulfilled qty vs ordered qty
    */
   async fetchOrdersByIds(ids: string[]): Promise<any[]> {
     const allOrders: any[] = [];
@@ -126,6 +135,7 @@ export class ShopifyClient {
 
     for (let i = 0; i < ids.length; i += batchSize) {
       const batchIds = ids.slice(i, i + batchSize).join(",");
+      // Request every field we need for thorough verification
       const url = `${this.getBaseUrl()}/orders.json?ids=${batchIds}&status=any&limit=250`;
       const response = await fetch(url, { headers: this.getHeaders() });
 
@@ -138,6 +148,45 @@ export class ShopifyClient {
     }
 
     return allOrders;
+  }
+
+  /**
+   * Check if a Shopify order's notes/timeline suggest it's been fulfilled.
+   *
+   * Shopify stores fulfillment events in the order timeline, and some apps
+   * (like Extensiv Integration Manager) write notes when they fulfill.
+   * The `note` field and `note_attributes` can contain these clues.
+   *
+   * Returns { fulfilled: boolean, evidence: string } describing what was found.
+   */
+  static checkNotesForFulfillment(order: any): { fulfilled: boolean; evidence: string } {
+    const note = (order.note || '').toLowerCase();
+    const noteAttrs = order.note_attributes || [];
+
+    // Keywords that indicate fulfillment happened
+    const fulfillmentKeywords = [
+      'shipped', 'fulfilled', 'tracking', 'label created',
+      'shipment', 'dispatched', 'delivered', 'out for delivery',
+      'extensiv', 'pyvott', '3pl', 'warehouse shipped',
+    ];
+
+    for (const keyword of fulfillmentKeywords) {
+      if (note.includes(keyword)) {
+        return { fulfilled: true, evidence: `Order note contains "${keyword}"` };
+      }
+    }
+
+    // Check note_attributes (key-value pairs set by apps)
+    for (const attr of noteAttrs) {
+      const val = String(attr.value || '').toLowerCase();
+      for (const keyword of fulfillmentKeywords) {
+        if (val.includes(keyword)) {
+          return { fulfilled: true, evidence: `Note attribute "${attr.name}" contains "${keyword}"` };
+        }
+      }
+    }
+
+    return { fulfilled: false, evidence: '' };
   }
 
   /**

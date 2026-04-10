@@ -55,6 +55,7 @@ interface InHouseOrder {
   totalOrdered: number;
   totalShipped: number;
   totalUnshipped: number;
+  checks?: string[]; // Human-readable verification results per order
 }
 
 interface InHouseData {
@@ -62,10 +63,15 @@ interface InHouseData {
   summary: {
     total: number;
     totalUnitsToShip: number;
-    verified?: boolean; // true if Shopify was checked as source of truth
+    verified?: boolean;
+    extensivVerified?: boolean;
     droppedByShopify?: number;
     droppedByExtensiv?: number;
+    droppedByNotes?: number;
     droppedByQty?: number;
+    candidatesChecked?: number;
+    verifiedAt?: string;
+    verifyMs?: number;
   };
   shopDomain?: string | null;
 }
@@ -355,30 +361,46 @@ export default function InHouseShipping() {
       )}
 
       {/* Verification status banner */}
-      {summary.verified && (summary.droppedByShopify || 0) + (summary.droppedByExtensiv || 0) > 0 && !syncResult && (
+      {(summary.verified || summary.extensivVerified) && !syncResult && (
         <Card className="border-green-500/50 bg-green-500/5">
           <CardContent className="py-3 flex items-start gap-3">
             <CheckCircle2 className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
             <div className="text-sm">
               <p className="font-medium">
-                Verified against Shopify & Extensiv
+                Auto-verified
+                {summary.verified && summary.extensivVerified ? ' against Shopify + Extensiv'
+                  : summary.verified ? ' against Shopify'
+                  : ' against Extensiv'}
+                {summary.verifyMs ? ` (${(summary.verifyMs / 1000).toFixed(1)}s)` : ''}
               </p>
-              <p className="text-muted-foreground">
-                {(summary.droppedByShopify || 0) > 0 && `${summary.droppedByShopify} already fulfilled in Shopify. `}
-                {(summary.droppedByExtensiv || 0) > 0 && `${summary.droppedByExtensiv} shipped by Extensiv/Pyvott. `}
-                {(summary.droppedByQty || 0) > 0 && `${summary.droppedByQty} had no remaining items. `}
-                Only verified orders are shown below.
-              </p>
+              {((summary.droppedByShopify || 0) + (summary.droppedByExtensiv || 0) + (summary.droppedByQty || 0)) > 0 ? (
+                <p className="text-muted-foreground">
+                  Auto-removed {(summary.droppedByShopify || 0) + (summary.droppedByExtensiv || 0) + (summary.droppedByQty || 0)} orders from {summary.candidatesChecked || '?'} candidates:
+                  {(summary.droppedByShopify || 0) > 0 && ` ${summary.droppedByShopify} fulfilled in Shopify,`}
+                  {(summary.droppedByExtensiv || 0) > 0 && ` ${summary.droppedByExtensiv} shipped by Pyvott/Extensiv,`}
+                  {(summary.droppedByQty || 0) > 0 && ` ${summary.droppedByQty} fully shipped.`}
+                  {' '}Only orders that genuinely need attention are shown.
+                </p>
+              ) : (
+                <p className="text-muted-foreground">
+                  Checked {summary.candidatesChecked || '?'} candidates. All remaining orders need attention.
+                </p>
+              )}
+              {summary.verifiedAt && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Last checked: {new Date(summary.verifiedAt).toLocaleTimeString()}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
       )}
-      {summary.verified === false && (
+      {!summary.verified && !summary.extensivVerified && (
         <Card className="border-amber-500/50 bg-amber-500/5">
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium">Could not verify with Shopify</p>
+              <p className="font-medium">Could not verify with Shopify or Extensiv</p>
               <p className="text-muted-foreground">
                 Showing orders from local database. Some may already be shipped. Click "Sync" to try again.
               </p>
@@ -410,14 +432,19 @@ export default function InHouseShipping() {
         <Card>
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-1">
-              {summary.verified ? (
-                <><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Verified</>
+              {(summary.verified && summary.extensivVerified) ? (
+                <><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Fully Verified</>
+              ) : (summary.verified || summary.extensivVerified) ? (
+                <><CheckCircle2 className="h-3.5 w-3.5 text-amber-500" /> Partially Verified</>
               ) : (
                 <><AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Unverified</>
               )}
             </CardDescription>
             <CardTitle className="text-sm text-muted-foreground mt-1">
-              {summary.verified ? "Shopify + Extensiv" : "Local DB only"}
+              {summary.verified && summary.extensivVerified ? "Shopify + Extensiv"
+                : summary.verified ? "Shopify only"
+                : summary.extensivVerified ? "Extensiv only"
+                : "Local DB only"}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -520,6 +547,25 @@ export default function InHouseShipping() {
                         <span><strong>{order.totalUnshipped}</strong> unit{order.totalUnshipped !== 1 ? 's' : ''}</span>
                         <span>{formatCurrency(order.totalAmount)}</span>
                       </div>
+                      {/* Verification context — shows Sammie what we checked */}
+                      {order.checks && order.checks.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          {order.checks.map((check, i) => (
+                            <span key={i} className="inline-flex items-center text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                              {check.startsWith('Shopify:') ? (
+                                <CheckCircle2 className="h-3 w-3 mr-1 text-green-500 shrink-0" />
+                              ) : check.startsWith('Extensiv:') ? (
+                                <CheckCircle2 className="h-3 w-3 mr-1 text-blue-500 shrink-0" />
+                              ) : check.startsWith('Tagged:') ? (
+                                <Tag className="h-3 w-3 mr-1 text-amber-500 shrink-0" />
+                              ) : (
+                                <Package className="h-3 w-3 mr-1 shrink-0" />
+                              )}
+                              {check}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
 

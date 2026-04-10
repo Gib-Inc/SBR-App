@@ -431,25 +431,6 @@ export default function InHouseShipping() {
           </Button>
           {selectedIds.size > 0 && (
             <>
-              <Button
-                size="sm"
-                variant="default"
-                className="gap-2"
-                onClick={() => setShowBatchConfirm(true)}
-              >
-                <Truck className="h-4 w-4" />
-                Ship {selectedIds.size} Order{selectedIds.size !== 1 ? "s" : ""}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                className="gap-2"
-                onClick={() => dismissMutation.mutate(Array.from(selectedIds))}
-                disabled={dismissMutation.isPending}
-              >
-                <Check className="h-4 w-4" />
-                {dismissMutation.isPending ? "Clearing…" : `Already Shipped (${selectedIds.size})`}
-              </Button>
               {shopDomain && (
                 <Button
                   size="sm"
@@ -458,9 +439,27 @@ export default function InHouseShipping() {
                   onClick={openSelectedInShopify}
                 >
                   <Tag className="h-4 w-4" />
-                  Create Labels in Shopify ({selectedIds.size})
+                  Print Labels ({selectedIds.size})
                 </Button>
               )}
+              <Button
+                size="sm"
+                className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={() => setShowBatchConfirm(true)}
+              >
+                <Truck className="h-4 w-4" />
+                Fulfilled In-House ({selectedIds.size})
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                className="gap-2"
+                onClick={() => dismissMutation.mutate(Array.from(selectedIds))}
+                disabled={dismissMutation.isPending}
+              >
+                <Package className="h-4 w-4" />
+                {dismissMutation.isPending ? "Clearing…" : `Fulfilled by Pyvott (${selectedIds.size})`}
+              </Button>
               <span className="text-sm text-muted-foreground">
                 {selectedIds.size} selected
               </span>
@@ -479,177 +478,104 @@ export default function InHouseShipping() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.size === orders.length && orders.length > 0}
-                        onChange={toggleSelectAll}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                    </TableHead>
-                    <TableHead className="min-w-[120px]">Order</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead className="hidden md:table-cell">Items</TableHead>
-                    <TableHead className="text-center">Qty</TableHead>
-                    <TableHead className="hidden md:table-cell text-right">Total</TableHead>
-                    <TableHead className="text-center">Age</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {orders.map((order) => {
-                    const age = daysAgoNum(order.orderDate);
-                    const isStale = age > 10;
-                    return (
-                      <TableRow
-                        key={order.id}
-                        data-testid={`row-order-${order.id}`}
-                        className={`${selectedIds.has(order.id) ? "bg-primary/5" : ""} ${isStale ? "opacity-60" : ""}`}
+        <div className="space-y-3">
+          {orders.map((order) => {
+            const age = daysAgoNum(order.orderDate);
+            return (
+              <Card key={order.id} data-testid={`row-order-${order.id}`} className={selectedIds.has(order.id) ? "ring-2 ring-primary" : ""}>
+                <CardContent className="p-4">
+                  {/* Top row: checkbox, order info, age badge */}
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(order.id)}
+                      onChange={() => toggleSelect(order.id)}
+                      className="h-5 w-5 rounded border-gray-300 mt-1 shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-base font-bold">
+                          {order.externalOrderId || order.id.slice(0, 8)}
+                        </span>
+                        <Badge variant="outline" className="text-xs">{order.channel}</Badge>
+                        <Badge
+                          variant={age > 3 ? "destructive" : age > 1 ? "secondary" : "default"}
+                        >
+                          {daysAgo(order.orderDate)}
+                        </Badge>
+                      </div>
+                      <div className="text-sm font-medium mt-1">{order.customerName}</div>
+                      <div className="text-sm text-muted-foreground mt-0.5">
+                        {order.lines.map((line) => {
+                          const toShip = line.qtyOrdered - line.qtyShipped;
+                          if (toShip <= 0) return null;
+                          return (
+                            <span key={line.id} className="mr-3">
+                              {line.productName || line.sku} × {toShip}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
+                        <span><strong>{order.totalUnshipped}</strong> unit{order.totalUnshipped !== 1 ? 's' : ''}</span>
+                        <span>{formatCurrency(order.totalAmount)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action buttons — BIG and clear */}
+                  <div className="flex gap-2 mt-3 flex-wrap">
+                    {/* PRINT LABEL — opens Shopify admin to create/print label */}
+                    {(shopDomain && order.externalOrderId) || order.sourceUrl ? (
+                      <Button
+                        variant="outline"
+                        className="gap-2 h-10 px-4 text-sm font-semibold"
+                        onClick={() => {
+                          const url = shopDomain && order.externalOrderId
+                            ? shopifyAdminUrl(shopDomain, order.externalOrderId)
+                            : order.sourceUrl;
+                          if (url) window.open(url, "_blank", "noopener,noreferrer");
+                        }}
                       >
-                        <TableCell>
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(order.id)}
-                            onChange={() => toggleSelect(order.id)}
-                            className="h-4 w-4 rounded border-gray-300"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-mono text-sm font-medium">
-                            {order.externalOrderId || order.id.slice(0, 8)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">{order.channel}</div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-medium text-sm truncate max-w-[150px]">{order.customerName}</div>
-                        </TableCell>
-                        <TableCell className="hidden md:table-cell">
-                          <div className="text-sm space-y-0.5">
-                            {order.lines.slice(0, 2).map((line) => (
-                              <div key={line.id} className="text-muted-foreground truncate max-w-[200px]">
-                                {line.productName || line.sku} × {line.qtyOrdered - line.qtyShipped}
-                              </div>
-                            ))}
-                            {order.lines.length > 2 && (
-                              <div className="text-xs text-muted-foreground">+{order.lines.length - 2} more</div>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <span className="font-semibold">{order.totalUnshipped}</span>
-                        </TableCell>
-                        <TableCell className="hidden md:table-cell text-right">
-                          {formatCurrency(order.totalAmount)}
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge
-                            variant={
-                              age > 3 ? "destructive"
-                              : age > 1 ? "secondary"
-                              : "default"
-                            }
-                          >
-                            {daysAgo(order.orderDate)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex gap-1 justify-end">
-                            <TooltipProvider>
-                              {/* Shopify admin link (for creating label) */}
-                              {shopDomain && order.externalOrderId && order.channel === "SHOPIFY" && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      size="icon"
-                                      variant="ghost"
-                                      className="h-8 w-8"
-                                      onClick={() => {
-                                        const url = shopifyAdminUrl(shopDomain, order.externalOrderId);
-                                        if (url) window.open(url, "_blank", "noopener,noreferrer");
-                                      }}
-                                    >
-                                      <ExternalLink className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Open in Shopify Admin</TooltipContent>
-                                </Tooltip>
-                              )}
-                              {/* Fallback: customer-facing link if no admin URL */}
-                              {(!shopDomain || !order.externalOrderId) && order.sourceUrl && order.channel === "SHOPIFY" && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      size="icon"
-                                      variant="ghost"
-                                      className="h-8 w-8"
-                                      onClick={() => {
-                                        window.open(order.sourceUrl!, "_blank", "noopener,noreferrer");
-                                      }}
-                                    >
-                                      <ExternalLink className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Open in Shopify</TooltipContent>
-                                </Tooltip>
-                              )}
+                        <Tag className="h-4 w-4" />
+                        Print Label
+                      </Button>
+                    ) : null}
 
-                              {/* Already Shipped — dismiss without touching inventory */}
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    size="icon"
-                                    variant="ghost"
-                                    className="h-8 w-8 text-muted-foreground hover:text-green-500"
-                                    onClick={() => dismissMutation.mutate([order.id])}
-                                    disabled={dismissMutation.isPending}
-                                  >
-                                    <Check className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Already shipped — remove from list (no inventory change)</TooltipContent>
-                              </Tooltip>
+                    {/* FULFILLED IN-HOUSE — ship from Hildale (subtracts inventory) */}
+                    <Button
+                      className="gap-2 h-10 px-4 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+                      onClick={() => setConfirmShipId(order.id)}
+                    >
+                      <Truck className="h-4 w-4" />
+                      Fulfilled In-House
+                    </Button>
 
-                              {/* Ship button — marks shipped AND subtracts inventory */}
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    size="sm"
-                                    variant="default"
-                                    className="gap-1"
-                                    onClick={() => setConfirmShipId(order.id)}
-                                  >
-                                    <Truck className="h-3.5 w-3.5" />
-                                    <span className="hidden sm:inline">Ship</span>
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Ship now — updates Hildale inventory counts</TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
+                    {/* FULFILLED BY PYVOTT — dismiss, no inventory change */}
+                    <Button
+                      variant="secondary"
+                      className="gap-2 h-10 px-4 text-sm font-semibold"
+                      onClick={() => dismissMutation.mutate([order.id])}
+                      disabled={dismissMutation.isPending}
+                    >
+                      <Package className="h-4 w-4" />
+                      Fulfilled by Pyvott
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
       )}
 
       {/* Confirm Ship Dialog */}
       <Dialog open={!!confirmShipId} onOpenChange={() => setConfirmShipId(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm Shipment</DialogTitle>
+            <DialogTitle>Fulfilled In-House</DialogTitle>
             <DialogDescription>
-              This will mark the order as shipped and subtract the quantities from Hildale inventory.
+              This marks the order as shipped from Hildale and subtracts the quantities from your inventory.
             </DialogDescription>
           </DialogHeader>
           {confirmOrder && (
@@ -684,7 +610,7 @@ export default function InHouseShipping() {
               className="gap-2"
             >
               <Truck className="h-4 w-4" />
-              {shipMutation.isPending ? "Shipping…" : "Confirm Ship"}
+              {shipMutation.isPending ? "Shipping…" : "Confirm — Fulfilled In-House"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -694,9 +620,9 @@ export default function InHouseShipping() {
       <Dialog open={showBatchConfirm} onOpenChange={() => !batchProgress && setShowBatchConfirm(false)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Ship {selectedIds.size} Orders</DialogTitle>
+            <DialogTitle>Fulfill {selectedIds.size} Orders In-House</DialogTitle>
             <DialogDescription>
-              This will mark all selected orders as shipped and update Hildale inventory for each one.
+              This marks all selected orders as shipped from Hildale and subtracts inventory for each one.
             </DialogDescription>
           </DialogHeader>
           {batchProgress ? (
@@ -733,15 +659,14 @@ export default function InHouseShipping() {
             </Button>
             <Button onClick={batchShip} disabled={!!batchProgress} className="gap-2">
               <Truck className="h-4 w-4" />
-              {batchProgress ? "Shipping…" : `Ship All ${selectedIds.size}`}
+              {batchProgress ? "Shipping…" : `Fulfill All ${selectedIds.size} In-House`}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <div className="text-xs text-muted-foreground space-y-1">
-        <p><strong>Ship</strong> = ship now and subtract from Hildale inventory. <strong>✓</strong> = already shipped elsewhere, just clear it from the list.</p>
-        <p>"Sync with Shopify & Extensiv" checks both systems for orders already fulfilled. "Already Shipped" lets you manually clear them.</p>
+        <p><strong>Print Label</strong> = open in Shopify to create a shipping label. <strong>Fulfilled In-House</strong> = we shipped it, subtract from inventory. <strong>Fulfilled by Pyvott</strong> = Pyvott handled it, just clear it.</p>
       </div>
     </div>
   );

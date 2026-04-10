@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -62,6 +62,7 @@ interface InHouseData {
   summary: {
     total: number;
     totalUnitsToShip: number;
+    filtered?: number; // orders auto-excluded because they had 0 qty or were already shipped
   };
   shopDomain?: string | null;
 }
@@ -109,6 +110,7 @@ export default function InHouseShipping() {
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; errors: string[] } | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const hasAutoSynced = useRef(false);
 
   const { data, isLoading, error } = useQuery<InHouseData>({
     queryKey: ["/api/sales-orders/in-house"],
@@ -138,6 +140,14 @@ export default function InHouseShipping() {
       toast({ title: "Sync failed", description: err.message, variant: "destructive" });
     },
   });
+
+  // Auto-sync with Shopify & Extensiv on first page load to clean up stale orders
+  useEffect(() => {
+    if (data && !hasAutoSynced.current && data.orders.length > 0) {
+      hasAutoSynced.current = true;
+      syncMutation.mutate();
+    }
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dismiss mutation — marks orders as already shipped WITHOUT touching inventory
   const dismissMutation = useMutation({

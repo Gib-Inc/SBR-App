@@ -17150,19 +17150,22 @@ Generate only the email body text, no subject line.`;
   });
 
   // In-house shipping queue — orders that need to be shipped from Hildale
-  // Returns orders where fulfillmentSource = HILDALE and status is not yet fully shipped
+  // Returns ONLY orders that genuinely still need action:
+  //  - fulfillmentSource = HILDALE
+  //  - status is NOT terminal (DELIVERED, REFUNDED, CANCELLED) and NOT already SHIPPED
+  //  - has at least 1 unit still unshipped (qtyOrdered - qtyShipped > 0)
   // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
-  // otherwise Express treats "in-house" as an :id parameter and returns 404.
   app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
     try {
       const allOrders = await storage.getAllSalesOrders();
-      // Filter to Hildale-fulfilled orders that aren't completed yet
-      const pendingStatuses = ['DRAFT', 'ORDERED', 'PENDING', 'PURCHASED', 'PARTIALLY_FULFILLED'];
+
+      // Exclude terminal statuses AND shipped — only show orders that truly need action
+      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
       const inHouseOrders = allOrders.filter(o =>
-        o.fulfillmentSource === 'HILDALE' && pendingStatuses.includes(o.status)
+        o.fulfillmentSource === 'HILDALE' && !excludeStatuses.includes(o.status)
       );
 
-      // Enrich with line items so we can show what needs shipping
+      // Enrich with line items and calculate unshipped quantities
       const enriched = await Promise.all(inHouseOrders.map(async (order) => {
         const lines = await storage.getSalesOrderLines(order.id);
         const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
@@ -17177,8 +17180,11 @@ Generate only the email body text, no subject line.`;
         };
       }));
 
+      // CRITICAL: Filter out orders where everything is already shipped (Qty 0)
+      const needsAction = enriched.filter(o => o.totalUnshipped > 0);
+
       // Sort by order date (oldest first — ship the oldest orders first)
-      enriched.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
+      needsAction.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
 
       // Get Shopify shop domain for admin links
       let shopDomain: string | null = null;
@@ -17192,12 +17198,13 @@ Generate only the email body text, no subject line.`;
       } catch { /* ignore — admin links are nice-to-have */ }
 
       res.json({
-        orders: enriched,
+        orders: needsAction,
         summary: {
-          total: enriched.length,
-          totalUnitsToShip: enriched.reduce((s, o) => s + o.totalUnshipped, 0),
+          total: needsAction.length,
+          totalUnitsToShip: needsAction.reduce((s, o) => s + o.totalUnshipped, 0),
+          filtered: enriched.length - needsAction.length, // how many were auto-excluded (Qty 0 or already shipped)
         },
-        shopDomain, // e.g. "my-store.myshopify.com" — used for admin deep links
+        shopDomain,
       });
     } catch (error: any) {
       console.error("[In-House Shipping] Error:", error);

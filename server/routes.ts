@@ -15515,12 +15515,22 @@ Generate only the email body text, no subject line.`;
           // Sum of damage amounts
           const computedDamageTotal = items.reduce((sum: number, item: any) => sum + (item.damageAmount || 0), 0);
           
-          return { 
-            ...ret, 
+          // Look up linked sales order for sourceUrl (used for Shopify return label link)
+          let sourceUrl: string | null = null;
+          if (ret.salesOrderId) {
+            const salesOrder = await storage.getSalesOrder(ret.salesOrderId);
+            if (salesOrder) {
+              sourceUrl = salesOrder.sourceUrl ?? null;
+            }
+          }
+
+          return {
+            ...ret,
             totalUnitsRequested,
             totalQtyReceived,
             // Use computed damage total if damageDeductionTotal not already set
             damageDeductionTotal: ret.damageDeductionTotal ?? computedDamageTotal,
+            sourceUrl,
           };
         })
       );

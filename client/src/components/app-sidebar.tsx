@@ -1,5 +1,6 @@
 import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import {
   Sidebar,
   SidebarContent,
@@ -9,6 +10,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuBadge,
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
@@ -44,6 +46,13 @@ const toolItems = [
 export function AppSidebar() {
   const [location] = useLocation();
 
+  // Live count of in-house orders waiting to ship (refreshes every 60s)
+  const { data: inHouseData } = useQuery<{ summary: { total: number } }>({
+    queryKey: ["/api/sales-orders/in-house"],
+    refetchInterval: 60_000,
+  });
+  const inHouseCount = inHouseData?.summary?.total ?? 0;
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-6 pb-4">
@@ -71,6 +80,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 {group.items.map((item) => {
                   const isActive = location === item.url;
+                  const badgeCount = item.url === "/in-house-shipping" ? inHouseCount : 0;
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton asChild isActive={isActive}>
@@ -79,6 +89,11 @@ export function AppSidebar() {
                           <span>{item.title}</span>
                         </Link>
                       </SidebarMenuButton>
+                      {badgeCount > 0 && (
+                        <SidebarMenuBadge className="bg-destructive text-destructive-foreground">
+                          {badgeCount}
+                        </SidebarMenuBadge>
+                      )}
                     </SidebarMenuItem>
                   );
                 })}

@@ -116,6 +116,31 @@ export class ShopifyClient {
   }
 
   /**
+   * Fetch specific orders by their Shopify IDs (comma-separated).
+   * Useful for checking fulfillment status of known orders.
+   * Returns raw Shopify order objects (not normalized).
+   */
+  async fetchOrdersByIds(ids: string[]): Promise<any[]> {
+    const allOrders: any[] = [];
+    const batchSize = 50; // Shopify allows up to 100 ids, but 50 is safer
+
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batchIds = ids.slice(i, i + batchSize).join(",");
+      const url = `${this.getBaseUrl()}/orders.json?ids=${batchIds}&status=any&limit=250`;
+      const response = await fetch(url, { headers: this.getHeaders() });
+
+      if (response.ok) {
+        const data = await response.json();
+        allOrders.push(...(data.orders || []));
+      } else {
+        console.error(`[Shopify] Failed to fetch order batch: ${response.status} ${response.statusText}`);
+      }
+    }
+
+    return allOrders;
+  }
+
+  /**
    * Test the API connection by fetching shop info
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {

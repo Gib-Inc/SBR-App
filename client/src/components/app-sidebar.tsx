@@ -15,32 +15,35 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
-// Sidebar items organized into logical groups so the list stays
-// scannable even on smaller screens.  Each group gets its own label.
-const overviewItems = [
+// ── Sidebar groups ──────────────────────────────────────────
+// Organized by workflow: Dashboard → Sales & Fulfillment → Supply Chain → Tools
+// Sales & Fulfillment = Sammie's daily workflow (orders in → ship → returns)
+// Supply Chain = sourcing, production, and product catalog
+
+const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Inventory",  url: "/inventory",   icon: Warehouse  },
-  { title: "Marketing",  url: "/marketing",   icon: Megaphone  },
 ];
 
-const operationsItems = [
-  { title: "Products",           url: "/products",           icon: Package  },
-  { title: "Raw Materials",      url: "/raw-materials",      icon: Boxes    },
-  { title: "Production",         url: "/production",         icon: Factory  },
-  { title: "In-House Shipping",  url: "/in-house-shipping",  icon: Truck    },
-  { title: "Barcodes",           url: "/barcodes",           icon: Barcode  },
+const salesItems = [
+  { title: "Sales Orders",      url: "/sales-orders",       icon: ShoppingCart  },
+  { title: "In-House Shipping", url: "/in-house-shipping",  icon: Truck         },
+  { title: "Returns",           url: "/returns",            icon: PackageOpen   },
 ];
 
-const orderItems = [
-  { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
+const supplyChainItems = [
+  { title: "Products",         url: "/products",         icon: Package       },
+  { title: "Raw Materials",    url: "/raw-materials",    icon: Boxes         },
+  { title: "Production",       url: "/production",       icon: Factory       },
   { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
-  { title: "Sales Orders",     url: "/sales-orders",     icon: ShoppingCart  },
-  { title: "Returns",          url: "/returns",          icon: PackageOpen   },
+  { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
 ];
 
 const toolItems = [
-  { title: "AI Agent",  url: "/ai",        icon: Brain    },
-  { title: "App Flow",  url: "/app-flow",  icon: Workflow },
+  { title: "Barcodes",   url: "/barcodes",   icon: Barcode  },
+  { title: "Marketing",  url: "/marketing",  icon: Megaphone },
+  { title: "AI Agent",   url: "/ai",         icon: Brain    },
+  { title: "App Flow",   url: "/app-flow",   icon: Workflow },
 ];
 
 export function AppSidebar() {
@@ -69,10 +72,10 @@ export function AppSidebar() {
       <SidebarContent>
         {/* Helper that renders a group of sidebar links */}
         {[
-          { label: "Overview",   items: overviewItems   },
-          { label: "Operations", items: operationsItems },
-          { label: "Orders",     items: orderItems      },
-          { label: "Tools",      items: toolItems       },
+          { label: "Dashboard",          items: dashboardItems    },
+          { label: "Sales & Fulfillment", items: salesItems       },
+          { label: "Supply Chain",        items: supplyChainItems },
+          { label: "Tools",               items: toolItems        },
         ].map((group) => (
           <SidebarGroup key={group.label}>
             <SidebarGroupLabel>{group.label}</SidebarGroupLabel>

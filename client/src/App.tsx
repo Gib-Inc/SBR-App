@@ -45,6 +45,7 @@ import Marketing from "@/pages/marketing";
 import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
 import InHouseShipping from "@/pages/in-house-shipping";
+import Scan from "@/pages/scan";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -97,6 +98,7 @@ function AuthenticatedApp() {
       <Route path="/login">
         <Redirect to="/" />
       </Route>
+      <Route path="/scan" component={Scan} />
       <Route>
         {() => (
           <SidebarProvider

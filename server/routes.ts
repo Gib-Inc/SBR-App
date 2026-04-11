@@ -3058,6 +3058,95 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // ============================================================================
+  // INVENTORY RECEIVE
+  // ============================================================================
+  // This endpoint handles receiving inventory stock at a specific location.
+
+  app.post("/api/inventory/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, quantity, location, notes } = req.body;
+
+      // Validate required fields
+      if (!itemId || !location) {
+        return res.status(400).json({ error: "itemId and location are required" });
+      }
+
+      if (typeof quantity !== 'number' || quantity <= 0 || !Number.isInteger(quantity)) {
+        return res.status(400).json({ error: "quantity must be a positive integer" });
+      }
+
+      if (location !== 'PIVOT' && location !== 'HILDALE') {
+        return res.status(400).json({ error: "location must be 'PIVOT' or 'HILDALE'" });
+      }
+
+      // Fetch the item
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+
+      // Determine item type
+      const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
+
+      // Store previous stock values
+      const previousStock = {
+        pivotQty: item.pivotQty ?? 0,
+        hildaleQty: item.hildaleQty ?? 0,
+        currentStock: item.currentStock ?? 0,
+      };
+
+      // Create inventory transaction
+      const transaction = await storage.createInventoryTransaction({
+        itemId: itemId,
+        itemType: itemType,
+        type: 'RECEIVE',
+        location: location,
+        quantity: quantity,
+        createdBy: req.session.userId || 'manual',
+        notes: notes || `Manual receive via scan: ${quantity} units`,
+      });
+
+      // Update item stock
+      const updates: any = {};
+
+      if (item.type === 'finished_product') {
+        if (location === 'PIVOT') {
+          updates.pivotQty = (item.pivotQty ?? 0) + quantity;
+        } else if (location === 'HILDALE') {
+          updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
+        }
+      } else {
+        // For components, update currentStock regardless of location
+        updates.currentStock = (item.currentStock ?? 0) + quantity;
+      }
+
+      await storage.updateItem(itemId, updates);
+
+      // Fetch updated item
+      const updatedItem = await storage.getItem(itemId);
+
+      // Calculate new stock values
+      const newStock = {
+        pivotQty: updatedItem?.pivotQty ?? 0,
+        hildaleQty: updatedItem?.hildaleQty ?? 0,
+        currentStock: updatedItem?.currentStock ?? 0,
+      };
+
+      return res.json({
+        success: true,
+        message: `Received ${quantity} units of ${item.name} at ${location}`,
+        item: updatedItem,
+        transaction: transaction,
+        previousStock: previousStock,
+        newStock: newStock,
+      });
+    } catch (error: any) {
+      console.error("Error receiving inventory:", error);
+      res.status(500).json({ error: error.message || "Failed to receive inventory" });
+    }
+  });
+
+  // ============================================================================
   // UNIFIED SCAN INGESTION (Products + Return Labels)
   // ============================================================================
   // This endpoint handles both product barcodes and Shippo return labels.

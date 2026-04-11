@@ -18325,9 +18325,14 @@ Generate only the email body text, no subject line.`;
       const allLines = await storage.getSalesOrderLines(id);
 
       // Determine which lines to ship
+      // For in-house shipping: lines may not be "allocated" — use remaining qty instead
       const linesToShip = lineIds && Array.isArray(lineIds)
         ? allLines.filter((line: SalesOrderLine) => lineIds.includes(line.id))
-        : allLines.filter((line: SalesOrderLine) => line.qtyAllocated > 0);
+        : allLines.filter((line: SalesOrderLine) => {
+            // Ship if allocated, OR if there are remaining unshipped items
+            const remaining = (line.qtyOrdered || 0) - (line.qtyShipped || 0);
+            return line.qtyAllocated > 0 || remaining > 0;
+          });
 
       if (linesToShip.length === 0) {
         return res.status(400).json({ error: "No lines available to ship" });
@@ -18340,7 +18345,9 @@ Generate only the email body text, no subject line.`;
 
       // Process each line being shipped
       for (const line of linesToShip) {
-        const shipQty = line.qtyAllocated;
+        // Use allocated qty if set, otherwise use remaining unshipped qty
+        const remaining = (line.qtyOrdered || 0) - (line.qtyShipped || 0);
+        const shipQty = line.qtyAllocated > 0 ? line.qtyAllocated : remaining;
         if (shipQty <= 0) continue;
 
         // Get current product data

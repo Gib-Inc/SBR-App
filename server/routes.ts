@@ -67,6 +67,7 @@ import { returnsService } from "./services/returns-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
 import { logService } from "./services/log-service";
+import { checkReorderThresholds } from "./services/reorder-alert";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
@@ -3058,6 +3059,64 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // ============================================================================
+  // SCAN LOOKUP (Mobile scan flow — confirm item before receiving)
+  // ============================================================================
+
+  app.get("/api/scan/lookup/:barcode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const barcodeValue = req.params.barcode;
+
+      // 1. Try barcodes table first (most UPCs are there)
+      const barcode = await storage.getBarcodeByValue(barcodeValue);
+      let item: any = null;
+
+      if (barcode?.referenceId) {
+        item = await storage.getItem(barcode.referenceId);
+      }
+
+      // 2. Fall back to items.upc field
+      if (!item) {
+        const items = await storage.getItems();
+        item = items.find(
+          (i: any) => i.upc === barcodeValue || i.barcodeValue === barcodeValue || i.barcode === barcodeValue
+        );
+      }
+
+      if (!item) {
+        return res.status(404).json({
+          error: "Unknown barcode",
+          barcode: barcodeValue,
+          message: "Barcode not recognized. Check the product list or enter manually.",
+        });
+      }
+
+      // Calculate effective stock for display
+      const effectiveStock =
+        item.type === "finished_product"
+          ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+          : item.currentStock ?? 0;
+
+      return res.json({
+        item: {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          type: item.type,
+          currentStock: effectiveStock,
+          pivotQty: item.pivotQty ?? 0,
+          hildaleQty: item.hildaleQty ?? 0,
+          minStock: item.minStock ?? 0,
+          category: item.category,
+          upc: item.upc,
+        },
+      });
+    } catch (error: any) {
+      console.error("Scan lookup error:", error);
+      res.status(500).json({ error: "Scan lookup failed" });
+    }
+  });
+
+  // ============================================================================
   // INVENTORY RECEIVE
   // ============================================================================
   // This endpoint handles receiving inventory stock at a specific location.
@@ -3132,6 +3191,17 @@ TOTAL: $${subtotal.toFixed(2)}
         currentStock: updatedItem?.currentStock ?? 0,
       };
 
+      // Check reorder thresholds after stock change
+      let reorderAlert = null;
+      try {
+        const alerts = await checkReorderThresholds(itemId);
+        if (alerts.length > 0) {
+          reorderAlert = alerts[0]; // The item we just received
+        }
+      } catch (alertErr) {
+        console.error("Reorder alert check failed (non-fatal):", alertErr);
+      }
+
       return res.json({
         success: true,
         message: `Received ${quantity} units of ${item.name} at ${location}`,
@@ -3139,6 +3209,7 @@ TOTAL: $${subtotal.toFixed(2)}
         transaction: transaction,
         previousStock: previousStock,
         newStock: newStock,
+        reorderAlert: reorderAlert, // null if stock is above reorder point
       });
     } catch (error: any) {
       console.error("Error receiving inventory:", error);

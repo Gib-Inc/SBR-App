@@ -2855,3 +2855,27 @@ export const copyRoots = pgTable("copy_roots", {
 export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: true });
 export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
+
+// ============================================================================
+// REORDER ALERTS (Triggered when stock drops below reorder point)
+// ============================================================================
+
+export const reorderAlerts = pgTable("reorder_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sku: text("sku").notNull(),
+  itemId: varchar("item_id").references(() => items.id),
+  currentStock: integer("current_stock").notNull(),
+  reorderPoint: integer("reorder_point").notNull(),
+  suggestedOrderQty: integer("suggested_order_qty"),
+  supplierName: text("supplier_name"),
+  status: text("status").notNull().default("open"), // 'open', 'acknowledged', 'ordered'
+  triggeredAt: timestamp("triggered_at").notNull().default(sql`now()`),
+  acknowledgedAt: timestamp("acknowledged_at"),
+}, (table) => ({
+  skuIdx: index("reorder_alerts_sku_idx").on(table.sku),
+  statusIdx: index("reorder_alerts_status_idx").on(table.status),
+}));
+
+export const insertReorderAlertSchema = createInsertSchema(reorderAlerts).omit({ id: true, triggeredAt: true });
+export type InsertReorderAlert = z.infer<typeof insertReorderAlertSchema>;
+export type ReorderAlert = typeof reorderAlerts.$inferSelect;

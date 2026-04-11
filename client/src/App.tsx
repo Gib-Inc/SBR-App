@@ -46,6 +46,7 @@ import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
 import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
+import SupplierIntel from "@/pages/supplier-intel";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -130,6 +131,7 @@ function AuthenticatedApp() {
                     <Route path="/direct-orders" component={DirectOrders} />
                     <Route path="/barcodes" component={Barcodes} />
                     <Route path="/suppliers" component={Suppliers} />
+                    <Route path="/supplier-intel" component={SupplierIntel} />
                     <Route path="/purchase-orders" component={PurchaseOrders} />
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/returns" component={Returns} />

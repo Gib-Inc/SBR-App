@@ -37,6 +37,7 @@ const supplyChainItems = [
   { title: "Production",       url: "/production",       icon: Factory       },
   { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
   { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
+  { title: "Supplier Intel",   url: "/supplier-intel",   icon: ClipboardCheck },
 ];
 
 const toolItems = [

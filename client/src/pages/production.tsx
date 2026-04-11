@@ -10,7 +10,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Factory, ChevronDown, ChevronRight, AlertTriangle,
   CheckCircle2, Clock, PackageCheck, Wrench, TrendingUp,
-  DollarSign, Layers, CalendarDays, User,
+  DollarSign, Layers, CalendarDays, User, ClipboardCheck,
+  Plus, Minus, Send, RotateCcw,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -463,6 +464,342 @@ function HistoryTab() {
   );
 }
 
+// ─── Daily Log Tab ───────────────────────────────────────────────────────────
+// Quick-tally style: Clarence types how many of each product were made today,
+// hits Submit, and it auto-updates inventory. Like a digital whiteboard.
+
+function DailyLogTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [quantities, setQuantities] = useState<Record<string, number>>({});
+  const [logNotes, setLogNotes] = useState("");
+  const [justSubmitted, setJustSubmitted] = useState(false);
+
+  // Fetch products with BOM info (same as Plan tab uses)
+  const { data: planData, isLoading: planLoading } = useQuery<{ plan: PlanProduct[] }>({
+    queryKey: ["/api/production/plan", 0],
+    queryFn: async () => {
+      const res = await fetch("/api/production/plan?target=0", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load products");
+      return res.json();
+    },
+  });
+
+  // Today's production runs — filter client-side
+  const { data: allRuns = [] } = useQuery<ProductionRun[]>({
+    queryKey: ["/api/production/runs"],
+    queryFn: async () => {
+      const res = await fetch("/api/production/runs?limit=100", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load runs");
+      return res.json();
+    },
+  });
+
+  // Filter to only manufactured products (have a BOM)
+  const products = useMemo(() => {
+    return (planData?.plan ?? []).filter(p => p.hasBOM);
+  }, [planData]);
+
+  // Filter runs to today only (Mountain Time — matches Hildale operations)
+  const todaysRuns = useMemo(() => {
+    const today = new Date().toLocaleDateString("en-US", { timeZone: "America/Denver" });
+    return allRuns.filter(run => {
+      const runDate = new Date(run.createdAt).toLocaleDateString("en-US", { timeZone: "America/Denver" });
+      return runDate === today && run.status !== "FAILED";
+    });
+  }, [allRuns]);
+
+  // Tally of what's been built today per product
+  const todaysTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const run of todaysRuns) {
+      for (const line of run.lines) {
+        if (line.success) {
+          totals[line.productSku] = (totals[line.productSku] || 0) + line.quantityBuilt;
+        }
+      }
+    }
+    return totals;
+  }, [todaysRuns]);
+
+  const totalUnitsToday = Object.values(todaysTotals).reduce((s, n) => s + n, 0);
+
+  // Submit production log
+  const submitMutation = useMutation({
+    mutationFn: async (builds: Array<{ finishedProductId: string; quantity: number }>) => {
+      const today = new Date().toLocaleDateString("en-US", {
+        timeZone: "America/Denver",
+        month: "short",
+        day: "numeric",
+      });
+      const res = await apiRequest("POST", "/api/production/batch-build", {
+        builds,
+        notes: logNotes || `Daily log — ${today}`,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Log failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const s = data.summary;
+      toast({
+        title: `✓ Logged ${s.totalUnitsBuilt} units`,
+        description: `${s.successCount} product${s.successCount !== 1 ? "s" : ""} recorded. Inventory updated.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/production/runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/production/plan"] });
+      setQuantities({});
+      setLogNotes("");
+      setJustSubmitted(true);
+      setTimeout(() => setJustSubmitted(false), 3000);
+    },
+    onError: (e: Error) => toast({ variant: "destructive", title: "Log failed", description: e.message }),
+  });
+
+  const handleSubmit = () => {
+    const builds = Object.entries(quantities)
+      .filter(([, qty]) => qty > 0)
+      .map(([finishedProductId, quantity]) => ({ finishedProductId, quantity }));
+    if (builds.length === 0) {
+      toast({ variant: "destructive", title: "Nothing to log", description: "Enter at least one quantity." });
+      return;
+    }
+    submitMutation.mutate(builds);
+  };
+
+  const handleReset = () => {
+    setQuantities({});
+    setLogNotes("");
+  };
+
+  const adjustQty = (productId: string, delta: number) => {
+    setQuantities(prev => {
+      const current = prev[productId] ?? 0;
+      const next = Math.max(0, current + delta);
+      return { ...prev, [productId]: next };
+    });
+  };
+
+  const hasAnyQty = Object.values(quantities).some(q => q > 0);
+
+  if (planLoading) return (
+    <div className="flex h-64 items-center justify-center text-muted-foreground gap-3">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      Loading products…
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Success flash — visual confirmation like Zo's "red marker" concept */}
+      {justSubmitted && (
+        <div className="rounded-xl border-2 border-green-500 bg-green-50 dark:bg-green-900/20 p-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400 flex-shrink-0" />
+          <div>
+            <p className="font-semibold text-green-800 dark:text-green-200">Production logged!</p>
+            <p className="text-sm text-green-700 dark:text-green-300">Inventory has been updated automatically.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Today's summary banner */}
+      <div className="rounded-xl border bg-muted/30 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <CalendarDays className="h-5 w-5 text-muted-foreground" />
+            <div>
+              <p className="font-semibold">
+                {new Date().toLocaleDateString("en-US", {
+                  timeZone: "America/Denver",
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {todaysRuns.length === 0
+                  ? "No production logged yet today"
+                  : `${todaysRuns.length} log${todaysRuns.length !== 1 ? "s" : ""} today — ${totalUnitsToday} units total`}
+              </p>
+            </div>
+          </div>
+          {totalUnitsToday > 0 && (
+            <div className="text-right">
+              <div className="text-3xl font-bold tabular-nums text-green-600 dark:text-green-400">{totalUnitsToday}</div>
+              <div className="text-xs text-muted-foreground">units today</div>
+            </div>
+          )}
+        </div>
+
+        {/* Per-product today's tally */}
+        {Object.keys(todaysTotals).length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
+            {Object.entries(todaysTotals).map(([sku, qty]) => (
+              <span key={sku} className="text-xs bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded-full px-3 py-1 font-mono">
+                {qty}× {sku}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Quick-tally grid — the digital whiteboard */}
+      <div className="grid gap-3">
+        {products.map(product => {
+          const qty = quantities[product.productId] ?? 0;
+          const todayTotal = todaysTotals[product.productSku] || 0;
+
+          return (
+            <div
+              key={product.productId}
+              className={`rounded-xl border bg-card p-4 flex items-center gap-4 transition-colors ${
+                qty > 0 ? "ring-2 ring-primary/30 border-primary/50" : ""
+              }`}
+            >
+              {/* Product info */}
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-lg truncate">{product.productName}</div>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span className="font-mono">{product.productSku}</span>
+                  <span className="flex items-center gap-1">
+                    <Layers className="h-3 w-3" />
+                    {product.hildaleQty} in stock
+                  </span>
+                  {todayTotal > 0 && (
+                    <span className="text-green-600 dark:text-green-400 font-medium">
+                      +{todayTotal} today
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Quantity controls — big tap targets for quick entry */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 rounded-full"
+                  onClick={() => adjustQty(product.productId, -10)}
+                  disabled={qty === 0}
+                >
+                  <span className="text-xs font-bold">-10</span>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 rounded-full"
+                  onClick={() => adjustQty(product.productId, -1)}
+                  disabled={qty === 0}
+                >
+                  <Minus className="h-4 w-4" />
+                </Button>
+                <Input
+                  type="number"
+                  min="0"
+                  value={qty || ""}
+                  placeholder="0"
+                  onChange={e => {
+                    const n = parseInt(e.target.value);
+                    setQuantities(prev => ({ ...prev, [product.productId]: isNaN(n) ? 0 : Math.max(0, n) }));
+                  }}
+                  className="w-20 text-center text-xl font-bold font-mono h-12"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 rounded-full"
+                  onClick={() => adjustQty(product.productId, 1)}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 rounded-full"
+                  onClick={() => adjustQty(product.productId, 10)}
+                >
+                  <span className="text-xs font-bold">+10</span>
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+
+        {products.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            No manufactured products found. Add Bills of Materials in the Products page first.
+          </div>
+        )}
+      </div>
+
+      {/* Notes + Submit bar — sticky at bottom when there's content */}
+      {products.length > 0 && (
+        <div className="rounded-xl border bg-muted/30 p-4 flex flex-wrap items-center gap-3 sticky bottom-4">
+          <Input
+            placeholder="Notes (optional) — e.g. 'Clarence batch run'"
+            value={logNotes}
+            onChange={e => setLogNotes(e.target.value)}
+            className="flex-1 min-w-48"
+          />
+          <Button
+            variant="outline"
+            onClick={handleReset}
+            disabled={!hasAnyQty && !logNotes}
+            className="gap-2"
+          >
+            <RotateCcw className="h-4 w-4" />
+            Clear
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!hasAnyQty || submitMutation.isPending}
+            className="gap-2 min-w-[140px]"
+            size="lg"
+          >
+            <Send className="h-4 w-4" />
+            {submitMutation.isPending ? "Logging…" : "Log Production"}
+          </Button>
+        </div>
+      )}
+
+      {/* Today's log entries */}
+      {todaysRuns.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Today's Log Entries</h3>
+          {todaysRuns.map(run => (
+            <div key={run.id} className="rounded-xl border bg-card p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-3">
+                  <StatusBadge status={run.status} />
+                  <span className="text-sm text-muted-foreground font-mono">{run.runNumber}</span>
+                  {run.notes && <span className="text-sm text-muted-foreground italic">{run.notes}</span>}
+                </div>
+                <span className="text-sm text-muted-foreground">
+                  {new Date(run.createdAt).toLocaleTimeString("en-US", {
+                    timeZone: "America/Denver",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {run.lines.filter(l => l.success).map(line => (
+                  <span key={line.id} className="text-sm bg-muted rounded-lg px-3 py-1 font-mono">
+                    {line.quantityBuilt}× {line.productName}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Production() {
@@ -508,9 +845,13 @@ export default function Production() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <Tabs defaultValue="plan">
+      {/* Tabs — Daily Log is first since it's the most-used by Clarence */}
+      <Tabs defaultValue="daily-log">
         <TabsList>
+          <TabsTrigger value="daily-log" className="gap-2">
+            <ClipboardCheck className="h-4 w-4" />
+            Daily Log
+          </TabsTrigger>
           <TabsTrigger value="plan" className="gap-2">
             <TrendingUp className="h-4 w-4" />
             Plan
@@ -523,6 +864,10 @@ export default function Production() {
             )}
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="daily-log" className="mt-6">
+          <DailyLogTab />
+        </TabsContent>
 
         <TabsContent value="plan" className="mt-6">
           <PlanTab />

@@ -7066,19 +7066,22 @@ TOTAL: $${subtotal.toFixed(2)}
         for (const order of normalizedOrders) {
           try {
             // Check if order exists by external ID
-            const existingOrder = await storage.getSalesOrderByExternalIdOnly(order.externalId);
-            
+            // NOTE: normalizeOrder() returns externalOrderId (NOT externalId)
+            const existingOrder = await storage.getSalesOrderByExternalIdOnly(order.externalOrderId);
+
             if (existingOrder) {
               // Update existing order status (delivery status)
+              // Also backfill externalOrderId if it was previously null
               await storage.updateSalesOrder(existingOrder.id, {
                 status: order.status,
                 deliveredAt: order.deliveredAt,
+                externalOrderId: order.externalOrderId,
               });
               ordersUpdated++;
             } else {
               // Create new order
               const newOrder = await storage.createSalesOrder({
-                externalId: order.externalId,
+                externalOrderId: order.externalOrderId,
                 externalOrderNumber: order.externalOrderNumber,
                 channel: order.channel,
                 status: order.status,
@@ -7101,7 +7104,7 @@ TOTAL: $${subtotal.toFixed(2)}
               // Create line items (skip items without SKU)
               for (const line of order.lineItems) {
                 if (!line.sku) {
-                  console.log(`[Full Order Sync] Skipping line item without SKU in order ${order.externalId}`);
+                  console.log(`[Full Order Sync] Skipping line item without SKU in order ${order.externalOrderId}`);
                   continue;
                 }
                 const item = await storage.getItemBySku(line.sku);
@@ -17646,6 +17649,165 @@ Generate only the email body text, no subject line.`;
 
       res.json(diag);
     } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── BACKFILL endpoint — populates missing externalOrderId from Shopify ──
+  // POST /api/sales-orders/in-house/backfill
+  // One-time fix: Fetches recent Shopify orders and matches them to our DB
+  // orders by customer name + order date to populate the missing Shopify ID.
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/backfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // 1. Get Shopify client
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken);
+        }
+      }
+      if (!shopifyClient) {
+        return res.status(400).json({ error: "Shopify not configured" });
+      }
+
+      // 2. Get all orders with null externalOrderId
+      const allOrders = await storage.getAllSalesOrders();
+      const needsBackfill = allOrders.filter(o => !o.externalOrderId);
+      console.log(`[Backfill] ${needsBackfill.length} orders need externalOrderId`);
+
+      if (needsBackfill.length === 0) {
+        return res.json({ message: "All orders already have externalOrderId", matched: 0, total: 0 });
+      }
+
+      // 3. Fetch ALL recent orders from Shopify (up to 1000)
+      //    We use the "any" status to get fulfilled + unfulfilled
+      const shopifyOrders: any[] = [];
+      let nextPageUrl: string | null = null;
+      const baseUrl = (shopifyClient as any).getBaseUrl();
+      const headers = (shopifyClient as any).getHeaders();
+
+      // Fetch up to 4 pages of 250 = 1000 orders
+      let url = `${baseUrl}/orders.json?status=any&limit=250&created_at_min=${new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()}`;
+      for (let page = 0; page < 4; page++) {
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+          console.error(`[Backfill] Shopify fetch failed: ${response.status}`);
+          break;
+        }
+        const data = await response.json();
+        shopifyOrders.push(...(data.orders || []));
+
+        // Check for next page
+        const linkHeader = response.headers.get('Link');
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+          if (match) {
+            url = match[1];
+          } else break;
+        } else break;
+
+        if ((data.orders || []).length < 250) break;
+      }
+
+      console.log(`[Backfill] Fetched ${shopifyOrders.length} orders from Shopify`);
+
+      // 4. Build a lookup by customer email and by customer name + approx date
+      const shopifyByEmail = new Map<string, any[]>();
+      const shopifyByName = new Map<string, any[]>();
+
+      for (const so of shopifyOrders) {
+        const email = (so.email || '').toLowerCase().trim();
+        if (email) {
+          if (!shopifyByEmail.has(email)) shopifyByEmail.set(email, []);
+          shopifyByEmail.get(email)!.push(so);
+        }
+
+        const name = ((so.customer?.first_name || '') + ' ' + (so.customer?.last_name || '')).toLowerCase().trim();
+        if (name && name !== ' ') {
+          if (!shopifyByName.has(name)) shopifyByName.set(name, []);
+          shopifyByName.get(name)!.push(so);
+        }
+      }
+
+      // 5. Match our orders to Shopify orders
+      let matched = 0;
+      const matchDetails: any[] = [];
+
+      for (const order of needsBackfill) {
+        // Try matching by email first (most reliable)
+        let candidates: any[] = [];
+        const email = (order.customerEmail || '').toLowerCase().trim();
+        if (email && shopifyByEmail.has(email)) {
+          candidates = shopifyByEmail.get(email)!;
+        }
+
+        // Fallback: match by customer name
+        if (candidates.length === 0) {
+          const name = (order.customerName || '').toLowerCase().trim();
+          if (name && shopifyByName.has(name)) {
+            candidates = shopifyByName.get(name)!;
+          }
+        }
+
+        if (candidates.length === 0) continue;
+
+        // Find the closest order by date
+        const orderDate = new Date(order.orderDate).getTime();
+        let bestMatch: any = null;
+        let bestDiff = Infinity;
+
+        for (const c of candidates) {
+          const shopDate = new Date(c.created_at).getTime();
+          const diff = Math.abs(orderDate - shopDate);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestMatch = c;
+          }
+        }
+
+        // Only match if within 24 hours
+        if (bestMatch && bestDiff < 24 * 60 * 60 * 1000) {
+          const shopifyId = String(bestMatch.id);
+          try {
+            await storage.updateSalesOrder(order.id, { externalOrderId: shopifyId });
+            matched++;
+            matchDetails.push({
+              orderId: order.id,
+              customer: order.customerName,
+              shopifyId,
+              shopifyName: bestMatch.name,
+              timeDiff: Math.round(bestDiff / 60000) + 'min',
+            });
+          } catch (err: any) {
+            console.error(`[Backfill] Failed to update order ${order.id}:`, err.message);
+          }
+        }
+      }
+
+      console.log(`[Backfill] Matched ${matched}/${needsBackfill.length} orders to Shopify IDs`);
+
+      res.json({
+        message: `Backfilled ${matched} of ${needsBackfill.length} orders with Shopify IDs`,
+        matched,
+        total: needsBackfill.length,
+        shopifyFetched: shopifyOrders.length,
+        details: matchDetails.slice(0, 20),
+      });
+    } catch (error: any) {
+      console.error("[Backfill] Error:", error);
       res.status(500).json({ error: error.message });
     }
   });

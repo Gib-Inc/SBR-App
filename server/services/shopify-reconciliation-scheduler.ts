@@ -193,6 +193,7 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
                 customerName: orderData.customerName,
                 customerEmail: orderData.customerEmail,
                 customerPhone: orderData.customerPhone,
+                externalOrderId: orderData.externalOrderId, // Backfill if previously null
                 externalCustomerId: orderData.externalCustomerId,
                 expectedDeliveryDate: orderData.expectedDeliveryDate,
                 sourceUrl: orderData.sourceUrl,

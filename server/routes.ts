@@ -1417,6 +1417,68 @@ RULES:
   });
 
   /**
+   * GET /api/system/stats
+   * Powers the Reports page System Overview KPI cards.
+   * Definitions:
+   *   totalItems            — every row in items
+   *   lowStockItems         — current_stock > 0 AND current_stock <= min_stock (and min_stock set)
+   *   criticalStockItems    — finished products at zero stock
+   *   activePurchaseOrders  — POs not in a terminal state (RECEIVED/CANCELLED/CLOSED)
+   *   activeSalesOrders     — SOs not in a terminal state (DELIVERED/SHIPPED/REFUNDED/CANCELLED),
+   *                           same filter the In-House Shipping view uses
+   *   pendingReturns        — SOs whose return_status is in flight (anything outside NONE/COMPLETED)
+   *   totalInventoryValue   — SUM(current_stock * default_purchase_cost) across all items
+   */
+  app.get("/api/system/stats", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [items, purchaseOrders, salesOrders] = await Promise.all([
+        storage.getAllItems(),
+        storage.getAllPurchaseOrders(),
+        storage.getAllSalesOrders(),
+      ]);
+
+      const SO_TERMINAL = new Set(['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED']);
+      const PO_TERMINAL = new Set(['RECEIVED', 'CANCELLED', 'CLOSED']);
+      const RETURN_TERMINAL = new Set(['NONE', 'COMPLETED']);
+
+      const totalItems = items.length;
+      const lowStockItems = items.filter(i =>
+        (i.currentStock ?? 0) > 0 &&
+        (i.minStock ?? 0) > 0 &&
+        (i.currentStock ?? 0) <= (i.minStock ?? 0)
+      ).length;
+      const criticalStockItems = items.filter(i =>
+        i.type === 'finished_product' && (i.currentStock ?? 0) === 0
+      ).length;
+      const activePurchaseOrders = purchaseOrders.filter(po =>
+        !PO_TERMINAL.has((po.status || '').toUpperCase())
+      ).length;
+      const activeSalesOrders = salesOrders.filter(so =>
+        !SO_TERMINAL.has((so.status || '').toUpperCase())
+      ).length;
+      const pendingReturns = salesOrders.filter(so =>
+        !RETURN_TERMINAL.has((so.returnStatus || 'NONE').toUpperCase())
+      ).length;
+      const totalInventoryValue = items.reduce((sum, i) =>
+        sum + (i.currentStock ?? 0) * (i.defaultPurchaseCost ?? 0)
+      , 0);
+
+      res.json({
+        totalItems,
+        lowStockItems,
+        criticalStockItems,
+        activePurchaseOrders,
+        activeSalesOrders,
+        pendingReturns,
+        totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
+      });
+    } catch (error: any) {
+      console.error("[System Stats] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch system stats" });
+    }
+  });
+
+  /**
    * POST /api/dashboard/stock/fix-in-ghl
    * Creates DRAFT Purchase Orders for high/critical priority items, then optionally
    * creates GHL opportunities for communication/approval workflow.

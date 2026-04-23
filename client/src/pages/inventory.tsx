@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2, TrendingUp } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -20,10 +20,86 @@ type SkuVelocity = {
   unitsSold: number;
 };
 
+// Minimal shape from /api/items — only the fields we need for the price column.
+type ItemsRow = {
+  sku: string;
+  sellingPrice: number | null;
+};
+
+type SkuStatus = "Out" | "Low" | "OK";
+
+type SkuRow = {
+  sku: string;
+  name: string;
+  pyvott: number;
+  hildale: number;
+  promised: number;
+  total: number;
+  unitsSold: number;
+  sellingPrice: number | null;
+  status: SkuStatus;
+};
+
+type SortColumn =
+  | "sku"
+  | "name"
+  | "unitsSold"
+  | "pyvott"
+  | "hildale"
+  | "promised"
+  | "total"
+  | "status"
+  | "price";
+
+type SortDirection = "asc" | "desc";
+
+type SortState = { column: SortColumn; direction: SortDirection };
+
+// Numeric columns default to descending on first click; text columns ascending.
+const NUMERIC_COLUMNS: readonly SortColumn[] = ["unitsSold", "pyvott", "hildale", "promised", "total", "price"] as const;
+
+// Urgency ordering for status: most urgent (Out) first when asc.
+const STATUS_ORDER: Record<SkuStatus, number> = { Out: 0, Low: 1, OK: 2 };
+
 // A SKU is "low stock" if combined qty across locations falls below this number.
-// Teaching note: this is a simple heuristic — once we have real sales velocity
-// per SKU we can replace this with "days of cover" instead of a static threshold.
 const LOW_STOCK_THRESHOLD = 20;
+
+const priceFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+function SortableHeader({
+  column,
+  label,
+  align = "left",
+  currentSort,
+  onSort,
+}: {
+  column: SortColumn;
+  label: string;
+  align?: "left" | "right";
+  currentSort: SortState;
+  onSort: (column: SortColumn) => void;
+}) {
+  const isActive = currentSort.column === column;
+  const Icon = !isActive ? ArrowUpDown : currentSort.direction === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <TableHead className={align === "right" ? "text-right" : undefined}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="inline-flex items-center gap-1 font-medium hover:text-foreground transition-colors select-none cursor-pointer"
+        data-testid={`sort-${column}`}
+      >
+        {label}
+        <Icon
+          className={`h-3.5 w-3.5 ${isActive ? "text-foreground" : "text-muted-foreground/50"}`}
+        />
+      </button>
+    </TableHead>
+  );
+}
 
 export default function Inventory() {
   const { data, isLoading, error } = useQuery<SnapshotRow[]>({
@@ -35,8 +111,27 @@ export default function Inventory() {
     queryKey: ["/api/inventory/sales-velocity"],
   });
 
+  // Fetch items for selling_price. Endpoint returns more fields than we need —
+  // we pick only sku + sellingPrice when building the lookup map.
+  const { data: itemsData } = useQuery<ItemsRow[]>({
+    queryKey: ["/api/items"],
+  });
+
   const rows = data ?? [];
   const velocity = velocityData ?? [];
+  const items = itemsData ?? [];
+
+  const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
+
+  const onSort = (column: SortColumn) => {
+    setSort((prev) => {
+      if (prev.column === column) {
+        return { column, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      const defaultDir: SortDirection = NUMERIC_COLUMNS.includes(column) ? "desc" : "asc";
+      return { column, direction: defaultDir };
+    });
+  };
 
   // Build a lookup map: SKU → unitsSold (for sorting)
   const velocityMap = useMemo(() => {
@@ -47,33 +142,101 @@ export default function Inventory() {
     return map;
   }, [velocity]);
 
-  // Group by SKU so we can show Pyvott + Hildale side by side
-  // Sorted by best sellers (most units sold in last 90 days) first
+  // Build a lookup map: SKU → sellingPrice
+  const priceMap = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const item of items) {
+      map.set(item.sku, item.sellingPrice ?? null);
+    }
+    return map;
+  }, [items]);
+
+  // Group by SKU so we can show Pyvott + Hildale side by side. Status and sellingPrice
+  // are materialized here so sorting can reference them directly.
   const bySku = useMemo(() => {
-    const map = new Map<string, { sku: string; name: string; pyvott: number; hildale: number; promised: number; total: number; unitsSold: number }>();
+    const map = new Map<string, SkuRow>();
     for (const r of rows) {
-      const existing = map.get(r.sku) ?? { sku: r.sku, name: r.name ?? "", pyvott: 0, hildale: 0, promised: 0, total: 0, unitsSold: velocityMap.get(r.sku) ?? 0 };
+      const existing = map.get(r.sku) ?? {
+        sku: r.sku,
+        name: r.name ?? "",
+        pyvott: 0,
+        hildale: 0,
+        promised: 0,
+        total: 0,
+        unitsSold: velocityMap.get(r.sku) ?? 0,
+        sellingPrice: priceMap.get(r.sku) ?? null,
+        status: "Out" as SkuStatus,
+      };
       if (r.location === "Pyvott") {
         existing.pyvott = r.qty;
         existing.promised = r.promised ?? 0;
       }
       if (r.location === "Hildale") existing.hildale = r.qty;
       existing.total = existing.pyvott + existing.hildale;
+      existing.status =
+        existing.total === 0 ? "Out" : existing.total < LOW_STOCK_THRESHOLD ? "Low" : "OK";
       if (!existing.name && r.name) existing.name = r.name;
       map.set(r.sku, existing);
     }
-    // Sort by units sold (best sellers first), then by total stock as tiebreaker
-    return Array.from(map.values()).sort((a, b) => b.unitsSold - a.unitsSold || b.total - a.total);
-  }, [rows, velocityMap]);
+    return Array.from(map.values());
+  }, [rows, velocityMap, priceMap]);
+
+  // Apply active sort. Nulls on price always go last regardless of direction.
+  // Tiebreaker: when sorting by the default (unitsSold desc), use total desc
+  // as a secondary sort so the initial render matches the prior behavior.
+  const sortedBySku = useMemo(() => {
+    const out = [...bySku];
+    const { column, direction } = sort;
+    const mult = direction === "asc" ? 1 : -1;
+
+    out.sort((a, b) => {
+      let primary = 0;
+
+      if (column === "price") {
+        const aNull = a.sellingPrice == null;
+        const bNull = b.sellingPrice == null;
+        if (aNull && bNull) primary = 0;
+        else if (aNull) return 1; // a last, always
+        else if (bNull) return -1; // b last, always
+        else primary = (a.sellingPrice! - b.sellingPrice!) * mult;
+      } else if (column === "status") {
+        primary = (STATUS_ORDER[a.status] - STATUS_ORDER[b.status]) * mult;
+      } else if (column === "sku") {
+        primary = a.sku.localeCompare(b.sku) * mult;
+      } else if (column === "name") {
+        primary = a.name.localeCompare(b.name) * mult;
+      } else {
+        // numeric: unitsSold | pyvott | hildale | promised | total
+        primary = ((a[column] as number) - (b[column] as number)) * mult;
+      }
+
+      if (primary !== 0) return primary;
+
+      // Stable secondary ordering: default case keeps the original tiebreaker
+      // (total desc when sorting by units sold). Other columns fall back to
+      // units sold desc so ordering is deterministic.
+      if (column === "unitsSold") return b.total - a.total;
+      return b.unitsSold - a.unitsSold;
+    });
+
+    return out;
+  }, [bySku, sort]);
 
   // Top-line KPIs
   const kpis = useMemo(() => {
-    const pyvottTotal = rows.filter(r => r.location === "Pyvott").reduce((s, r) => s + r.qty, 0);
-    const hildaleTotal = rows.filter(r => r.location === "Hildale").reduce((s, r) => s + r.qty, 0);
+    const pyvottTotal = rows.filter((r) => r.location === "Pyvott").reduce((s, r) => s + r.qty, 0);
+    const hildaleTotal = rows.filter((r) => r.location === "Hildale").reduce((s, r) => s + r.qty, 0);
     const skuCount = bySku.length;
-    const lowStockCount = bySku.filter(s => s.total > 0 && s.total < LOW_STOCK_THRESHOLD).length;
-    const outOfStockCount = bySku.filter(s => s.total === 0).length;
-    return { pyvottTotal, hildaleTotal, total: pyvottTotal + hildaleTotal, skuCount, lowStockCount, outOfStockCount };
+    const lowStockCount = bySku.filter((s) => s.total > 0 && s.total < LOW_STOCK_THRESHOLD).length;
+    const outOfStockCount = bySku.filter((s) => s.total === 0).length;
+    return {
+      pyvottTotal,
+      hildaleTotal,
+      total: pyvottTotal + hildaleTotal,
+      skuCount,
+      lowStockCount,
+      outOfStockCount,
+    };
   }, [rows, bySku]);
 
   const snapshotDate = rows[0]?.snapshot_date ?? null;
@@ -175,29 +338,28 @@ export default function Inventory() {
             Stock by SKU
           </CardTitle>
           <CardDescription>
-            {kpis.skuCount} SKUs tracked. Sorted by best sellers (last 90 days).
+            {kpis.skuCount} SKUs tracked. Click any column header to sort.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>SKU</TableHead>
-                <TableHead>Product</TableHead>
-                <TableHead className="text-right">Sold (90d)</TableHead>
-                <TableHead className="text-right">Pyvott</TableHead>
-                <TableHead className="text-right">Hildale</TableHead>
-                <TableHead className="text-right">Promised</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Status</TableHead>
+                <SortableHeader column="sku" label="SKU" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="name" label="Product" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="unitsSold" label="Sold (90d)" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="pyvott" label="Pyvott" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="hildale" label="Hildale" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="promised" label="Promised" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="total" label="Total" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="status" label="Status" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="price" label="Price" align="right" currentSort={sort} onSort={onSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bySku.map((s) => {
-                const status =
-                  s.total === 0 ? "Out" : s.total < LOW_STOCK_THRESHOLD ? "Low" : "OK";
+              {sortedBySku.map((s) => {
                 const badgeVariant: "default" | "destructive" | "secondary" =
-                  status === "Out" ? "destructive" : status === "Low" ? "secondary" : "default";
+                  s.status === "Out" ? "destructive" : s.status === "Low" ? "secondary" : "default";
                 return (
                   <TableRow key={s.sku} data-testid={`row-sku-${s.sku}`}>
                     <TableCell className="font-mono text-xs">{s.sku}</TableCell>
@@ -212,7 +374,10 @@ export default function Inventory() {
                       {s.total.toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Badge variant={badgeVariant}>{status}</Badge>
+                      <Badge variant={badgeVariant}>{s.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {s.sellingPrice == null ? "–" : priceFormatter.format(s.sellingPrice)}
                     </TableCell>
                   </TableRow>
                 );

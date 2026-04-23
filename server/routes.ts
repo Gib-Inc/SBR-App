@@ -5820,24 +5820,42 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(401).json({ ok: false, error: "Invalid cron secret" });
       }
 
-      // Credentials from env
-      const clientId = process.env.EXTENSIV_CLIENT_ID;
-      const clientSecret = process.env.EXTENSIV_CLIENT_SECRET;
-      const orgKey = process.env.EXTENSIV_ORG_KEY || undefined;
-      const baseUrl = process.env.EXTENSIV_BASE_URL || 'https://secure-wms.com';
-
-      if (!clientId || !clientSecret) {
-        console.error("[Extensiv Cron] EXTENSIV_CLIENT_ID or EXTENSIV_CLIENT_SECRET not set");
-        return res.status(500).json({ ok: false, error: "Extensiv credentials not configured" });
-      }
-
       console.log("[Extensiv Cron] Starting align sync (zeroMissing=false)");
       const startTime = Date.now();
 
-      // System user for audit trail (first user in DB; app is single-tenant)
+      // System user for audit trail + for looking up integration_configs (per-user table).
+      // App is single-tenant; use the first user.
       const users = await storage.getAllUsers();
       const systemUser = users[0];
       const userId = systemUser?.id;
+      if (!userId) {
+        console.error("[Extensiv Cron] No users in DB — cannot resolve credentials or audit trail");
+        return res.status(500).json({ ok: false, error: "No system user available" });
+      }
+
+      // Credentials: prefer env vars, fall back to the EXTENSIV integration_configs row.
+      // Matches the existing /api/integrations/extensiv/sync route's pattern so both paths
+      // share a single source of truth. Env vars let us rotate without a DB write when needed.
+      let clientId = process.env.EXTENSIV_CLIENT_ID;
+      let clientSecret: string | undefined = process.env.EXTENSIV_CLIENT_SECRET;
+      let orgKey: string | undefined = process.env.EXTENSIV_ORG_KEY || undefined;
+      let baseUrl = process.env.EXTENSIV_BASE_URL || 'https://secure-wms.com';
+
+      if (!clientId || !clientSecret) {
+        const extensivConfig = await storage.getIntegrationConfig(userId, 'EXTENSIV');
+        if (extensivConfig) {
+          const cfg = (extensivConfig.config as Record<string, any>) || {};
+          clientId = clientId || cfg.clientId;
+          clientSecret = clientSecret || extensivConfig.apiKey || undefined;
+          orgKey = orgKey || cfg.orgKey;
+          baseUrl = process.env.EXTENSIV_BASE_URL || cfg.baseUrl || 'https://secure-wms.com';
+        }
+      }
+
+      if (!clientId || !clientSecret) {
+        console.error("[Extensiv Cron] No Extensiv credentials available from env or integration_configs");
+        return res.status(500).json({ ok: false, error: "Extensiv credentials not configured" });
+      }
 
       // Build client and auto-detect customer
       const client = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);

@@ -1579,6 +1579,7 @@ export type FulfillmentSource = typeof FulfillmentSource[keyof typeof Fulfillmen
 export const salesOrders = pgTable("sales_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
+  orderName: text("order_name"), // Customer-facing order name (e.g., "#15020"). From Shopify payload.name. Not indexed — lookup is by externalOrderId.
   externalCustomerId: text("external_customer_id"), // Customer ID from external system
   channel: text("channel").notNull(), // 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
   customerName: text("customer_name").notNull(),
@@ -1622,7 +1623,11 @@ export const salesOrders = pgTable("sales_orders", {
   // Live vs History tracking
   isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
   archivedAt: timestamp("archived_at"), // When record moved to History
-  
+
+  // Customer delay notifications (B-003): set when Sammie sends a delay notice from In-House Shipping
+  delayNotificationSentAt: timestamp("delay_notification_sent_at"),
+  delayNotificationCount: integer("delay_notification_count").notNull().default(0),
+
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({

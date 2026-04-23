@@ -172,6 +172,7 @@ export async function handleOrderCreated(
       try {
         return await storage.createSalesOrder({
           externalOrderId: String(orderId),
+          orderName: payload.name || null,
           channel: 'SHOPIFY',
           customerName,
           customerEmail: payload.customer?.email || payload.email || null,
@@ -421,6 +422,7 @@ export async function handleOrderUpdated(
         await storage.updateSalesOrder(existingOrder.id, {
           status: newStatus,
           ...(deliveredAt && { deliveredAt }),
+          ...(payload.name && { orderName: payload.name }),
           rawPayload: payload,
         });
 

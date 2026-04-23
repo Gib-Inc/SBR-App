@@ -2258,8 +2258,14 @@ export default function BOM() {
       aVal = (a.primarySupplier?.supplierName || "").toLowerCase();
       bVal = (b.primarySupplier?.supplierName || "").toLowerCase();
     } else if (stockSortField === "cost") {
-      aVal = a.primarySupplier?.unitCost ?? 0;
-      bVal = b.primarySupplier?.unitCost ?? 0;
+      // Nulls always last, regardless of direction
+      const aCost = a.primarySupplier?.unitCost;
+      const bCost = b.primarySupplier?.unitCost;
+      if (aCost == null && bCost == null) return 0;
+      if (aCost == null) return 1;
+      if (bCost == null) return -1;
+      aVal = aCost;
+      bVal = bCost;
     } else if (stockSortField === "stock") {
       aVal = a.currentStock ?? 0;
       bVal = b.currentStock ?? 0;

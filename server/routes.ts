@@ -5911,10 +5911,17 @@ TOTAL: $${subtotal.toFixed(2)}
           const extensivQty = extensivItem.quantity;
           const delta = extensivQty - currentPivotQty;
 
-          await storage.updateItem(item.id, {
+          // B-009a: mirror extensiv-sync.js current_stock CASE wiring (lines 183-196).
+          // For finished products, current_stock = Pyvott on-hand + Hildale on-hand.
+          // For other types (raw materials, components), leave current_stock alone.
+          const updatePayload: Record<string, any> = {
             extensivOnHandSnapshot: extensivQty,
             extensivLastSyncAt: new Date(),
-          });
+          };
+          if (item.type === 'finished_product') {
+            updatePayload.currentStock = (extensivQty ?? 0) + (item.hildaleQty ?? 0);
+          }
+          await storage.updateItem(item.id, updatePayload);
 
           if (delta !== 0 && userId) {
             const result = await inventoryMovement.apply({

@@ -18235,6 +18235,107 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // POST /api/sales-orders/in-house/notify-delay
+  // Body: { orderIds: string[] }
+  // Sends a Stacy-voice delay notification email to each order's customer_email,
+  // skipping orders without an email. Bumps delay_notification_sent_at + count on success.
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/notify-delay", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { orderIds } = req.body as { orderIds: string[] };
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ error: "orderIds array is required" });
+      }
+
+      if (!process.env.SENDGRID_API_KEY || !process.env.SENDGRID_FROM_EMAIL) {
+        return res.status(503).json({
+          error: "Email service not configured (SENDGRID_API_KEY and SENDGRID_FROM_EMAIL required).",
+        });
+      }
+
+      const sgMail = await import("@sendgrid/mail");
+      sgMail.default.setApiKey(process.env.SENDGRID_API_KEY);
+
+      const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+      const fromName = process.env.SENDGRID_FROM_NAME || "Stacy at Sticker Burr Roller";
+      const replyTo = "customersupport@stickerburrroller.com";
+
+      let sent = 0;
+      const skipped: { orderId: string; reason: string }[] = [];
+      const errors: { orderId: string; message: string }[] = [];
+
+      for (const orderId of orderIds) {
+        try {
+          const order = await storage.getSalesOrder(orderId);
+          if (!order) {
+            errors.push({ orderId, message: "Order not found" });
+            continue;
+          }
+          if (!order.customerEmail) {
+            skipped.push({ orderId, reason: "no_email" });
+            continue;
+          }
+
+          const lines = await storage.getSalesOrderLines(orderId);
+          const itemSummary = lines
+            .filter((l: any) => (l.qtyOrdered || 0) - (l.qtyShipped || 0) > 0)
+            .map((l: any) => `${l.productName || l.sku} ×${(l.qtyOrdered || 0) - (l.qtyShipped || 0)}`)
+            .join(", ") || "your order";
+
+          const orderNumber = order.externalOrderId || order.id.slice(0, 8);
+          const orderDateFmt = new Date(order.orderDate).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+          const customerFirstName = (order.customerName || "").split(" ")[0] || "there";
+
+          const subject = `Quick update on your Sticker Burr order #${orderNumber}`;
+          const text = `Hi ${customerFirstName},\n\nI'm Stacy from Sticker Burr Roller. I wanted to reach out personally about your order #${orderNumber} placed on ${orderDateFmt} for ${itemSummary}.\n\nYour order is in production at our Hildale shop right now and hasn't shipped yet. We know you're waiting, and we're moving as fast as we can to get it out the door. You should see tracking within the next 7 business days.\n\nIf you need anything in the meantime, just hit reply and I'll personally make sure it gets handled.\n\nThanks for your patience with us.\n\nGo win your ground war,\nStacy\n\nSticker Burr Roller\ncustomersupport@stickerburrroller.com`;
+          const html = `<div style="font-family:system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.55;color:#1a1a1a;max-width:560px;">
+<p>Hi ${customerFirstName},</p>
+<p>I'm Stacy from Sticker Burr Roller. I wanted to reach out personally about your order <strong>#${orderNumber}</strong> placed on ${orderDateFmt} for ${itemSummary}.</p>
+<p>Your order is in production at our Hildale shop right now and hasn't shipped yet. We know you're waiting, and we're moving as fast as we can to get it out the door. You should see tracking within the next 7 business days.</p>
+<p>If you need anything in the meantime, just hit reply and I'll personally make sure it gets handled.</p>
+<p>Thanks for your patience with us.</p>
+<p>Go win your ground war,<br/>Stacy</p>
+<p style="color:#666;font-size:13px;margin-top:24px;">Sticker Burr Roller<br/><a href="mailto:customersupport@stickerburrroller.com" style="color:#666;">customersupport@stickerburrroller.com</a></p>
+</div>`;
+
+          await sgMail.default.send({
+            to: order.customerEmail,
+            from: { email: fromEmail, name: fromName },
+            replyTo,
+            subject,
+            text,
+            html,
+            categories: ["delay-notification", "in-house-shipping"],
+            customArgs: { orderId, orderNumber: String(orderNumber) },
+          });
+
+          await storage.updateSalesOrder(orderId, {
+            delayNotificationSentAt: new Date(),
+            delayNotificationCount: (order.delayNotificationCount || 0) + 1,
+          });
+
+          sent++;
+          console.log(`[Delay Notify] Sent to ${order.customerEmail} for order ${orderNumber}`);
+        } catch (err: any) {
+          console.error(`[Delay Notify] Failed for ${orderId}:`, err.message);
+          errors.push({ orderId, message: err.message || "Send failed" });
+        }
+      }
+
+      res.json({
+        sent,
+        skipped,
+        errors,
+        total: orderIds.length,
+        message: `Sent ${sent}, skipped ${skipped.length}${errors.length > 0 ? `, ${errors.length} failed` : ""}.`,
+      });
+    } catch (error: any) {
+      console.error("[Delay Notify] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send delay notifications" });
+    }
+  });
+
   // Get single sales order with all details
   // GET /api/sales-orders/:id
   app.get("/api/sales-orders/:id", requireAuth, async (req: Request, res: Response) => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -30,6 +30,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Truck, Package, ExternalLink, CheckCircle2, Loader2,
   AlertTriangle, Clock, RefreshCw, Tag, Check, ArchiveX,
+  Mail, Phone,
 } from "lucide-react";
 
 interface OrderLine {
@@ -47,6 +48,7 @@ interface InHouseOrder {
   channel: string;
   customerName: string;
   customerEmail: string | null;
+  customerPhone: string | null;
   status: string;
   orderDate: string;
   totalAmount: number;
@@ -56,6 +58,16 @@ interface InHouseOrder {
   totalShipped: number;
   totalUnshipped: number;
   checks?: string[]; // Human-readable verification results per order
+  delayNotificationSentAt: string | null;
+  delayNotificationCount: number;
+}
+
+interface NotifyDelayResult {
+  sent: number;
+  skipped: { orderId: string; reason: string }[];
+  errors: { orderId: string; message: string }[];
+  total: number;
+  message: string;
 }
 
 interface InHouseData {
@@ -119,11 +131,26 @@ export default function InHouseShipping() {
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; errors: string[] } | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [showNotifyConfirm, setShowNotifyConfirm] = useState(false);
+  const [notifyResult, setNotifyResult] = useState<NotifyDelayResult | null>(null);
+  const userTouchedSelection = useRef(false);
 
   const { data, isLoading, error } = useQuery<InHouseData>({
     queryKey: ["/api/sales-orders/in-house"],
     refetchInterval: 60_000,
   });
+
+  // Auto-select aged-3d+ orders on first load (per B-003 spec). Only runs once per
+  // session; user picking/deselecting after that wins and we stop overriding.
+  useEffect(() => {
+    if (userTouchedSelection.current) return;
+    const orders = data?.orders;
+    if (!orders || orders.length === 0) return;
+    const aged = orders.filter(o => daysAgoNum(o.orderDate) >= 3).map(o => o.id);
+    if (aged.length > 0) {
+      setSelectedIds(new Set(aged));
+    }
+  }, [data]);
 
   // Shopify sync mutation
   const syncMutation = useMutation({
@@ -176,6 +203,7 @@ export default function InHouseShipping() {
   });
 
   const toggleSelect = (id: string) => {
+    userTouchedSelection.current = true;
     setSelectedIds(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -184,6 +212,7 @@ export default function InHouseShipping() {
   };
 
   const toggleSelectAll = () => {
+    userTouchedSelection.current = true;
     const orders = data?.orders ?? [];
     if (selectedIds.size === orders.length) {
       setSelectedIds(new Set());
@@ -191,6 +220,30 @@ export default function InHouseShipping() {
       setSelectedIds(new Set(orders.map(o => o.id)));
     }
   };
+
+  // Send delay notification email batch
+  const notifyDelayMutation = useMutation({
+    mutationFn: async (orderIds: string[]) => {
+      const res = await apiRequest("POST", "/api/sales-orders/in-house/notify-delay", { orderIds });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to send notifications");
+      }
+      return res.json() as Promise<NotifyDelayResult>;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sales-orders/in-house"] });
+      setNotifyResult(result);
+      setShowNotifyConfirm(false);
+      const variant = result.errors.length > 0 ? "destructive" : undefined;
+      toast({ title: result.message, variant });
+      // Clear selection after a successful send so the next batch starts clean
+      if (result.sent > 0) setSelectedIds(new Set());
+    },
+    onError: (err: any) => {
+      toast({ title: "Notification failed", description: err.message, variant: "destructive" });
+    },
+  });
 
   const shipMutation = useMutation({
     mutationFn: async (orderId: string) => {
@@ -281,6 +334,26 @@ export default function InHouseShipping() {
   // Split orders into stale (>10 days) and active
   const staleOrders = orders.filter(o => daysAgoNum(o.orderDate) > 10);
   const activeOrders = orders.filter(o => daysAgoNum(o.orderDate) <= 10);
+
+  // B-003: orders selected for delay-notify, broken into eligible and skip-reasons
+  const selectedOrders = orders.filter(o => selectedIds.has(o.id));
+  const notifyEligible = selectedOrders.filter(o => !!o.customerEmail);
+  const notifySkipNoEmail = selectedOrders.filter(o => !o.customerEmail);
+  const previewOrder = notifyEligible[0] ?? null;
+  const previewFirstName = (previewOrder?.customerName || "").split(" ")[0] || "there";
+  const previewOrderNumber = previewOrder?.externalOrderId || previewOrder?.id.slice(0, 8) || "";
+  const previewOrderDate = previewOrder
+    ? new Date(previewOrder.orderDate).toLocaleDateString("en-US", { month: "long", day: "numeric" })
+    : "";
+  const previewItemSummary = previewOrder
+    ? previewOrder.lines
+        .filter(l => l.qtyOrdered - l.qtyShipped > 0)
+        .map(l => `${l.productName || l.sku} ×${l.qtyOrdered - l.qtyShipped}`)
+        .join(", ") || "your order"
+    : "";
+
+  // Orders missing customer_email (need phone follow-up instead of email)
+  const ordersNeedingPhone = orders.filter(o => !o.customerEmail);
 
   if (isLoading) {
     return (
@@ -487,12 +560,56 @@ export default function InHouseShipping() {
                 <Package className="h-4 w-4" />
                 {dismissMutation.isPending ? "Clearing…" : `Fulfilled by Pyvott (${selectedIds.size})`}
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 border-amber-500 text-amber-700 hover:bg-amber-50"
+                onClick={() => setShowNotifyConfirm(true)}
+                disabled={notifyDelayMutation.isPending || notifyEligible.length === 0}
+                data-testid="btn-send-delay-notice"
+              >
+                <Mail className="h-4 w-4" />
+                Send Delay Notice ({notifyEligible.length})
+              </Button>
               <span className="text-sm text-muted-foreground">
                 {selectedIds.size} selected
               </span>
             </>
           )}
         </div>
+      )}
+
+      {/* B-003: orders missing customer_email — these need a phone call instead */}
+      {ordersNeedingPhone.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-500/5">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2 text-amber-700">
+              <Phone className="h-4 w-4" />
+              Needs phone follow-up ({ordersNeedingPhone.length})
+            </CardDescription>
+            <CardTitle className="text-sm font-normal text-muted-foreground">
+              No customer email on file. Reach out by phone instead.
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <div className="space-y-1">
+              {ordersNeedingPhone.map(o => (
+                <div key={o.id} className="text-sm flex items-center gap-3 flex-wrap">
+                  <span className="font-mono font-semibold">{o.externalOrderId || o.id.slice(0, 8)}</span>
+                  <span>{o.customerName}</span>
+                  {o.customerPhone ? (
+                    <a href={`tel:${o.customerPhone}`} className="text-amber-700 underline">
+                      {o.customerPhone}
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground italic">no phone</span>
+                  )}
+                  <span className="text-xs text-muted-foreground">{daysAgo(o.orderDate)}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Orders table */}
@@ -530,6 +647,13 @@ export default function InHouseShipping() {
                         >
                           {daysAgo(order.orderDate)}
                         </Badge>
+                        {order.delayNotificationSentAt && (
+                          <Badge variant="outline" className="text-xs gap-1 border-amber-500 text-amber-700">
+                            <Mail className="h-3 w-3" />
+                            Notified {formatDate(order.delayNotificationSentAt)}
+                            {order.delayNotificationCount > 1 && ` (${order.delayNotificationCount}×)`}
+                          </Badge>
+                        )}
                       </div>
                       <div className="text-sm font-medium mt-1">{order.customerName}</div>
                       <div className="text-sm text-muted-foreground mt-0.5">
@@ -711,8 +835,106 @@ export default function InHouseShipping() {
         </DialogContent>
       </Dialog>
 
+      {/* B-003: Send Delay Notice confirm dialog */}
+      <Dialog open={showNotifyConfirm} onOpenChange={() => !notifyDelayMutation.isPending && setShowNotifyConfirm(false)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5" />
+              Send Delay Notice
+            </DialogTitle>
+            <DialogDescription>
+              Sends a Stacy-voice email letting these customers know their order is in production and hasn't shipped yet.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Will send</div>
+                <div className="text-2xl font-bold text-amber-700">{notifyEligible.length}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Skipped (no email)</div>
+                <div className="text-2xl font-bold text-muted-foreground">{notifySkipNoEmail.length}</div>
+              </div>
+              <div className="rounded border p-3">
+                <div className="text-xs text-muted-foreground">Selected</div>
+                <div className="text-2xl font-bold">{selectedIds.size}</div>
+              </div>
+            </div>
+            {previewOrder && (
+              <div>
+                <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">
+                  Preview (first recipient: {previewOrder.customerName})
+                </div>
+                <div className="rounded border bg-muted/30 p-4 text-sm whitespace-pre-line">
+{`Subject: Quick update on your Sticker Burr order #${previewOrderNumber}
+
+Hi ${previewFirstName},
+
+I'm Stacy from Sticker Burr Roller. I wanted to reach out personally about your order #${previewOrderNumber} placed on ${previewOrderDate} for ${previewItemSummary}.
+
+Your order is in production at our Hildale shop right now and hasn't shipped yet. We know you're waiting, and we're moving as fast as we can to get it out the door. You should see tracking within the next 7 business days.
+
+If you need anything in the meantime, just hit reply and I'll personally make sure it gets handled.
+
+Thanks for your patience with us.
+
+Go win your ground war,
+Stacy`}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Replies go to customersupport@stickerburrroller.com
+                </div>
+              </div>
+            )}
+            {notifySkipNoEmail.length > 0 && (
+              <div className="text-xs text-muted-foreground">
+                {notifySkipNoEmail.length} selected order{notifySkipNoEmail.length !== 1 ? "s have" : " has"} no email on file. See the "Needs phone follow-up" section above to handle by phone.
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNotifyConfirm(false)} disabled={notifyDelayMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              className="gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={() => notifyDelayMutation.mutate(notifyEligible.map(o => o.id))}
+              disabled={notifyDelayMutation.isPending || notifyEligible.length === 0}
+              data-testid="btn-confirm-send-delay-notice"
+            >
+              <Mail className="h-4 w-4" />
+              {notifyDelayMutation.isPending ? "Sending…" : `Send to ${notifyEligible.length}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* B-003: Last-send result banner */}
+      {notifyResult && (
+        <Card className={notifyResult.errors.length > 0 ? "border-destructive/50 bg-destructive/5" : "border-green-500/50 bg-green-500/5"}>
+          <CardContent className="py-3 flex items-start gap-3">
+            <Mail className={`h-5 w-5 mt-0.5 shrink-0 ${notifyResult.errors.length > 0 ? "text-destructive" : "text-green-500"}`} />
+            <div className="text-sm flex-1">
+              <p className="font-medium">{notifyResult.message}</p>
+              {notifyResult.errors.length > 0 && (
+                <div className="text-xs text-destructive mt-1">
+                  {notifyResult.errors.slice(0, 5).map(e => (
+                    <div key={e.orderId}>Order {e.orderId.slice(0, 8)}: {e.message}</div>
+                  ))}
+                </div>
+              )}
+              <button className="text-xs text-muted-foreground underline mt-1" onClick={() => setNotifyResult(null)}>
+                Dismiss
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="text-xs text-muted-foreground space-y-1">
-        <p><strong>Print Label</strong> = open in Shopify to create a shipping label. <strong>Fulfilled In-House</strong> = we shipped it, subtract from inventory. <strong>Fulfilled by Pyvott</strong> = Pyvott handled it, just clear it.</p>
+        <p><strong>Print Label</strong> = open in Shopify to create a shipping label. <strong>Fulfilled In-House</strong> = we shipped it, subtract from inventory. <strong>Fulfilled by Pyvott</strong> = Pyvott handled it, just clear it. <strong>Send Delay Notice</strong> = email selected customers a Stacy-voice apology that their order is in production.</p>
       </div>
     </div>
   );

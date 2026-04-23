@@ -162,11 +162,16 @@ export default async function runApp(
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
+  const host = process.env.HOST || '0.0.0.0';
+  // reusePort is required on Railway/Linux for zero-downtime deploys, but macOS
+  // throws ENOTSUP when combined with 0.0.0.0 on Node 24+. Disable it for local
+  // dev where a 127.0.0.1 host is fine.
+  const reusePort = host === '0.0.0.0';
   server.listen({
     port,
-    host: "0.0.0.0",
-    reusePort: true,
+    host,
+    reusePort,
   }, () => {
-    log(`serving on port ${port}`);
+    log(`serving on ${host}:${port}`);
   });
 }

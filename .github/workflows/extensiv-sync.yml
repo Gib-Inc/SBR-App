@@ -1,0 +1,33 @@
+name: Extensiv inventory sync
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: extensiv-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci --omit=dev
+
+      - name: Run Extensiv sync
+        env:
+          EXTENSIV_CLIENT_ID: ${{ secrets.EXTENSIV_CLIENT_ID }}
+          EXTENSIV_CLIENT_SECRET: ${{ secrets.EXTENSIV_CLIENT_SECRET }}
+          EXTENSIV_USER_LOGIN: ${{ secrets.EXTENSIV_USER_LOGIN }}
+          EXTENSIV_CUSTOMER_ID: ${{ secrets.EXTENSIV_CUSTOMER_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run sync:extensiv

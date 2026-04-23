@@ -5793,6 +5793,165 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Extensiv hourly cron — headless align sync (no session, no per-user config)
+  // Authenticates via X-Cron-Secret header (timing-safe compare against CRON_SECRET env)
+  // Credentials come from env: EXTENSIV_CLIENT_ID / EXTENSIV_CLIENT_SECRET / optional EXTENSIV_ORG_KEY / optional EXTENSIV_BASE_URL
+  // Hardcoded to align mode, zeroMissing=false. Returns compact summary.
+  app.post("/api/integrations/extensiv/sync-cron", async (req: Request, res: Response) => {
+    try {
+      // Auth (timing-safe shared secret)
+      const cronSecret = process.env.CRON_SECRET;
+      const providedSecret = req.headers['x-cron-secret'] as string | undefined;
+
+      if (!cronSecret) {
+        console.error("[Extensiv Cron] CRON_SECRET not configured");
+        return res.status(401).json({ ok: false, error: "Cron authentication not configured" });
+      }
+      if (!providedSecret) {
+        return res.status(401).json({ ok: false, error: "Missing X-Cron-Secret" });
+      }
+
+      const expectedBuffer = Buffer.from(cronSecret, 'utf-8');
+      const providedBuffer = Buffer.from(providedSecret, 'utf-8');
+      if (expectedBuffer.length !== providedBuffer.length) {
+        return res.status(401).json({ ok: false, error: "Invalid cron secret" });
+      }
+      if (!crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+        return res.status(401).json({ ok: false, error: "Invalid cron secret" });
+      }
+
+      // Credentials from env
+      const clientId = process.env.EXTENSIV_CLIENT_ID;
+      const clientSecret = process.env.EXTENSIV_CLIENT_SECRET;
+      const orgKey = process.env.EXTENSIV_ORG_KEY || undefined;
+      const baseUrl = process.env.EXTENSIV_BASE_URL || 'https://secure-wms.com';
+
+      if (!clientId || !clientSecret) {
+        console.error("[Extensiv Cron] EXTENSIV_CLIENT_ID or EXTENSIV_CLIENT_SECRET not set");
+        return res.status(500).json({ ok: false, error: "Extensiv credentials not configured" });
+      }
+
+      console.log("[Extensiv Cron] Starting align sync (zeroMissing=false)");
+      const startTime = Date.now();
+
+      // System user for audit trail (first user in DB; app is single-tenant)
+      const users = await storage.getAllUsers();
+      const systemUser = users[0];
+      const userId = systemUser?.id;
+
+      // Build client and auto-detect customer
+      const client = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+      const warehouses = await client.getWarehouses();
+      if (!warehouses || warehouses.length === 0) {
+        return res.status(502).json({ ok: false, error: "No Extensiv warehouses found — check credentials" });
+      }
+      const pivotWarehouseId = warehouses[0].id;
+      const extensivItems = await client.getAllInventory(pivotWarehouseId);
+      console.log(`[Extensiv Cron] Fetched ${extensivItems.length} items from Extensiv`);
+
+      const inventoryMovement = new InventoryMovement(storage);
+
+      let comparedCount = 0;
+      let adjustmentsApplied = 0;
+      let autoCreatedCount = 0;
+      const unmatchedSkus: string[] = [];
+      const errors: string[] = [];
+
+      for (const extensivItem of extensivItems) {
+        try {
+          let item = await storage.getItemBySku(extensivItem.sku);
+          if (!item) {
+            item = await storage.findProductByExtensivSku(extensivItem.sku);
+          }
+          if (!item) {
+            // Auto-create missing finished products (same as admin path)
+            try {
+              item = await storage.createItem({
+                name: extensivItem.name || extensivItem.sku,
+                sku: extensivItem.sku,
+                type: 'finished_product',
+                extensivSku: extensivItem.sku,
+                upc: extensivItem.upc || null,
+                pivotQty: 0,
+                hildaleQty: 0,
+                currentStock: 0,
+              });
+              autoCreatedCount++;
+            } catch (createErr: any) {
+              if (createErr.message?.includes('duplicate') || createErr.code === '23505') {
+                item = await storage.getItemBySku(extensivItem.sku);
+              }
+              if (!item) {
+                unmatchedSkus.push(extensivItem.sku);
+                continue;
+              }
+            }
+          }
+
+          comparedCount++;
+          const currentPivotQty = item.pivotQty ?? 0;
+          const extensivQty = extensivItem.quantity;
+          const delta = extensivQty - currentPivotQty;
+
+          await storage.updateItem(item.id, {
+            extensivOnHandSnapshot: extensivQty,
+            extensivLastSyncAt: new Date(),
+          });
+
+          if (delta !== 0 && userId) {
+            const result = await inventoryMovement.apply({
+              eventType: "EXTENSIV_SYNC",
+              itemId: item.id,
+              quantity: extensivQty,
+              location: "PIVOT",
+              source: "SYSTEM",
+              userId,
+              userName: systemUser?.email || 'extensiv-cron',
+              notes: `Extensiv cron sync: ${currentPivotQty} → ${extensivQty}`,
+            });
+            if (result.success) {
+              adjustmentsApplied++;
+            } else {
+              errors.push(`${extensivItem.sku}: ${result.error}`);
+            }
+          }
+        } catch (error: any) {
+          errors.push(`${extensivItem.sku}: ${error.message}`);
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      const summary = `Cron align sync: compared=${comparedCount}, applied=${adjustmentsApplied}, auto-created=${autoCreatedCount}, unmatched=${unmatchedSkus.length}, errors=${errors.length}, duration=${durationMs}ms`;
+      console.log(`[Extensiv Cron] ${summary}`);
+
+      try {
+        const { logService } = await import('./services/log-service');
+        await logService.logIntegrationEvent({
+          source: 'EXTENSIV',
+          action: 'CRON_ALIGN_SYNC_COMPLETED',
+          status: errors.length > 0 ? 'PARTIAL' : 'SUCCESS',
+          message: summary,
+          details: { comparedCount, adjustmentsApplied, autoCreatedCount, unmatchedCount: unmatchedSkus.length, errorCount: errors.length, durationMs },
+        });
+      } catch (logError) {
+        console.warn('[Extensiv Cron] Failed to log completion event:', logError);
+      }
+
+      res.json({
+        ok: errors.length === 0,
+        comparedCount,
+        adjustmentsApplied,
+        autoCreatedCount,
+        unmatchedCount: unmatchedSkus.length,
+        errors,
+        durationMs,
+      });
+    } catch (error: any) {
+      console.error("[Extensiv Cron] Fatal error:", error);
+      res.status(500).json({ ok: false, error: error.message || "Extensiv cron sync failed" });
+    }
+  });
+
   // Extensiv - Fetch products for SKU mapping
   app.get("/api/integrations/extensiv/products", requireAuth, async (req: Request, res: Response) => {
     try {

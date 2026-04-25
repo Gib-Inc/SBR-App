@@ -70,6 +70,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { DashboardWidget } from "@/components/dashboard-widget";
 import { CriticalStockBanner } from "@/components/critical-stock-banner";
+import { DefaultWidgets } from "@/components/dashboard-default-widgets";
 
 type Widget = {
   id: string;
@@ -570,25 +571,13 @@ export default function Reports() {
 
       <Separator />
 
+      <DefaultWidgets />
+
       {isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="flex items-center justify-center h-32">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : widgets.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <BarChart3 className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium mb-2">No widgets yet</h3>
-            <p className="text-muted-foreground text-center mb-4">
-              Add widgets to visualize your data and track metrics
-            </p>
-            <Button onClick={() => setAddWidgetOpen(true)} data-testid="button-add-first-widget">
-              <Plus className="mr-2 h-4 w-4" />
-              Add Your First Widget
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
+      ) : widgets.length > 0 ? (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -606,7 +595,7 @@ export default function Reports() {
             </div>
           </SortableContext>
         </DndContext>
-      )}
+      ) : null}
 
       <AddWidgetDialog
         open={addWidgetOpen}

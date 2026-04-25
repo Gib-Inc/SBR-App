@@ -1,882 +1,755 @@
-import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Label } from "@/components/ui/label";
 import {
-  Factory, ChevronDown, ChevronRight, AlertTriangle,
-  CheckCircle2, Clock, PackageCheck, Wrench, TrendingUp,
-  DollarSign, Layers, CalendarDays, User, ClipboardCheck,
-  Plus, Minus, Send, RotateCcw,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Check,
+  ChevronRight,
+  ClipboardCheck,
+  Loader2,
+  Minus,
+  Plus,
 } from "lucide-react";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// Mobile shop-floor production logger. SKUs are intentionally hidden everywhere
+// — only product names and big numbers. Cards stack vertically. Tap → bottom sheet.
 
-interface PlanComponent {
-  componentId: string;
-  componentName: string;
-  componentSku: string;
-  qtyPerUnit: number;
-  wastagePercent: number;
-  effectiveQtyPerUnit: number;
-  onHand: number;
-  canMake: number;
-  neededForTarget: number;
-  shortage: number;
-  unitCost: number | null;
-  shortageCost: number;
-}
+// ─── Card configuration ────────────────────────────────────────────────────
 
-interface PlanProduct {
-  productId: string;
-  productName: string;
-  productSku: string;
-  hildaleQty: number;
-  canBuildNow: number;
-  limitingComponent: string | null;
-  components: PlanComponent[];
-  targetQty: number;
-  shortages: PlanComponent[];
-  totalShortageCost: number;
-  hasBOM: boolean;
-}
+type CardConfig = {
+  key: string;
+  label: string;
+  // SKUs the card represents. If multiple, the sheet asks the user to pick
+  // a variant before showing the action rows.
+  skus: string[];
+  // Optional shorter labels for the variant picker buttons, keyed by SKU.
+  variantLabels?: Record<string, string>;
+};
 
-interface ProductionRunLine {
+const CARDS: CardConfig[] = [
+  { key: "push-1-0", label: "Push Model 1.0", skus: ["101-PSH-M1"] },
+  { key: "push-2-0", label: "Push Model 2.0", skus: ["201-PSH-M2"] },
+  {
+    key: "pull-behind",
+    label: "Pull-Behind",
+    skus: ["1001-PB-M1", "1200-PB-M2"],
+    variantLabels: { "1001-PB-M1": "Original", "1200-PB-M2": "Bigfoot" },
+  },
+  { key: "bigfoot", label: "Bigfoot", skus: ["1200-PB-M2"] },
+];
+
+// Short display names used in the "This Week" copy/list. Falls back to the
+// catalog name when a SKU isn't mapped here.
+const SHORT_NAMES_BY_SKU: Record<string, string> = {
+  "101-PSH-M1": "Push 1.0",
+  "201-PSH-M2": "Push 2.0",
+  "1001-PB-M1": "Pull-Behind Original",
+  "1200-PB-M2": "Bigfoot",
+};
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+type Item = {
   id: string;
-  productName: string;
-  productSku: string;
-  quantityBuilt: number;
-  componentsConsumed: Array<{ name: string; sku: string; qty: number }>;
-  buildCostSnapshot: number | null;
-  success: boolean;
-  errorMessage?: string;
-}
+  sku: string;
+  name: string;
+  type: string;
+};
 
-interface ProductionRun {
+type TodayTotals = {
+  date: string;
+  totals: Record<string, { rolls_made: number; built: number; boxed: number }>;
+};
+
+type WeekLog = {
   id: string;
-  runNumber: string;
-  createdAt: string;
-  createdByName: string;
+  itemId: string;
+  itemName: string;
+  actionType: "rolls_made" | "built" | "boxed";
+  quantity: number;
+  productionDate: string;
   notes: string | null;
-  totalProductsBuilt: number;
-  totalUnitsBuilt: number;
-  status: "COMPLETED" | "PARTIAL" | "FAILED";
-  lines: ProductionRunLine[];
+  createdAt: string;
+};
+
+type WeekResponse = { startDate: string; endDate: string; logs: WeekLog[] };
+
+type ActionKey = "rolls_made" | "built" | "boxed";
+
+type SaveBanner =
+  | { kind: "idle" }
+  | { kind: "saving" }
+  | { kind: "success"; message: string }
+  | { kind: "error"; message: string; retry: () => void };
+
+// ─── Date helpers (operate in user's local TZ) ─────────────────────────────
+
+function todayISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function fmt$(n: number) {
-  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function fmtDate(iso: string) {
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short", day: "numeric", year: "numeric",
-    hour: "numeric", minute: "2-digit",
+function formatVoxerDate(isoDate: string): string {
+  // "2026-04-25" → "Sat Apr 25"
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
   });
 }
 
-function StatusBadge({ status }: { status: ProductionRun["status"] }) {
-  if (status === "COMPLETED") return <Badge className="bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300 border-0">Completed</Badge>;
-  if (status === "PARTIAL") return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border-0">Partial</Badge>;
-  return <Badge className="bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300 border-0">Failed</Badge>;
+// ─── Display helpers ───────────────────────────────────────────────────────
+
+function shortNameForItem(sku: string | undefined, fallback: string): string {
+  if (sku && SHORT_NAMES_BY_SKU[sku]) return SHORT_NAMES_BY_SKU[sku];
+  return fallback;
 }
 
-// ─── Plan Tab ─────────────────────────────────────────────────────────────────
-
-function PlanTab() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [targetInput, setTargetInput] = useState("450");
-  const [target, setTarget] = useState(450);
-  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
-  const [buildQtys, setBuildQtys] = useState<Record<string, number>>({});
-  const [buildNotes, setBuildNotes] = useState("");
-
-  const { data, isLoading, refetch } = useQuery<{ plan: PlanProduct[]; targetQty: number }>({
-    queryKey: ["/api/production/plan", target],
-    queryFn: async () => {
-      const res = await fetch(`/api/production/plan?target=${target}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load plan");
-      return res.json();
-    },
-  });
-
-  const buildMutation = useMutation({
-    mutationFn: async (builds: Array<{ finishedProductId: string; quantity: number }>) => {
-      const res = await apiRequest("POST", "/api/production/batch-build", { builds, notes: buildNotes || undefined });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Build failed");
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      const s = data.summary;
-      toast({ title: `Built ${s.successCount} product${s.successCount !== 1 ? "s" : ""}`, description: s.failCount > 0 ? `${s.failCount} failed` : "All successful" });
-      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/production/runs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/production/plan"] });
-      setBuildQtys({});
-      setBuildNotes("");
-    },
-    onError: (e: Error) => toast({ variant: "destructive", title: "Build failed", description: e.message }),
-  });
-
-  const toggleExpand = (id: string) => {
-    setExpandedProducts(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const handleBuild = () => {
-    const builds = Object.entries(buildQtys)
-      .filter(([, qty]) => qty > 0)
-      .map(([finishedProductId, quantity]) => ({ finishedProductId, quantity }));
-    if (builds.length === 0) { toast({ variant: "destructive", title: "Nothing to build", description: "Enter quantities above 0 for at least one product." }); return; }
-    buildMutation.mutate(builds);
-  };
-
-  const hasBuildQtys = Object.values(buildQtys).some(q => q > 0);
-
-  if (isLoading) return (
-    <div className="flex h-64 items-center justify-center text-muted-foreground gap-3">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      Loading production plan…
-    </div>
-  );
-
-  const allPlan = data?.plan ?? [];
-  // Only show products that have a BOM — items without one aren't manufactured
-  const plan = allPlan.filter(p => p.hasBOM);
-  const noBomCount = allPlan.length - plan.length;
-
-  return (
-    <div className="space-y-6">
-      {/* Target + Build Controls */}
-      <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-muted/30 p-4">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Monthly target (units per product)</label>
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min="0"
-              value={targetInput}
-              onChange={e => setTargetInput(e.target.value)}
-              className="w-28 font-mono"
-            />
-            <Button variant="outline" size="sm" onClick={() => { const n = parseInt(targetInput); if (!isNaN(n)) { setTarget(n); refetch(); } }}>
-              Calculate
-            </Button>
-          </div>
-        </div>
-        <div className="space-y-1 flex-1 min-w-48">
-          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Build notes (optional)</label>
-          <Input
-            placeholder="e.g. March production run"
-            value={buildNotes}
-            onChange={e => setBuildNotes(e.target.value)}
-          />
-        </div>
-        <Button
-          onClick={handleBuild}
-          disabled={!hasBuildQtys || buildMutation.isPending}
-          className="gap-2"
-        >
-          <Factory className="h-4 w-4" />
-          {buildMutation.isPending ? "Building…" : "Log Build"}
-        </Button>
-      </div>
-
-      {/* Product Cards */}
-      <div className="space-y-3">
-        {plan.map(product => {
-          const isExpanded = expandedProducts.has(product.productId);
-          const buildQty = buildQtys[product.productId] ?? 0;
-          const hasShortages = product.shortages.length > 0;
-          const canBuild = product.hasBOM && product.canBuildNow > 0;
-
-          return (
-            <div key={product.productId} className="rounded-xl border bg-card overflow-hidden">
-              {/* Header row */}
-              <div className="flex items-center gap-4 p-4">
-                <button onClick={() => toggleExpand(product.productId)} className="text-muted-foreground hover:text-foreground">
-                  {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                </button>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold truncate">{product.productName}</span>
-                    <span className="text-xs text-muted-foreground font-mono">{product.productSku}</span>
-                  </div>
-                  <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><Layers className="h-3 w-3" />{product.hildaleQty} at Hildale</span>
-                    {!product.hasBOM && <span className="text-amber-600 flex items-center gap-1"><AlertTriangle className="h-3 w-3" />No BOM set</span>}
-                    {product.hasBOM && product.limitingComponent && (
-                      <span className="flex items-center gap-1">
-                        <Wrench className="h-3 w-3" />
-                        Limited by: {product.limitingComponent}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Can build now */}
-                <div className="text-center min-w-[80px]">
-                  <div className={`text-2xl font-bold tabular-nums ${canBuild ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
-                    {product.canBuildNow}
-                  </div>
-                  <div className="text-xs text-muted-foreground">can build</div>
-                </div>
-
-                {/* Target shortages */}
-                {target > 0 && (
-                  <div className="text-center min-w-[80px]">
-                    {hasShortages ? (
-                      <>
-                        <div className="text-2xl font-bold tabular-nums text-red-600 dark:text-red-400">
-                          {product.shortages.length}
-                        </div>
-                        <div className="text-xs text-muted-foreground">short of {target}</div>
-                      </>
-                    ) : (
-                      <div className="flex flex-col items-center gap-1">
-                        <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
-                        <div className="text-xs text-muted-foreground">on track</div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Build qty input */}
-                {product.hasBOM && (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder="qty"
-                      value={buildQty || ""}
-                      onChange={e => {
-                        const n = parseInt(e.target.value);
-                        setBuildQtys(prev => ({ ...prev, [product.productId]: isNaN(n) ? 0 : n }));
-                      }}
-                      className="w-20 font-mono text-right"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Expanded component breakdown */}
-              {isExpanded && product.hasBOM && (
-                <div className="border-t bg-muted/20">
-                  <div className="px-4 py-3">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-xs text-muted-foreground uppercase tracking-wide">
-                          <th className="text-left pb-2 font-medium">Component</th>
-                          <th className="text-right pb-2 font-medium">Per Unit</th>
-                          <th className="text-right pb-2 font-medium">Waste %</th>
-                          <th className="text-right pb-2 font-medium">On Hand</th>
-                          <th className="text-right pb-2 font-medium">Can Make</th>
-                          {target > 0 && <th className="text-right pb-2 font-medium">Need ({target})</th>}
-                          {target > 0 && <th className="text-right pb-2 font-medium">Short</th>}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {product.components.map(comp => (
-                          <tr key={comp.componentId} className={comp.shortage > 0 ? "text-red-700 dark:text-red-300" : ""}>
-                            <td className="py-1">
-                              <div className="font-medium">{comp.componentName}</div>
-                              <div className="text-xs text-muted-foreground font-mono">{comp.componentSku}</div>
-                            </td>
-                            <td className="text-right tabular-nums py-1">{comp.qtyPerUnit}</td>
-                            <td className="text-right tabular-nums py-1 text-muted-foreground">{comp.wastagePercent > 0 ? `${comp.wastagePercent}%` : "—"}</td>
-                            <td className="text-right tabular-nums py-1 font-mono">{comp.onHand}</td>
-                            <td className={`text-right tabular-nums py-1 font-medium ${comp.canMake === 0 ? "text-red-600 dark:text-red-400" : ""}`}>{comp.canMake}</td>
-                            {target > 0 && <td className="text-right tabular-nums py-1">{comp.neededForTarget}</td>}
-                            {target > 0 && (
-                              <td className="text-right tabular-nums py-1 font-medium">
-                                {comp.shortage > 0
-                                  ? <span className="text-red-600 dark:text-red-400">{comp.shortage}</span>
-                                  : <span className="text-green-600 dark:text-green-400">✓</span>}
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-
-                    {/* Shortage cost summary */}
-                    {product.shortages.length > 0 && product.totalShortageCost > 0 && (
-                      <div className="mt-3 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-2">
-                        <DollarSign className="h-4 w-4 flex-shrink-0" />
-                        Estimated cost to fill shortages: <span className="font-semibold ml-1">{fmt$(product.totalShortageCost)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {plan.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">
-            No products have a Bill of Materials set up yet. Add BOMs in the Products page to enable production planning.
-          </div>
-        )}
-      </div>
-      {noBomCount > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {noBomCount} product{noBomCount !== 1 ? "s" : ""} without a BOM hidden. Set up BOMs in the Products page to include them.
-        </p>
-      )}
-    </div>
-  );
+function actionVerb(action: ActionKey, qty: number): string {
+  if (action === "rolls_made") {
+    return `${qty} foam roller${qty === 1 ? "" : "s"} made`;
+  }
+  if (action === "boxed") return `${qty} boxed`;
+  return `${qty} built`;
 }
 
-// ─── History Tab ──────────────────────────────────────────────────────────────
-
-function HistoryTab() {
-  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
-
-  const { data: runs = [], isLoading } = useQuery<ProductionRun[]>({
-    queryKey: ["/api/production/runs"],
-    queryFn: async () => {
-      const res = await fetch("/api/production/runs", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load runs");
-      return res.json();
-    },
-  });
-
-  const toggleRun = (id: string) => {
-    setExpandedRuns(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  if (isLoading) return (
-    <div className="flex h-64 items-center justify-center text-muted-foreground gap-3">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      Loading history…
-    </div>
-  );
-
-  if (runs.length === 0) return (
-    <div className="flex flex-col h-64 items-center justify-center text-muted-foreground gap-3">
-      <PackageCheck className="h-10 w-10 opacity-30" />
-      <p className="text-sm">No production runs yet.</p>
-      <p className="text-xs">Use the Plan tab to log your first build.</p>
-    </div>
-  );
-
-  return (
-    <div className="space-y-3">
-      {runs.map(run => {
-        const isExpanded = expandedRuns.has(run.id);
-        const totalCost = run.lines.reduce((s, l) => s + (l.buildCostSnapshot ?? 0), 0);
-
-        return (
-          <div key={run.id} className="rounded-xl border bg-card overflow-hidden">
-            <button
-              className="w-full flex items-center gap-4 p-4 text-left hover:bg-muted/30 transition-colors"
-              onClick={() => toggleRun(run.id)}
-            >
-              {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold font-mono text-sm">{run.runNumber}</span>
-                  <StatusBadge status={run.status} />
-                </div>
-                <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
-                  <span className="flex items-center gap-1"><CalendarDays className="h-3 w-3" />{fmtDate(run.createdAt)}</span>
-                  <span className="flex items-center gap-1"><User className="h-3 w-3" />{run.createdByName}</span>
-                  {run.notes && <span className="italic truncate">{run.notes}</span>}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-6 text-right flex-shrink-0">
-                <div>
-                  <div className="text-lg font-bold tabular-nums">{run.totalUnitsBuilt}</div>
-                  <div className="text-xs text-muted-foreground">units built</div>
-                </div>
-                <div>
-                  <div className="text-lg font-bold tabular-nums">{run.totalProductsBuilt}</div>
-                  <div className="text-xs text-muted-foreground">products</div>
-                </div>
-                {totalCost > 0 && (
-                  <div>
-                    <div className="text-lg font-bold tabular-nums">{fmt$(totalCost)}</div>
-                    <div className="text-xs text-muted-foreground">materials cost</div>
-                  </div>
-                )}
-              </div>
-            </button>
-
-            {isExpanded && (
-              <div className="border-t bg-muted/20 px-4 py-3 space-y-4">
-                {run.lines.map(line => (
-                  <div key={line.id} className={`rounded-lg border p-3 ${line.success ? "bg-card" : "border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20"}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <span className="font-medium">{line.productName}</span>
-                        <span className="text-xs text-muted-foreground font-mono ml-2">{line.productSku}</span>
-                      </div>
-                      <div className="flex items-center gap-3 text-sm">
-                        {line.buildCostSnapshot != null && (
-                          <span className="text-muted-foreground">{fmt$(line.buildCostSnapshot)} materials</span>
-                        )}
-                        <span className="font-semibold tabular-nums">{line.quantityBuilt} units</span>
-                        {line.success
-                          ? <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
-                          : <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />}
-                      </div>
-                    </div>
-                    {line.errorMessage && (
-                      <p className="text-xs text-red-600 dark:text-red-400 mb-2">{line.errorMessage}</p>
-                    )}
-                    {line.componentsConsumed && line.componentsConsumed.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {line.componentsConsumed.map((c, i) => (
-                          <span key={i} className="text-xs bg-muted rounded px-2 py-0.5 font-mono">
-                            {c.qty}× {c.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Daily Log Tab ───────────────────────────────────────────────────────────
-// Quick-tally style: Clarence types how many of each product were made today,
-// hits Submit, and it auto-updates inventory. Like a digital whiteboard.
-
-function DailyLogTab() {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [logNotes, setLogNotes] = useState("");
-  const [justSubmitted, setJustSubmitted] = useState(false);
-
-  // Fetch products with BOM info (same as Plan tab uses)
-  const { data: planData, isLoading: planLoading } = useQuery<{ plan: PlanProduct[] }>({
-    queryKey: ["/api/production/plan", 0],
-    queryFn: async () => {
-      const res = await fetch("/api/production/plan?target=0", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load products");
-      return res.json();
-    },
-  });
-
-  // Today's production runs — filter client-side
-  const { data: allRuns = [] } = useQuery<ProductionRun[]>({
-    queryKey: ["/api/production/runs"],
-    queryFn: async () => {
-      const res = await fetch("/api/production/runs?limit=100", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load runs");
-      return res.json();
-    },
-  });
-
-  // Filter to only manufactured products (have a BOM)
-  const products = useMemo(() => {
-    return (planData?.plan ?? []).filter(p => p.hasBOM);
-  }, [planData]);
-
-  // Filter runs to today only (Mountain Time — matches Hildale operations)
-  const todaysRuns = useMemo(() => {
-    const today = new Date().toLocaleDateString("en-US", { timeZone: "America/Denver" });
-    return allRuns.filter(run => {
-      const runDate = new Date(run.createdAt).toLocaleDateString("en-US", { timeZone: "America/Denver" });
-      return runDate === today && run.status !== "FAILED";
-    });
-  }, [allRuns]);
-
-  // Tally of what's been built today per product
-  const todaysTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
-    for (const run of todaysRuns) {
-      for (const line of run.lines) {
-        if (line.success) {
-          totals[line.productSku] = (totals[line.productSku] || 0) + line.quantityBuilt;
-        }
-      }
-    }
-    return totals;
-  }, [todaysRuns]);
-
-  const totalUnitsToday = Object.values(todaysTotals).reduce((s, n) => s + n, 0);
-
-  // Submit production log
-  const submitMutation = useMutation({
-    mutationFn: async (builds: Array<{ finishedProductId: string; quantity: number }>) => {
-      const today = new Date().toLocaleDateString("en-US", {
-        timeZone: "America/Denver",
-        month: "short",
-        day: "numeric",
-      });
-      const res = await apiRequest("POST", "/api/production/batch-build", {
-        builds,
-        notes: logNotes || `Daily log — ${today}`,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Log failed");
-      }
-      return res.json();
-    },
-    onSuccess: (data) => {
-      const s = data.summary;
-      toast({
-        title: `✓ Logged ${s.totalUnitsBuilt} units`,
-        description: `${s.successCount} product${s.successCount !== 1 ? "s" : ""} recorded. Inventory updated.`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/production/runs"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/production/plan"] });
-      setQuantities({});
-      setLogNotes("");
-      setJustSubmitted(true);
-      setTimeout(() => setJustSubmitted(false), 3000);
-    },
-    onError: (e: Error) => toast({ variant: "destructive", title: "Log failed", description: e.message }),
-  });
-
-  const handleSubmit = () => {
-    const builds = Object.entries(quantities)
-      .filter(([, qty]) => qty > 0)
-      .map(([finishedProductId, quantity]) => ({ finishedProductId, quantity }));
-    if (builds.length === 0) {
-      toast({ variant: "destructive", title: "Nothing to log", description: "Enter at least one quantity." });
-      return;
-    }
-    submitMutation.mutate(builds);
-  };
-
-  const handleReset = () => {
-    setQuantities({});
-    setLogNotes("");
-  };
-
-  const adjustQty = (productId: string, delta: number) => {
-    setQuantities(prev => {
-      const current = prev[productId] ?? 0;
-      const next = Math.max(0, current + delta);
-      return { ...prev, [productId]: next };
-    });
-  };
-
-  const hasAnyQty = Object.values(quantities).some(q => q > 0);
-
-  if (planLoading) return (
-    <div className="flex h-64 items-center justify-center text-muted-foreground gap-3">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      Loading products…
-    </div>
-  );
-
-  return (
-    <div className="space-y-6">
-      {/* Success flash — visual confirmation like Zo's "red marker" concept */}
-      {justSubmitted && (
-        <div className="rounded-xl border-2 border-green-500 bg-green-50 dark:bg-green-900/20 p-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
-          <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400 flex-shrink-0" />
-          <div>
-            <p className="font-semibold text-green-800 dark:text-green-200">Production logged!</p>
-            <p className="text-sm text-green-700 dark:text-green-300">Inventory has been updated automatically.</p>
-          </div>
-        </div>
-      )}
-
-      {/* Today's summary banner */}
-      <div className="rounded-xl border bg-muted/30 p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <CalendarDays className="h-5 w-5 text-muted-foreground" />
-            <div>
-              <p className="font-semibold">
-                {new Date().toLocaleDateString("en-US", {
-                  timeZone: "America/Denver",
-                  weekday: "long",
-                  month: "long",
-                  day: "numeric",
-                })}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {todaysRuns.length === 0
-                  ? "No production logged yet today"
-                  : `${todaysRuns.length} log${todaysRuns.length !== 1 ? "s" : ""} today — ${totalUnitsToday} units total`}
-              </p>
-            </div>
-          </div>
-          {totalUnitsToday > 0 && (
-            <div className="text-right">
-              <div className="text-3xl font-bold tabular-nums text-green-600 dark:text-green-400">{totalUnitsToday}</div>
-              <div className="text-xs text-muted-foreground">units today</div>
-            </div>
-          )}
-        </div>
-
-        {/* Per-product today's tally */}
-        {Object.keys(todaysTotals).length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-            {Object.entries(todaysTotals).map(([sku, qty]) => (
-              <span key={sku} className="text-xs bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded-full px-3 py-1 font-mono">
-                {qty}× {sku}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Quick-tally grid — the digital whiteboard */}
-      <div className="grid gap-3">
-        {products.map(product => {
-          const qty = quantities[product.productId] ?? 0;
-          const todayTotal = todaysTotals[product.productSku] || 0;
-
-          return (
-            <div
-              key={product.productId}
-              className={`rounded-xl border bg-card p-4 flex items-center gap-4 transition-colors ${
-                qty > 0 ? "ring-2 ring-primary/30 border-primary/50" : ""
-              }`}
-            >
-              {/* Product info */}
-              <div className="flex-1 min-w-0">
-                <div className="font-semibold text-lg truncate">{product.productName}</div>
-                <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                  <span className="font-mono">{product.productSku}</span>
-                  <span className="flex items-center gap-1">
-                    <Layers className="h-3 w-3" />
-                    {product.hildaleQty} in stock
-                  </span>
-                  {todayTotal > 0 && (
-                    <span className="text-green-600 dark:text-green-400 font-medium">
-                      +{todayTotal} today
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Quantity controls — big tap targets for quick entry */}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 rounded-full"
-                  onClick={() => adjustQty(product.productId, -10)}
-                  disabled={qty === 0}
-                >
-                  <span className="text-xs font-bold">-10</span>
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 rounded-full"
-                  onClick={() => adjustQty(product.productId, -1)}
-                  disabled={qty === 0}
-                >
-                  <Minus className="h-4 w-4" />
-                </Button>
-                <Input
-                  type="number"
-                  min="0"
-                  value={qty || ""}
-                  placeholder="0"
-                  onChange={e => {
-                    const n = parseInt(e.target.value);
-                    setQuantities(prev => ({ ...prev, [product.productId]: isNaN(n) ? 0 : Math.max(0, n) }));
-                  }}
-                  className="w-20 text-center text-xl font-bold font-mono h-12"
-                />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 rounded-full"
-                  onClick={() => adjustQty(product.productId, 1)}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-10 w-10 rounded-full"
-                  onClick={() => adjustQty(product.productId, 10)}
-                >
-                  <span className="text-xs font-bold">+10</span>
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-
-        {products.length === 0 && (
-          <div className="text-center py-12 text-muted-foreground">
-            No manufactured products found. Add Bills of Materials in the Products page first.
-          </div>
-        )}
-      </div>
-
-      {/* Notes + Submit bar — sticky at bottom when there's content */}
-      {products.length > 0 && (
-        <div className="rounded-xl border bg-muted/30 p-4 flex flex-wrap items-center gap-3 sticky bottom-4">
-          <Input
-            placeholder="Notes (optional) — e.g. 'Clarence batch run'"
-            value={logNotes}
-            onChange={e => setLogNotes(e.target.value)}
-            className="flex-1 min-w-48"
-          />
-          <Button
-            variant="outline"
-            onClick={handleReset}
-            disabled={!hasAnyQty && !logNotes}
-            className="gap-2"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Clear
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={!hasAnyQty || submitMutation.isPending}
-            className="gap-2 min-w-[140px]"
-            size="lg"
-          >
-            <Send className="h-4 w-4" />
-            {submitMutation.isPending ? "Logging…" : "Log Production"}
-          </Button>
-        </div>
-      )}
-
-      {/* Today's log entries */}
-      {todaysRuns.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Today's Log Entries</h3>
-          {todaysRuns.map(run => (
-            <div key={run.id} className="rounded-xl border bg-card p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-3">
-                  <StatusBadge status={run.status} />
-                  <span className="text-sm text-muted-foreground font-mono">{run.runNumber}</span>
-                  {run.notes && <span className="text-sm text-muted-foreground italic">{run.notes}</span>}
-                </div>
-                <span className="text-sm text-muted-foreground">
-                  {new Date(run.createdAt).toLocaleTimeString("en-US", {
-                    timeZone: "America/Denver",
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {run.lines.filter(l => l.success).map(line => (
-                  <span key={line.id} className="text-sm bg-muted rounded-lg px-3 py-1 font-mono">
-                    {line.quantityBuilt}× {line.productName}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function Production() {
-  const { data: runs = [] } = useQuery<ProductionRun[]>({
-    queryKey: ["/api/production/runs"],
-    queryFn: async () => {
-      const res = await fetch("/api/production/runs", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
+  const [openSheetKey, setOpenSheetKey] = useState<string | null>(null);
+  const today = todayISO();
+
+  const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({
+    queryKey: ["/api/items"],
+  });
+
+  const itemBySku = useMemo(() => {
+    const m = new Map<string, Item>();
+    for (const it of items) m.set(it.sku, it);
+    return m;
+  }, [items]);
+
+  // Resolve all card SKUs → item IDs we need totals for. De-duped.
+  const trackedItemIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const card of CARDS) {
+      for (const sku of card.skus) {
+        const item = itemBySku.get(sku);
+        if (item) set.add(item.id);
+      }
+    }
+    return Array.from(set);
+  }, [itemBySku]);
+
+  const { data: todayData } = useQuery<TodayTotals>({
+    queryKey: [`/api/production-logs/today-totals?date=${today}&itemIds=${trackedItemIds.join(",")}`],
+    enabled: trackedItemIds.length > 0,
+  });
+
+  const { data: weekData } = useQuery<WeekResponse>({
+    queryKey: [`/api/production-logs/week?endDate=${today}&days=7`],
+  });
+
+  const todayTotalForCard = (card: CardConfig): number => {
+    if (!todayData) return 0;
+    let sum = 0;
+    for (const sku of card.skus) {
+      const item = itemBySku.get(sku);
+      if (!item) continue;
+      sum += todayData.totals[item.id]?.built ?? 0;
+    }
+    return sum;
+  };
+
+  const openCard = openSheetKey ? CARDS.find((c) => c.key === openSheetKey) ?? null : null;
+
+  return (
+    <div className="p-4 mx-auto max-w-2xl space-y-6" data-testid="page-production">
+      <header>
+        <h1 className="text-3xl font-bold">Production</h1>
+        <p className="text-muted-foreground">Tap a product to log work.</p>
+      </header>
+
+      {/* Section 1: Product cards */}
+      <section className="space-y-3" aria-label="Log today's work">
+        {CARDS.map((card) => {
+          const built = todayTotalForCard(card);
+          const missing = card.skus.every((sku) => !itemBySku.get(sku));
+          return (
+            <Card
+              key={card.key}
+              role="button"
+              tabIndex={0}
+              onClick={() => !missing && setOpenSheetKey(card.key)}
+              onKeyDown={(e) => {
+                if (!missing && (e.key === "Enter" || e.key === " ")) {
+                  e.preventDefault();
+                  setOpenSheetKey(card.key);
+                }
+              }}
+              className={`min-h-[88px] flex items-center justify-between p-5 transition-colors active:bg-accent ${
+                missing ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-accent/50"
+              }`}
+              data-testid={`card-product-${card.key}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-2xl font-bold leading-tight">{card.label}</div>
+                <div className="text-sm text-muted-foreground mt-0.5">
+                  {missing
+                    ? "Not in catalog yet"
+                    : itemsLoading
+                    ? "Loading…"
+                    : built === 0
+                    ? "Nothing logged today"
+                    : `${built} built today`}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0 ml-3">
+                <div className="text-right">
+                  <div
+                    className="text-4xl font-bold tabular-nums"
+                    data-testid={`today-built-${card.key}`}
+                  >
+                    {built}
+                  </div>
+                  <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                    today
+                  </div>
+                </div>
+                <ChevronRight className="h-6 w-6 text-muted-foreground" />
+              </div>
+            </Card>
+          );
+        })}
+      </section>
+
+      {openCard && (
+        <ProductionSheet
+          card={openCard}
+          itemBySku={itemBySku}
+          onClose={() => setOpenSheetKey(null)}
+        />
+      )}
+
+      {/* Section 2: This week */}
+      <WeekReport week={weekData} itemBySku={itemBySku} />
+    </div>
+  );
+}
+
+// ─── Bottom sheet ───────────────────────────────────────────────────────────
+
+function ProductionSheet({
+  card,
+  itemBySku,
+  onClose,
+}: {
+  card: CardConfig;
+  itemBySku: Map<string, Item>;
+  onClose: () => void;
+}) {
+  const today = todayISO();
+  const requiresVariant = card.skus.length > 1;
+  const [selectedSku, setSelectedSku] = useState<string | null>(
+    requiresVariant ? null : card.skus[0],
+  );
+  const [date, setDate] = useState(today);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [rolls, setRolls] = useState(0);
+  const [built, setBuilt] = useState(0);
+  const [boxed, setBoxed] = useState(0);
+  const [banner, setBanner] = useState<SaveBanner>({ kind: "idle" });
+  const bannerTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimer.current) window.clearTimeout(bannerTimer.current);
+    };
+  }, []);
+
+  const selectedItem = selectedSku ? itemBySku.get(selectedSku) ?? null : null;
+  const titleName = selectedItem
+    ? shortNameForItem(selectedItem.sku, selectedItem.name)
+    : card.label;
+
+  const reset = () => {
+    setRolls(0);
+    setBuilt(0);
+    setBoxed(0);
+    setNotes("");
+  };
+
+  const submitMutation = useMutation({
+    mutationFn: async (payload: {
+      itemId: string;
+      entries: Array<{ actionType: ActionKey; quantity: number }>;
+    }) => {
+      const results: Array<{
+        actionType: ActionKey;
+        quantity: number;
+        ok: boolean;
+        error?: string;
+        warnings?: string[];
+      }> = [];
+      for (const entry of payload.entries) {
+        try {
+          const res = await apiRequest("POST", "/api/production-logs", {
+            itemId: payload.itemId,
+            actionType: entry.actionType,
+            quantity: entry.quantity,
+            productionDate: date,
+            notes: notes || undefined,
+          });
+          const body = await res.json();
+          results.push({
+            actionType: entry.actionType,
+            quantity: entry.quantity,
+            ok: true,
+            warnings: body.warnings ?? [],
+          });
+        } catch (err: any) {
+          results.push({
+            actionType: entry.actionType,
+            quantity: entry.quantity,
+            ok: false,
+            error: err?.message ?? "Unknown error",
+          });
+        }
+      }
+      return results;
     },
   });
 
-  const totalUnitsThisMonth = useMemo(() => {
-    const now = new Date();
-    return runs
-      .filter(r => {
-        const d = new Date(r.createdAt);
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear() && r.status !== "FAILED";
-      })
-      .reduce((s, r) => s + r.totalUnitsBuilt, 0);
-  }, [runs]);
+  const runSubmit = (entries: Array<{ actionType: ActionKey; quantity: number }>) => {
+    if (!selectedItem) return;
+    setBanner({ kind: "saving" });
+    submitMutation.mutate(
+      { itemId: selectedItem.id, entries },
+      {
+        onSuccess: (results) => {
+          queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+          queryClient.invalidateQueries({
+            predicate: (q) =>
+              typeof q.queryKey[0] === "string" &&
+              (q.queryKey[0] as string).startsWith("/api/production-logs"),
+          });
+
+          const failed = results.filter((r) => !r.ok);
+          if (failed.length > 0) {
+            const first = failed[0];
+            const remaining = results
+              .filter((r) => !r.ok)
+              .map((r) => ({ actionType: r.actionType, quantity: r.quantity }));
+            setBanner({
+              kind: "error",
+              message: `${first.actionType} failed — ${first.error}`,
+              retry: () => runSubmit(remaining),
+            });
+            return;
+          }
+
+          const parts = results.map((r) => {
+            if (r.actionType === "rolls_made") return actionVerb(r.actionType, r.quantity);
+            return `${r.quantity} ${titleName} ${r.actionType === "built" ? "built" : "boxed"}`;
+          });
+          const allWarnings = results.flatMap((r) => r.warnings ?? []);
+          const warningSuffix = allWarnings.length > 0 ? `  ⚠ ${allWarnings.join(" ")}` : "";
+          setBanner({
+            kind: "success",
+            message: `✓ Saved — ${parts.join(", ")} logged${warningSuffix}`,
+          });
+          reset();
+          if (bannerTimer.current) window.clearTimeout(bannerTimer.current);
+          bannerTimer.current = window.setTimeout(() => setBanner({ kind: "idle" }), 4000);
+        },
+      },
+    );
+  };
+
+  const doSave = () => {
+    if (!selectedItem) return;
+    const entries: Array<{ actionType: ActionKey; quantity: number }> = [];
+    if (rolls > 0) entries.push({ actionType: "rolls_made", quantity: rolls });
+    if (built > 0) entries.push({ actionType: "built", quantity: built });
+    if (boxed > 0) entries.push({ actionType: "boxed", quantity: boxed });
+    if (entries.length === 0) {
+      setBanner({
+        kind: "error",
+        message: "Enter a quantity in at least one row.",
+        retry: () => setBanner({ kind: "idle" }),
+      });
+      return;
+    }
+    runSubmit(entries);
+  };
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Factory className="h-6 w-6" />
-            Production
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Plan builds and track what Clarence's crew has made</p>
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent
+        side="bottom"
+        className="max-h-[92vh] overflow-y-auto rounded-t-2xl"
+      >
+        <SheetHeader className="text-left">
+          <SheetTitle className="text-2xl font-bold">{titleName}</SheetTitle>
+        </SheetHeader>
+
+        {requiresVariant && !selectedSku && (
+          <div className="mt-4 space-y-2" data-testid="variant-picker">
+            <Label className="text-sm text-muted-foreground">Which one?</Label>
+            <div className="grid grid-cols-1 gap-2">
+              {card.skus.map((sku) => {
+                const item = itemBySku.get(sku);
+                const label = card.variantLabels?.[sku] ?? item?.name ?? sku;
+                return (
+                  <Button
+                    key={sku}
+                    variant="outline"
+                    className="h-14 text-lg justify-start"
+                    onClick={() => setSelectedSku(sku)}
+                    disabled={!item}
+                    data-testid={`variant-${sku}`}
+                  >
+                    {label}
+                    {!item && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        (not in catalog)
+                      </span>
+                    )}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {selectedSku && (
+          <div className="mt-4 space-y-4">
+            <ActionRow
+              icon="🔩"
+              label="Rolls Made"
+              hint="foam roller production"
+              value={rolls}
+              onChange={setRolls}
+              testId="row-rolls-made"
+            />
+            <ActionRow
+              icon="🔨"
+              label="Built"
+              hint="assembled units (deducts components)"
+              value={built}
+              onChange={setBuilt}
+              testId="row-built"
+            />
+            <ActionRow
+              icon="📦"
+              label="Boxed"
+              hint="packaged (no stock change)"
+              value={boxed}
+              onChange={setBoxed}
+              testId="row-boxed"
+            />
+
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">
+                Date: <span className="font-medium text-foreground">{formatVoxerDate(date)}</span>
+              </span>
+              {showDatePicker ? (
+                <Input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value || today)}
+                  className="w-44 h-10"
+                  data-testid="date-picker"
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="text-primary underline text-sm h-10 px-2"
+                  onClick={() => setShowDatePicker(true)}
+                  data-testid="show-date-picker"
+                >
+                  Different date?
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="prod-notes" className="text-sm text-muted-foreground">
+                Notes (optional)
+              </Label>
+              <Input
+                id="prod-notes"
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="e.g. short on sleeves"
+                className="h-12 text-base"
+                data-testid="input-notes"
+              />
+            </div>
+
+            {banner.kind === "success" && (
+              <div
+                className="rounded-md border border-green-600/40 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400"
+                data-testid="banner-success"
+              >
+                {banner.message}
+              </div>
+            )}
+            {banner.kind === "error" && (
+              <div
+                className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive flex items-start justify-between gap-3"
+                data-testid="banner-error"
+              >
+                <span>✗ {banner.message}</span>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => banner.retry()}
+                  data-testid="button-retry"
+                >
+                  Retry
+                </Button>
+              </div>
+            )}
+
+            <Button
+              onClick={doSave}
+              disabled={banner.kind === "saving"}
+              className="w-full h-14 text-lg bg-green-600 hover:bg-green-700 text-white"
+              data-testid="button-log-it"
+            >
+              {banner.kind === "saving" ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                <>
+                  <Check className="mr-2 h-5 w-5" />
+                  Log It
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function ActionRow({
+  icon,
+  label,
+  hint,
+  value,
+  onChange,
+  testId,
+}: {
+  icon: string;
+  label: string;
+  hint: string;
+  value: number;
+  onChange: (n: number) => void;
+  testId: string;
+}) {
+  const set = (n: number) => onChange(Math.max(0, Math.floor(n)));
+  return (
+    <div className="rounded-lg border bg-muted/30 p-3" data-testid={testId}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-base font-semibold flex items-center gap-2">
+            <span aria-hidden>{icon}</span>
+            {label}
+          </div>
+          <div className="text-xs text-muted-foreground">{hint}</div>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right">
-            <div className="text-2xl font-bold tabular-nums">{totalUnitsThisMonth}</div>
-            <div className="text-xs text-muted-foreground">units built this month</div>
-          </div>
-          <div className="text-right">
-            <div className="text-2xl font-bold tabular-nums">{runs.length}</div>
-            <div className="text-xs text-muted-foreground">total runs</div>
-          </div>
+        <div className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-12 w-12"
+            onClick={() => set(value - 1)}
+            disabled={value <= 0}
+            aria-label={`Decrease ${label}`}
+            data-testid={`${testId}-decrement`}
+          >
+            <Minus className="h-5 w-5" />
+          </Button>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            value={value === 0 ? "" : String(value)}
+            onChange={(e) => set(Number(e.target.value) || 0)}
+            placeholder="0"
+            className="h-12 w-20 text-center text-2xl font-bold tabular-nums"
+            data-testid={`${testId}-input`}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="h-12 w-12"
+            onClick={() => set(value + 1)}
+            aria-label={`Increase ${label}`}
+            data-testid={`${testId}-increment`}
+          >
+            <Plus className="h-5 w-5" />
+          </Button>
         </div>
       </div>
-
-      {/* Tabs — Daily Log is first since it's the most-used by Clarence */}
-      <Tabs defaultValue="daily-log">
-        <TabsList>
-          <TabsTrigger value="daily-log" className="gap-2">
-            <ClipboardCheck className="h-4 w-4" />
-            Daily Log
-          </TabsTrigger>
-          <TabsTrigger value="plan" className="gap-2">
-            <TrendingUp className="h-4 w-4" />
-            Plan
-          </TabsTrigger>
-          <TabsTrigger value="history" className="gap-2">
-            <Clock className="h-4 w-4" />
-            History
-            {runs.length > 0 && (
-              <Badge variant="secondary" className="ml-1 text-xs">{runs.length}</Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="daily-log" className="mt-6">
-          <DailyLogTab />
-        </TabsContent>
-
-        <TabsContent value="plan" className="mt-6">
-          <PlanTab />
-        </TabsContent>
-
-        <TabsContent value="history" className="mt-6">
-          <HistoryTab />
-        </TabsContent>
-      </Tabs>
     </div>
+  );
+}
+
+// ─── This week ─────────────────────────────────────────────────────────────
+
+function buildWeekLines(
+  week: WeekResponse | undefined,
+  itemBySku: Map<string, Item>,
+): Array<{ date: string; line: string }> {
+  if (!week) return [];
+
+  const skuByItemId = new Map<string, string>();
+  for (const item of Array.from(itemBySku.values())) skuByItemId.set(item.id, item.sku);
+
+  // Collapse multiple log rows into a single phrase per (date, action, item).
+  type Bucket = Map<ActionKey, Map<string, { qty: number; itemName: string }>>;
+  const byDate = new Map<string, Bucket>();
+  for (const log of week.logs) {
+    if (!byDate.has(log.productionDate)) byDate.set(log.productionDate, new Map());
+    const bucket = byDate.get(log.productionDate)!;
+    if (!bucket.has(log.actionType)) bucket.set(log.actionType, new Map());
+    const inner = bucket.get(log.actionType)!;
+    const existing = inner.get(log.itemId) ?? { qty: 0, itemName: log.itemName };
+    existing.qty += log.quantity;
+    inner.set(log.itemId, existing);
+  }
+
+  const dates = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : -1));
+  const result: Array<{ date: string; line: string }> = [];
+  for (const date of dates) {
+    const bucket = byDate.get(date)!;
+    const phrases: string[] = [];
+
+    const built = bucket.get("built");
+    if (built) {
+      for (const [itemId, info] of Array.from(built.entries())) {
+        const sku = skuByItemId.get(itemId);
+        const name = shortNameForItem(sku, info.itemName);
+        phrases.push(`${info.qty} ${name} built`);
+      }
+    }
+    const boxed = bucket.get("boxed");
+    if (boxed) {
+      for (const [itemId, info] of Array.from(boxed.entries())) {
+        const sku = skuByItemId.get(itemId);
+        const name = shortNameForItem(sku, info.itemName);
+        phrases.push(`${info.qty} ${name} boxed`);
+      }
+    }
+    const rolls = bucket.get("rolls_made");
+    if (rolls) {
+      let total = 0;
+      for (const v of Array.from(rolls.values())) total += v.qty;
+      if (total > 0) phrases.push(`${total} foam roller${total === 1 ? "" : "s"} made`);
+    }
+
+    if (phrases.length === 0) continue;
+    result.push({ date, line: `${formatVoxerDate(date)} — ${phrases.join(", ")}` });
+  }
+  return result;
+}
+
+function WeekReport({
+  week,
+  itemBySku,
+}: {
+  week: WeekResponse | undefined;
+  itemBySku: Map<string, Item>;
+}) {
+  const lines = useMemo(() => buildWeekLines(week, itemBySku), [week, itemBySku]);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    };
+  }, []);
+
+  const onCopy = async () => {
+    const text = lines.map((l) => l.line).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      if (copyTimer.current) window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <section className="space-y-3" aria-label="This week">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">This Week</h2>
+        <span className="text-xs text-muted-foreground">
+          {lines.length} day{lines.length === 1 ? "" : "s"} of activity
+        </span>
+      </div>
+
+      {lines.length === 0 ? (
+        <Card className="p-5 text-sm text-muted-foreground">
+          Nothing logged this week yet.
+        </Card>
+      ) : (
+        <Card className="divide-y" data-testid="week-list">
+          {lines.map((l) => (
+            <div key={l.date} className="p-3 text-base" data-testid={`week-row-${l.date}`}>
+              {l.line}
+            </div>
+          ))}
+        </Card>
+      )}
+
+      <Button
+        onClick={onCopy}
+        disabled={lines.length === 0}
+        className="w-full h-14 text-base"
+        variant="outline"
+        data-testid="button-copy-week"
+      >
+        {copied ? (
+          <>
+            <Check className="mr-2 h-5 w-5 text-green-600" />
+            Copied!
+          </>
+        ) : (
+          <>
+            <ClipboardCheck className="mr-2 h-5 w-5" />
+            📋 Copy Weekly Report
+          </>
+        )}
+      </Button>
+    </section>
   );
 }

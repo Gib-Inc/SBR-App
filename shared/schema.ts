@@ -228,7 +228,26 @@ export const insertProductionRunLineSchema = createInsertSchema(productionRunLin
 export type InsertProductionRunLine = z.infer<typeof insertProductionRunLineSchema>;
 export type ProductionRunLine = typeof productionRunLines.$inferSelect;
 
+// Lightweight per-action production log for the mobile shop-floor UI. One row per
+// rolls/built/boxed action that Clarence taps in. action_type is a free-form text
+// constrained at the application layer to: 'rolls_made' | 'built' | 'boxed'.
+export const productionLogs = pgTable("production_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  actionType: text("action_type").notNull(),
+  quantity: integer("quantity").notNull(),
+  productionDate: text("production_date").notNull(), // ISO YYYY-MM-DD
+  notes: text("notes"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: index("production_logs_item_id_idx").on(table.itemId),
+  productionDateIdx: index("production_logs_production_date_idx").on(table.productionDate),
+}));
 
+export const insertProductionLogSchema = createInsertSchema(productionLogs).omit({ id: true, createdAt: true });
+export type InsertProductionLog = z.infer<typeof insertProductionLogSchema>;
+export type ProductionLog = typeof productionLogs.$inferSelect;
 
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

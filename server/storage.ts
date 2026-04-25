@@ -126,6 +126,8 @@ import {
   type InsertProductionRun,
   type ProductionRunLine,
   type InsertProductionRunLine,
+  type ProductionLog,
+  type InsertProductionLog,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -215,6 +217,11 @@ export interface IStorage {
   getProductionRuns(limit?: number): Promise<ProductionRun[]>;
   getProductionRunLines(runId: string): Promise<ProductionRunLine[]>;
   getNextProductionRunNumber(): Promise<string>;
+
+  // Production logs (per-action shop floor entries)
+  createProductionLog(log: InsertProductionLog): Promise<ProductionLog>;
+  getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]>;
+  getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]>;
 
   // Cycle counts
   createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
@@ -1426,6 +1433,25 @@ export class MemStorage implements IStorage {
   }
   async getProductionRuns(): Promise<ProductionRun[]> { return []; }
   async getProductionRunLines(): Promise<ProductionRunLine[]> { return []; }
+
+  private productionLogs: ProductionLog[] = [];
+  async createProductionLog(log: InsertProductionLog): Promise<ProductionLog> {
+    const row: ProductionLog = {
+      id: randomUUID(),
+      createdAt: new Date(),
+      notes: log.notes ?? null,
+      createdBy: log.createdBy ?? null,
+      ...log,
+    } as ProductionLog;
+    this.productionLogs.push(row);
+    return row;
+  }
+  async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
+    return this.productionLogs.filter(l => l.productionDate >= startDate && l.productionDate <= endDate);
+  }
+  async getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]> {
+    return this.productionLogs.filter(l => l.productionDate === productionDate && l.itemId === itemId);
+  }
 
   // Cycle Count stubs
   async getNextCycleCountSessionNumber(): Promise<string> { return `CC-${new Date().getFullYear()}-0001`; }
@@ -4473,6 +4499,32 @@ export class PostgresStorage implements IStorage {
       .select()
       .from(schema.productionRunLines)
       .where(eq(schema.productionRunLines.runId, runId));
+  }
+
+  async createProductionLog(log: InsertProductionLog): Promise<ProductionLog> {
+    const results = await this.db.insert(schema.productionLogs).values(log).returning();
+    return results[0];
+  }
+
+  async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
+    return await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(and(
+        gte(schema.productionLogs.productionDate, startDate),
+        lte(schema.productionLogs.productionDate, endDate),
+      ))
+      .orderBy(desc(schema.productionLogs.productionDate), desc(schema.productionLogs.createdAt));
+  }
+
+  async getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]> {
+    return await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(and(
+        eq(schema.productionLogs.productionDate, productionDate),
+        eq(schema.productionLogs.itemId, itemId),
+      ));
   }
 
   // Cycle Count Sessions

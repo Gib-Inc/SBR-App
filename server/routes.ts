@@ -11843,6 +11843,218 @@ Notes: ${po.notes || 'None'}
   });
 
   // ============================================================================
+  // PRODUCTION LOGS — per-action shop floor entries (Clarence's mobile UI)
+  // ============================================================================
+
+  // POST /api/production-logs — log a single action (rolls_made | built | boxed).
+  // 'built' also runs BOM_CONSUMPTION per component + PRODUCTION_COMPLETED for the
+  // finished good. 'rolls_made' bumps the foam roller component if one is found by
+  // name (case-insensitive substring match on "foam"); otherwise inventory is left
+  // alone and a warning is returned. 'boxed' is log-only.
+  app.post("/api/production-logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, actionType, quantity, productionDate, notes } = req.body as {
+        itemId?: string;
+        actionType?: string;
+        quantity?: number;
+        productionDate?: string;
+        notes?: string;
+      };
+
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (actionType !== "rolls_made" && actionType !== "built" && actionType !== "boxed") {
+        return res.status(400).json({ error: "actionType must be 'rolls_made', 'built', or 'boxed'" });
+      }
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "quantity must be a positive whole number" });
+      }
+      const date = typeof productionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(productionDate)
+        ? productionDate
+        : new Date().toISOString().slice(0, 10);
+
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(400).json({ error: "Item not found" });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      const auditNote = cleanNotes
+        ? `[${actionType}] ${cleanNotes}`
+        : `[${actionType}]`;
+
+      const warnings: string[] = [];
+      let inventoryUpdated = false;
+
+      if (actionType === "built") {
+        if (item.type !== "finished_product") {
+          warnings.push(`${item.name} is not a finished product — skipped inventory update.`);
+        } else {
+          const bom = await storage.getBillOfMaterialsByProductId(item.id);
+          if (bom.length === 0) {
+            warnings.push(`No BOM defined for ${item.name} — finished good incremented but no components consumed.`);
+          }
+
+          const inventoryMovement = new InventoryMovement(storage);
+          for (const entry of bom) {
+            const component = await storage.getItem(entry.componentId);
+            if (!component) {
+              warnings.push(`Component ${entry.componentId} not found — skipped.`);
+              continue;
+            }
+            const wastageMultiplier = 1 + (entry.wastagePercent ?? 0) / 100;
+            const consumeQty = Math.ceil(entry.quantityRequired * qty * wastageMultiplier);
+            const onHand = component.currentStock ?? 0;
+            if (consumeQty > onHand) {
+              warnings.push(`${component.name}: short by ${consumeQty - onHand} (needed ${consumeQty}, on hand ${onHand}). Built anyway.`);
+            }
+            const result = await inventoryMovement.apply({
+              eventType: "BOM_CONSUMPTION",
+              itemId: component.id,
+              quantity: consumeQty,
+              source: "USER",
+              userId,
+              userName,
+              notes: `[built] ${item.name} ×${qty}${cleanNotes ? ` — ${cleanNotes}` : ""}`,
+            });
+            if (!result.success) {
+              warnings.push(`${component.name}: ${result.error}`);
+            }
+          }
+
+          const buildResult = await inventoryMovement.apply({
+            eventType: "PRODUCTION_COMPLETED",
+            itemId: item.id,
+            quantity: qty,
+            location: "HILDALE",
+            source: "USER",
+            userId,
+            userName,
+            notes: auditNote,
+          });
+          if (!buildResult.success) {
+            return res.status(400).json({ error: buildResult.error });
+          }
+          inventoryUpdated = true;
+        }
+      } else if (actionType === "rolls_made") {
+        // Find a foam component by name (case-insensitive substring). If none exists
+        // we still log the row — the UI will surface the warning so Clarence isn't blocked.
+        const allItems = await storage.getAllItems();
+        const foam = allItems.find(i =>
+          i.type === "component" &&
+          /foam/i.test(i.name ?? "")
+        );
+        if (!foam) {
+          warnings.push("No foam component found in catalog — logged the count, but stock not adjusted.");
+        } else {
+          const inventoryMovement = new InventoryMovement(storage);
+          const result = await inventoryMovement.apply({
+            eventType: "MANUAL_ADJUSTMENT",
+            itemId: foam.id,
+            quantity: qty,
+            source: "USER",
+            userId,
+            userName,
+            notes: auditNote,
+          });
+          if (!result.success) {
+            warnings.push(`Foam adjustment failed: ${result.error}`);
+          } else {
+            inventoryUpdated = true;
+          }
+        }
+      }
+      // 'boxed' = log only, no inventory side-effect
+
+      const log = await storage.createProductionLog({
+        itemId: item.id,
+        actionType,
+        quantity: qty,
+        productionDate: date,
+        notes: cleanNotes || null,
+        createdBy: userId,
+      });
+
+      res.status(201).json({ log, warnings, inventoryUpdated });
+    } catch (error: any) {
+      console.error("[Production Logs] Error creating log:", error);
+      res.status(500).json({ error: error.message || "Failed to log production" });
+    }
+  });
+
+  // GET /api/production-logs/today-totals?date=YYYY-MM-DD&itemIds=id1,id2,...
+  // Returns totals per actionType per itemId for the given date. Caller passes the
+  // date so we don't have to guess the user's local timezone.
+  app.get("/api/production-logs/today-totals", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : new Date().toISOString().slice(0, 10);
+      const itemIdsRaw = typeof req.query.itemIds === "string" ? req.query.itemIds : "";
+      const itemIds = itemIdsRaw.split(",").map(s => s.trim()).filter(Boolean);
+
+      const totals: Record<string, { rolls_made: number; built: number; boxed: number }> = {};
+      for (const id of itemIds) totals[id] = { rolls_made: 0, built: 0, boxed: 0 };
+
+      // Single query covering all requested items for the date.
+      const allForDate = await storage.getProductionLogsForRange(date, date);
+      for (const log of allForDate) {
+        if (itemIds.length > 0 && !itemIds.includes(log.itemId)) continue;
+        if (!totals[log.itemId]) totals[log.itemId] = { rolls_made: 0, built: 0, boxed: 0 };
+        const k = log.actionType as "rolls_made" | "built" | "boxed";
+        if (k in totals[log.itemId]) totals[log.itemId][k] += log.quantity;
+      }
+
+      res.json({ date, totals });
+    } catch (error: any) {
+      console.error("[Production Logs] Error fetching today totals:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch totals" });
+    }
+  });
+
+  // GET /api/production-logs/week?endDate=YYYY-MM-DD&days=7
+  // Returns logs across the window, joined with item name for display.
+  app.get("/api/production-logs/week", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const endDate = typeof req.query.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.endDate)
+        ? req.query.endDate
+        : new Date().toISOString().slice(0, 10);
+      const daysParam = Number(req.query.days);
+      const days = Number.isInteger(daysParam) && daysParam > 0 && daysParam <= 60 ? daysParam : 7;
+
+      const start = new Date(endDate + "T00:00:00Z");
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+      const startDate = start.toISOString().slice(0, 10);
+
+      const logs = await storage.getProductionLogsForRange(startDate, endDate);
+      const items = await storage.getAllItems();
+      const nameById = new Map(items.map(i => [i.id, i.name] as const));
+
+      const enriched = logs.map(l => ({
+        id: l.id,
+        itemId: l.itemId,
+        itemName: nameById.get(l.itemId) ?? "(unknown)",
+        actionType: l.actionType,
+        quantity: l.quantity,
+        productionDate: l.productionDate,
+        notes: l.notes,
+        createdAt: l.createdAt,
+      }));
+
+      res.json({ startDate, endDate, logs: enriched });
+    } catch (error: any) {
+      console.error("[Production Logs] Error fetching week:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch week" });
+    }
+  });
+
+  // ============================================================================
   // CYCLE COUNTS (#7) — physical shelf-walk sessions
   // ============================================================================
 

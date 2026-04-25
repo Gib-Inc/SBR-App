@@ -128,6 +128,8 @@ import {
   type InsertProductionRunLine,
   type ProductionLog,
   type InsertProductionLog,
+  type ShopIssue,
+  type InsertShopIssue,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -222,6 +224,9 @@ export interface IStorage {
   createProductionLog(log: InsertProductionLog): Promise<ProductionLog>;
   getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]>;
   getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]>;
+
+  // Shop floor issue reports
+  createShopIssue(issue: InsertShopIssue): Promise<ShopIssue>;
 
   // Cycle counts
   createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
@@ -1451,6 +1456,18 @@ export class MemStorage implements IStorage {
   }
   async getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]> {
     return this.productionLogs.filter(l => l.productionDate === productionDate && l.itemId === itemId);
+  }
+
+  private shopIssues: ShopIssue[] = [];
+  async createShopIssue(issue: InsertShopIssue): Promise<ShopIssue> {
+    const row: ShopIssue = {
+      id: randomUUID(),
+      createdAt: new Date(),
+      reportedBy: issue.reportedBy ?? null,
+      ...issue,
+    } as ShopIssue;
+    this.shopIssues.push(row);
+    return row;
   }
 
   // Cycle Count stubs
@@ -4525,6 +4542,11 @@ export class PostgresStorage implements IStorage {
         eq(schema.productionLogs.productionDate, productionDate),
         eq(schema.productionLogs.itemId, itemId),
       ));
+  }
+
+  async createShopIssue(issue: InsertShopIssue): Promise<ShopIssue> {
+    const results = await this.db.insert(schema.shopIssues).values(issue).returning();
+    return results[0];
   }
 
   // Cycle Count Sessions

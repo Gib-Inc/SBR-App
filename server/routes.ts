@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { storage } from "./storage";
+import { storage, type IStorage } from "./storage";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
@@ -11853,12 +11853,13 @@ Notes: ${po.notes || 'None'}
   // alone and a warning is returned. 'boxed' is log-only.
   app.post("/api/production-logs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { itemId, actionType, quantity, productionDate, notes } = req.body as {
+      const { itemId, actionType, quantity, productionDate, notes, componentItemId } = req.body as {
         itemId?: string;
         actionType?: string;
         quantity?: number;
         productionDate?: string;
         notes?: string;
+        componentItemId?: string;
       };
 
       if (!itemId || typeof itemId !== "string") {
@@ -11943,13 +11944,22 @@ Notes: ${po.notes || 'None'}
           inventoryUpdated = true;
         }
       } else if (actionType === "rolls_made") {
-        // Find a foam component by name (case-insensitive substring). If none exists
-        // we still log the row — the UI will surface the warning so Clarence isn't blocked.
-        const allItems = await storage.getAllItems();
-        const foam = allItems.find(i =>
-          i.type === "component" &&
-          /foam/i.test(i.name ?? "")
-        );
+        // Prefer the client-supplied component (per-card foam mapping). Fall back to
+        // a generic name search so cards without an explicit mapping still work.
+        let foam: typeof item | undefined;
+        if (componentItemId) {
+          foam = await storage.getItem(componentItemId);
+          if (!foam || foam.type !== "component") {
+            warnings.push("Provided component is not a valid component — falling back to name search.");
+            foam = undefined;
+          }
+        }
+        if (!foam) {
+          const allItems = await storage.getAllItems();
+          foam = allItems.find((i) =>
+            i.type === "component" && /foam/i.test(i.name ?? ""),
+          );
+        }
         if (!foam) {
           warnings.push("No foam component found in catalog — logged the count, but stock not adjusted.");
         } else {
@@ -12051,6 +12061,91 @@ Notes: ${po.notes || 'None'}
     } catch (error: any) {
       console.error("[Production Logs] Error fetching week:", error);
       res.status(500).json({ error: error.message || "Failed to fetch week" });
+    }
+  });
+
+  // GET /api/production-logs/buildable?itemId=xxx
+  // Returns how many units of a finished product the current component stock
+  // supports, plus the name of the limiting component. Read-only — used by the
+  // pre-build hint in the production sheet.
+  app.get("/api/production-logs/buildable", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const itemId = typeof req.query.itemId === "string" ? req.query.itemId : "";
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+
+      const bom = await storage.getBillOfMaterialsByProductId(item.id);
+      if (bom.length === 0) {
+        return res.json({ hasBOM: false, canBuild: null, limitingComponentName: null });
+      }
+
+      let canBuild = Number.POSITIVE_INFINITY;
+      let limitingComponentName: string | null = null;
+      for (const entry of bom) {
+        const component = await storage.getItem(entry.componentId);
+        if (!component) {
+          // Treat a missing component as a hard zero — can't build until catalog is fixed.
+          canBuild = 0;
+          limitingComponentName = "(missing component)";
+          continue;
+        }
+        const wastageMultiplier = 1 + (entry.wastagePercent ?? 0) / 100;
+        const perUnit = entry.quantityRequired * wastageMultiplier;
+        const onHand = component.currentStock ?? 0;
+        const max = perUnit > 0 ? Math.floor(onHand / perUnit) : Number.POSITIVE_INFINITY;
+        if (max < canBuild) {
+          canBuild = max;
+          limitingComponentName = component.name;
+        }
+      }
+
+      res.json({
+        hasBOM: true,
+        canBuild: Number.isFinite(canBuild) ? canBuild : null,
+        limitingComponentName,
+      });
+    } catch (error: any) {
+      console.error("[Production Logs] Error computing buildable:", error);
+      res.status(500).json({ error: error.message || "Failed to compute buildable" });
+    }
+  });
+
+  // POST /api/shop-issues — Clarence files an issue from the production sheet.
+  app.post("/api/shop-issues", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, issueType, notes } = req.body as {
+        itemId?: string;
+        issueType?: string;
+        notes?: string;
+      };
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      const validTypes = ["defective_component", "short_shipment", "equipment_problem", "other"];
+      if (!issueType || !validTypes.includes(issueType)) {
+        return res.status(400).json({ error: `issueType must be one of: ${validTypes.join(", ")}` });
+      }
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      if (!cleanNotes) {
+        return res.status(400).json({ error: "notes is required" });
+      }
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(400).json({ error: "Item not found" });
+
+      const userId = req.session.userId!;
+      const issue = await storage.createShopIssue({
+        itemId,
+        issueType,
+        notes: cleanNotes,
+        reportedBy: userId,
+      });
+      res.status(201).json({ issue });
+    } catch (error: any) {
+      console.error("[Shop Issues] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to file issue" });
     }
   });
 
@@ -22687,5 +22782,31 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Idempotent seed: ensure the two foam roller component items exist so the
+  // Production page's "Rolls Made" action has somewhere to write inventory.
+  // Safe to run on every boot — INSERT only fires when the SKU is missing.
+  ensureFoamComponents(storage).catch((err) => {
+    console.warn("[Production] Failed to ensure foam components:", err?.message ?? err);
+  });
+
   return httpServer;
+}
+
+async function ensureFoamComponents(storage: IStorage): Promise<void> {
+  const seeds = [
+    { sku: "SBR-COMP-ROLLER-12", name: 'Foam Roller - 12"' },
+    { sku: "SBR-COMP-ROLLER-18", name: 'Foam Roller - 18"' },
+  ];
+  for (const s of seeds) {
+    const existing = await storage.getItemBySku(s.sku);
+    if (existing) continue;
+    await storage.createItem({
+      sku: s.sku,
+      name: s.name,
+      type: "component",
+      currentStock: 0,
+      category: "Foam Rollers",
+    });
+    console.log(`[Production] Seeded foam component ${s.sku} (${s.name})`);
+  }
 }

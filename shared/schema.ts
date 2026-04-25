@@ -249,6 +249,25 @@ export const insertProductionLogSchema = createInsertSchema(productionLogs).omit
 export type InsertProductionLog = z.infer<typeof insertProductionLogSchema>;
 export type ProductionLog = typeof productionLogs.$inferSelect;
 
+// Free-form shop floor issue reports filed from the production sheet.
+// issue_type is constrained at the application layer to:
+// 'defective_component' | 'short_shipment' | 'equipment_problem' | 'other'.
+export const shopIssues = pgTable("shop_issues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  issueType: text("issue_type").notNull(),
+  notes: text("notes").notNull(),
+  reportedBy: text("reported_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: index("shop_issues_item_id_idx").on(table.itemId),
+  createdAtIdx: index("shop_issues_created_at_idx").on(table.createdAt),
+}));
+
+export const insertShopIssueSchema = createInsertSchema(shopIssues).omit({ id: true, createdAt: true });
+export type InsertShopIssue = z.infer<typeof insertShopIssueSchema>;
+export type ShopIssue = typeof shopIssues.$inferSelect;
+
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),

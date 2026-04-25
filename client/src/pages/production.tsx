@@ -12,6 +12,15 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  ArrowLeft,
   Check,
   ChevronRight,
   ClipboardCheck,
@@ -33,18 +42,41 @@ type CardConfig = {
   skus: string[];
   // Optional shorter labels for the variant picker buttons, keyed by SKU.
   variantLabels?: Record<string, string>;
+  // If primary SKU(s) aren't found, try matching an item by name pattern
+  // (and the optional finishedProduct constraint). Used to track moving SKUs
+  // like Bigfoot until the catalog is finalized.
+  fallbackNameRegex?: RegExp;
+  fallbackTypeFilter?: "finished_product" | "component";
+  // The foam component SKU consumed when "Rolls Made" is logged from this card.
+  foamComponentSku?: string;
 };
 
 const CARDS: CardConfig[] = [
-  { key: "push-1-0", label: "Push Model 1.0", skus: ["101-PSH-M1"] },
-  { key: "push-2-0", label: "Push Model 2.0", skus: ["201-PSH-M2"] },
+  {
+    key: "push-1-0",
+    label: "Push Model 1.0",
+    skus: ["101-PSH-M1"],
+    foamComponentSku: "SBR-COMP-ROLLER-12",
+  },
+  {
+    key: "push-2-0",
+    label: "Push Model 2.0",
+    skus: ["201-PSH-M2"],
+    foamComponentSku: "SBR-COMP-ROLLER-18",
+  },
   {
     key: "pull-behind",
     label: "Pull-Behind",
     skus: ["1001-PB-M1", "1200-PB-M2"],
     variantLabels: { "1001-PB-M1": "Original", "1200-PB-M2": "Bigfoot" },
   },
-  { key: "bigfoot", label: "Bigfoot", skus: ["1200-PB-M2"] },
+  {
+    key: "bigfoot",
+    label: "Bigfoot",
+    skus: ["SBR-PB-BIGFOOT"],
+    fallbackNameRegex: /bigfoot/i,
+    fallbackTypeFilter: "finished_product",
+  },
 ];
 
 // Short display names used in the "This Week" copy/list. Falls back to the
@@ -54,6 +86,7 @@ const SHORT_NAMES_BY_SKU: Record<string, string> = {
   "201-PSH-M2": "Push 2.0",
   "1001-PB-M1": "Pull-Behind Original",
   "1200-PB-M2": "Bigfoot",
+  "SBR-PB-BIGFOOT": "Bigfoot",
 };
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -119,6 +152,24 @@ function shortNameForItem(sku: string | undefined, fallback: string): string {
   return fallback;
 }
 
+// Resolve a card's primary item list. Tries exact SKU matches first; if none of
+// the listed SKUs are found and the card has a fallback name pattern, returns
+// the first item matching that pattern (and optional type filter).
+function resolveCardItems(card: CardConfig, items: Item[]): Item[] {
+  const bySku = new Map(items.map((i) => [i.sku, i] as const));
+  const direct = card.skus.map((s) => bySku.get(s)).filter((x): x is Item => !!x);
+  if (direct.length > 0) return direct;
+  if (card.fallbackNameRegex) {
+    const fallback = items.find(
+      (i) =>
+        card.fallbackNameRegex!.test(i.name ?? "") &&
+        (!card.fallbackTypeFilter || i.type === card.fallbackTypeFilter),
+    );
+    if (fallback) return [fallback];
+  }
+  return [];
+}
+
 function actionVerb(action: ActionKey, qty: number): string {
   if (action === "rolls_made") {
     return `${qty} foam roller${qty === 1 ? "" : "s"} made`;
@@ -143,17 +194,24 @@ export default function Production() {
     return m;
   }, [items]);
 
-  // Resolve all card SKUs → item IDs we need totals for. De-duped.
+  // Resolve each card's items once (handles fallback name search for cards
+  // whose primary SKU isn't in the catalog yet).
+  const cardItems = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    for (const card of CARDS) {
+      map.set(card.key, resolveCardItems(card, items));
+    }
+    return map;
+  }, [items]);
+
+  // De-duplicated list of tracked item IDs for the today-totals query.
   const trackedItemIds = useMemo(() => {
     const set = new Set<string>();
-    for (const card of CARDS) {
-      for (const sku of card.skus) {
-        const item = itemBySku.get(sku);
-        if (item) set.add(item.id);
-      }
+    for (const list of Array.from(cardItems.values())) {
+      for (const it of list) set.add(it.id);
     }
     return Array.from(set);
-  }, [itemBySku]);
+  }, [cardItems]);
 
   const { data: todayData } = useQuery<TodayTotals>({
     queryKey: [`/api/production-logs/today-totals?date=${today}&itemIds=${trackedItemIds.join(",")}`],
@@ -166,11 +224,10 @@ export default function Production() {
 
   const todayTotalForCard = (card: CardConfig): number => {
     if (!todayData) return 0;
+    const list = cardItems.get(card.key) ?? [];
     let sum = 0;
-    for (const sku of card.skus) {
-      const item = itemBySku.get(sku);
-      if (!item) continue;
-      sum += todayData.totals[item.id]?.built ?? 0;
+    for (const it of list) {
+      sum += todayData.totals[it.id]?.built ?? 0;
     }
     return sum;
   };
@@ -188,7 +245,8 @@ export default function Production() {
       <section className="space-y-3" aria-label="Log today's work">
         {CARDS.map((card) => {
           const built = todayTotalForCard(card);
-          const missing = card.skus.every((sku) => !itemBySku.get(sku));
+          const resolved = cardItems.get(card.key) ?? [];
+          const missing = resolved.length === 0;
           return (
             <Card
               key={card.key}
@@ -240,6 +298,7 @@ export default function Production() {
       {openCard && (
         <ProductionSheet
           card={openCard}
+          resolvedItems={cardItems.get(openCard.key) ?? []}
           itemBySku={itemBySku}
           onClose={() => setOpenSheetKey(null)}
         />
@@ -255,17 +314,19 @@ export default function Production() {
 
 function ProductionSheet({
   card,
+  resolvedItems,
   itemBySku,
   onClose,
 }: {
   card: CardConfig;
+  resolvedItems: Item[];
   itemBySku: Map<string, Item>;
   onClose: () => void;
 }) {
   const today = todayISO();
-  const requiresVariant = card.skus.length > 1;
+  const requiresVariant = resolvedItems.length > 1;
   const [selectedSku, setSelectedSku] = useState<string | null>(
-    requiresVariant ? null : card.skus[0],
+    requiresVariant ? null : resolvedItems[0]?.sku ?? null,
   );
   const [date, setDate] = useState(today);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -275,6 +336,7 @@ function ProductionSheet({
   const [boxed, setBoxed] = useState(0);
   const [banner, setBanner] = useState<SaveBanner>({ kind: "idle" });
   const bannerTimer = useRef<number | null>(null);
+  const [mode, setMode] = useState<"main" | "report">("main");
 
   useEffect(() => {
     return () => {
@@ -306,6 +368,7 @@ function ProductionSheet({
         error?: string;
         warnings?: string[];
       }> = [];
+      const foamItem = card.foamComponentSku ? itemBySku.get(card.foamComponentSku) : undefined;
       for (const entry of payload.entries) {
         try {
           const res = await apiRequest("POST", "/api/production-logs", {
@@ -314,6 +377,7 @@ function ProductionSheet({
             quantity: entry.quantity,
             productionDate: date,
             notes: notes || undefined,
+            componentItemId: entry.actionType === "rolls_made" ? foamItem?.id : undefined,
           });
           const body = await res.json();
           results.push({
@@ -398,6 +462,13 @@ function ProductionSheet({
     runSubmit(entries);
   };
 
+  const showReportSubmitted = () => {
+    setMode("main");
+    setBanner({ kind: "success", message: "✓ Report submitted" });
+    if (bannerTimer.current) window.clearTimeout(bannerTimer.current);
+    bannerTimer.current = window.setTimeout(() => setBanner({ kind: "idle" }), 4000);
+  };
+
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
@@ -405,31 +476,46 @@ function ProductionSheet({
         className="max-h-[92vh] overflow-y-auto rounded-t-2xl"
       >
         <SheetHeader className="text-left">
-          <SheetTitle className="text-2xl font-bold">{titleName}</SheetTitle>
+          <SheetTitle className="text-2xl font-bold flex items-center gap-2">
+            {mode === "report" && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 -ml-2"
+                onClick={() => setMode("main")}
+                aria-label="Back"
+                data-testid="button-back-from-report"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            )}
+            {mode === "report" ? "Report an issue" : titleName}
+          </SheetTitle>
         </SheetHeader>
 
-        {requiresVariant && !selectedSku && (
+        {mode === "report" && selectedItem && (
+          <IssueReportForm
+            item={selectedItem}
+            onSubmitted={showReportSubmitted}
+          />
+        )}
+
+        {mode === "main" && requiresVariant && !selectedSku && (
           <div className="mt-4 space-y-2" data-testid="variant-picker">
             <Label className="text-sm text-muted-foreground">Which one?</Label>
             <div className="grid grid-cols-1 gap-2">
-              {card.skus.map((sku) => {
-                const item = itemBySku.get(sku);
-                const label = card.variantLabels?.[sku] ?? item?.name ?? sku;
+              {resolvedItems.map((item) => {
+                const label = card.variantLabels?.[item.sku] ?? item.name;
                 return (
                   <Button
-                    key={sku}
+                    key={item.sku}
                     variant="outline"
                     className="h-14 text-lg justify-start"
-                    onClick={() => setSelectedSku(sku)}
-                    disabled={!item}
-                    data-testid={`variant-${sku}`}
+                    onClick={() => setSelectedSku(item.sku)}
+                    data-testid={`variant-${item.sku}`}
                   >
                     {label}
-                    {!item && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        (not in catalog)
-                      </span>
-                    )}
                   </Button>
                 );
               })}
@@ -437,8 +523,9 @@ function ProductionSheet({
           </div>
         )}
 
-        {selectedSku && (
+        {mode === "main" && selectedSku && selectedItem && (
           <div className="mt-4 space-y-4">
+            <BuildableHint itemId={selectedItem.id} />
             <ActionRow
               icon="🔩"
               label="Rolls Made"
@@ -546,10 +633,193 @@ function ProductionSheet({
                 </>
               )}
             </Button>
+
+            <button
+              type="button"
+              onClick={() => setMode("report")}
+              className="block mx-auto text-sm text-muted-foreground underline h-10 px-2"
+              data-testid="link-report-issue"
+            >
+              Report an issue
+            </button>
           </div>
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// Read-only pre-build hint shown at the top of the sheet. Hidden when there's
+// no BOM for the product. Threshold: ≥10 buildable = green, 1–9 = amber,
+// 0 = red.
+function BuildableHint({ itemId }: { itemId: string }) {
+  type Buildable = {
+    hasBOM: boolean;
+    canBuild: number | null;
+    limitingComponentName: string | null;
+  };
+  const { data, isLoading } = useQuery<Buildable>({
+    queryKey: [`/api/production-logs/buildable?itemId=${itemId}`],
+  });
+
+  if (isLoading || !data || !data.hasBOM) return null;
+
+  const can = data.canBuild ?? 0;
+  if (can >= 10) {
+    return (
+      <div
+        className="rounded-md border border-green-600/40 bg-green-600/10 p-3 text-sm font-medium text-green-700 dark:text-green-400"
+        data-testid="buildable-hint"
+      >
+        ✅ Enough for {can} unit{can === 1 ? "" : "s"}
+      </div>
+    );
+  }
+  if (can > 0) {
+    const limit = data.limitingComponentName ?? "a component";
+    return (
+      <div
+        className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
+        data-testid="buildable-hint"
+      >
+        ⚠️ Enough for {can} unit{can === 1 ? "" : "s"} — {limit} is the limit
+      </div>
+    );
+  }
+  return (
+    <div
+      className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm font-medium text-destructive"
+      data-testid="buildable-hint"
+    >
+      🔴 Missing components — check stock
+    </div>
+  );
+}
+
+// In-sheet issue report form. Shown when the sheet's mode === "report".
+function IssueReportForm({
+  item,
+  onSubmitted,
+}: {
+  item: Item;
+  onSubmitted: () => void;
+}) {
+  const ISSUE_TYPES: Array<{ value: string; label: string }> = [
+    { value: "defective_component", label: "Defective component" },
+    { value: "short_shipment", label: "Short shipment" },
+    { value: "equipment_problem", label: "Equipment problem" },
+    { value: "other", label: "Other" },
+  ];
+  const [issueType, setIssueType] = useState<string>("");
+  const [issueNotes, setIssueNotes] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/shop-issues", {
+        itemId: item.id,
+        issueType,
+        notes: issueNotes,
+      });
+      return await res.json();
+    },
+    onSuccess: () => {
+      onSubmitted();
+    },
+    onError: (err: Error) => {
+      setError(err.message || "Failed to submit");
+    },
+  });
+
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!issueType) {
+      setError("Pick an issue type.");
+      return;
+    }
+    if (!issueNotes.trim()) {
+      setError("Notes are required.");
+      return;
+    }
+    mutation.mutate();
+  };
+
+  const titleName = shortNameForItem(item.sku, item.name);
+
+  return (
+    <form onSubmit={onSubmit} className="mt-4 space-y-4">
+      <div className="rounded-md bg-muted/50 p-3 text-sm">
+        Item: <span className="font-medium">{titleName}</span>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="issue-type" className="text-sm text-muted-foreground">
+          Issue type
+        </Label>
+        <Select value={issueType} onValueChange={setIssueType}>
+          <SelectTrigger id="issue-type" className="h-12 text-base" data-testid="select-issue-type">
+            <SelectValue placeholder="Select…" />
+          </SelectTrigger>
+          <SelectContent>
+            {ISSUE_TYPES.map((t) => (
+              <SelectItem key={t.value} value={t.value}>
+                {t.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor="issue-notes" className="text-sm text-muted-foreground">
+          Notes
+        </Label>
+        <Textarea
+          id="issue-notes"
+          value={issueNotes}
+          onChange={(e) => setIssueNotes(e.target.value)}
+          placeholder="Describe what happened"
+          rows={4}
+          className="text-base"
+          data-testid="textarea-issue-notes"
+        />
+      </div>
+
+      {error && (
+        <div
+          className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive flex items-start justify-between gap-3"
+          data-testid="banner-issue-error"
+        >
+          <span>✗ {error}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            onClick={() => mutation.mutate()}
+            data-testid="button-retry-issue"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      <Button
+        type="submit"
+        disabled={mutation.isPending}
+        className="w-full h-14 text-lg"
+        data-testid="button-submit-issue"
+      >
+        {mutation.isPending ? (
+          <>
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+            Submitting…
+          </>
+        ) : (
+          "Submit Report"
+        )}
+      </Button>
+    </form>
   );
 }
 

@@ -69,6 +69,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { DashboardWidget } from "@/components/dashboard-widget";
+import { CriticalStockBanner } from "@/components/critical-stock-banner";
 
 type Widget = {
   id: string;
@@ -551,6 +552,7 @@ export default function Reports() {
 
   return (
     <div className="p-6 space-y-6">
+      <CriticalStockBanner />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Reports</h1>

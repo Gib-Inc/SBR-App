@@ -390,7 +390,7 @@ export default function Inventory() {
       {/* Source footnote */}
       <p className="text-xs text-muted-foreground">
         Pyvott column is live from Extensiv (updates on each sync). Hildale
-        column is from the most recent manual PDF upload.
+        column reflects the latest manual count sheet entry.
       </p>
     </div>
   );

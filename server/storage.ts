@@ -7697,25 +7697,13 @@ export class PostgresStorage implements IStorage {
     return (rows as any).rows ?? (rows as any);
   }
 
-  async getInventorySnapshot(params?: { date?: string }): Promise<any[]> {
-    // Merged feed:
-    //   - Pyvott rows come LIVE from items.extensiv_on_hand_snapshot (synced from Extensiv)
-    //   - Hildale rows come from the most recent inventory_snapshots PDF upload
-    // Non-Pyvott rows in inventory_snapshots are preserved; Pyvott rows in
-    // inventory_snapshots are ignored in favor of the live feed.
-    const snapshotDateResult: any = await this.db.execute(
-      drizzleSql`SELECT MAX(snapshot_date)::text AS d FROM inventory_snapshots`
-    );
-    const hildaleDate = params?.date
-      ?? snapshotDateResult.rows?.[0]?.d
-      ?? snapshotDateResult[0]?.d
-      ?? null;
-
-    // Live Pyvott rows from items table.
-    // SKU normalization: Extensiv auto-created items have sku like "SKU: #101-PSH-M1"
-    // while the Hildale PDF uses "#101-PSH-M1". We strip the "SKU: " prefix so the
-    // UI's group-by-SKU can merge rows across warehouses.
-    const liveResult: any = await this.db.execute(drizzleSql`
+  async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
+    // Both warehouses are sourced live from the items table:
+    //   - Pyvott qty  = items.extensiv_on_hand_snapshot (written by Extensiv sync)
+    //   - Hildale qty = items.hildale_qty (written by manual count sheet uploads)
+    // SKU normalization: Extensiv auto-created items have sku like "SKU: #101-PSH-M1";
+    // we strip the "SKU: " prefix so the UI's group-by-SKU merges rows across warehouses.
+    const result: any = await this.db.execute(drizzleSql`
       SELECT
         COALESCE(extensiv_last_sync_at::date::text, CURRENT_DATE::text) AS snapshot_date,
         'Pyvott' AS location,
@@ -7726,36 +7714,19 @@ export class PostgresStorage implements IStorage {
         'extensiv_live' AS source
       FROM items
       WHERE extensiv_sku IS NOT NULL
+      UNION ALL
+      SELECT
+        CURRENT_DATE::text AS snapshot_date,
+        'Hildale' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(hildale_qty, 0) AS qty,
+        0 AS promised,
+        'hildale_qty' AS source
+      FROM items
+      WHERE extensiv_sku IS NOT NULL
     `);
-    const liveRows = liveResult.rows ?? liveResult ?? [];
-
-    // Hildale (and any other non-Pyvott) rows from PDF snapshots
-    let snapshotRows: any[] = [];
-    if (hildaleDate) {
-      // Hildale display qty = PDF baseline + items.hildale_qty (live delta).
-      // The delta starts at 0 after a PDF upload and moves with ships (down),
-      // production (up), and returns (up). LEFT JOIN on normalized SKU so that
-      // snapshot rows without a matching item still render with delta = 0.
-      const snapResult: any = await this.db.execute(drizzleSql`
-        SELECT
-          s.snapshot_date::text AS snapshot_date,
-          s.location,
-          s.sku,
-          s.name,
-          (s.qty + COALESCE(i.hildale_qty, 0))::int AS qty,
-          0 AS promised,
-          s.source
-        FROM inventory_snapshots s
-        LEFT JOIN items i
-          ON REGEXP_REPLACE(i.sku, '^SKU:\\s*', '') = s.sku
-        WHERE s.snapshot_date = ${hildaleDate}::date
-          AND s.location <> 'Pyvott'
-        ORDER BY s.location, s.sku
-      `);
-      snapshotRows = snapResult.rows ?? snapResult ?? [];
-    }
-
-    return [...liveRows, ...snapshotRows];
+    return result.rows ?? result ?? [];
   }
 }
 

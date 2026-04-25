@@ -12,10 +12,13 @@ import {
 
 const HEADLINE_SKU = "SBR-Extrawide2.0";
 const HEADLINE_NAME = 'Push 2.0 Extra Wide 18" Roller';
-const HEADLINE_MESSAGE =
-  "🔴 CRITICALLY OUT OF STOCK — 0 units available. ~20 units/day velocity. Oversold at Pyvott.";
+const VELOCITY_WINDOW_DAYS = 90; // /api/inventory/sales-velocity returns 90d totals
 const OTHER_CRITICAL_VELOCITY_THRESHOLD = 50; // 90-day units sold
 const DISMISS_KEY = `critical-banner:${HEADLINE_SKU}:dismissed`;
+
+function buildHeadlineMessage(unitsPerDay: number): string {
+  return `🔴 CRITICALLY OUT OF STOCK — 0 units available. ~${unitsPerDay} units/day velocity. Oversold at Pyvott.`;
+}
 
 type SnapshotRow = {
   location: string;
@@ -78,7 +81,7 @@ export function CriticalStockBanner() {
     }
   }, [snapshot]);
 
-  const { headline, otherCritical } = useMemo(() => {
+  const { headline, headlineUnitsPerDay, otherCritical } = useMemo(() => {
     const aggregateMap = new Map<string, Aggregated>();
     const velocityMap = new Map<string, number>();
     for (const v of velocity ?? []) velocityMap.set(v.sku, v.unitsSold);
@@ -103,6 +106,8 @@ export function CriticalStockBanner() {
 
     const headlineRow = aggregateMap.get(HEADLINE_SKU) ?? null;
     const headlineCritical = !!headlineRow && headlineRow.total === 0;
+    const headlineSold = headlineRow?.unitsSold ?? velocityMap.get(HEADLINE_SKU) ?? 0;
+    const unitsPerDay = Math.max(0, Math.round(headlineSold / VELOCITY_WINDOW_DAYS));
 
     const others = Array.from(aggregateMap.values())
       .filter(
@@ -113,7 +118,11 @@ export function CriticalStockBanner() {
       )
       .sort((a, b) => b.unitsSold - a.unitsSold);
 
-    return { headline: headlineCritical, otherCritical: others };
+    return {
+      headline: headlineCritical,
+      headlineUnitsPerDay: unitsPerDay,
+      otherCritical: others,
+    };
   }, [snapshot, velocity]);
 
   if (!headline || dismissed) return null;
@@ -124,7 +133,9 @@ export function CriticalStockBanner() {
         <AlertTriangle className="h-4 w-4" />
         <AlertTitle data-testid="critical-banner-title">{HEADLINE_NAME}</AlertTitle>
         <AlertDescription className="mt-1 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <span data-testid="critical-banner-message">{HEADLINE_MESSAGE}</span>
+          <span data-testid="critical-banner-message">
+            {buildHeadlineMessage(headlineUnitsPerDay)}
+          </span>
           <Button
             asChild
             variant="destructive"

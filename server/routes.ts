@@ -11471,6 +11471,80 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Hildale → Pyvott multi-line transfer. Per CLAUDE.md, uses InventoryMovement.apply
+  // with eventType=TRANSFER so hildaleQty decrements and availableForSaleQty increments
+  // without ever touching pivotQty (Extensiv remains the source of truth for that field).
+  app.post("/api/inventory/transfer-to-pyvott", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { lines, reason } = req.body as {
+        lines?: Array<{ itemId?: string; quantity?: number }>;
+        reason?: string;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item is required" });
+      }
+
+      const cleanReason = typeof reason === "string" ? reason.trim() : "";
+      const noteTag = cleanReason
+        ? `[transfer_to_pyvott] ${cleanReason}`
+        : `[transfer_to_pyvott]`;
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const inventoryMovement = new InventoryMovement(storage);
+      const results: Array<{
+        itemId: string;
+        sku: string;
+        quantity: number;
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", sku: "", quantity: 0, success: false, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, sku: "", quantity: 0, success: false, error: `Line ${i + 1}: quantity must be a positive integer` });
+          continue;
+        }
+
+        const result = await inventoryMovement.apply({
+          eventType: "TRANSFER",
+          itemId,
+          quantity: qty,
+          location: "HILDALE",
+          source: "USER",
+          userId,
+          userName,
+          notes: noteTag,
+        });
+
+        results.push({
+          itemId,
+          sku: result.sku,
+          quantity: qty,
+          success: result.success,
+          error: result.error,
+        });
+      }
+
+      const allFailed = results.every((r) => !r.success);
+      res.status(allFailed ? 400 : 201).json({ results });
+    } catch (error: any) {
+      console.error("[Transfer to Pyvott] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to process transfer" });
+    }
+  });
+
   app.post("/api/transactions/transfer", requireAuth, async (req: Request, res: Response) => {
     try {
       const { itemId, fromLocation, toLocation, quantity, notes } = req.body;

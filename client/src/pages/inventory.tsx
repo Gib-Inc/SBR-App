@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft } from "lucide-react";
+import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -122,6 +124,7 @@ export default function Inventory() {
   const items = itemsData ?? [];
 
   const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const onSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -276,12 +279,26 @@ export default function Inventory() {
             Current stock across Pyvott (Spanish Fork) and Hildale warehouses.
           </p>
         </div>
-        {snapshotDate && (
-          <Badge variant="outline" className="text-sm">
-            Snapshot: {snapshotDate}
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {snapshotDate && (
+            <Badge variant="outline" className="text-sm">
+              Snapshot: {snapshotDate}
+            </Badge>
+          )}
+          <Button
+            onClick={() => setTransferOpen(true)}
+            data-testid="button-open-transfer-to-pyvott"
+          >
+            <ArrowRightLeft className="mr-2 h-4 w-4" />
+            Transfer to Pyvott
+          </Button>
+        </div>
       </div>
+
+      <TransferToPyvottDialog
+        isOpen={transferOpen}
+        onClose={() => setTransferOpen(false)}
+      />
 
       {/* KPI cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -4,6 +4,13 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { storage, type IStorage } from "./storage";
+import {
+  COUNT_ADJUSTMENT_TYPE,
+  adjustmentLocationFor,
+  fieldForLocation,
+  resolveCountList,
+  type CountLocation,
+} from "./services/count-inventory";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
@@ -22583,6 +22590,179 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[InventoryAdjustment] Error fetching:", error);
       res.status(500).json({ error: error.message || "Failed to fetch adjustments" });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // COUNT INVENTORY — Sammie's mobile counting flow (/count-inventory)
+  // ════════════════════════════════════════════════════════════════════════
+
+  // GET /api/count-inventory/locations — last count timestamp per location
+  // (used by the picker screen).
+  app.get("/api/count-inventory/locations", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const adjustments = await storage.getInventoryAdjustments({ limit: 500 });
+      const lastByLocation: Record<string, string | null> = {
+        "raw-materials": null,
+        hildale: null,
+        pyvott: null,
+      };
+      for (const adj of adjustments) {
+        const loc = adj.location ?? "N/A";
+        const key = loc === "HILDALE" ? "hildale" : loc === "PIVOT" ? "pyvott" : "raw-materials";
+        if (!lastByLocation[key]) {
+          lastByLocation[key] = adj.createdAt instanceof Date
+            ? adj.createdAt.toISOString()
+            : (adj.createdAt as unknown as string);
+        }
+      }
+      res.json({ lastCountAt: lastByLocation });
+    } catch (error: any) {
+      console.error("[CountInventory] locations error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch locations" });
+    }
+  });
+
+  // GET /api/count-inventory/items?location=raw-materials|hildale|pyvott
+  // Resolves the location's static list to current items and last counted value.
+  app.get("/api/count-inventory/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const locationParam = String(req.query.location ?? "");
+      if (locationParam !== "raw-materials" && locationParam !== "hildale" && locationParam !== "pyvott") {
+        return res.status(400).json({ error: "location must be raw-materials, hildale, or pyvott" });
+      }
+      const location = locationParam as CountLocation;
+
+      const items = await storage.getAllItems();
+      const resolved = resolveCountList(items, location);
+      const field = fieldForLocation(location);
+
+      // Bucket recent adjustments by itemId so we can show "Last counted X".
+      const adjustments = await storage.getInventoryAdjustments({ limit: 500 });
+      const lastAdjByItem = new Map<string, string>();
+      for (const adj of adjustments) {
+        if (lastAdjByItem.has(adj.itemId)) continue;
+        const ts = adj.createdAt instanceof Date
+          ? adj.createdAt.toISOString()
+          : (adj.createdAt as unknown as string);
+        lastAdjByItem.set(adj.itemId, ts);
+      }
+
+      const responseItems = resolved.map(({ display, item }) => ({
+        display,
+        itemId: item?.id ?? null,
+        itemName: item?.name ?? null,
+        lastValue: item ? (item[field] as number | null | undefined) ?? 0 : null,
+        lastCountedAt: item ? lastAdjByItem.get(item.id) ?? null : null,
+      }));
+
+      res.json({ location, items: responseItems });
+    } catch (error: any) {
+      console.error("[CountInventory] items error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch count items" });
+    }
+  });
+
+  // POST /api/count-inventory/submit — write all changed counts in one go.
+  // Per the user spec: Pyvott writes to extensiv_on_hand_snapshot directly
+  // (overriding the usual Extensiv-as-source-of-truth), Hildale writes to
+  // hildale_qty, Raw Materials writes to current_stock.
+  app.post("/api/count-inventory/submit", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { location: locationParam, submittedBy: submittedByRaw, counts } = req.body as {
+        location?: string;
+        submittedBy?: string;
+        counts?: Array<{ itemId?: string; actualQty?: number }>;
+      };
+      if (locationParam !== "raw-materials" && locationParam !== "hildale" && locationParam !== "pyvott") {
+        return res.status(400).json({ error: "location must be raw-materials, hildale, or pyvott" });
+      }
+      if (!Array.isArray(counts) || counts.length === 0) {
+        return res.status(400).json({ error: "counts array is required" });
+      }
+      const location = locationParam as CountLocation;
+      const field = fieldForLocation(location);
+      const adjLocation = adjustmentLocationFor(location);
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const submittedBy = (submittedByRaw && String(submittedByRaw).trim()) || user?.email || "unknown";
+
+      const results: Array<{
+        itemId: string;
+        success: boolean;
+        before: number;
+        after: number;
+        difference: number;
+        error?: string;
+      }> = [];
+
+      for (const entry of counts) {
+        const itemId = typeof entry?.itemId === "string" ? entry.itemId : "";
+        const actualQty = Number(entry?.actualQty);
+        if (!itemId || !Number.isInteger(actualQty) || actualQty < 0) {
+          results.push({
+            itemId,
+            success: false,
+            before: 0,
+            after: 0,
+            difference: 0,
+            error: "itemId and non-negative integer actualQty are required",
+          });
+          continue;
+        }
+
+        try {
+          const item = await storage.getItem(itemId);
+          if (!item) {
+            results.push({ itemId, success: false, before: 0, after: 0, difference: 0, error: "Item not found" });
+            continue;
+          }
+          const before = ((item as any)[field] as number | null | undefined) ?? 0;
+          const difference = actualQty - before;
+
+          if (difference !== 0) {
+            await storage.updateItem(item.id, { [field]: actualQty } as any);
+          }
+
+          await storage.createInventoryAdjustment({
+            itemId: item.id,
+            sku: item.sku,
+            expectedQty: before,
+            actualQty,
+            difference,
+            adjustmentType: COUNT_ADJUSTMENT_TYPE,
+            location: adjLocation,
+            submittedBy,
+            notes: null,
+            applied: true,
+          });
+
+          results.push({ itemId: item.id, success: true, before, after: actualQty, difference });
+        } catch (err: any) {
+          results.push({
+            itemId,
+            success: false,
+            before: 0,
+            after: 0,
+            difference: 0,
+            error: err?.message ?? "Unknown error",
+          });
+        }
+      }
+
+      const changed = results.filter((r) => r.success && r.difference !== 0).length;
+      const unchanged = results.filter((r) => r.success && r.difference === 0).length;
+      const failed = results.filter((r) => !r.success).length;
+      res.status(failed === results.length ? 400 : 201).json({
+        location,
+        submittedBy,
+        summary: { total: results.length, changed, unchanged, failed },
+        results,
+      });
+    } catch (error: any) {
+      console.error("[CountInventory] submit error:", error);
+      res.status(500).json({ error: error.message || "Failed to submit count" });
     }
   });
 

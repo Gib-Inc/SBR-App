@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { storage, type IStorage } from "./storage";
+import { storage } from "./storage";
 import {
   COUNT_ADJUSTMENT_TYPE,
   adjustmentLocationFor,
@@ -11853,27 +11853,25 @@ Notes: ${po.notes || 'None'}
   // PRODUCTION LOGS — per-action shop floor entries (Clarence's mobile UI)
   // ============================================================================
 
-  // POST /api/production-logs — log a single action (rolls_made | built | boxed).
-  // 'built' also runs BOM_CONSUMPTION per component + PRODUCTION_COMPLETED for the
-  // finished good. 'rolls_made' bumps the foam roller component if one is found by
-  // name (case-insensitive substring match on "foam"); otherwise inventory is left
-  // alone and a warning is returned. 'boxed' is log-only.
+  // POST /api/production-logs — log a single action (built | boxed).
+  // 'built' runs BOM_CONSUMPTION per component + PRODUCTION_COMPLETED for the
+  // finished good. 'boxed' is log-only. (Foam rollers are received from Pednar,
+  // not made in-house, so there is no rolls_made action.)
   app.post("/api/production-logs", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { itemId, actionType, quantity, productionDate, notes, componentItemId } = req.body as {
+      const { itemId, actionType, quantity, productionDate, notes } = req.body as {
         itemId?: string;
         actionType?: string;
         quantity?: number;
         productionDate?: string;
         notes?: string;
-        componentItemId?: string;
       };
 
       if (!itemId || typeof itemId !== "string") {
         return res.status(400).json({ error: "itemId is required" });
       }
-      if (actionType !== "rolls_made" && actionType !== "built" && actionType !== "boxed") {
-        return res.status(400).json({ error: "actionType must be 'rolls_made', 'built', or 'boxed'" });
+      if (actionType !== "built" && actionType !== "boxed") {
+        return res.status(400).json({ error: "actionType must be 'built' or 'boxed'" });
       }
       const qty = Number(quantity);
       if (!Number.isInteger(qty) || qty <= 0) {
@@ -11950,42 +11948,6 @@ Notes: ${po.notes || 'None'}
           }
           inventoryUpdated = true;
         }
-      } else if (actionType === "rolls_made") {
-        // Prefer the client-supplied component (per-card foam mapping). Fall back to
-        // a generic name search so cards without an explicit mapping still work.
-        let foam: typeof item | undefined;
-        if (componentItemId) {
-          foam = await storage.getItem(componentItemId);
-          if (!foam || foam.type !== "component") {
-            warnings.push("Provided component is not a valid component — falling back to name search.");
-            foam = undefined;
-          }
-        }
-        if (!foam) {
-          const allItems = await storage.getAllItems();
-          foam = allItems.find((i) =>
-            i.type === "component" && /foam/i.test(i.name ?? ""),
-          );
-        }
-        if (!foam) {
-          warnings.push("No foam component found in catalog — logged the count, but stock not adjusted.");
-        } else {
-          const inventoryMovement = new InventoryMovement(storage);
-          const result = await inventoryMovement.apply({
-            eventType: "MANUAL_ADJUSTMENT",
-            itemId: foam.id,
-            quantity: qty,
-            source: "USER",
-            userId,
-            userName,
-            notes: auditNote,
-          });
-          if (!result.success) {
-            warnings.push(`Foam adjustment failed: ${result.error}`);
-          } else {
-            inventoryUpdated = true;
-          }
-        }
       }
       // 'boxed' = log only, no inventory side-effect
 
@@ -12016,15 +11978,15 @@ Notes: ${po.notes || 'None'}
       const itemIdsRaw = typeof req.query.itemIds === "string" ? req.query.itemIds : "";
       const itemIds = itemIdsRaw.split(",").map(s => s.trim()).filter(Boolean);
 
-      const totals: Record<string, { rolls_made: number; built: number; boxed: number }> = {};
-      for (const id of itemIds) totals[id] = { rolls_made: 0, built: 0, boxed: 0 };
+      const totals: Record<string, { built: number; boxed: number }> = {};
+      for (const id of itemIds) totals[id] = { built: 0, boxed: 0 };
 
       // Single query covering all requested items for the date.
       const allForDate = await storage.getProductionLogsForRange(date, date);
       for (const log of allForDate) {
         if (itemIds.length > 0 && !itemIds.includes(log.itemId)) continue;
-        if (!totals[log.itemId]) totals[log.itemId] = { rolls_made: 0, built: 0, boxed: 0 };
-        const k = log.actionType as "rolls_made" | "built" | "boxed";
+        if (!totals[log.itemId]) totals[log.itemId] = { built: 0, boxed: 0 };
+        const k = log.actionType as "built" | "boxed";
         if (k in totals[log.itemId]) totals[log.itemId][k] += log.quantity;
       }
 
@@ -22976,31 +22938,5 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // Idempotent seed: ensure the two foam roller component items exist so the
-  // Production page's "Rolls Made" action has somewhere to write inventory.
-  // Safe to run on every boot — INSERT only fires when the SKU is missing.
-  ensureFoamComponents(storage).catch((err) => {
-    console.warn("[Production] Failed to ensure foam components:", err?.message ?? err);
-  });
-
   return httpServer;
-}
-
-async function ensureFoamComponents(storage: IStorage): Promise<void> {
-  const seeds = [
-    { sku: "SBR-COMP-ROLLER-12", name: 'Foam Roller - 12"' },
-    { sku: "SBR-COMP-ROLLER-18", name: 'Foam Roller - 18"' },
-  ];
-  for (const s of seeds) {
-    const existing = await storage.getItemBySku(s.sku);
-    if (existing) continue;
-    await storage.createItem({
-      sku: s.sku,
-      name: s.name,
-      type: "component",
-      currentStock: 0,
-      category: "Foam Rollers",
-    });
-    console.log(`[Production] Seeded foam component ${s.sku} (${s.name})`);
-  }
 }

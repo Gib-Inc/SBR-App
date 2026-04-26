@@ -47,13 +47,11 @@ type CardConfig = {
   // like Bigfoot until the catalog is finalized.
   fallbackNameRegex?: RegExp;
   fallbackTypeFilter?: "finished_product" | "component";
-  // The foam component SKU consumed when "Rolls Made" is logged from this card.
-  foamComponentSku?: string;
 };
 
 const CARDS: CardConfig[] = [
-  { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"], foamComponentSku: "SBR-COMP-ROLLER-12" },
-  { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"], foamComponentSku: "SBR-COMP-ROLLER-18" },
+  { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"] },
+  { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"] },
   {
     key: "pull-behind",
     label: "Pull-Behind",
@@ -83,14 +81,14 @@ type Item = {
 
 type TodayTotals = {
   date: string;
-  totals: Record<string, { rolls_made: number; built: number; boxed: number }>;
+  totals: Record<string, { built: number; boxed: number }>;
 };
 
 type WeekLog = {
   id: string;
   itemId: string;
   itemName: string;
-  actionType: "rolls_made" | "built" | "boxed";
+  actionType: "built" | "boxed";
   quantity: number;
   productionDate: string;
   notes: string | null;
@@ -99,7 +97,7 @@ type WeekLog = {
 
 type WeekResponse = { startDate: string; endDate: string; logs: WeekLog[] };
 
-type ActionKey = "rolls_made" | "built" | "boxed";
+type ActionKey = "built" | "boxed";
 
 type SaveBanner =
   | { kind: "idle" }
@@ -154,9 +152,6 @@ function resolveCardItems(card: CardConfig, items: Item[]): Item[] {
 }
 
 function actionVerb(action: ActionKey, qty: number): string {
-  if (action === "rolls_made") {
-    return `${qty} foam roller${qty === 1 ? "" : "s"} made`;
-  }
   if (action === "boxed") return `${qty} boxed`;
   return `${qty} built`;
 }
@@ -314,7 +309,6 @@ function ProductionSheet({
   const [date, setDate] = useState(today);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [notes, setNotes] = useState("");
-  const [rolls, setRolls] = useState(0);
   const [built, setBuilt] = useState(0);
   const [boxed, setBoxed] = useState(0);
   const [banner, setBanner] = useState<SaveBanner>({ kind: "idle" });
@@ -333,7 +327,6 @@ function ProductionSheet({
     : card.label;
 
   const reset = () => {
-    setRolls(0);
     setBuilt(0);
     setBoxed(0);
     setNotes("");
@@ -351,7 +344,6 @@ function ProductionSheet({
         error?: string;
         warnings?: string[];
       }> = [];
-      const foamItem = card.foamComponentSku ? itemBySku.get(card.foamComponentSku) : undefined;
       for (const entry of payload.entries) {
         try {
           const res = await apiRequest("POST", "/api/production-logs", {
@@ -360,7 +352,6 @@ function ProductionSheet({
             quantity: entry.quantity,
             productionDate: date,
             notes: notes || undefined,
-            componentItemId: entry.actionType === "rolls_made" ? foamItem?.id : undefined,
           });
           const body = await res.json();
           results.push({
@@ -410,10 +401,9 @@ function ProductionSheet({
             return;
           }
 
-          const parts = results.map((r) => {
-            if (r.actionType === "rolls_made") return actionVerb(r.actionType, r.quantity);
-            return `${r.quantity} ${titleName} ${r.actionType === "built" ? "built" : "boxed"}`;
-          });
+          const parts = results.map(
+            (r) => `${r.quantity} ${titleName} ${r.actionType === "built" ? "built" : "boxed"}`,
+          );
           const allWarnings = results.flatMap((r) => r.warnings ?? []);
           const warningSuffix = allWarnings.length > 0 ? `  ⚠ ${allWarnings.join(" ")}` : "";
           setBanner({
@@ -431,7 +421,6 @@ function ProductionSheet({
   const doSave = () => {
     if (!selectedItem) return;
     const entries: Array<{ actionType: ActionKey; quantity: number }> = [];
-    if (rolls > 0) entries.push({ actionType: "rolls_made", quantity: rolls });
     if (built > 0) entries.push({ actionType: "built", quantity: built });
     if (boxed > 0) entries.push({ actionType: "boxed", quantity: boxed });
     if (entries.length === 0) {
@@ -510,17 +499,9 @@ function ProductionSheet({
           <div className="mt-4 space-y-4">
             <BuildableHint itemId={selectedItem.id} />
             <ActionRow
-              icon="🔩"
-              label="Rolls Made"
-              hint="foam roller production"
-              value={rolls}
-              onChange={setRolls}
-              testId="row-rolls-made"
-            />
-            <ActionRow
               icon="🔨"
               label="Built"
-              hint="assembled units (deducts components)"
+              hint="roller assembled onto frame, unit complete (deducts components)"
               value={built}
               onChange={setBuilt}
               testId="row-built"
@@ -528,7 +509,7 @@ function ProductionSheet({
             <ActionRow
               icon="📦"
               label="Boxed"
-              hint="packaged (no stock change)"
+              hint="packaged and ready to ship (no stock change)"
               value={boxed}
               onChange={setBoxed}
               testId="row-boxed"
@@ -918,12 +899,6 @@ function buildWeekLines(
         const name = shortNameForItem(sku, info.itemName);
         phrases.push(`${info.qty} ${name} boxed`);
       }
-    }
-    const rolls = bucket.get("rolls_made");
-    if (rolls) {
-      let total = 0;
-      for (const v of Array.from(rolls.values())) total += v.qty;
-      if (total > 0) phrases.push(`${total} foam roller${total === 1 ? "" : "s"} made`);
     }
 
     if (phrases.length === 0) continue;

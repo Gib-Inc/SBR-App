@@ -4651,6 +4651,22 @@ TOTAL: $${subtotal.toFixed(2)}
 
       const bom = await storage.getBillOfMaterialsByProductId(req.params.itemId);
 
+      // Build per-item supplier price lookup. Prefer the designated supplier
+      // (is_designated_supplier = true); fall back to any supplier with a
+      // price set so components linked to a single non-designated supplier
+      // still pick up a real cost.
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const designatedPrice = new Map<string, number>();
+      const fallbackPrice = new Map<string, number>();
+      for (const si of allSupplierItems) {
+        if (si.price == null || si.price <= 0) continue;
+        if (si.isDesignatedSupplier) {
+          designatedPrice.set(si.itemId, si.price);
+        } else if (!fallbackPrice.has(si.itemId)) {
+          fallbackPrice.set(si.itemId, si.price);
+        }
+      }
+
       const lines: Array<{
         componentId: string;
         componentName: string;
@@ -4659,6 +4675,7 @@ TOTAL: $${subtotal.toFixed(2)}
         wastagePercent: number;
         effectiveQty: number;
         unitCost: number | null;
+        unitCostSource: "designated_supplier" | "supplier" | "default_purchase_cost" | null;
         lineCost: number | null;
         missingCost: boolean;
       }> = [];
@@ -4670,7 +4687,22 @@ TOTAL: $${subtotal.toFixed(2)}
         const component = await storage.getItem(entry.componentId);
         const wastage = (entry as any).wastagePercent ?? 0;
         const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
-        const unitCost = component?.defaultPurchaseCost ?? null;
+
+        // Source resolution: designated supplier price > any supplier price >
+        // legacy items.default_purchase_cost > null. Surface the source so the
+        // UI can distinguish "real supplier quote" from "guesstimate".
+        let unitCost: number | null = null;
+        let unitCostSource: "designated_supplier" | "supplier" | "default_purchase_cost" | null = null;
+        if (designatedPrice.has(entry.componentId)) {
+          unitCost = designatedPrice.get(entry.componentId)!;
+          unitCostSource = "designated_supplier";
+        } else if (fallbackPrice.has(entry.componentId)) {
+          unitCost = fallbackPrice.get(entry.componentId)!;
+          unitCostSource = "supplier";
+        } else if (component?.defaultPurchaseCost != null && component.defaultPurchaseCost > 0) {
+          unitCost = component.defaultPurchaseCost;
+          unitCostSource = "default_purchase_cost";
+        }
         const lineCost = unitCost !== null ? effectiveQty * unitCost : null;
 
         if (lineCost === null) hasMissingCosts = true;
@@ -4684,6 +4716,7 @@ TOTAL: $${subtotal.toFixed(2)}
           wastagePercent: wastage,
           effectiveQty: Math.round(effectiveQty * 1000) / 1000,
           unitCost,
+          unitCostSource,
           lineCost: lineCost !== null ? Math.round(lineCost * 100) / 100 : null,
           missingCost: unitCost === null,
         });

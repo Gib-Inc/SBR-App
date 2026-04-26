@@ -4248,7 +4248,25 @@ export class PostgresStorage implements IStorage {
         eq(schema.supplierItems.supplierId, schema.suppliers.id)
       )
       .groupBy(schema.items.id, schema.supplierItems.id, schema.suppliers.id);
-    
+
+    // Component unit-cost lookup map shared across all rows. Resolution
+    // order matches /api/bom/:itemId/cost-rollup so the Products table
+    // margin and the cost-rollup modal agree:
+    //   designated supplier_items.price  →  any supplier_items.price  →  null
+    // (items.default_purchase_cost is a per-item legacy field already on the
+    // row — used as a final fallback below.)
+    const allSupplierItems = await this.db.select().from(schema.supplierItems);
+    const designatedComponentPrice = new Map<string, number>();
+    const fallbackComponentPrice = new Map<string, number>();
+    for (const si of allSupplierItems) {
+      if (si.price == null || si.price <= 0) continue;
+      if (si.isDesignatedSupplier) {
+        designatedComponentPrice.set(si.itemId, si.price);
+      } else if (!fallbackComponentPrice.has(si.itemId)) {
+        fallbackComponentPrice.set(si.itemId, si.price);
+      }
+    }
+
     // Calculate forecast and totalOwned for each finished product
     const itemsWithForecast = await Promise.all(
       results.map(async (row) => {
@@ -4259,19 +4277,27 @@ export class PostgresStorage implements IStorage {
           minimumOrderQuantity: row.supplierItem.minimumOrderQuantity,
           leadTimeDays: row.supplierItem.leadTimeDays,
         } : null;
-        
+
         if (row.items.type === "finished_product") {
           const forecast = await this.calculateProductionForecast(row.items.id);
           const totalOwned = (row.items.pivotQty ?? 0) + (row.items.hildaleQty ?? 0);
 
-          // Calculate BOM build cost: sum of (effectiveQty × component cost) per BOM line
+          // Calculate BOM build cost: sum of (effectiveQty × component cost)
+          // per BOM line. Component cost falls through three sources before
+          // we mark the product as "no price set".
           let bomBuildCost: number | null = 0;
           const bomEntries = await this.getBillOfMaterialsByProductId(row.items.id);
           for (const entry of bomEntries) {
             const component = await this.getItem(entry.componentId);
             const wastage = (entry as any).wastagePercent ?? 0;
             const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
-            const unitCost = component?.defaultPurchaseCost ?? null;
+            const designated = designatedComponentPrice.get(entry.componentId);
+            const fallback = fallbackComponentPrice.get(entry.componentId);
+            const legacy = component?.defaultPurchaseCost ?? null;
+            const unitCost =
+              (designated != null && designated > 0) ? designated :
+              (fallback != null && fallback > 0) ? fallback :
+              (legacy != null && legacy > 0) ? legacy : null;
             if (unitCost === null) { bomBuildCost = null; break; }
             bomBuildCost! += effectiveQty * unitCost;
           }

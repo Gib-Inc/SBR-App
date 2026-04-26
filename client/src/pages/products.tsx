@@ -1356,6 +1356,31 @@ function BOMDialog({
                     </div>
                   </>
                 )}
+
+                {/* Per-component "No price set" callout — shows which BOM lines
+                    are blocking the margin so the user knows what to update. */}
+                {Array.isArray(costRollup.lines) && costRollup.lines.some((l: any) => l.missingCost) && (
+                  <div className="border-t pt-2 space-y-1">
+                    <div className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                      Components without a supplier price:
+                    </div>
+                    <ul className="text-xs space-y-0.5">
+                      {costRollup.lines
+                        .filter((l: any) => l.missingCost)
+                        .map((l: any) => (
+                          <li
+                            key={l.componentId}
+                            className="text-muted-foreground flex items-center gap-1.5"
+                            data-testid={`missing-cost-${l.componentId}`}
+                          >
+                            <span className="text-amber-600 dark:text-amber-400">⚠</span>
+                            <span className="font-medium text-foreground">{l.componentName}</span>
+                            <span>— No price set</span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 

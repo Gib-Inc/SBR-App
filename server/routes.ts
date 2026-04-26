@@ -11711,7 +11711,7 @@ Notes: ${po.notes || 'None'}
     try {
       const { supplierId: rawSupplierId, lines } = req.body as {
         supplierId?: string | null;
-        lines?: Array<{ itemId?: string; quantity?: number }>;
+        lines?: Array<{ itemId?: string; quantity?: number; lotNumber?: string | null }>;
       };
 
       if (!Array.isArray(lines) || lines.length === 0) {
@@ -11768,17 +11768,33 @@ Notes: ${po.notes || 'None'}
           const before = item.currentStock ?? 0;
           const newStock = before + qty;
           await storage.updateItem(item.id, { currentStock: newStock });
-          await storage.createInventoryTransaction({
+          const lotNumber = typeof line?.lotNumber === "string" && line.lotNumber.trim()
+            ? line.lotNumber.trim()
+            : null;
+          const tx = await storage.createInventoryTransaction({
             itemId: item.id,
             itemType: "RAW",
             type: "RECEIVE",
             location: "N/A",
             quantity: qty,
             supplierId,
+            lotNumber,
             createdBy: userId,
             createdByName: receiveUserName,
             notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
           });
+          // When a lot number is provided, also write to inventory_lots so
+          // BOM_CONSUMPTION can do FIFO draws against it later.
+          if (lotNumber) {
+            await storage.createInventoryLot({
+              itemId: item.id,
+              lotNumber,
+              originalQty: qty,
+              remainingQty: qty,
+              sourceTransactionId: tx.id,
+              supplierId,
+            });
+          }
 
           results.push({ itemId: item.id, itemName: item.name, success: true, quantity: qty, newStock });
         } catch (err: any) {
@@ -12444,6 +12460,20 @@ Notes: ${po.notes || 'None'}
       const warnings: string[] = [];
       let inventoryUpdated = false;
 
+      // Create the production_logs row first so the BOM consumption FIFO
+      // draw can attribute lot consumption events back to this build. If
+      // any later inventory call fails, the log is preserved and the
+      // failures are surfaced via warnings — that's a more useful audit
+      // state than orphaned consumption with no parent log.
+      const log = await storage.createProductionLog({
+        itemId: item.id,
+        actionType,
+        quantity: qty,
+        productionDate: date,
+        notes: cleanNotes || null,
+        createdBy: userId,
+      });
+
       if (actionType === "built") {
         if (item.type !== "finished_product") {
           warnings.push(`${item.name} is not a finished product — skipped inventory update.`);
@@ -12474,6 +12504,9 @@ Notes: ${po.notes || 'None'}
               userId,
               userName,
               notes: `[built] ${item.name} ×${qty}${cleanNotes ? ` — ${cleanNotes}` : ""}`,
+              // Drives FIFO lot draw + lot_consumption_events linkage so a
+              // recall can trace back from any lot to this build.
+              productionLogId: log.id,
             });
             if (!result.success) {
               warnings.push(`${component.name}: ${result.error}`);
@@ -12497,15 +12530,6 @@ Notes: ${po.notes || 'None'}
         }
       }
       // 'boxed' = log only, no inventory side-effect
-
-      const log = await storage.createProductionLog({
-        itemId: item.id,
-        actionType,
-        quantity: qty,
-        productionDate: date,
-        notes: cleanNotes || null,
-        createdBy: userId,
-      });
 
       res.status(201).json({ log, warnings, inventoryUpdated });
     } catch (error: any) {
@@ -23457,6 +23481,134 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Margin History] Error:", error);
       res.status(500).json({ error: error.message || "Failed to compute margin history" });
+    }
+  });
+
+  // GET /api/lots/trace?itemId=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Recall-style traceability: given a component + a receive-date window,
+  // returns each lot received in that window, the production runs that drew
+  // from each lot, the finished products those runs built, and the sales
+  // orders that shipped those products on/after the build date —
+  // i.e. the customers who could have received an affected unit.
+  //
+  // This is "potentially affected" not "definitely affected" because we
+  // don't track which specific built unit shipped on which order (no
+  // per-unit serial). For a small manufacturer this is the level of
+  // traceability the user asked for and it's far better than nothing.
+  app.get("/api/lots/trace", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const itemId = typeof req.query.itemId === "string" ? req.query.itemId : "";
+      const fromStr = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : "";
+      const toStr = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : "";
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!fromStr || !toStr) return res.status(400).json({ error: "from and to dates (YYYY-MM-DD) are required" });
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      const from = new Date(`${fromStr}T00:00:00.000Z`);
+      const to = new Date(`${toStr}T23:59:59.999Z`);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+        return res.status(400).json({ error: "Invalid date range" });
+      }
+
+      const lots = await storage.getLotsForItemReceivedBetween(itemId, from, to);
+      const allItemsCache = await storage.getAllItems();
+      const itemById = new Map(allItemsCache.map((i) => [i.id, i] as const));
+      const allSOs = await storage.getAllSalesOrders();
+
+      // Walk each lot → consumption events → production_log → finished
+      // product → potentially-affected sales orders.
+      const out = await Promise.all(lots.map(async (lot) => {
+        const events = await storage.getConsumptionEventsForLot(lot.id);
+        const enrichedEvents = await Promise.all(events.map(async (ev) => {
+          const log = ev.productionLogId ? await storage.getProductionLog(ev.productionLogId) : null;
+          if (!log) {
+            return {
+              consumedAt: ev.consumedAt,
+              qtyDrawn: ev.qtyDrawn,
+              productionLogId: ev.productionLogId,
+              productionDate: null,
+              finishedProductId: null,
+              finishedProductName: null,
+              builtQty: null,
+              potentiallyAffectedOrders: [] as Array<any>,
+            };
+          }
+          const finished = itemById.get(log.itemId) ?? null;
+
+          // Sales orders that shipped this finished product on or after the
+          // build date — these are the recall candidates.
+          type AffectedOrder = {
+            orderId: string;
+            orderName: string | null;
+            customerName: string;
+            customerEmail: string | null;
+            channel: string;
+            shippedQty: number;
+            shippedAt: string | null;
+          };
+          const affected: AffectedOrder[] = [];
+          if (finished) {
+            const buildDate = new Date(`${log.productionDate}T00:00:00.000Z`);
+            for (const so of allSOs) {
+              const shipTs = (so as any).deliveredAt ?? null;
+              const shipAt = shipTs ? new Date(shipTs) : null;
+              // Use deliveredAt when present, else fall back to orderDate.
+              // We need _some_ date; if neither is present we still include
+              // the order if its lines match (worst case the user double-checks).
+              const referenceDate = shipAt ?? new Date(so.orderDate);
+              if (referenceDate < buildDate) continue;
+              const lines = await storage.getSalesOrderLines(so.id);
+              const matchedQty = lines
+                .filter((l) => l.sku === finished.sku && (l.qtyShipped ?? 0) > 0)
+                .reduce((s, l) => s + (l.qtyShipped ?? 0), 0);
+              if (matchedQty <= 0) continue;
+              affected.push({
+                orderId: so.id,
+                orderName: (so as any).orderName ?? so.orderNumber ?? null,
+                customerName: so.customerName ?? "(unknown)",
+                customerEmail: so.customerEmail ?? null,
+                channel: so.channel ?? "OTHER",
+                shippedQty: matchedQty,
+                shippedAt: shipAt ? shipAt.toISOString() : null,
+              });
+            }
+          }
+
+          return {
+            consumedAt: ev.consumedAt,
+            qtyDrawn: ev.qtyDrawn,
+            productionLogId: ev.productionLogId,
+            productionDate: log.productionDate,
+            finishedProductId: log.itemId,
+            finishedProductName: finished?.name ?? null,
+            builtQty: log.quantity,
+            potentiallyAffectedOrders: affected,
+          };
+        }));
+
+        return {
+          lotId: lot.id,
+          lotNumber: lot.lotNumber,
+          originalQty: lot.originalQty,
+          remainingQty: lot.remainingQty,
+          receivedAt: lot.receivedAt,
+          supplierId: lot.supplierId,
+          consumption: enrichedEvents,
+        };
+      }));
+
+      res.json({
+        itemId: item.id,
+        itemName: item.name,
+        from: fromStr,
+        to: toStr,
+        lots: out,
+        note: "Affected orders are 'potentially' affected — we infer from product SKU + ship date, not per-unit serials.",
+      });
+    } catch (error: any) {
+      console.error("[Lot Trace] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute lot trace" });
     }
   });
 

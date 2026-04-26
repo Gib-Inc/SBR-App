@@ -893,6 +893,10 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   // Optional reason code for write-offs etc. ('Damaged' | 'Defective' | 'Lost' |
   // 'Scrap' | 'Other' for type='WRITEOFF'). Null for other transaction types.
   reason: text("reason"),
+  // Optional supplier-provided lot/batch number captured at receive time.
+  // Propagated from inventory_lots so consumption rows can show provenance
+  // without joining back to the lots table.
+  lotNumber: text("lot_number"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   createdBy: text("created_by"), // User ID or system identifier
   // Snapshot of the user's display name (typically email) at write time so
@@ -911,6 +915,52 @@ export const insertInventoryTransactionSchema = createInsertSchema(inventoryTran
 });
 export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransactionSchema>;
 export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
+
+// ============================================================================
+// LOT / BATCH TRACEABILITY
+// ============================================================================
+// One row per receive event that carries a supplier-provided lot number.
+// remaining_qty drains FIFO as BOM_CONSUMPTION events draw from the lot;
+// the per-draw history lives in lot_consumption_events so a recall query
+// can walk lot → consumption events → production_logs → finished products.
+
+export const inventoryLots = pgTable("inventory_lots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  lotNumber: text("lot_number").notNull(),
+  originalQty: integer("original_qty").notNull(),
+  remainingQty: integer("remaining_qty").notNull(),
+  receivedAt: timestamp("received_at").notNull().default(sql`now()`),
+  // Optional pointer back to the receive transaction that created this lot.
+  sourceTransactionId: varchar("source_transaction_id").references(() => inventoryTransactions.id),
+  supplierId: varchar("supplier_id").references(() => suppliers.id),
+  notes: text("notes"),
+}, (table) => ({
+  itemIdIdx: index("inventory_lots_item_id_idx").on(table.itemId),
+  receivedAtIdx: index("inventory_lots_received_at_idx").on(table.receivedAt),
+}));
+
+export const insertInventoryLotSchema = createInsertSchema(inventoryLots).omit({ id: true, receivedAt: true });
+export type InsertInventoryLot = z.infer<typeof insertInventoryLotSchema>;
+export type InventoryLot = typeof inventoryLots.$inferSelect;
+
+// One row per (lot drawn from, build event that consumed). A single
+// production_logs row can produce multiple events when the FIFO draw
+// spans more than one open lot.
+export const lotConsumptionEvents = pgTable("lot_consumption_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  lotId: varchar("lot_id").notNull().references(() => inventoryLots.id),
+  productionLogId: varchar("production_log_id").references(() => productionLogs.id),
+  qtyDrawn: integer("qty_drawn").notNull(),
+  consumedAt: timestamp("consumed_at").notNull().default(sql`now()`),
+}, (table) => ({
+  lotIdIdx: index("lot_consumption_events_lot_id_idx").on(table.lotId),
+  productionLogIdIdx: index("lot_consumption_events_production_log_id_idx").on(table.productionLogId),
+}));
+
+export const insertLotConsumptionEventSchema = createInsertSchema(lotConsumptionEvents).omit({ id: true, consumedAt: true });
+export type InsertLotConsumptionEvent = z.infer<typeof insertLotConsumptionEventSchema>;
+export type LotConsumptionEvent = typeof lotConsumptionEvents.$inferSelect;
 
 // ============================================================================
 // AI RECOMMENDATIONS (Decision Engine Inventory Recommendations)

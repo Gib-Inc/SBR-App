@@ -27,6 +27,8 @@ const REQUIRED_TABLES = [
   "production_logs",
   "shop_issues",
   "daily_briefings",
+  "inventory_lots",
+  "lot_consumption_events",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -77,6 +79,32 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
     );
     CREATE INDEX IF NOT EXISTS daily_briefings_date_idx ON daily_briefings(date);
   `,
+  inventory_lots: `
+    CREATE TABLE IF NOT EXISTS inventory_lots (
+      id                    VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      item_id               VARCHAR NOT NULL REFERENCES items(id),
+      lot_number            TEXT NOT NULL,
+      original_qty          INTEGER NOT NULL,
+      remaining_qty         INTEGER NOT NULL,
+      received_at           TIMESTAMP NOT NULL DEFAULT NOW(),
+      source_transaction_id VARCHAR REFERENCES inventory_transactions(id),
+      supplier_id           VARCHAR REFERENCES suppliers(id),
+      notes                 TEXT
+    );
+    CREATE INDEX IF NOT EXISTS inventory_lots_item_id_idx ON inventory_lots(item_id);
+    CREATE INDEX IF NOT EXISTS inventory_lots_received_at_idx ON inventory_lots(received_at);
+  `,
+  lot_consumption_events: `
+    CREATE TABLE IF NOT EXISTS lot_consumption_events (
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      lot_id             VARCHAR NOT NULL REFERENCES inventory_lots(id),
+      production_log_id  VARCHAR REFERENCES production_logs(id),
+      qty_drawn          INTEGER NOT NULL,
+      consumed_at        TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS lot_consumption_events_lot_id_idx ON lot_consumption_events(lot_id);
+    CREATE INDEX IF NOT EXISTS lot_consumption_events_production_log_id_idx ON lot_consumption_events(production_log_id);
+  `,
 };
 
 async function ensureTablesExist(client: pg.PoolClient): Promise<void> {
@@ -96,6 +124,7 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS created_by_name TEXT`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS supplier_id VARCHAR REFERENCES suppliers(id)`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS reason TEXT`,
+    `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS lot_number TEXT`,
   ];
   for (const stmt of ADDS) {
     try {

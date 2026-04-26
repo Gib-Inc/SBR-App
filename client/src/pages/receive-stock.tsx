@@ -44,6 +44,7 @@ type Line = {
   key: string;
   itemId: string;
   quantity: string; // text input; parsed at submit
+  lotNumber: string; // optional supplier-provided lot/batch number
 };
 
 type LineResult = {
@@ -58,7 +59,7 @@ type LineResult = {
 type Mode = "supplier" | "items" | "done";
 
 let LINE_KEY_SEED = 0;
-const newLine = (): Line => ({ key: `l${++LINE_KEY_SEED}`, itemId: "", quantity: "" });
+const newLine = (): Line => ({ key: `l${++LINE_KEY_SEED}`, itemId: "", quantity: "", lotNumber: "" });
 
 export default function ReceiveStock() {
   const [mode, setMode] = useState<Mode>("supplier");
@@ -91,7 +92,12 @@ export default function ReceiveStock() {
     mutationFn: async () => {
       const cleanLines = lines
         .filter((l) => l.itemId && l.quantity && Number(l.quantity) > 0)
-        .map((l) => ({ itemId: l.itemId, quantity: Number(l.quantity) }));
+        .map((l) => ({
+          itemId: l.itemId,
+          quantity: Number(l.quantity),
+          // Optional lot/batch number — only sent when filled in.
+          lotNumber: l.lotNumber.trim() || undefined,
+        }));
       const res = await apiRequest("POST", "/api/receive-stock", {
         supplierId: supplierId,
         lines: cleanLines,
@@ -156,7 +162,7 @@ export default function ReceiveStock() {
             // Pre-load a fresh items step with only the failed lines.
             const failedLines = results
               .filter((r) => !r.success)
-              .map((r) => ({ key: `l${++LINE_KEY_SEED}`, itemId: r.itemId, quantity: String(r.quantity) }));
+              .map((r) => ({ key: `l${++LINE_KEY_SEED}`, itemId: r.itemId, quantity: String(r.quantity), lotNumber: "" }));
             setLines(failedLines.length > 0 ? failedLines : [newLine()]);
             setResults(null);
             setMode("items");
@@ -471,6 +477,19 @@ function ItemRow({
           <X className="h-5 w-5" />
         </Button>
       </div>
+      {/* Optional supplier-provided lot/batch number. When filled, the
+          server creates an inventory_lots row so future BOM_CONSUMPTION
+          events can FIFO-draw from this lot for traceability. */}
+      {line.itemId && (
+        <Input
+          type="text"
+          value={line.lotNumber}
+          onChange={(e) => onChange({ lotNumber: e.target.value })}
+          placeholder="Lot # (optional)"
+          className="h-9 text-sm"
+          data-testid={`input-lot-${testIndex}`}
+        />
+      )}
       {error && (
         <p className="text-xs text-destructive" data-testid={`line-error-${testIndex}`}>
           {error}

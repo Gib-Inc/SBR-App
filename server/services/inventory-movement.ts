@@ -114,6 +114,11 @@ export interface InventoryMovementParams {
   userId?: string | number;
   userName?: string;
   notes?: string;
+  // For BOM_CONSUMPTION: when present, the apply() call will FIFO-draw from
+  // open inventory_lots and record per-lot draws in lot_consumption_events
+  // linked to this production_logs row. Optional so legacy callers still
+  // work — without it, lot tracking is silently skipped.
+  productionLogId?: string;
 }
 
 export interface InventoryMovementResult {
@@ -385,6 +390,40 @@ export class InventoryMovement {
               : params.eventType === "SALES_ORDER_SHIPPED" ? "SHIP"
               : "MOVEMENT",
           });
+        }
+      }
+
+      // Lot traceability: when a build consumes components, draw FIFO from
+      // open inventory_lots so a recall can later trace from a specific lot
+      // back to the production runs (and ultimately customers) it touched.
+      // Only fires when the caller passes productionLogId, so legacy paths
+      // (Shopify webhook BOM consumption etc.) keep working unchanged.
+      if (
+        params.eventType === "BOM_CONSUMPTION" &&
+        params.productionLogId &&
+        params.quantity > 0
+      ) {
+        try {
+          let remaining = params.quantity;
+          const lots = await this.storage.getOpenLotsForItemFIFO(params.itemId);
+          for (const lot of lots) {
+            if (remaining <= 0) break;
+            const draw = Math.min(remaining, lot.remainingQty ?? 0);
+            if (draw <= 0) continue;
+            await this.storage.decrementLotRemaining(lot.id, draw);
+            await this.storage.createLotConsumptionEvent({
+              lotId: lot.id,
+              productionLogId: params.productionLogId,
+              qtyDrawn: draw,
+            });
+            remaining -= draw;
+          }
+          // remaining > 0 here means we consumed more than the lots have on
+          // record (possible when older receives weren't lot-tracked). The
+          // currentStock decrement above already accounted for it; we just
+          // can't attribute the surplus to any lot.
+        } catch (err) {
+          console.warn("[InventoryMovement] FIFO lot draw failed (non-fatal):", err);
         }
       }
 

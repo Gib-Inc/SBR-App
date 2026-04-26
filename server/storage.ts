@@ -132,6 +132,10 @@ import {
   type InsertShopIssue,
   type DailyBriefing,
   type InsertDailyBriefing,
+  type InventoryLot,
+  type InsertInventoryLot,
+  type LotConsumptionEvent,
+  type InsertLotConsumptionEvent,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -224,6 +228,7 @@ export interface IStorage {
 
   // Production logs (per-action shop floor entries)
   createProductionLog(log: InsertProductionLog): Promise<ProductionLog>;
+  getProductionLog(id: string): Promise<ProductionLog | undefined>;
   getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]>;
   getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]>;
 
@@ -234,6 +239,15 @@ export interface IStorage {
   // Daily briefings (7 AM MT cron output)
   upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing>;
   getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined>;
+
+  // Lot / batch traceability
+  createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot>;
+  // FIFO: oldest open lots (remaining_qty > 0) for an item, ordered receivedAt ASC.
+  getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]>;
+  decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined>;
+  createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent>;
+  getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]>;
+  getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]>;
 
   // Cycle counts
   createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
@@ -1458,6 +1472,9 @@ export class MemStorage implements IStorage {
     this.productionLogs.push(row);
     return row;
   }
+  async getProductionLog(id: string): Promise<ProductionLog | undefined> {
+    return this.productionLogs.find((l) => l.id === id);
+  }
   async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
     return this.productionLogs.filter(l => l.productionDate >= startDate && l.productionDate <= endDate);
   }
@@ -1493,6 +1510,50 @@ export class MemStorage implements IStorage {
   }
   async getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined> {
     return this.dailyBriefings.get(date);
+  }
+
+  private inventoryLots: InventoryLot[] = [];
+  private lotConsumptionEvents: LotConsumptionEvent[] = [];
+  async createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot> {
+    const row: InventoryLot = {
+      id: randomUUID(),
+      receivedAt: new Date(),
+      sourceTransactionId: lot.sourceTransactionId ?? null,
+      supplierId: lot.supplierId ?? null,
+      notes: lot.notes ?? null,
+      ...lot,
+    } as InventoryLot;
+    this.inventoryLots.push(row);
+    return row;
+  }
+  async getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]> {
+    return this.inventoryLots
+      .filter((l) => l.itemId === itemId && (l.remainingQty ?? 0) > 0)
+      .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+  }
+  async decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined> {
+    const row = this.inventoryLots.find((l) => l.id === lotId);
+    if (!row) return undefined;
+    row.remainingQty = Math.max(0, (row.remainingQty ?? 0) - qty);
+    return row;
+  }
+  async createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent> {
+    const row: LotConsumptionEvent = {
+      id: randomUUID(),
+      consumedAt: new Date(),
+      productionLogId: event.productionLogId ?? null,
+      ...event,
+    } as LotConsumptionEvent;
+    this.lotConsumptionEvents.push(row);
+    return row;
+  }
+  async getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]> {
+    return this.inventoryLots.filter(
+      (l) => l.itemId === itemId && l.receivedAt >= from && l.receivedAt <= to,
+    );
+  }
+  async getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]> {
+    return this.lotConsumptionEvents.filter((e) => e.lotId === lotId);
   }
 
   // Cycle Count stubs
@@ -4574,6 +4635,15 @@ export class PostgresStorage implements IStorage {
     return results[0];
   }
 
+  async getProductionLog(id: string): Promise<ProductionLog | undefined> {
+    const rows = await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(eq(schema.productionLogs.id, id))
+      .limit(1);
+    return rows[0];
+  }
+
   async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
     return await this.db
       .select()
@@ -4633,6 +4703,60 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.dailyBriefings.date, date))
       .limit(1);
     return results[0];
+  }
+
+  // ── Lot / batch traceability ──────────────────────────────────────────
+
+  async createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot> {
+    const results = await this.db.insert(schema.inventoryLots).values(lot).returning();
+    return results[0];
+  }
+
+  async getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]> {
+    return await this.db
+      .select()
+      .from(schema.inventoryLots)
+      .where(and(
+        eq(schema.inventoryLots.itemId, itemId),
+        gt(schema.inventoryLots.remainingQty, 0),
+      ))
+      .orderBy(schema.inventoryLots.receivedAt);
+  }
+
+  async decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined> {
+    // Single-statement decrement floored at 0 so two concurrent draws don't
+    // race the value below zero. RETURNING gives the updated row.
+    const results = await this.db
+      .update(schema.inventoryLots)
+      .set({ remainingQty: drizzleSql`GREATEST(0, ${schema.inventoryLots.remainingQty} - ${qty})` })
+      .where(eq(schema.inventoryLots.id, lotId))
+      .returning();
+    return results[0];
+  }
+
+  async createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent> {
+    const results = await this.db.insert(schema.lotConsumptionEvents).values(event).returning();
+    return results[0];
+  }
+
+  async getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]> {
+    return await this.db
+      .select()
+      .from(schema.inventoryLots)
+      .where(and(
+        eq(schema.inventoryLots.itemId, itemId),
+        gte(schema.inventoryLots.receivedAt, from),
+        lte(schema.inventoryLots.receivedAt, to),
+      ))
+      .orderBy(schema.inventoryLots.receivedAt);
+  }
+
+  async getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]> {
+    return await this.db
+      .select()
+      .from(schema.lotConsumptionEvents)
+      .where(eq(schema.lotConsumptionEvents.lotId, lotId))
+      .orderBy(schema.lotConsumptionEvents.consumedAt);
   }
 
   // Cycle Count Sessions

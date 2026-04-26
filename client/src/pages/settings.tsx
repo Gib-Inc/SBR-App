@@ -8,8 +8,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Users, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield, Mail, UserPlus, Trash2, RotateCcw, Clock, Crown, Database } from "lucide-react";
+import { User, Users, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield, Mail, UserPlus, Trash2, RotateCcw, Clock, Crown, Database, FileSearch } from "lucide-react";
 import { DataQualityTab } from "@/components/data-quality-tab";
+import { LotTraceTab } from "@/components/lot-trace-tab";
 import { Link } from "wouter";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
@@ -54,6 +55,10 @@ export default function Settings() {
             <Database className="mr-2 h-4 w-4" />
             Data Quality
           </TabsTrigger>
+          <TabsTrigger value="lot-trace" data-testid="tab-lot-trace">
+            <FileSearch className="mr-2 h-4 w-4" />
+            Lot Trace
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="space-y-4">
@@ -78,6 +83,10 @@ export default function Settings() {
 
         <TabsContent value="data-quality" className="space-y-4">
           <DataQualityTab />
+        </TabsContent>
+
+        <TabsContent value="lot-trace" className="space-y-4">
+          <LotTraceTab />
         </TabsContent>
       </Tabs>
     </div>

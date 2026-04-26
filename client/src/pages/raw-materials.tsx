@@ -88,6 +88,16 @@ export default function RawMaterials() {
     return true;
   });
 
+  // Reorder = current stock at or below the configured minimum, but only when
+  // a real minimum is set (min > 0). Items without a minimum get a separate
+  // suggested-min hint instead.
+  const isReorder = (m: MaterialRow) => m.minStock > 0 && m.onHand <= m.minStock;
+  const reorderCount = materials.filter(isReorder).length;
+  const suggestedMin = (m: MaterialRow) =>
+    !isReorder(m) && (!m.minStock || m.minStock <= 0) && m.dailyUsage > 0
+      ? Math.ceil(m.dailyUsage * 14)
+      : null;
+
   const startEdit = (m: MaterialRow) => {
     setEditingId(m.id);
     setEditValue(String(m.onHand));
@@ -139,6 +149,18 @@ export default function RawMaterials() {
 
   return (
     <div className="p-4 md:p-8 space-y-6" data-testid="page-raw-materials">
+      {reorderCount > 0 && (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm flex items-center gap-2 text-amber-700 dark:text-amber-400"
+          data-testid="banner-reorder"
+        >
+          <AlertTriangle className="h-4 w-4" />
+          <span>
+            <strong className="tabular-nums">{reorderCount}</strong> component{reorderCount === 1 ? "" : "s"} need reordering
+          </span>
+        </div>
+      )}
+
       {/* Page header */}
       <div>
         <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
@@ -226,8 +248,20 @@ export default function RawMaterials() {
                     >
                       <TableCell>
                         <div>
-                          <div className="font-medium text-sm">{m.name}</div>
+                          <div className="font-medium text-sm flex items-center gap-1.5 flex-wrap">
+                            <span>{m.name}</span>
+                            {isReorder(m) && (
+                              <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5" data-testid={`badge-reorder-${m.id}`}>
+                                ⚠️ Reorder
+                              </Badge>
+                            )}
+                          </div>
                           <div className="text-xs text-muted-foreground font-mono">{m.sku}</div>
+                          {suggestedMin(m) !== null && (
+                            <div className="text-xs text-muted-foreground mt-0.5" data-testid={`suggested-min-${m.id}`}>
+                              Suggested min: {suggestedMin(m)}
+                            </div>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell className="text-right">

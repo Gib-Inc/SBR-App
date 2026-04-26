@@ -354,6 +354,27 @@ type SnapshotRow = {
 
 type Velocity = { sku: string; unitsSold: number };
 
+type ItemForWidget = {
+  id: string;
+  name: string;
+  type: string;
+  currentStock: number | null;
+  minStock: number | null;
+  dailyUsage: number | null;
+};
+
+type AttentionRow =
+  | { key: string; kind: "out"; name: string; perDay: number; rate: number }
+  | {
+      key: string;
+      kind: "low";
+      name: string;
+      onHand: number;
+      minStock: number;
+      dailyUsage: number;
+      rate: number;
+    };
+
 function CriticalStockWidget() {
   const { data: snapshot, isLoading: snapLoading } = useQuery<SnapshotRow[]>({
     queryKey: ["/api/inventory/snapshot"],
@@ -361,30 +382,65 @@ function CriticalStockWidget() {
   const { data: velocity, isLoading: velLoading } = useQuery<Velocity[]>({
     queryKey: ["/api/inventory/sales-velocity"],
   });
+  const { data: items, isLoading: itemsLoading } = useQuery<ItemForWidget[]>({
+    queryKey: ["/api/items"],
+  });
 
-  const top = useMemo(() => {
-    if (!snapshot || !velocity) return [];
+  const top = useMemo<AttentionRow[]>(() => {
+    if (!snapshot || !velocity || !items) return [];
+
+    // 1. Finished goods at total = 0 with active sales (existing logic).
     const velMap = new Map<string, number>();
     for (const v of velocity) velMap.set(v.sku, v.unitsSold);
 
-    type Row = { sku: string; name: string; total: number; unitsSold: number };
-    const bySku = new Map<string, Row>();
+    type Bucket = { sku: string; name: string; total: number; unitsSold: number };
+    const bySku = new Map<string, Bucket>();
     for (const r of snapshot) {
       const existing =
         bySku.get(r.sku) ??
-        ({ sku: r.sku, name: r.name ?? r.sku, total: 0, unitsSold: velMap.get(r.sku) ?? 0 } as Row);
+        ({ sku: r.sku, name: r.name ?? r.sku, total: 0, unitsSold: velMap.get(r.sku) ?? 0 } as Bucket);
       existing.total += r.qty;
       if (!existing.name && r.name) existing.name = r.name;
       bySku.set(r.sku, existing);
     }
-
-    return Array.from(bySku.values())
+    const outRows: AttentionRow[] = Array.from(bySku.values())
       .filter((r) => r.total === 0 && r.unitsSold > 0)
-      .sort((a, b) => b.unitsSold - a.unitsSold)
-      .slice(0, CRITICAL_LIST_LIMIT);
-  }, [snapshot, velocity]);
+      .map((r) => ({
+        key: `out:${r.sku}`,
+        kind: "out",
+        name: r.name,
+        perDay: Math.max(0, Math.round(r.unitsSold / VELOCITY_WINDOW_DAYS)),
+        rate: r.unitsSold / VELOCITY_WINDOW_DAYS,
+      }));
 
-  const isLoading = snapLoading || velLoading;
+    // 2. Components at or below their configured minimum (min > 0).
+    const lowRows: AttentionRow[] = items
+      .filter(
+        (i) =>
+          i.type === "component" &&
+          (i.minStock ?? 0) > 0 &&
+          (i.currentStock ?? 0) <= (i.minStock ?? 0),
+      )
+      .map((i) => ({
+        key: `low:${i.id}`,
+        kind: "low",
+        name: i.name,
+        onHand: i.currentStock ?? 0,
+        minStock: i.minStock ?? 0,
+        dailyUsage: i.dailyUsage ?? 0,
+        rate: i.dailyUsage ?? 0,
+      }));
+
+    // Two-tier sort: out-of-stock first, then below-min; secondary rate desc.
+    return [...outRows, ...lowRows]
+      .sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === "out" ? -1 : 1;
+        return b.rate - a.rate;
+      })
+      .slice(0, CRITICAL_LIST_LIMIT);
+  }, [snapshot, velocity, items]);
+
+  const isLoading = snapLoading || velLoading || itemsLoading;
 
   return (
     <Card data-testid="widget-critical-stock">
@@ -406,30 +462,57 @@ function CriticalStockWidget() {
           <WidgetSkeleton />
         ) : top.length === 0 ? (
           <div className="text-sm text-muted-foreground py-2">
-            No SKUs are out of stock with active sales.
+            Stock is healthy across SKUs and components.
           </div>
         ) : (
           <ul className="divide-y">
-            {top.map((row) => {
-              const perDay = Math.max(0, Math.round(row.unitsSold / VELOCITY_WINDOW_DAYS));
-              return (
+            {top.map((row) =>
+              row.kind === "out" ? (
                 <li
-                  key={row.sku}
+                  key={row.key}
                   className="py-2 flex items-center justify-between gap-3"
-                  data-testid={`critical-row-${row.sku}`}
+                  data-testid={`critical-row-${row.key}`}
                 >
                   <div className="min-w-0">
                     <div className="text-sm font-medium truncate">{row.name}</div>
+                    <div className="text-xs text-destructive font-medium">Out of stock</div>
                     <div className="text-xs text-muted-foreground">
-                      0 on hand · {perDay} unit{perDay === 1 ? "" : "s"}/day
+                      0 on hand · {row.perDay} unit{row.perDay === 1 ? "" : "s"}/day
                     </div>
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold tabular-nums text-destructive">0</div>
                   </div>
                 </li>
-              );
-            })}
+              ) : (
+                <li
+                  key={row.key}
+                  className="py-2 flex items-center justify-between gap-3"
+                  data-testid={`critical-row-${row.key}`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate">{row.name}</div>
+                    <div className="text-xs text-amber-700 dark:text-amber-400 font-medium">Low component stock</div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.onHand} on hand · min {row.minStock}
+                      {row.dailyUsage > 0 && (
+                        <>
+                          {" · "}
+                          {row.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div
+                      className="text-base font-bold tabular-nums text-amber-700 dark:text-amber-400"
+                    >
+                      {row.onHand}
+                    </div>
+                  </div>
+                </li>
+              ),
+            )}
           </ul>
         )}
       </CardContent>

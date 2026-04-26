@@ -4165,6 +4165,43 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/items/by-barcode?code=X — purpose-built lookup for the
+  // shop-floor scanner integration. Tries every identifier field on items
+  // in the same priority order a human would: barcodeValue → barcode →
+  // upc → amazonAsin → sku → shopifySku → extensivSku.
+  app.get("/api/items/by-barcode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const raw = typeof req.query.code === "string" ? req.query.code.trim() : "";
+      if (!raw) return res.status(400).json({ error: "code is required" });
+
+      const items = await storage.getAllItems();
+      const exact = (val: string | null | undefined) => !!val && val.trim() === raw;
+      const found =
+        items.find((i) => exact((i as any).barcodeValue)) ??
+        items.find((i) => exact(i.barcode)) ??
+        items.find((i) => exact((i as any).upc)) ??
+        items.find((i) => exact((i as any).amazonAsin)) ??
+        items.find((i) => exact(i.sku)) ??
+        items.find((i) => exact((i as any).shopifySku)) ??
+        items.find((i) => exact((i as any).extensivSku)) ??
+        null;
+
+      if (!found) return res.status(404).json({ error: "No item matches that code" });
+      res.json({
+        id: found.id,
+        sku: found.sku,
+        name: found.name,
+        type: found.type,
+        currentStock: found.currentStock,
+        hildaleQty: (found as any).hildaleQty ?? 0,
+        pivotQty: (found as any).pivotQty ?? 0,
+      });
+    } catch (error: any) {
+      console.error("[Items by-barcode] Error:", error);
+      res.status(500).json({ error: error.message || "Lookup failed" });
+    }
+  });
+
   app.patch("/api/barcodes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateBarcodeSchema.parse(req.body);

@@ -24,6 +24,7 @@ import {
 import {
   ArrowLeft,
   ArrowRight,
+  Barcode,
   Check,
   ChevronsUpDown,
   Loader2,
@@ -32,6 +33,8 @@ import {
   Truck,
   X,
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { useBarcodeDetector } from "@/hooks/use-barcode-scanner";
 
 // Mobile-friendly receive-stock flow for Clarence. Three steps: pick a
 // supplier (or skip), enter component lines, confirm. SKUs are intentionally
@@ -266,6 +269,7 @@ function ItemsStep({
   onConfirm: () => void;
   submitError: Error | null;
 }) {
+  const { toast } = useToast();
   const usedItemIds = useMemo(() => {
     const s = new Set<string>();
     for (const l of lines) if (l.itemId) s.add(l.itemId);
@@ -279,6 +283,61 @@ function ItemsStep({
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((l) => l.key !== key)));
   };
   const addLine = () => setLines((prev) => [...prev, newLine()]);
+
+  // Hardware (USB wedge) barcode scanner integration. Scan → look up item
+  // by code → drop it into the first empty row (or push a new row).
+  // Only fires while we're on the items step; the supplier step doesn't
+  // mount this component.
+  useBarcodeDetector({
+    enabled: true,
+    onScan: async (code: string) => {
+      try {
+        const res = await fetch(`/api/items/by-barcode?code=${encodeURIComponent(code)}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          toast({
+            variant: "destructive",
+            title: "Code not recognized",
+            description: code.length > 24 ? code.slice(0, 24) + "…" : code,
+          });
+          return;
+        }
+        const item = (await res.json()) as { id: string; name: string; sku: string; type: string };
+        if (item.type !== "component") {
+          toast({
+            variant: "destructive",
+            title: "Components only",
+            description: `${item.name} isn't a component — receive flow is for raw materials.`,
+          });
+          return;
+        }
+        // Drop the scanned item into the first empty-itemId row, OR add a
+        // new row when every row is already filled.
+        setLines((prev) => {
+          if (prev.some((l) => l.itemId === item.id)) {
+            // Already on the list; toast and let the user bump qty manually.
+            return prev;
+          }
+          const idx = prev.findIndex((l) => !l.itemId);
+          if (idx === -1) {
+            return [
+              ...prev,
+              { key: `l${++LINE_KEY_SEED}`, itemId: item.id, quantity: "", lotNumber: "" },
+            ];
+          }
+          return prev.map((l, i) => (i === idx ? { ...l, itemId: item.id } : l));
+        });
+        toast({ title: `Scanned ${item.name}` });
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Scan failed",
+          description: err?.message ?? String(err),
+        });
+      }
+    },
+  });
 
   // Per-line validation: positive integer qty, non-empty itemId.
   const lineErrors = lines.map((l) => {
@@ -306,10 +365,19 @@ function ItemsStep({
           <ArrowLeft className="h-4 w-4" /> Change supplier
         </button>
         <h1 className="text-3xl font-bold">What did you receive?</h1>
-        <p className="text-muted-foreground inline-flex items-center gap-1.5">
-          <Truck className="h-4 w-4" />
-          {supplierName ?? "No supplier picked"}
-        </p>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <p className="text-muted-foreground inline-flex items-center gap-1.5">
+            <Truck className="h-4 w-4" />
+            {supplierName ?? "No supplier picked"}
+          </p>
+          <p
+            className="text-xs text-muted-foreground inline-flex items-center gap-1.5"
+            data-testid="scanner-ready-hint"
+          >
+            <Barcode className="h-3.5 w-3.5" />
+            Scan barcodes to add — USB scanner ready
+          </p>
+        </div>
       </header>
 
       <Card className="p-4 space-y-3">

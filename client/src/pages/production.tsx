@@ -52,8 +52,8 @@ type CardConfig = {
 };
 
 const CARDS: CardConfig[] = [
-  { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"] },
-  { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"] },
+  { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"], foamComponentSku: "SBR-COMP-ROLLER-12" },
+  { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"], foamComponentSku: "SBR-COMP-ROLLER-18" },
   {
     key: "pull-behind",
     label: "Pull-Behind",

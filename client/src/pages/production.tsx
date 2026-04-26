@@ -11,6 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { ProductionPlan } from "@/components/production-plan";
 import {
   Select,
   SelectContent,
@@ -216,8 +217,11 @@ export default function Production() {
     <div className="p-4 mx-auto max-w-2xl space-y-6" data-testid="page-production">
       <header>
         <h1 className="text-3xl font-bold">Production</h1>
-        <p className="text-muted-foreground">Tap a product to log work.</p>
+        <p className="text-muted-foreground">This week's plan, then tap a product to log work.</p>
       </header>
+
+      {/* Forward-looking weekly plan — what to build, what's blocked, when. */}
+      <ProductionPlan />
 
       {/* Section 1: Product cards */}
       <section className="space-y-3" aria-label="Log today's work">

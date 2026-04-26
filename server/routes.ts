@@ -12128,6 +12128,274 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // GET /api/production/plan-week?startDate=YYYY-MM-DD
+  // Forward-looking weekly build plan for /production. Combines BOM × 90d
+  // velocity (the demand pull) with current component stock + inbound POs
+  // (the supply) and open backorders (the priority signal) to produce a
+  // 5-workday schedule plus an aggregate materials check.
+  app.get("/api/production/plan-week", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // Anchor the week to the requested start date or today (always Monday-aligned).
+      const baseDate = typeof req.query.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.startDate)
+        ? new Date(req.query.startDate)
+        : new Date();
+      // Snap to Monday of that week. JS getDay: Sun=0, Mon=1, ... Sat=6.
+      const dayOfWeek = baseDate.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const weekStart = new Date(baseDate);
+      weekStart.setHours(0, 0, 0, 0);
+      weekStart.setDate(weekStart.getDate() + mondayOffset);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+      const fmtKey = (d: Date) => d.toISOString().slice(0, 10);
+
+      // ── Pull every dataset we need in one round of queries ──
+      const [allItems, velocity, allPOs, allPOLines, allSOs] = await Promise.all([
+        storage.getAllItems(),
+        storage.getSkuSalesVelocity(90),
+        storage.getAllPurchaseOrders(),
+        storage.getAllPurchaseOrderLines(),
+        storage.getAllSalesOrders(),
+      ]);
+      const finishedProducts = allItems.filter((i) => i.type === "finished_product");
+      const componentById = new Map(allItems.filter((i) => i.type === "component").map((c) => [c.id, c] as const));
+      const velocityMap = new Map(velocity.map((v) => [v.sku, v.unitsSold] as const));
+
+      // ── Inbound PO arrivals per component, sorted by arrival ──
+      // Only count PO lines with qty still owed (qtyReceived < qtyOrdered)
+      // and a non-terminal PO status. expectedDate is the arrival window.
+      const PO_TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      type Inbound = { date: Date; qty: number; poNumber: string; supplierName: string | null };
+      const inboundByComponent = new Map<string, Inbound[]>();
+      const poById = new Map(allPOs.map((p) => [p.id, p] as const));
+      for (const line of allPOLines) {
+        const po = poById.get(line.purchaseOrderId);
+        if (!po) continue;
+        if (PO_TERMINAL.has(po.status)) continue;
+        if ((po as any).isHistorical) continue;
+        const owed = (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0);
+        if (owed <= 0) continue;
+        const eta = (po as any).expectedDate as Date | string | null | undefined;
+        if (!eta) continue;
+        const etaDate = new Date(eta);
+        if (Number.isNaN(etaDate.getTime())) continue;
+        const arr = inboundByComponent.get(line.itemId) ?? [];
+        arr.push({
+          date: etaDate,
+          qty: owed,
+          poNumber: po.poNumber,
+          supplierName: po.supplierName ?? null,
+        });
+        inboundByComponent.set(line.itemId, arr);
+      }
+      for (const arr of Array.from(inboundByComponent.values())) {
+        arr.sort((a, b) => a.date.getTime() - b.date.getTime());
+      }
+
+      // ── Open backorder qty per finished product SKU ──
+      const SO_TERMINAL = new Set(["FULFILLED", "CANCELLED", "DELIVERED", "REFUNDED", "PENDING_REFUND"]);
+      const backorderBySku = new Map<string, number>();
+      for (const so of allSOs) {
+        if (SO_TERMINAL.has(so.status)) continue;
+        const lines = await storage.getSalesOrderLines(so.id);
+        for (const line of lines) {
+          const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyShipped ?? 0));
+          if (open <= 0 || !line.sku) continue;
+          backorderBySku.set(line.sku, (backorderBySku.get(line.sku) ?? 0) + open);
+        }
+      }
+
+      // ── Aggregate weekly demand from each product → its components ──
+      // Per-product weekly target = ceil(dailySales × 7) + open backorders
+      // (so a backordered product gets prioritized capacity automatically).
+      type ProductPlan = {
+        itemId: string;
+        sku: string;
+        name: string;
+        dailySales: number;
+        weeklyTarget: number;
+        backordered: number;
+        currentStock: number;
+        currentBuildable: number;        // from on-hand components today
+        weeklyBuildable: number;         // including inbound POs arriving this week
+        earliestBuildable: string | null; // YYYY-MM-DD when the first unit can start
+        blockedBy: Array<{ componentId: string; componentName: string; shortBy: number; earliestArrival: string | null }>;
+        scheduledByDay: Record<string, number>; // YYYY-MM-DD → qty assigned that day
+      };
+      const productPlans: ProductPlan[] = [];
+
+      // Component demand totals across products (for the materials check).
+      type ComponentDemand = { id: string; name: string; required: number; onHand: number };
+      const componentDemand = new Map<string, ComponentDemand>();
+
+      for (const product of finishedProducts) {
+        const unitsSold90 = velocityMap.get(product.sku) ?? 0;
+        const dailySales = unitsSold90 / 90;
+        const backordered = backorderBySku.get(product.sku) ?? 0;
+        const baseWeekly = Math.ceil(dailySales * 7);
+        const weeklyTarget = baseWeekly + backordered;
+        if (weeklyTarget <= 0) continue;
+
+        const bom = await storage.getBillOfMaterialsByProductId(product.id);
+        if (!bom || bom.length === 0) {
+          productPlans.push({
+            itemId: product.id,
+            sku: product.sku,
+            name: product.name,
+            dailySales: Math.round(dailySales * 100) / 100,
+            weeklyTarget,
+            backordered,
+            currentStock: (product.hildaleQty ?? 0) + (product.pivotQty ?? 0),
+            currentBuildable: 0,
+            weeklyBuildable: 0,
+            earliestBuildable: null,
+            blockedBy: [{ componentId: "", componentName: "(no BOM defined)", shortBy: weeklyTarget, earliestArrival: null }],
+            scheduledByDay: {},
+          });
+          continue;
+        }
+
+        // Tally per-component demand for this product into the global map.
+        let currentBuildable = Number.POSITIVE_INFINITY;
+        let weeklyBuildable = Number.POSITIVE_INFINITY;
+        const blockedBy: ProductPlan["blockedBy"] = [];
+
+        for (const entry of bom) {
+          const comp = componentById.get(entry.componentId);
+          const compName = comp?.name ?? "(unknown)";
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const perUnit = entry.quantityRequired * (1 + wastage / 100);
+          const need = Math.ceil(perUnit * weeklyTarget);
+          const onHand = comp?.currentStock ?? 0;
+
+          // Aggregate for the materials check.
+          const agg = componentDemand.get(entry.componentId) ?? {
+            id: entry.componentId,
+            name: compName,
+            required: 0,
+            onHand,
+          };
+          agg.required += need;
+          componentDemand.set(entry.componentId, agg);
+
+          // What's reachable today vs by end-of-week (with inbound POs)?
+          const inbound = inboundByComponent.get(entry.componentId) ?? [];
+          const inboundThisWeek = inbound
+            .filter((i) => i.date <= weekEnd)
+            .reduce((s, i) => s + i.qty, 0);
+          const todayCanMake = perUnit > 0 ? Math.floor(onHand / perUnit) : Number.POSITIVE_INFINITY;
+          const weekCanMake = perUnit > 0 ? Math.floor((onHand + inboundThisWeek) / perUnit) : Number.POSITIVE_INFINITY;
+          if (todayCanMake < currentBuildable) currentBuildable = todayCanMake;
+          if (weekCanMake < weeklyBuildable) weeklyBuildable = weekCanMake;
+
+          if (todayCanMake < weeklyTarget) {
+            const earliestForOne = inbound.length > 0 ? fmtKey(inbound[0].date) : null;
+            blockedBy.push({
+              componentId: entry.componentId,
+              componentName: compName,
+              shortBy: Math.max(0, need - (onHand + inboundThisWeek)),
+              earliestArrival: earliestForOne,
+            });
+          }
+        }
+
+        const finiteCurrent = Number.isFinite(currentBuildable) ? currentBuildable : weeklyTarget;
+        const finiteWeekly = Number.isFinite(weeklyBuildable) ? weeklyBuildable : weeklyTarget;
+
+        // Earliest buildable date: today if at least one unit fits today,
+        // otherwise the earliest arrival across the blockers.
+        let earliestBuildable: string | null = null;
+        if (finiteCurrent >= 1) {
+          earliestBuildable = fmtKey(weekStart);
+        } else {
+          const arrivals = blockedBy
+            .map((b) => b.earliestArrival)
+            .filter((d): d is string => !!d)
+            .sort();
+          earliestBuildable = arrivals[0] ?? null;
+        }
+
+        productPlans.push({
+          itemId: product.id,
+          sku: product.sku,
+          name: product.name,
+          dailySales: Math.round(dailySales * 100) / 100,
+          weeklyTarget,
+          backordered,
+          currentStock: (product.hildaleQty ?? 0) + (product.pivotQty ?? 0),
+          currentBuildable: Math.max(0, finiteCurrent),
+          weeklyBuildable: Math.max(0, Math.min(finiteWeekly, weeklyTarget)),
+          earliestBuildable,
+          blockedBy,
+          scheduledByDay: {},
+        });
+      }
+
+      // ── Sort by priority: backorders first, then by daily sales velocity ──
+      productPlans.sort((a, b) => {
+        if (a.backordered !== b.backordered) return b.backordered - a.backordered;
+        return b.dailySales - a.dailySales;
+      });
+
+      // ── Spread each product's weeklyBuildable across Mon–Fri evenly ──
+      // Heuristic v1: simple equal split, rounded so the day-by-day numbers
+      // sum back to the weekly figure. Fancier optimization (one product per
+      // shift, FIFO component drawdown) can layer on top later.
+      const workdays: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(weekStart);
+        d.setDate(d.getDate() + i);
+        workdays.push(fmtKey(d));
+      }
+      for (const p of productPlans) {
+        const total = p.weeklyBuildable;
+        if (total <= 0) continue;
+        const per = Math.floor(total / 5);
+        let remainder = total - per * 5;
+        for (const day of workdays) {
+          const qty = per + (remainder > 0 ? 1 : 0);
+          if (remainder > 0) remainder--;
+          if (qty > 0) p.scheduledByDay[day] = qty;
+        }
+      }
+
+      // ── Materials check ──
+      const materialsCheck = Array.from(componentDemand.values())
+        .map((c) => {
+          const inbound = inboundByComponent.get(c.id) ?? [];
+          const inboundThisWeek = inbound
+            .filter((i) => i.date <= weekEnd)
+            .reduce((s, i) => s + i.qty, 0);
+          const gap = Math.max(0, c.required - c.onHand);
+          const gapAfterInbound = Math.max(0, c.required - c.onHand - inboundThisWeek);
+          const earliestArrival = inbound[0]?.date ? fmtKey(inbound[0].date) : null;
+          return {
+            componentId: c.id,
+            componentName: c.name,
+            required: c.required,
+            onHand: c.onHand,
+            inboundThisWeek,
+            gap,
+            gapAfterInbound,
+            earliestArrival,
+          };
+        })
+        .filter((m) => m.gap > 0)
+        .sort((a, b) => b.gap - a.gap);
+
+      res.json({
+        weekStart: fmtKey(weekStart),
+        weekEnd: fmtKey(new Date(weekEnd.getTime() - 1)),
+        workdays,
+        products: productPlans,
+        materialsCheck,
+      });
+    } catch (error: any) {
+      console.error("[Production Plan Week] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute weekly plan" });
+    }
+  });
+
   // ============================================================================
   // PRODUCTION LOGS — per-action shop floor entries (Clarence's mobile UI)
   // ============================================================================

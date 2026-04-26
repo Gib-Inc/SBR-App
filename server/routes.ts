@@ -22962,6 +22962,89 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/otdr/summary — current 30d OTDR vs previous 30d, plus the late
+  // orders behind the current-period number (for the dashboard drill-down).
+  // OTDR = orders delivered on/before requiredByDate / orders with both dates
+  // present. Same math as briefing-service.computeOTDR but windowed at 30d
+  // and surfacing the per-order detail so the user can answer "why are we at
+  // 84% this week" without leaving the dashboard.
+  app.get("/api/otdr/summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const allOrders = await storage.getAllSalesOrders();
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      const currentStart = now - 30 * day;
+      const previousStart = now - 60 * day;
+      const previousEnd = currentStart;
+
+      type LateOrder = {
+        orderId: string;
+        orderName: string | null;
+        externalOrderId: string | null;
+        customerName: string;
+        customerEmail: string | null;
+        channel: string;
+        requiredByDate: string;
+        deliveredAt: string;
+        daysLate: number;
+      };
+
+      const computeWindow = (windowStart: number, windowEnd: number) => {
+        let total = 0;
+        let onTime = 0;
+        const lateOrders: LateOrder[] = [];
+        for (const o of allOrders) {
+          const deliveredRaw = (o as any).deliveredAt;
+          const requiredRaw = (o as any).requiredByDate;
+          if (!deliveredRaw || !requiredRaw) continue;
+          const deliveredAt = new Date(deliveredRaw).getTime();
+          const requiredBy = new Date(requiredRaw).getTime();
+          if (Number.isNaN(deliveredAt) || Number.isNaN(requiredBy)) continue;
+          if (deliveredAt < windowStart || deliveredAt >= windowEnd) continue;
+          total++;
+          if (deliveredAt <= requiredBy) {
+            onTime++;
+          } else {
+            lateOrders.push({
+              orderId: o.id,
+              orderName: (o as any).orderName ?? null,
+              externalOrderId: (o as any).externalOrderId ?? null,
+              customerName: (o as any).customerName ?? "(unknown)",
+              customerEmail: (o as any).customerEmail ?? null,
+              channel: o.channel ?? "OTHER",
+              requiredByDate: new Date(requiredBy).toISOString(),
+              deliveredAt: new Date(deliveredAt).toISOString(),
+              daysLate: Math.ceil((deliveredAt - requiredBy) / day),
+            });
+          }
+        }
+        const pct = total > 0 ? Math.round((onTime / total) * 1000) / 10 : null;
+        return { pct, total, onTime, lateOrders };
+      };
+
+      const current = computeWindow(currentStart, now);
+      const previous = computeWindow(previousStart, previousEnd);
+      const delta = current.pct != null && previous.pct != null
+        ? Math.round((current.pct - previous.pct) * 10) / 10
+        : null;
+
+      // Sort late orders by most-late first so the drill-down opens with
+      // the worst breaches at the top.
+      current.lateOrders.sort((a, b) => b.daysLate - a.daysLate);
+
+      res.json({
+        target: 90,
+        current: { pct: current.pct, total: current.total, onTime: current.onTime },
+        previous: { pct: previous.pct, total: previous.total, onTime: previous.onTime },
+        delta, // current.pct - previous.pct, in percentage points
+        lateOrders: current.lateOrders,
+      });
+    } catch (error: any) {
+      console.error("[OTDR] Summary error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute OTDR" });
+    }
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // COUNT INVENTORY — Sammie's mobile counting flow (/count-inventory)
   // ════════════════════════════════════════════════════════════════════════

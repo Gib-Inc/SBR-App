@@ -72,6 +72,7 @@ import { DashboardWidget } from "@/components/dashboard-widget";
 import { CriticalStockBanner } from "@/components/critical-stock-banner";
 import { DefaultWidgets } from "@/components/dashboard-default-widgets";
 import { MorningBriefingCard } from "@/components/morning-briefing-card";
+import { OtdrWidget } from "@/components/otdr-widget";
 
 type Widget = {
   id: string;
@@ -571,6 +572,8 @@ export default function Reports() {
       <SystemOverview />
 
       <Separator />
+
+      <OtdrWidget />
 
       <MorningBriefingCard />
 

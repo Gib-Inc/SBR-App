@@ -45,6 +45,7 @@ import Marketing from "@/pages/marketing";
 import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
 import CountInventory from "@/pages/count-inventory";
+import ReceiveStock from "@/pages/receive-stock";
 import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
 import SupplierIntel from "@/pages/supplier-intel";
@@ -141,6 +142,7 @@ function AuthenticatedApp() {
                     <Route path="/inventory" component={Inventory} />
                     <Route path="/raw-materials" component={RawMaterials} />
                     <Route path="/count-inventory" component={CountInventory} />
+                    <Route path="/receive-stock" component={ReceiveStock} />
                     <Route path="/in-house-shipping" component={InHouseShipping} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />

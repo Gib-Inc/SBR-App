@@ -11626,6 +11626,98 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // POST /api/receive-stock — Clarence's ad-hoc receiving flow.
+  // Accepts { supplierId?, lines: [{itemId, quantity}] }. For each line:
+  // bumps items.current_stock and inserts an inventory_transactions row with
+  // type='RECEIVE'. supplierId may be null (Clarence skipped supplier picker).
+  app.post("/api/receive-stock", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { supplierId: rawSupplierId, lines } = req.body as {
+        supplierId?: string | null;
+        lines?: Array<{ itemId?: string; quantity?: number }>;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "lines array is required" });
+      }
+
+      let supplierId: string | null = null;
+      if (typeof rawSupplierId === "string" && rawSupplierId.trim()) {
+        const supplier = await storage.getSupplier(rawSupplierId.trim());
+        if (!supplier) {
+          return res.status(400).json({ error: "supplier not found" });
+        }
+        supplierId = supplier.id;
+      }
+
+      const userId = req.session.userId!;
+
+      const results: Array<{
+        itemId: string;
+        itemName: string;
+        success: boolean;
+        quantity: number;
+        newStock: number;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", itemName: "", success: false, quantity: 0, newStock: 0, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, itemName: "", success: false, quantity: 0, newStock: 0, error: `Line ${i + 1}: quantity must be a positive whole number` });
+          continue;
+        }
+
+        try {
+          const item = await storage.getItem(itemId);
+          if (!item) {
+            results.push({ itemId, itemName: "", success: false, quantity: qty, newStock: 0, error: "Item not found" });
+            continue;
+          }
+          if (item.type !== "component") {
+            results.push({ itemId, itemName: item.name, success: false, quantity: qty, newStock: item.currentStock ?? 0, error: "Only components can be received here" });
+            continue;
+          }
+
+          const before = item.currentStock ?? 0;
+          const newStock = before + qty;
+          await storage.updateItem(item.id, { currentStock: newStock });
+          await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "RAW",
+            type: "RECEIVE",
+            location: "N/A",
+            quantity: qty,
+            supplierId,
+            createdBy: userId,
+            notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
+          });
+
+          results.push({ itemId: item.id, itemName: item.name, success: true, quantity: qty, newStock });
+        } catch (err: any) {
+          results.push({ itemId, itemName: "", success: false, quantity: qty, newStock: 0, error: err?.message ?? "Unknown error" });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      res.status(successCount === 0 ? 400 : 201).json({
+        supplierId,
+        summary: { total: results.length, success: successCount, failed: results.length - successCount },
+        results,
+      });
+    } catch (error: any) {
+      console.error("[Receive Stock] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to receive stock" });
+    }
+  });
+
   // Batch production - produce multiple products at once
   app.post("/api/production/batch-build", requireAuth, async (req: Request, res: Response) => {
     try {

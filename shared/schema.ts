@@ -866,6 +866,9 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   type: text("type").notNull(), // 'RECEIVE', 'SHIP', 'TRANSFER_IN', 'TRANSFER_OUT', 'PRODUCE', 'ADJUST'
   location: text("location").notNull(), // 'HILDALE', 'PIVOT', or 'N/A' for raw items
   quantity: integer("quantity").notNull(), // Positive number (direction determined by type)
+  // Optional supplier link — populated by /receive-stock when Clarence picks
+  // a supplier; null when the source isn't tracked (skipped or non-supplier event).
+  supplierId: varchar("supplier_id").references(() => suppliers.id),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   createdBy: text("created_by"), // User ID or system identifier
   notes: text("notes"), // Optional reason/description

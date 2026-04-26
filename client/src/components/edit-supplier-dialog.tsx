@@ -24,7 +24,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Save, Building2, ShoppingBag, Wrench } from "lucide-react";
+import { SupplierPerformance } from "@/components/supplier-performance";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -182,6 +184,43 @@ export function EditSupplierDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {mode === "edit" && supplier ? (
+          <Tabs defaultValue="details" className="w-full">
+            <TabsList className="grid w-full max-w-sm grid-cols-2">
+              <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
+              <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
+            </TabsList>
+            <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
+              <SupplierPerformance supplierId={supplier.id} />
+            </TabsContent>
+            <TabsContent value="details" className="mt-4">
+              <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
+            </TabsContent>
+          </Tabs>
+        ) : (
+          <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Form body extracted so the edit-mode tabs and the add-mode flat layout
+// share the same fields without duplication.
+function SupplierFormBody({
+  form,
+  onSubmit,
+  mutationPending,
+  mode,
+  onClose,
+}: {
+  form: ReturnType<typeof useForm<SupplierFormData>>;
+  onSubmit: (values: SupplierFormData) => void;
+  mutationPending: boolean;
+  mode: "edit" | "create";
+  onClose: () => void;
+}) {
+  return (
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
             <ScrollArea className="max-h-[60vh] pr-4">
@@ -467,18 +506,18 @@ export function EditSupplierDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
-                disabled={updateMutation.isPending}
+                onClick={onClose}
+                disabled={mutationPending}
                 data-testid="button-cancel"
               >
                 Cancel
               </Button>
               <Button
                 type="submit"
-                disabled={updateMutation.isPending}
+                disabled={mutationPending}
                 data-testid="button-save-supplier"
               >
-                {updateMutation.isPending ? (
+                {mutationPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Saving...
@@ -493,7 +532,5 @@ export function EditSupplierDialog({
             </DialogFooter>
           </form>
         </Form>
-      </DialogContent>
-    </Dialog>
   );
 }

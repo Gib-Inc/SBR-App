@@ -28,6 +28,7 @@ import {
   Upload,
 } from "lucide-react";
 import { EditSupplierDialog } from "@/components/edit-supplier-dialog";
+import { ReliabilityBadge, computeSupplierMetrics } from "@/components/supplier-performance";
 import { ImportSuppliersDialog } from "@/components/import-suppliers-dialog";
 import type { Supplier } from "@shared/schema";
 
@@ -42,6 +43,19 @@ export default function Suppliers() {
   const { data: suppliers = [], isLoading, refetch } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
   });
+
+  // Pull POs + supplier_items once so the Reliability column can compute OTDR
+  // per supplier without N+1 fetches.
+  const { data: allPOs = [] } = useQuery<any[]>({ queryKey: ['/api/purchase-orders'] });
+  const { data: allSupplierItems = [] } = useQuery<any[]>({ queryKey: ['/api/supplier-items'] });
+  const reliabilityBySupplier = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const s of suppliers) {
+      const m = computeSupplierMetrics(allPOs as any, allSupplierItems as any, s.id);
+      map.set(s.id, m.otdr);
+    }
+    return map;
+  }, [suppliers, allPOs, allSupplierItems]);
 
   const filteredSuppliers = useMemo(() => {
     if (!searchQuery.trim()) return suppliers;
@@ -148,6 +162,7 @@ export default function Suppliers() {
                           <TableHead className="min-w-[250px]">Address</TableHead>
                           <TableHead className="min-w-[100px]">Payment Terms</TableHead>
                           <TableHead className="min-w-[100px]">PO Activity</TableHead>
+                          <TableHead className="w-[110px] text-center">Reliability</TableHead>
                           <TableHead className="w-[80px] text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -227,6 +242,9 @@ export default function Suppliers() {
                                 <span className="font-medium">{supplier.poReceivedCount || 0}</span>
                                 <span className="text-muted-foreground text-xs ml-1">(sent/recv)</span>
                               </div>
+                            </TableCell>
+                            <TableCell className="text-center" data-testid={`text-reliability-${supplier.id}`}>
+                              <ReliabilityBadge otdr={reliabilityBySupplier.get(supplier.id) ?? null} />
                             </TableCell>
                             <TableCell className="text-right">
                               <Button

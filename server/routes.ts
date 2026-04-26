@@ -19406,20 +19406,35 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Determine which warehouse to ship from (prioritize Pivot, then Hildale)
+        // Determine which warehouse to ship from. In-house orders
+        // (fulfillmentSource='HILDALE') physically leave from Hildale, so we must
+        // pin the location to HILDALE — the previous prioritize-Pivot logic would
+        // pick PIVOT whenever pivotQty was sufficient, leaving hildaleQty
+        // un-decremented even though Hildale actually shipped the order.
+        // Pivot/3PL orders keep the original prioritize-Pivot fallback.
+        const isInHouse = order.fulfillmentSource === 'HILDALE';
         let location: 'PIVOT' | 'HILDALE';
-        if ((product.pivotQty ?? 0) >= shipQty) {
+        if (isInHouse) {
+          if ((product.hildaleQty ?? 0) >= shipQty) {
+            location = 'HILDALE';
+          } else {
+            return res.status(400).json({
+              error: `Insufficient Hildale stock to ship line ${line.sku}`,
+            });
+          }
+        } else if ((product.pivotQty ?? 0) >= shipQty) {
           location = 'PIVOT';
         } else if ((product.hildaleQty ?? 0) >= shipQty) {
           location = 'HILDALE';
         } else {
           // Not enough stock in either location
-          return res.status(400).json({ 
-            error: `Insufficient stock to ship line ${line.sku}` 
+          return res.status(400).json({
+            error: `Insufficient stock to ship line ${line.sku}`,
           });
         }
 
-        // Use InventoryMovement helper to update stock and log the movement
+        // Use InventoryMovement helper to update stock and log the movement.
+        // SALES_ORDER_SHIPPED with location='HILDALE' decrements hildaleQty.
         const result = await inventoryMovement.apply({
           eventType: "SALES_ORDER_SHIPPED",
           itemId: product.id,
@@ -19438,12 +19453,17 @@ Generate only the email body text, no subject line.`;
           return res.status(400).json({ error: result.error });
         }
 
-        // Create SHIP transaction for legacy compatibility
+        // Legacy inventory_transactions entry. For Hildale ships we tag the row
+        // type='SHIPPED_HILDALE' with a negative quantity so SUM(quantity) per
+        // item gives net stock change directly. Pivot ships keep the historical
+        // type='SHIP' / positive-qty shape — Extensiv owns pivotQty, so those
+        // rows are informational anyway.
+        const isHildaleShip = location === 'HILDALE';
         await storage.createInventoryTransaction({
           itemId: product.id,
           itemType: 'FINISHED',
-          type: 'SHIP',
-          quantity: shipQty,
+          type: isHildaleShip ? 'SHIPPED_HILDALE' : 'SHIP',
+          quantity: isHildaleShip ? -shipQty : shipQty,
           location,
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
           createdBy: userId.toString(),

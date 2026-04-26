@@ -17850,14 +17850,16 @@ Generate only the email body text, no subject line.`;
   app.get("/api/sales-orders", requireAuth, async (req: Request, res: Response) => {
     try {
       // Support filtering by live/historical via query params
-      const { view, startDate, endDate, status, channel } = req.query as {
+      const { view, startDate, endDate, status, channel, withLines } = req.query as {
         view?: 'live' | 'historical' | 'all';
         startDate?: string;
         endDate?: string;
         status?: string;
         channel?: string;
+        withLines?: string;
       };
-      
+      const includeLines = withLines === 'true' || withLines === '1';
+
       let orders: SalesOrder[];
       
       if (view === 'historical') {
@@ -17930,12 +17932,24 @@ Generate only the email body text, no subject line.`;
             totalUnits,
             totalBackorderQty,
             productionSource,
+            // Per-line detail for widgets that need product-level breakdown.
+            // Opt-in via ?withLines=true to keep the default response compact.
+            ...(includeLines
+              ? {
+                  lines: lines.map((l: SalesOrderLine) => ({
+                    sku: l.sku,
+                    qtyOrdered: l.qtyOrdered,
+                    qtyShipped: l.qtyShipped,
+                    unitPrice: l.unitPrice,
+                  })),
+                }
+              : {}),
           };
         })
       );
 
       // Sort by orderDate DESC
-      ordersWithSummary.sort((a, b) => 
+      ordersWithSummary.sort((a, b) =>
         new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()
       );
 

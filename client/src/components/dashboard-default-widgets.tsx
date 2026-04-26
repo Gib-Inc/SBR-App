@@ -1,14 +1,20 @@
 import { useMemo } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, AlertTriangle, ArrowRight, ArrowUp, ArrowDown } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Loader2, AlertTriangle, ArrowRight } from "lucide-react";
 
-// Three always-on dashboard widgets rendered below the System Overview on
-// the Reports page. Each fetches its own data from existing endpoints — no
-// new API surface — and handles its own loading state.
+// Default Reports dashboard widgets. Each fetches its own data from existing
+// endpoints — no new API surface — and handles its own loading state.
 
-const WEEK_START_DAY = 0; // 0 = Sunday (US calendar week)
 const VELOCITY_WINDOW_DAYS = 90;
 const CRITICAL_LIST_LIMIT = 5;
 
@@ -18,84 +24,123 @@ const usd = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
-// Returns the Date at 00:00 local time for the start of the calendar week
-// that contains `from`. Week starts on Sunday by default.
-function startOfWeek(from: Date, weekStartDay: number = WEEK_START_DAY): Date {
-  const d = new Date(from);
-  d.setHours(0, 0, 0, 0);
-  const delta = (d.getDay() - weekStartDay + 7) % 7;
-  d.setDate(d.getDate() - delta);
-  return d;
-}
+const numFmt = new Intl.NumberFormat("en-US");
 
-function addDays(d: Date, days: number): Date {
-  const out = new Date(d);
-  out.setDate(out.getDate() + days);
-  return out;
+function daysAgoISO(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
 }
 
 export function DefaultWidgets() {
   return (
-    <section
-      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
-      data-testid="default-widgets"
-    >
-      <WeeklySalesWidget />
-      <InventoryHealthWidget />
-      <CriticalStockWidget />
+    <section className="space-y-4" data-testid="default-widgets">
+      <ProductPerformanceWidget />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <InventoryHealthWidget />
+        <CriticalStockWidget />
+      </div>
     </section>
   );
 }
 
-// ─── Widget 1: Weekly Sales by Channel ─────────────────────────────────────
+// ─── Widget 1: Product Performance (units + revenue, 7d / 30d / 60d) ──────
 
-type SalesOrderRow = {
-  id: string;
-  channel: string; // 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
-  totalAmount: number;
-  orderDate: string;
+type SalesOrderLineLite = {
+  sku: string;
+  qtyOrdered: number;
+  qtyShipped?: number | null;
+  unitPrice: number | null;
 };
 
-function WeeklySalesWidget() {
-  // Window: this week + last week. We pull both in one request and partition
-  // client-side so we can compute the % change without a second round-trip.
-  const now = new Date();
-  const thisWeekStart = startOfWeek(now);
-  const lastWeekStart = addDays(thisWeekStart, -7);
-  const endExclusive = addDays(thisWeekStart, 7); // tomorrow's week boundary
+type SalesOrderWithLines = {
+  id: string;
+  orderDate: string;
+  lines?: SalesOrderLineLite[];
+};
 
-  const startISO = lastWeekStart.toISOString();
-  const endISO = endExclusive.toISOString();
+type PerProduct = { units: number; revenue: number };
+type PerWindow = Record<string, PerProduct>; // keyed by product SKU
+type AllWindows = { d7: PerWindow; d30: PerWindow; d60: PerWindow };
 
-  const { data: orders, isLoading, isError, error } = useQuery<SalesOrderRow[]>({
+const PRODUCTS: Array<{ sku: string; label: string }> = [
+  { sku: "SBR-PUSH-1.0",     label: "Push 1.0" },
+  { sku: "SBR-Extrawide2.0", label: "Push 2.0 Extra Wide" },
+  { sku: "SBR-PB-ORIG",      label: "Pull-Behind Original" },
+  { sku: "SBR-PB-BIGFOOT",   label: "Pull-Behind Bigfoot" },
+];
+
+const WINDOWS: Array<{ key: keyof AllWindows; label: string; days: number }> = [
+  { key: "d7",  label: "7 days",  days: 7 },
+  { key: "d30", label: "30 days", days: 30 },
+  { key: "d60", label: "60 days", days: 60 },
+];
+
+function emptyWindow(): PerWindow {
+  const w: PerWindow = {};
+  for (const p of PRODUCTS) w[p.sku] = { units: 0, revenue: 0 };
+  return w;
+}
+
+function ProductPerformanceWidget() {
+  // Single fetch for the widest window (60d). Three client-side passes filter
+  // by date and aggregate per product.
+  const startISO = daysAgoISO(60);
+  const { data: orders, isLoading, isError, error } = useQuery<SalesOrderWithLines[]>({
     queryKey: [
-      `/api/sales-orders?view=historical&startDate=${startISO}&endDate=${endISO}`,
+      `/api/sales-orders?view=historical&startDate=${startISO}&withLines=true`,
     ],
   });
 
-  const stats = useMemo(() => {
-    const weekly = { shopify: 0, amazon: 0, total: 0 };
-    const lastWeekly = { shopify: 0, amazon: 0, total: 0 };
-    for (const o of orders ?? []) {
-      const dt = new Date(o.orderDate);
-      const target = dt >= thisWeekStart ? weekly : dt >= lastWeekStart ? lastWeekly : null;
-      if (!target) continue;
-      const channel = (o.channel ?? "").toUpperCase();
-      if (channel === "SHOPIFY") target.shopify += o.totalAmount ?? 0;
-      else if (channel === "AMAZON") target.amazon += o.totalAmount ?? 0;
-      target.total += o.totalAmount ?? 0;
+  const aggregates = useMemo<AllWindows>(() => {
+    const out: AllWindows = { d7: emptyWindow(), d30: emptyWindow(), d60: emptyWindow() };
+    if (!orders) return out;
+    const trackedSkus = new Set(PRODUCTS.map((p) => p.sku));
+    const now = Date.now();
+    const cutoffs = {
+      d7:  now - 7  * 24 * 60 * 60 * 1000,
+      d30: now - 30 * 24 * 60 * 60 * 1000,
+      d60: now - 60 * 24 * 60 * 60 * 1000,
+    };
+    for (const order of orders) {
+      const t = new Date(order.orderDate).getTime();
+      if (Number.isNaN(t) || t < cutoffs.d60) continue;
+      const buckets: Array<keyof AllWindows> = ["d60"];
+      if (t >= cutoffs.d30) buckets.push("d30");
+      if (t >= cutoffs.d7) buckets.push("d7");
+      for (const line of order.lines ?? []) {
+        if (!trackedSkus.has(line.sku)) continue;
+        const qty = line.qtyOrdered ?? 0;
+        const revenue = qty * (line.unitPrice ?? 0);
+        for (const b of buckets) {
+          out[b][line.sku].units += qty;
+          out[b][line.sku].revenue += revenue;
+        }
+      }
     }
-    let pctChange: number | null = null;
-    if (lastWeekly.total > 0) {
-      pctChange = ((weekly.total - lastWeekly.total) / lastWeekly.total) * 100;
+    return out;
+  }, [orders]);
+
+  const totals = useMemo(() => {
+    const t: Record<keyof AllWindows, PerProduct> = {
+      d7: { units: 0, revenue: 0 },
+      d30: { units: 0, revenue: 0 },
+      d60: { units: 0, revenue: 0 },
+    };
+    for (const w of WINDOWS) {
+      for (const p of PRODUCTS) {
+        t[w.key].units += aggregates[w.key][p.sku].units;
+        t[w.key].revenue += aggregates[w.key][p.sku].revenue;
+      }
     }
-    return { weekly, lastWeekly, pctChange };
-  }, [orders, thisWeekStart, lastWeekStart]);
+    return t;
+  }, [aggregates]);
 
   return (
-    <Card data-testid="widget-weekly-sales">
+    <Card data-testid="widget-product-performance">
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Sales This Week</CardTitle>
+        <CardTitle className="text-base">Product Performance</CardTitle>
+        <CardDescription>Units sold and revenue by product</CardDescription>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -104,56 +149,101 @@ function WeeklySalesWidget() {
           <WidgetError message={(error as Error)?.message ?? "Failed to load"} />
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">
-                  Shopify
-                </div>
-                <div className="text-3xl font-bold tabular-nums" data-testid="weekly-sales-shopify">
-                  {usd.format(stats.weekly.shopify)}
-                </div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">
-                  Amazon
-                </div>
-                <div className="text-3xl font-bold tabular-nums" data-testid="weekly-sales-amazon">
-                  {usd.format(stats.weekly.amazon)}
-                </div>
-              </div>
+            {/* Desktop: side-by-side table */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[34%]">Product</TableHead>
+                    {WINDOWS.map((w) => (
+                      <TableHead key={w.key} className="text-right">{w.label}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {PRODUCTS.map((p) => (
+                    <TableRow key={p.sku} data-testid={`product-perf-row-${p.sku}`}>
+                      <TableCell className="font-medium">{p.label}</TableCell>
+                      {WINDOWS.map((w) => {
+                        const cell = aggregates[w.key][p.sku];
+                        return (
+                          <TableCell key={w.key} className="text-right tabular-nums">
+                            <div className="font-semibold">
+                              {numFmt.format(cell.units)} units
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {usd.format(cell.revenue)}
+                            </div>
+                          </TableCell>
+                        );
+                      })}
+                    </TableRow>
+                  ))}
+                  <TableRow className="border-t-2 font-semibold">
+                    <TableCell>Total</TableCell>
+                    {WINDOWS.map((w) => (
+                      <TableCell key={w.key} className="text-right tabular-nums">
+                        <div>{numFmt.format(totals[w.key].units)} units</div>
+                        <div className="text-xs text-muted-foreground">
+                          {usd.format(totals[w.key].revenue)}
+                        </div>
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                </TableBody>
+              </Table>
             </div>
-            <div className="mt-4 flex items-baseline justify-between border-t pt-3">
-              <div>
-                <div className="text-xs text-muted-foreground uppercase tracking-wide">Total</div>
-                <div className="text-2xl font-bold tabular-nums" data-testid="weekly-sales-total">
-                  {usd.format(stats.weekly.total)}
+
+            {/* Mobile: per-product card with stacked period rows */}
+            <div className="md:hidden space-y-3">
+              {PRODUCTS.map((p) => (
+                <div
+                  key={p.sku}
+                  className="rounded-md border bg-muted/30 p-3"
+                  data-testid={`product-perf-mobile-${p.sku}`}
+                >
+                  <div className="font-medium text-base mb-2">{p.label}</div>
+                  <div className="space-y-1.5">
+                    {WINDOWS.map((w) => {
+                      const cell = aggregates[w.key][p.sku];
+                      return (
+                        <div
+                          key={w.key}
+                          className="flex items-baseline justify-between text-sm tabular-nums"
+                        >
+                          <span className="text-muted-foreground">{w.label}</span>
+                          <span>
+                            <span className="font-semibold">{numFmt.format(cell.units)}</span>
+                            <span className="text-muted-foreground"> units · </span>
+                            <span>{usd.format(cell.revenue)}</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div className="rounded-md border bg-muted/50 p-3 font-semibold">
+                <div className="text-base mb-2">Total</div>
+                <div className="space-y-1.5">
+                  {WINDOWS.map((w) => (
+                    <div
+                      key={w.key}
+                      className="flex items-baseline justify-between text-sm tabular-nums"
+                    >
+                      <span className="text-muted-foreground font-normal">{w.label}</span>
+                      <span>
+                        {numFmt.format(totals[w.key].units)} units · {usd.format(totals[w.key].revenue)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
-              {stats.pctChange !== null && (
-                <PctChangeBadge value={stats.pctChange} />
-              )}
             </div>
           </>
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function PctChangeBadge({ value }: { value: number }) {
-  const positive = value >= 0;
-  const Icon = positive ? ArrowUp : ArrowDown;
-  const colorClass = positive
-    ? "text-green-700 dark:text-green-400"
-    : "text-destructive";
-  return (
-    <div
-      className={`flex items-center gap-1 text-sm font-medium ${colorClass}`}
-      data-testid="weekly-sales-pct-change"
-    >
-      <Icon className="h-4 w-4" />
-      {Math.abs(value).toFixed(0)}% vs last week
-    </div>
   );
 }
 

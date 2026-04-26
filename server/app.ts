@@ -145,6 +145,17 @@ export default async function runApp(
 ) {
   const server = await registerRoutes(app);
 
+  // Boot-time schema + data migration checks. Fails loud (with clear log
+  // lines) but doesn't block startup so other routes still come up if
+  // anything is off. Awaited here so the output appears before the
+  // "serving on ..." line — easy to spot in the deploy log tail.
+  try {
+    const { runStartupChecks } = await import("./services/startup-checks");
+    await runStartupChecks();
+  } catch (err: any) {
+    console.error("[Startup Checks] Failed to run:", err?.message ?? err);
+  }
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

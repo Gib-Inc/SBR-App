@@ -130,6 +130,8 @@ import {
   type InsertProductionLog,
   type ShopIssue,
   type InsertShopIssue,
+  type DailyBriefing,
+  type InsertDailyBriefing,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -227,6 +229,11 @@ export interface IStorage {
 
   // Shop floor issue reports
   createShopIssue(issue: InsertShopIssue): Promise<ShopIssue>;
+  getShopIssuesSince(since: Date): Promise<ShopIssue[]>;
+
+  // Daily briefings (7 AM MT cron output)
+  upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing>;
+  getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined>;
 
   // Cycle counts
   createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
@@ -1468,6 +1475,24 @@ export class MemStorage implements IStorage {
     } as ShopIssue;
     this.shopIssues.push(row);
     return row;
+  }
+  async getShopIssuesSince(since: Date): Promise<ShopIssue[]> {
+    return this.shopIssues.filter((i) => i.createdAt >= since);
+  }
+
+  private dailyBriefings = new Map<string, DailyBriefing>();
+  async upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing> {
+    const existing = this.dailyBriefings.get(briefing.date);
+    const row: DailyBriefing = {
+      id: existing?.id ?? randomUUID(),
+      createdAt: existing?.createdAt ?? new Date(),
+      ...briefing,
+    } as DailyBriefing;
+    this.dailyBriefings.set(briefing.date, row);
+    return row;
+  }
+  async getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined> {
+    return this.dailyBriefings.get(date);
   }
 
   // Cycle Count stubs
@@ -4546,6 +4571,41 @@ export class PostgresStorage implements IStorage {
 
   async createShopIssue(issue: InsertShopIssue): Promise<ShopIssue> {
     const results = await this.db.insert(schema.shopIssues).values(issue).returning();
+    return results[0];
+  }
+
+  async getShopIssuesSince(since: Date): Promise<ShopIssue[]> {
+    return await this.db
+      .select()
+      .from(schema.shopIssues)
+      .where(gte(schema.shopIssues.createdAt, since))
+      .orderBy(desc(schema.shopIssues.createdAt));
+  }
+
+  async upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing> {
+    const existing = await this.db
+      .select()
+      .from(schema.dailyBriefings)
+      .where(eq(schema.dailyBriefings.date, briefing.date))
+      .limit(1);
+    if (existing.length > 0) {
+      const updated = await this.db
+        .update(schema.dailyBriefings)
+        .set({ contentJson: briefing.contentJson })
+        .where(eq(schema.dailyBriefings.date, briefing.date))
+        .returning();
+      return updated[0];
+    }
+    const inserted = await this.db.insert(schema.dailyBriefings).values(briefing).returning();
+    return inserted[0];
+  }
+
+  async getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined> {
+    const results = await this.db
+      .select()
+      .from(schema.dailyBriefings)
+      .where(eq(schema.dailyBriefings.date, date))
+      .limit(1);
     return results[0];
   }
 

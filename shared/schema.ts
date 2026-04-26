@@ -268,6 +268,23 @@ export const insertShopIssueSchema = createInsertSchema(shopIssues).omit({ id: t
 export type InsertShopIssue = z.infer<typeof insertShopIssueSchema>;
 export type ShopIssue = typeof shopIssues.$inferSelect;
 
+// One row per generated daily briefing. `date` is the briefing target date in
+// the user's timezone (YYYY-MM-DD); `contentJson` carries the rendered
+// payload (OTDR, critical components, draft POs, etc.). Unique by date so
+// re-runs the same day update in place.
+export const dailyBriefings = pgTable("daily_briefings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: text("date").notNull().unique(),
+  contentJson: jsonb("content_json").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  dateIdx: index("daily_briefings_date_idx").on(table.date),
+}));
+
+export const insertDailyBriefingSchema = createInsertSchema(dailyBriefings).omit({ id: true, createdAt: true });
+export type InsertDailyBriefing = z.infer<typeof insertDailyBriefingSchema>;
+export type DailyBriefing = typeof dailyBriefings.$inferSelect;
+
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),

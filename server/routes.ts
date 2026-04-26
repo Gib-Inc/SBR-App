@@ -22561,6 +22561,13 @@ Generate only the email body text, no subject line.`;
   });
   
   // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time
+  import("./services/briefing-scheduler").then(({ initializeBriefingScheduler }) => {
+    initializeBriefingScheduler();
+    console.log("[Server] Daily Briefing Scheduler initialized");
+  }).catch((err) => {
+    console.error("[Server] Failed to initialize Daily Briefing Scheduler:", err);
+  });
+
   import("./services/ai-batch-scheduler").then(({ initializeScheduler }) => {
     initializeScheduler();
     console.log("[Server] AI Batch Scheduler initialized");
@@ -22823,6 +22830,40 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[InventoryAdjustment] Error fetching:", error);
       res.status(500).json({ error: error.message || "Failed to fetch adjustments" });
+    }
+  });
+
+  // GET /api/briefing/daily — returns today's daily briefing payload. If a
+  // briefing already exists for today's Mountain-time date it's returned from
+  // daily_briefings; otherwise we compute fresh, persist, and return.
+  // ?date=YYYY-MM-DD lets you fetch a historical briefing if one was stored.
+  app.get("/api/briefing/daily", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { generateAndPersistBriefing } = await import("./services/briefing-service");
+      const dateParam = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : undefined;
+
+      if (dateParam) {
+        const stored = await storage.getDailyBriefingByDate(dateParam);
+        if (stored) return res.json(stored.contentJson);
+      } else {
+        // Today: serve cached when present, generate if not.
+        const todayKey = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "America/Denver",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date());
+        const stored = await storage.getDailyBriefingByDate(todayKey);
+        if (stored) return res.json(stored.contentJson);
+      }
+
+      const payload = await generateAndPersistBriefing(dateParam);
+      res.json(payload);
+    } catch (error: any) {
+      console.error("[Briefing] Error fetching daily briefing:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch briefing" });
     }
   });
 

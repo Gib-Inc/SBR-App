@@ -23045,6 +23045,146 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/data-quality/summary — five integrity checks reported as
+  // {count, samples[], fixUrl} per check. Powers the Settings → Data Quality
+  // tab. Read-only; everything is derived from existing tables.
+  app.get("/api/data-quality/summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [items, suppliers, supplierItems, salesOrders, purchaseOrders] = await Promise.all([
+        storage.getAllItems(),
+        storage.getAllSuppliers(),
+        storage.getAllSupplierItems(),
+        storage.getAllSalesOrders(),
+        storage.getAllPurchaseOrders(),
+      ]);
+
+      // ── 1. Components missing a supplier price ───────────────────────
+      // Anything we'd want to put on a PO needs a price tied to it.
+      // We look at item type='component' and check whether at least one
+      // supplier_items row has a positive price.
+      const itemHasPrice = new Map<string, boolean>();
+      for (const si of supplierItems) {
+        if (si.itemId && (si.price ?? 0) > 0) itemHasPrice.set(si.itemId, true);
+      }
+      const itemsMissingPrice = items
+        .filter((i) => i.type === "component")
+        .filter((i) => !itemHasPrice.get(i.id));
+
+      // ── 2. Suppliers without lead time on any of their items ─────────
+      const supplierHasLeadTime = new Map<string, boolean>();
+      for (const si of supplierItems) {
+        if (si.supplierId && (si.leadTimeDays ?? 0) > 0) {
+          supplierHasLeadTime.set(si.supplierId, true);
+        }
+      }
+      const suppliersMissingLeadTime = suppliers.filter(
+        (s) => !supplierHasLeadTime.get(s.id),
+      );
+
+      // ── 3. Sales orders with no customer email (blocks notifications) ──
+      const ordersWithoutEmail = salesOrders.filter(
+        (o) => !o.customerEmail || o.customerEmail.trim().length === 0,
+      );
+
+      // ── 4. SOs in unknown status (blocks reconciliation) ─────────────
+      // Known set captures both the current state machine values and
+      // documented legacy values (per shared/schema.ts comments).
+      const KNOWN_SO_STATUSES = new Set([
+        "DRAFT",
+        "ORDERED",
+        "SHIPPED",
+        "DELIVERED",
+        "PENDING_REFUND",
+        "REFUNDED",
+        "CANCELLED",
+        // legacy values still present in historical rows
+        "PURCHASED",
+        "PENDING",
+        "FULFILLED",
+        "PARTIALLY_FULFILLED",
+        "PARTIAL",
+      ]);
+      const ordersUnknownStatus = salesOrders.filter(
+        (o) => !o.status || !KNOWN_SO_STATUSES.has(o.status),
+      );
+
+      // ── 5. POs without expected date (blocks OTDR) ───────────────────
+      // Skip terminal-state POs since their lateness is already measurable.
+      const PO_TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      const posMissingExpected = purchaseOrders.filter(
+        (p) => !p.expectedDate && !PO_TERMINAL.has(p.status) && !(p as any).isHistorical,
+      );
+
+      res.json({
+        checks: [
+          {
+            id: "items_without_supplier_price",
+            label: "Components without supplier prices",
+            description: "Blocks BOM rollup margin and PO auto-pricing.",
+            count: itemsMissingPrice.length,
+            samples: itemsMissingPrice.slice(0, 10).map((i) => ({
+              id: i.id,
+              label: i.name,
+              hint: i.sku,
+            })),
+            fixUrl: "/products?type=component",
+          },
+          {
+            id: "suppliers_without_lead_time",
+            label: "Suppliers without lead time",
+            description: "Blocks delivery prediction and PO expected-date calc.",
+            count: suppliersMissingLeadTime.length,
+            samples: suppliersMissingLeadTime.slice(0, 10).map((s) => ({
+              id: s.id,
+              label: s.name,
+              hint: s.email ?? "no email on file",
+            })),
+            fixUrl: "/suppliers",
+          },
+          {
+            id: "customers_without_email",
+            label: "Sales orders without customer email",
+            description: "Blocks delay notifications and OTDR drilldown.",
+            count: ordersWithoutEmail.length,
+            samples: ordersWithoutEmail.slice(0, 10).map((o) => ({
+              id: o.id,
+              label: (o as any).orderName ?? o.orderNumber ?? o.id.slice(0, 8),
+              hint: o.customerName ?? "(no customer name)",
+            })),
+            fixUrl: "/sales-orders",
+          },
+          {
+            id: "sos_unknown_status",
+            label: "Sales orders in unknown status",
+            description: "Blocks reconciliation and rollup math.",
+            count: ordersUnknownStatus.length,
+            samples: ordersUnknownStatus.slice(0, 10).map((o) => ({
+              id: o.id,
+              label: (o as any).orderName ?? o.orderNumber ?? o.id.slice(0, 8),
+              hint: `status: ${o.status ?? "(null)"}`,
+            })),
+            fixUrl: "/sales-orders",
+          },
+          {
+            id: "pos_without_expected_date",
+            label: "Open POs without an expected delivery date",
+            description: "Blocks OTDR and delays-vs-quote analytics.",
+            count: posMissingExpected.length,
+            samples: posMissingExpected.slice(0, 10).map((p) => ({
+              id: p.id,
+              label: p.poNumber,
+              hint: p.supplierName ?? p.supplierId,
+            })),
+            fixUrl: "/purchase-orders",
+          },
+        ],
+      });
+    } catch (error: any) {
+      console.error("[Data Quality] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute data quality" });
+    }
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // COUNT INVENTORY — Sammie's mobile counting flow (/count-inventory)
   // ════════════════════════════════════════════════════════════════════════

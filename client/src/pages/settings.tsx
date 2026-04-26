@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { User, Users, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield, Mail, UserPlus, Trash2, RotateCcw, Clock, Crown } from "lucide-react";
+import { User, Users, Zap, CheckCircle2, XCircle, AlertCircle, Barcode, Loader2, Info, Bot, Copy, ExternalLink, Key, Eye, EyeOff, RefreshCw, FileText, Shield, Mail, UserPlus, Trash2, RotateCcw, Clock, Crown, Database } from "lucide-react";
+import { DataQualityTab } from "@/components/data-quality-tab";
 import { Link } from "wouter";
 import { Slider } from "@/components/ui/slider";
 import { useToast } from "@/hooks/use-toast";
@@ -49,6 +50,10 @@ export default function Settings() {
             <Users className="mr-2 h-4 w-4" />
             Team
           </TabsTrigger>
+          <TabsTrigger value="data-quality" data-testid="tab-data-quality">
+            <Database className="mr-2 h-4 w-4" />
+            Data Quality
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="account" className="space-y-4">
@@ -69,6 +74,10 @@ export default function Settings() {
 
         <TabsContent value="team" className="space-y-4">
           <TeamManagement />
+        </TabsContent>
+
+        <TabsContent value="data-quality" className="space-y-4">
+          <DataQualityTab />
         </TabsContent>
       </Tabs>
     </div>

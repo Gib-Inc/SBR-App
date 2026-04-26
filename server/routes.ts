@@ -4690,7 +4690,12 @@ TOTAL: $${subtotal.toFixed(2)}
       }
 
       const sellingPrice = (product as any).sellingPrice ?? null;
-      const grossMargin = sellingPrice !== null && !hasMissingCosts
+      // Only report margin when the build cost is genuinely > 0. A
+      // totalBuildCost of 0 with no missing-cost flags would otherwise
+      // produce a fake "100% margin" — false data the UI would have to
+      // re-suppress. Treat $0 as unknown here.
+      const haveRealCost = !hasMissingCosts && totalBuildCost > 0;
+      const grossMargin = sellingPrice !== null && haveRealCost
         ? sellingPrice - totalBuildCost
         : null;
       const marginPercent = grossMargin !== null && sellingPrice && sellingPrice > 0

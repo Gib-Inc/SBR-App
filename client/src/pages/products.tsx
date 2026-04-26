@@ -946,12 +946,15 @@ function ItemTableRow({
         </td>
       )}
 
-      {/* Margin Column — calculated from sellingPrice vs bomBuildCost, read-only */}
+      {/* Margin Column — calculated from sellingPrice vs bomBuildCost, read-only.
+          A bomBuildCost of 0 or null means we don't actually know what it costs
+          to build this product, so showing 100% (selling price ÷ selling price)
+          would be false data. Suppress the % until cost is genuinely > 0. */}
       {item.type === "finished_product" && (
         <td className="px-3 align-middle whitespace-nowrap text-right text-sm">
-          {item.sellingPrice != null && item.bomBuildCost != null ? (() => {
+          {item.sellingPrice != null && item.sellingPrice > 0 && item.bomBuildCost != null && item.bomBuildCost > 0 ? (() => {
             const margin = item.sellingPrice - item.bomBuildCost;
-            const pct = item.sellingPrice > 0 ? (margin / item.sellingPrice) * 100 : 0;
+            const pct = (margin / item.sellingPrice) * 100;
             const color = pct >= 40 ? "text-green-600 dark:text-green-400"
               : pct >= 20 ? "text-yellow-600 dark:text-yellow-400"
               : "text-red-600 dark:text-red-400";
@@ -960,7 +963,7 @@ function ItemTableRow({
                 {pct.toFixed(1)}%
               </span>
             );
-          })() : <span className="text-muted-foreground">—</span>}
+          })() : <span className="text-muted-foreground" title="Cost not confirmed — set BOM costs to compute margin">—</span>}
         </td>
       )}
 

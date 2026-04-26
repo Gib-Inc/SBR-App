@@ -29,6 +29,21 @@ type ItemsRow = {
   sellingPrice: number | null;
 };
 
+// /api/sales-orders?view=all&withLines=true returns each order with its lines.
+// We use this to compute "Committed" — the unshipped quantity sitting on
+// open orders for each SKU.
+type SalesOrderLineLite = {
+  sku: string;
+  qtyOrdered: number;
+  qtyShipped?: number | null;
+  backorderQty?: number | null;
+};
+type SalesOrderWithLines = {
+  id: string;
+  status: string;
+  lines?: SalesOrderLineLite[];
+};
+
 type SkuStatus = "Out" | "Low" | "OK";
 
 type SkuRow = {
@@ -37,7 +52,9 @@ type SkuRow = {
   pyvott: number;
   hildale: number;
   promised: number;
+  committed: number;
   total: number;
+  available: number;
   unitsSold: number;
   sellingPrice: number | null;
   status: SkuStatus;
@@ -48,9 +65,11 @@ type SortColumn =
   | "name"
   | "unitsSold"
   | "pyvott"
+  | "committed"
   | "hildale"
   | "promised"
   | "total"
+  | "available"
   | "status"
   | "price";
 
@@ -59,7 +78,12 @@ type SortDirection = "asc" | "desc";
 type SortState = { column: SortColumn; direction: SortDirection };
 
 // Numeric columns default to descending on first click; text columns ascending.
-const NUMERIC_COLUMNS: readonly SortColumn[] = ["unitsSold", "pyvott", "hildale", "promised", "total", "price"] as const;
+const NUMERIC_COLUMNS: readonly SortColumn[] = ["unitsSold", "pyvott", "committed", "hildale", "promised", "total", "available", "price"] as const;
+
+// "Available" is the headline number — Total minus what's promised to open
+// orders. We highlight in amber once it dips below this many units AND there
+// are real customer commitments outstanding.
+const AVAILABLE_LOW_THRESHOLD = 10;
 
 // Urgency ordering for status: most urgent (Out) first when asc.
 const STATUS_ORDER: Record<SkuStatus, number> = { Out: 0, Low: 1, OK: 2 };
@@ -120,9 +144,17 @@ export default function Inventory() {
     queryKey: ["/api/items"],
   });
 
+  // Pull all orders with their lines so we can show how many of each SKU are
+  // already committed to open orders. No new endpoint — the ?withLines=true
+  // projection added earlier surfaces qtyOrdered + qtyShipped per line.
+  const { data: ordersData } = useQuery<SalesOrderWithLines[]>({
+    queryKey: ["/api/sales-orders?view=all&withLines=true"],
+  });
+
   const rows = data ?? [];
   const velocity = velocityData ?? [];
   const items = itemsData ?? [];
+  const orders = ordersData ?? [];
 
   const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
   const [transferOpen, setTransferOpen] = useState(false);
@@ -156,8 +188,33 @@ export default function Inventory() {
     return map;
   }, [items]);
 
-  // Group by SKU so we can show Pyvott + Hildale side by side. Status and sellingPrice
-  // are materialized here so sorting can reference them directly.
+  // Build a lookup map: SKU → committed units across active sales orders.
+  // "Committed" = unshipped portion (qtyOrdered − qtyShipped) on any order
+  // that hasn't been cancelled/refunded/delivered. Shipped lines drop out
+  // automatically because their unshipped portion is zero.
+  const committedMap = useMemo(() => {
+    const TERMINAL = new Set([
+      "CANCELLED",
+      "REFUNDED",
+      "DELIVERED",
+      "PENDING_REFUND",
+    ]);
+    const map = new Map<string, number>();
+    for (const o of orders) {
+      if (TERMINAL.has(o.status)) continue;
+      for (const line of o.lines ?? []) {
+        if (!line.sku) continue;
+        const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyShipped ?? 0));
+        if (open <= 0) continue;
+        map.set(line.sku, (map.get(line.sku) ?? 0) + open);
+      }
+    }
+    return map;
+  }, [orders]);
+
+  // Group by SKU so we can show Pyvott + Committed + Hildale + Available
+  // side by side. Status and sellingPrice are materialized here so sorting
+  // can reference them directly.
   const bySku = useMemo(() => {
     const map = new Map<string, SkuRow>();
     for (const r of rows) {
@@ -167,7 +224,9 @@ export default function Inventory() {
         pyvott: 0,
         hildale: 0,
         promised: 0,
+        committed: committedMap.get(r.sku) ?? 0,
         total: 0,
+        available: 0,
         unitsSold: velocityMap.get(r.sku) ?? 0,
         sellingPrice: priceMap.get(r.sku) ?? null,
         status: "Out" as SkuStatus,
@@ -178,13 +237,14 @@ export default function Inventory() {
       }
       if (r.location === "Hildale") existing.hildale = r.qty;
       existing.total = existing.pyvott + existing.hildale;
+      existing.available = existing.total - existing.committed;
       existing.status =
         existing.total === 0 ? "Out" : existing.total < LOW_STOCK_THRESHOLD ? "Low" : "OK";
       if (!existing.name && r.name) existing.name = r.name;
       map.set(r.sku, existing);
     }
     return Array.from(map.values());
-  }, [rows, velocityMap, priceMap]);
+  }, [rows, velocityMap, priceMap, committedMap]);
 
   // Apply active sort. Nulls on price always go last regardless of direction.
   // Tiebreaker: when sorting by the default (unitsSold desc), use total desc
@@ -211,7 +271,7 @@ export default function Inventory() {
       } else if (column === "name") {
         primary = a.name.localeCompare(b.name) * mult;
       } else {
-        // numeric: unitsSold | pyvott | hildale | promised | total
+        // numeric: unitsSold | pyvott | committed | hildale | promised | total | available
         primary = ((a[column] as number) - (b[column] as number)) * mult;
       }
 
@@ -381,9 +441,11 @@ export default function Inventory() {
                 <SortableHeader column="name" label="Product" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="unitsSold" label="Sold (90d)" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="pyvott" label="Pyvott" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="committed" label="Committed" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="hildale" label="Hildale" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="promised" label="Promised" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="total" label="Total" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="available" label="Available" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="status" label="Status" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="price" label="Price" align="right" currentSort={sort} onSort={onSort} />
               </TableRow>
@@ -400,10 +462,23 @@ export default function Inventory() {
                       {s.unitsSold > 0 ? s.unitsSold.toLocaleString() : "–"}
                     </TableCell>
                     <TableCell className="text-right">{s.pyvott.toLocaleString()}</TableCell>
+                    <TableCell className="text-right text-muted-foreground tabular-nums">
+                      {s.committed > 0 ? s.committed.toLocaleString() : "–"}
+                    </TableCell>
                     <TableCell className="text-right">{s.hildale.toLocaleString()}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{s.promised.toLocaleString()}</TableCell>
                     <TableCell className="text-right font-semibold">
                       {s.total.toLocaleString()}
+                    </TableCell>
+                    <TableCell
+                      className={`text-right font-semibold tabular-nums ${
+                        s.committed > 0 && s.available < AVAILABLE_LOW_THRESHOLD
+                          ? "text-amber-700 dark:text-amber-400"
+                          : ""
+                      }`}
+                      data-testid={`available-${s.sku}`}
+                    >
+                      {s.available.toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
                       <Badge variant={badgeVariant}>{s.status}</Badge>

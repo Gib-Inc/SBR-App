@@ -350,11 +350,43 @@ export function EditPODialog({
             Edit Purchase Order {purchaseOrder?.poNumber || ""}
           </DialogTitle>
           <DialogDescription>
-            {canEdit 
+            {canEdit
               ? "Make changes to this draft purchase order."
               : "This purchase order cannot be edited because it has been sent or received."}
           </DialogDescription>
         </DialogHeader>
+
+        {/* Lead-time callout: derived from supplier_items.lead_time_days at PO
+            creation. If we couldn't compute one, prompt the user to update the
+            supplier profile. */}
+        {purchaseOrder && (() => {
+          const ord = purchaseOrder.orderDate ? new Date(purchaseOrder.orderDate) : null;
+          const eta = purchaseOrder.expectedDate ? new Date(purchaseOrder.expectedDate) : null;
+          if (eta) {
+            const isToday = ord && ord.toDateString() === new Date().toDateString();
+            const orderedLabel = isToday ? "Ordered today" : ord ? `Ordered ${format(ord, "MMM d")}` : "Ordered";
+            return (
+              <div
+                className="rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-700 dark:text-blue-400 flex items-center gap-2"
+                data-testid="po-eta-callout"
+              >
+                <CalendarIcon className="h-4 w-4" />
+                <span>
+                  <strong>{orderedLabel}</strong> — expected delivery {format(eta, "MMM d")}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2"
+              data-testid="po-eta-unknown"
+            >
+              <AlertCircle className="h-4 w-4" />
+              <span>Lead time unknown — update supplier profile</span>
+            </div>
+          );
+        })()}
 
         {!canEdit ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">

@@ -13435,10 +13435,37 @@ Notes: ${po.notes || 'None'}
       }
 
       const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
-      
+
       // Recalculate PO totals after creating all lines
       if (createdLines.length > 0) {
         await storage.recalculatePOTotals(purchaseOrder.id);
+      }
+
+      // Auto-compute expectedDate from supplier_items.lead_time_days when the
+      // caller didn't provide one. Take the max lead time across the PO's
+      // lines so the slowest line drives the estimate (conservative).
+      // Idempotent: only sets when expectedDate is null AND we found a real
+      // (>0) lead time on at least one line.
+      if (!purchaseOrder.expectedDate && createdLines.length > 0 && purchaseOrder.supplierId) {
+        const allSupplierItems = await storage.getAllSupplierItems();
+        const supplierLeadTimes = new Map<string, number>();
+        for (const si of allSupplierItems) {
+          if (si.supplierId !== purchaseOrder.supplierId) continue;
+          if (typeof si.leadTimeDays === "number" && si.leadTimeDays > 0) {
+            supplierLeadTimes.set(si.itemId, si.leadTimeDays);
+          }
+        }
+        let maxLead = 0;
+        for (const line of createdLines) {
+          const lt = supplierLeadTimes.get(line.itemId) ?? 0;
+          if (lt > maxLead) maxLead = lt;
+        }
+        if (maxLead > 0) {
+          const base = purchaseOrder.orderDate ? new Date(purchaseOrder.orderDate) : new Date();
+          const eta = new Date(base);
+          eta.setDate(eta.getDate() + maxLead);
+          await storage.updatePurchaseOrder(purchaseOrder.id, { expectedDate: eta });
+        }
       }
       
       // Update linked recommendations with decision tracking and accuracy

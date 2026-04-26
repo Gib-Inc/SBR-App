@@ -307,10 +307,28 @@ function TodayCard({ item }: { item: InventoryItem }) {
   const urgColor = urgencyColor(item.status);
   const cardClass = item.status === "CRITICAL" ? "si-critical" : item.status === "REORDER" ? "si-reorder" : "si-soon";
 
+  // Lead-time-aware messaging: when the supplier's lead time would push
+  // delivery past the projected stockout date, call that out plainly so
+  // Clarence sees the gap. When lead time isn't set, prompt to fix the
+  // supplier profile instead of guessing.
+  const leadTimeDays = sup?.leadTimeDays ?? null;
+  const deliveryDate = leadTimeDays != null && leadTimeDays > 0 ? addDays(TODAY, leadTimeDays) : null;
+  const willMissStockout = deliveryDate != null && deliveryDate > stockoutDate;
+
   const actionText: Record<string, string> = {
-    CRITICAL: `Place PO with ${sup?.name} for ${item.gap.toLocaleString()} units immediately. ${sup?.leadTimeDays}-day lead means delivery around ${formatDate(addDays(TODAY, sup?.leadTimeDays || 14))}.`,
-    REORDER: `Stock hits reorder point in ~${Math.round(days/2)} days. Contact ${sup?.name} this week — ${sup?.leadTimeDays}-day lead.`,
-    ORDER_SOON: `You have ~${days} days. Plan PO with ${sup?.name} by end of month.`,
+    CRITICAL: leadTimeDays == null || leadTimeDays <= 0
+      ? `Place PO with ${sup?.name} for ${item.gap.toLocaleString()} units immediately. Lead time unknown — update supplier profile so we can project delivery.`
+      : willMissStockout
+        ? `Order now — ${leadTimeDays} day lead time means delivery ${formatDate(deliveryDate!)}, stockout projected ${formatDate(stockoutDate)}. Expedite or split the shipment.`
+        : `Place PO with ${sup?.name} for ${item.gap.toLocaleString()} units immediately. ${leadTimeDays}-day lead means delivery around ${formatDate(deliveryDate!)}.`,
+    REORDER: leadTimeDays == null || leadTimeDays <= 0
+      ? `Contact ${sup?.name} this week to set up the order. Lead time unknown — update supplier profile.`
+      : willMissStockout
+        ? `Order now — ${leadTimeDays} day lead time means delivery ${formatDate(deliveryDate!)}, stockout projected ${formatDate(stockoutDate)}.`
+        : `Stock hits reorder point in ~${Math.round(days/2)} days. Contact ${sup?.name} this week — ${leadTimeDays}-day lead.`,
+    ORDER_SOON: leadTimeDays == null || leadTimeDays <= 0
+      ? `You have ~${days} days. Plan PO with ${sup?.name} by end of month — lead time unknown, update supplier profile.`
+      : `You have ~${days} days. Plan PO with ${sup?.name} by end of month — ${leadTimeDays}-day lead.`,
   };
 
   return (

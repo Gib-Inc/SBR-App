@@ -836,7 +836,15 @@ export default function PurchaseOrders() {
                         </div>
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.orderDate)}</td>
-                      <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.expectedDate)}</td>
+                      <td className="p-3 align-middle whitespace-nowrap" data-testid={`text-expected-${po.id}`}>
+                        {po.expectedDate ? (
+                          formatDate(po.expectedDate)
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">
+                            Lead time unknown
+                          </span>
+                        )}
+                      </td>
                       <td className="p-3 align-middle whitespace-nowrap text-center text-muted-foreground" data-testid={`text-lead-time-${po.id}`}>
                         {calculateLeadTime(po.sentAt, po.receivedAt)}
                       </td>

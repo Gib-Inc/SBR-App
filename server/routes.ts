@@ -15378,6 +15378,23 @@ Notes: ${po.notes || 'None'}
         await backorderService.checkAndFulfillBackorders(itemId, 0);
       }
 
+      // Backorder unblock comms — generate (and optionally send) the
+      // "your backorder is shipping soon" notices. Safe-by-default: just
+      // logs the would-be-sent payload to audit unless BACKORDER_AUTO_EMAIL
+      // is true AND SendGrid is configured. Idempotent via a unique index
+      // on (sales_order_id, item_id), so re-receiving a PO won't double-send.
+      try {
+        const { notifyBackorderUnblock } = await import("./services/backorder-comms");
+        const result = await notifyBackorderUnblock(receivedItemIds, id, po.poNumber);
+        if (result.built > 0) {
+          console.log(
+            `[Backorder Comms] PO ${po.poNumber}: considered ${result.considered}, built ${result.built}, sent ${result.sent}, logged ${result.logged}, failed ${result.failed}, dup ${result.alreadyNotified}`,
+          );
+        }
+      } catch (commsErr: any) {
+        console.error(`[PurchaseOrder] Backorder comms error (non-fatal):`, commsErr?.message ?? commsErr);
+      }
+
       // Sync to GHL if fully received (non-blocking)
       if (allFullyReceived) {
         const { triggerPOSync } = await import("./services/ghl-sync-triggers");

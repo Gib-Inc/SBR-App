@@ -29,6 +29,7 @@ const REQUIRED_TABLES = [
   "daily_briefings",
   "inventory_lots",
   "lot_consumption_events",
+  "backorder_notices",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -104,6 +105,19 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
     );
     CREATE INDEX IF NOT EXISTS lot_consumption_events_lot_id_idx ON lot_consumption_events(lot_id);
     CREATE INDEX IF NOT EXISTS lot_consumption_events_production_log_id_idx ON lot_consumption_events(production_log_id);
+  `,
+  backorder_notices: `
+    CREATE TABLE IF NOT EXISTS backorder_notices (
+      id              VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      sales_order_id  VARCHAR NOT NULL,
+      item_id         VARCHAR NOT NULL REFERENCES items(id),
+      po_id           VARCHAR,
+      channel         TEXT NOT NULL,
+      payload_json    JSONB,
+      sent_at         TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS backorder_notices_sales_order_id_idx ON backorder_notices(sales_order_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS backorder_notices_order_item_unique_idx ON backorder_notices(sales_order_id, item_id);
   `,
 };
 

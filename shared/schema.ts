@@ -962,6 +962,28 @@ export const insertLotConsumptionEventSchema = createInsertSchema(lotConsumption
 export type InsertLotConsumptionEvent = z.infer<typeof insertLotConsumptionEventSchema>;
 export type LotConsumptionEvent = typeof lotConsumptionEvents.$inferSelect;
 
+// One row per "your backorder is unblocked" notice we built for a customer.
+// Idempotency key is (salesOrderId, itemId) — once we've told them their
+// product is back in stock once, we don't spam them again. channel records
+// whether SendGrid actually sent ('EMAIL_SENT'), failed ('EMAIL_FAILED'),
+// or we only logged the payload because send wasn't enabled ('EMAIL_LOG').
+export const backorderNotices = pgTable("backorder_notices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  salesOrderId: varchar("sales_order_id").notNull(),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  poId: varchar("po_id"),
+  channel: text("channel").notNull(), // EMAIL_SENT | EMAIL_FAILED | EMAIL_LOG
+  payloadJson: jsonb("payload_json"),
+  sentAt: timestamp("sent_at").notNull().default(sql`now()`),
+}, (table) => ({
+  salesOrderIdIdx: index("backorder_notices_sales_order_id_idx").on(table.salesOrderId),
+  uniqOrderItem: uniqueIndex("backorder_notices_order_item_unique_idx").on(table.salesOrderId, table.itemId),
+}));
+
+export const insertBackorderNoticeSchema = createInsertSchema(backorderNotices).omit({ id: true, sentAt: true });
+export type InsertBackorderNotice = z.infer<typeof insertBackorderNoticeSchema>;
+export type BackorderNotice = typeof backorderNotices.$inferSelect;
+
 // ============================================================================
 // AI RECOMMENDATIONS (Decision Engine Inventory Recommendations)
 // ============================================================================

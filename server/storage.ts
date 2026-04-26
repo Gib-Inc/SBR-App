@@ -136,6 +136,8 @@ import {
   type InsertInventoryLot,
   type LotConsumptionEvent,
   type InsertLotConsumptionEvent,
+  type BackorderNotice,
+  type InsertBackorderNotice,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -239,6 +241,10 @@ export interface IStorage {
   // Daily briefings (7 AM MT cron output)
   upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing>;
   getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined>;
+
+  // Backorder unblock comms (Move 4)
+  getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined>;
+  createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice>;
 
   // Lot / batch traceability
   createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot>;
@@ -1554,6 +1560,22 @@ export class MemStorage implements IStorage {
   }
   async getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]> {
     return this.lotConsumptionEvents.filter((e) => e.lotId === lotId);
+  }
+
+  private backorderNotices: BackorderNotice[] = [];
+  async getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined> {
+    return this.backorderNotices.find((n) => n.salesOrderId === salesOrderId && n.itemId === itemId);
+  }
+  async createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice> {
+    const row: BackorderNotice = {
+      id: randomUUID(),
+      sentAt: new Date(),
+      poId: notice.poId ?? null,
+      payloadJson: notice.payloadJson ?? null,
+      ...notice,
+    } as BackorderNotice;
+    this.backorderNotices.push(row);
+    return row;
   }
 
   // Cycle Count stubs
@@ -4757,6 +4779,23 @@ export class PostgresStorage implements IStorage {
       .from(schema.lotConsumptionEvents)
       .where(eq(schema.lotConsumptionEvents.lotId, lotId))
       .orderBy(schema.lotConsumptionEvents.consumedAt);
+  }
+
+  async getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined> {
+    const rows = await this.db
+      .select()
+      .from(schema.backorderNotices)
+      .where(and(
+        eq(schema.backorderNotices.salesOrderId, salesOrderId),
+        eq(schema.backorderNotices.itemId, itemId),
+      ))
+      .limit(1);
+    return rows[0];
+  }
+
+  async createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice> {
+    const results = await this.db.insert(schema.backorderNotices).values(notice).returning();
+    return results[0];
   }
 
   // Cycle Count Sessions

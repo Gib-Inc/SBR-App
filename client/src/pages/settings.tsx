@@ -1386,13 +1386,20 @@ function TeamManagement() {
                         value={u.role}
                         onValueChange={(role) => roleMutation.mutate({ userId: u.id, role })}
                       >
-                        <SelectTrigger className="h-8 w-[100px] text-xs">
+                        <SelectTrigger className="h-8 w-[120px] text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="admin">Admin</SelectItem>
-                          <SelectItem value="member">Member</SelectItem>
-                          <SelectItem value="warehouse">Warehouse</SelectItem>
+                          {/* New role taxonomy. Legacy values kept so an
+                              admin/member row still renders correctly until
+                              the operator picks a new role. */}
+                          <SelectItem value="owner">Owner</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
+                          <SelectItem value="floor">Floor</SelectItem>
+                          <SelectItem value="office">Office</SelectItem>
+                          <SelectItem value="admin" disabled>Admin (legacy)</SelectItem>
+                          <SelectItem value="member" disabled>Member (legacy)</SelectItem>
+                          <SelectItem value="warehouse" disabled>Warehouse (legacy)</SelectItem>
                         </SelectContent>
                       </Select>
                       <Button

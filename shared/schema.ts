@@ -12,7 +12,11 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   name: text("name"),
-  role: text("role").notNull().default("member"), // 'admin' or 'member'
+  // Role taxonomy: 'owner' | 'manager' | 'floor' | 'office'.
+  // Legacy values 'admin' and 'member' are still present in older rows;
+  // the requireRole middleware treats both as 'owner' so existing users
+  // keep full access until an operator reassigns them.
+  role: text("role").notNull().default("member"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 

@@ -24,7 +24,7 @@ import { AmazonClient } from "./services/amazon-client";
 import { GoHighLevelClient } from "./services/gohighlevel-client";
 // PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
-import { requireAuth } from "./middleware/auth";
+import { requireAuth, requireRole } from "./middleware/auth";
 import { requireRole } from "./middleware/requireRole";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
@@ -4203,7 +4203,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  app.post("/api/suppliers", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/suppliers", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
     try {
       const validated = insertSupplierSchema.parse(req.body);
       const supplier = await storage.createSupplier(validated);
@@ -11817,7 +11817,7 @@ Notes: ${po.notes || 'None'}
   // over an item returns the net stock movement directly.
   // Hard floor: refuses to drop the resulting balance below -10 to prevent
   // accidental wipeouts from typos.
-  app.post("/api/inventory/writeoff", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/inventory/writeoff", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
     try {
       const { itemId, location, quantity, reason, notes } = req.body as {
         itemId?: string;
@@ -14383,7 +14383,7 @@ Notes: ${po.notes || 'None'}
   // ============================================================================
 
   // Approve PO
-  app.post("/api/purchase-orders/:id/approve", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/purchase-orders/:id/approve", requireAuth, requireRole("owner"), async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const po = await storage.getPurchaseOrder(id);

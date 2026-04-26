@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Search, Check, X, Trash2, Package, Edit, Upload, Download, Boxes, ShoppingCart, Brain, Info, DollarSign, Link2, SlidersHorizontal, CheckSquare, Square, ShieldCheck, Loader2, FileEdit, PackageMinus, ClipboardCheck, AlertCircle, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ProductMarginChart } from "@/components/product-margin-chart";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SiShopify, SiAmazon } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
@@ -1355,6 +1356,14 @@ function BOMDialog({
                       </span>
                     </div>
                   </>
+                )}
+
+                {/* 12-month margin trend — surfaces what's eroded on the cost
+                    side (sellingPrice held constant; PO history drives builds). */}
+                {item?.id && (
+                  <div className="border-t pt-2">
+                    <ProductMarginChart productId={item.id} />
+                  </div>
                 )}
 
                 {/* Per-component "No price set" callout — shows which BOM lines

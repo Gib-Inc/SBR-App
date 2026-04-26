@@ -23045,6 +23045,153 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // GET /api/products/:id/margin-history?months=12 — per-product monthly
+  // margin% over the last N months. Build cost is recomputed each month from
+  // PO history (avg unitCost across POs received that month, weighted by
+  // qtyReceived). For months with no PO data for a component we carry forward
+  // the most recent known cost so the line stays continuous.
+  //
+  // Caveat: sellingPrice has no historical record on items, so margin uses
+  // today's sellingPrice across the whole window. The chart's value is
+  // showing what's eroded on the COST side — the "Push 1.0 was 60%, now 52%"
+  // story comes from component cost increases, which this captures honestly.
+  app.get("/api/products/:id/margin-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const monthsParam = Number(req.query.months);
+      const months = Number.isInteger(monthsParam) && monthsParam > 0 && monthsParam <= 36
+        ? monthsParam
+        : 12;
+
+      const product = await storage.getItem(req.params.id);
+      if (!product) return res.status(404).json({ error: "Product not found" });
+      const sellingPrice = (product as any).sellingPrice ?? null;
+      const bom = await storage.getBillOfMaterialsByProductId(product.id);
+      if (!bom || bom.length === 0) {
+        return res.json({
+          productId: product.id,
+          sellingPrice,
+          months: [],
+          note: "No BOM defined for this product.",
+        });
+      }
+
+      // Build the rolling 12-month bucket list (oldest → newest), keyed YYYY-MM.
+      const now = new Date();
+      const monthKeys: string[] = [];
+      for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+
+      // Pull every line for this BOM's components to keep it to one query.
+      const componentIds = bom.map((b) => b.componentId);
+      const allLines = await storage.getAllPurchaseOrderLines();
+      const allPOs = await storage.getAllPurchaseOrders();
+      const poById = new Map(allPOs.map((p) => [p.id, p] as const));
+
+      // For each component, build a per-month avg unit cost from PO lines whose
+      // parent PO has a receivedAt in that month. Lines with qtyReceived = 0
+      // are skipped (the cost wasn't realized).
+      type MonthCost = Map<string, number>; // monthKey → avg unit cost
+      const componentMonthCost = new Map<string, MonthCost>();
+      for (const cid of componentIds) componentMonthCost.set(cid, new Map());
+      for (const line of allLines) {
+        if (!componentIds.includes(line.itemId)) continue;
+        if ((line.qtyReceived ?? 0) <= 0) continue;
+        const po = poById.get(line.purchaseOrderId);
+        if (!po) continue;
+        const recv = (po as any).receivedAt as Date | string | null | undefined;
+        if (!recv) continue;
+        const dt = new Date(recv);
+        if (Number.isNaN(dt.getTime())) continue;
+        const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+        // Weighted accumulator stored as { sumCostQty, sumQty } and reduced at the end.
+        const inner = componentMonthCost.get(line.itemId)!;
+        const prev = inner.get(key);
+        const qty = line.qtyReceived ?? 0;
+        // Encode running totals in two parallel keys so we don't have to swap
+        // structures: store the weighted sum here and divide later.
+        const accCost = (prev ?? 0) + (line.unitCost ?? 0) * qty;
+        inner.set(key, accCost);
+        // Mirror the qty in a parallel map keyed `__qty__:<key>` (single Map keeps types simple).
+        const qtyKey = `__qty__:${key}`;
+        const prevQty = inner.get(qtyKey) ?? 0;
+        inner.set(qtyKey, prevQty + qty);
+      }
+
+      // Build the per-month results, carrying forward the last known unit
+      // cost for any component that didn't receive a shipment that month.
+      const lastKnownCost = new Map<string, number>();
+      const monthsOut: Array<{
+        month: string;
+        buildCost: number;
+        marginPct: number | null;
+        hadAnyPO: boolean;
+        missingComponents: string[];
+      }> = [];
+
+      for (const monthKey of monthKeys) {
+        let buildCost = 0;
+        let hadAnyPO = false;
+        const missing: string[] = [];
+
+        for (const entry of bom) {
+          const inner = componentMonthCost.get(entry.componentId)!;
+          const sumCost = inner.get(monthKey);
+          const sumQty = inner.get(`__qty__:${monthKey}`);
+          let unitCost: number | null = null;
+          if (sumCost != null && sumQty != null && sumQty > 0) {
+            unitCost = sumCost / sumQty;
+            lastKnownCost.set(entry.componentId, unitCost);
+            hadAnyPO = true;
+          } else if (lastKnownCost.has(entry.componentId)) {
+            unitCost = lastKnownCost.get(entry.componentId)!;
+          }
+          if (unitCost == null) {
+            // No PO history for this component yet — fall back to current
+            // supplier_items / defaultPurchaseCost for at least a baseline.
+            const component = await storage.getItem(entry.componentId);
+            const fallback = component?.defaultPurchaseCost ?? 0;
+            if (fallback > 0) {
+              unitCost = fallback;
+              lastKnownCost.set(entry.componentId, unitCost);
+            }
+          }
+          if (unitCost == null || unitCost <= 0) {
+            missing.push(entry.componentId);
+            continue;
+          }
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+          buildCost += effectiveQty * unitCost;
+        }
+
+        const marginPct = sellingPrice != null && sellingPrice > 0 && buildCost > 0
+          ? ((sellingPrice - buildCost) / sellingPrice) * 100
+          : null;
+
+        monthsOut.push({
+          month: monthKey,
+          buildCost: Math.round(buildCost * 100) / 100,
+          marginPct: marginPct != null ? Math.round(marginPct * 10) / 10 : null,
+          hadAnyPO,
+          missingComponents: missing,
+        });
+      }
+
+      res.json({
+        productId: product.id,
+        productName: product.name,
+        sellingPrice,
+        sellingPriceNote: "Margin uses today's sellingPrice across the window. Cost erosion shown is real; price changes are not.",
+        months: monthsOut,
+      });
+    } catch (error: any) {
+      console.error("[Margin History] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute margin history" });
+    }
+  });
+
   // GET /api/data-quality/summary — five integrity checks reported as
   // {count, samples[], fixUrl} per check. Powers the Settings → Data Quality
   // tab. Read-only; everything is derived from existing tables.

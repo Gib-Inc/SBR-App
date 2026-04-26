@@ -4383,7 +4383,45 @@ TOTAL: $${subtotal.toFixed(2)}
   app.get("/api/supplier-items", requireAuth, async (req: Request, res: Response) => {
     try {
       const supplierItems = await storage.getAllSupplierItems();
-      res.json(supplierItems);
+      const supplierIdFilter = typeof req.query.supplierId === "string" ? req.query.supplierId.trim() : "";
+
+      // Default behavior (no filter): preserve the original SupplierItem[] shape
+      // so existing callers don't break.
+      if (!supplierIdFilter) {
+        return res.json(supplierItems);
+      }
+
+      // Filtered + enriched response for the PO creation flow: include item
+      // metadata (name, sku, currentStock, minStock, dailyUsage) per row so
+      // the dialog can pre-populate without a second request.
+      const filtered = supplierItems.filter((si) => si.supplierId === supplierIdFilter);
+      const itemIds = Array.from(new Set(filtered.map((si) => si.itemId)));
+      const itemsForRows = await Promise.all(itemIds.map((id) => storage.getItem(id)));
+      const itemById = new Map<string, NonNullable<typeof itemsForRows[number]>>();
+      for (const it of itemsForRows) if (it) itemById.set(it.id, it);
+
+      const enriched = filtered
+        .map((si) => {
+          const item = itemById.get(si.itemId);
+          if (!item) return null;
+          return {
+            ...si,
+            itemName: item.name,
+            itemSku: item.sku,
+            itemType: item.type,
+            currentStock: item.currentStock ?? 0,
+            minStock: item.minStock ?? 0,
+            dailyUsage: item.dailyUsage ?? 0,
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null)
+        // Components first, then anything else; alphabetical by name within each group.
+        .sort((a, b) => {
+          if (a.itemType !== b.itemType) return a.itemType === "component" ? -1 : 1;
+          return a.itemName.localeCompare(b.itemName);
+        });
+
+      res.json(enriched);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch supplier items" });
     }

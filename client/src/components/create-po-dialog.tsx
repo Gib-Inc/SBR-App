@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -62,6 +62,24 @@ interface DraftLineItem {
   taxAmount: number; // Manual tax input
   taxRate?: number | null; // Tax percentage from QuickBooks
   quickbooksItemId?: string | null;
+  // Snapshots from /api/supplier-items?supplierId for the suggested-order
+  // calculation. Optional because manually-added lines may not have them.
+  currentStock?: number;
+  dailyUsage?: number;
+}
+
+// Shape returned by GET /api/supplier-items?supplierId=X (the enriched form).
+interface SupplierItemRow {
+  id: string;
+  supplierId: string;
+  itemId: string;
+  itemName: string;
+  itemSku: string;
+  itemType: string;
+  price: number | null;
+  currentStock: number;
+  minStock: number;
+  dailyUsage: number;
 }
 
 interface CreatePODialogProps {
@@ -103,6 +121,38 @@ export function CreatePODialog({
     queryKey: ['/api/items'],
     enabled: open,
   });
+
+  // Pre-populate lineItems with this supplier's items on supplier change.
+  const { data: supplierItemRows = [], isFetching: supplierItemsLoading } =
+    useQuery<SupplierItemRow[]>({
+      queryKey: [`/api/supplier-items?supplierId=${supplierId}`],
+      enabled: open && !!supplierId,
+    });
+  const lastPopulatedSupplierRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!supplierId) {
+      lastPopulatedSupplierRef.current = null;
+      return;
+    }
+    if (lastPopulatedSupplierRef.current === supplierId) return;
+    if (supplierItemsLoading) return;
+    // Replace lineItems with the supplier's items, qty=0 by default. Manually
+    // added lines from a previous supplier are intentionally cleared so the
+    // form starts fresh — user can re-add via "Add Item" if needed.
+    const seeded: DraftLineItem[] = supplierItemRows.map((row) => ({
+      id: `seed-${row.itemId}`,
+      itemId: row.itemId,
+      sku: row.itemSku,
+      name: row.itemName,
+      qtyOrdered: 0,
+      unitCost: row.price ?? 0,
+      taxAmount: 0,
+      currentStock: row.currentStock,
+      dailyUsage: row.dailyUsage,
+    }));
+    setLineItems(seeded);
+    lastPopulatedSupplierRef.current = supplierId;
+  }, [supplierId, supplierItemRows, supplierItemsLoading]);
 
   // Create supplier mutation
   const createSupplierMutation = useMutation({
@@ -218,33 +268,36 @@ export function CreatePODialog({
     return subtotal + shipping + effectiveTaxes;
   }, [subtotal, shippingCost, effectiveTaxes]);
 
+  // Lines actually being ordered — qty=0 rows are pre-populated supplier items
+  // the user chose to skip and are excluded from validation + submit payload.
+  const orderedLines = useMemo(
+    () => lineItems.filter((l) => l.qtyOrdered > 0),
+    [lineItems],
+  );
+
   const isValid = useMemo(() => {
     if (!supplierId) return false;
-    if (lineItems.length === 0) return false;
-    return lineItems.every(line => line.qtyOrdered > 0 && line.unitCost > 0);
-  }, [supplierId, lineItems]);
+    if (orderedLines.length === 0) return false;
+    return orderedLines.every(line => line.unitCost > 0);
+  }, [supplierId, orderedLines]);
 
   const validateForm = useCallback(() => {
     const newErrors: Record<string, string> = {};
-    
+
     if (!supplierId) {
       newErrors.supplier = "Please select a supplier";
     }
-    if (lineItems.length === 0) {
-      newErrors.lineItems = "Please add at least one line item";
+    if (orderedLines.length === 0) {
+      newErrors.lineItems = "Enter a quantity for at least one item";
     }
-    const invalidQtyLines = lineItems.filter(line => line.qtyOrdered < 1);
-    if (invalidQtyLines.length > 0) {
-      newErrors.lineItems = "All line items must have quantity > 0";
-    }
-    const invalidCostLines = lineItems.filter(line => line.unitCost <= 0);
+    const invalidCostLines = orderedLines.filter(line => line.unitCost <= 0);
     if (invalidCostLines.length > 0) {
-      newErrors.lineItems = "All line items must have a unit cost > 0";
+      newErrors.lineItems = "All ordered items must have a unit cost > 0";
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [supplierId, lineItems]);
+  }, [supplierId, orderedLines]);
 
   const createAndSendMutation = useMutation({
     mutationFn: async () => {
@@ -268,12 +321,16 @@ export function CreatePODialog({
         expectedDate: expectedDate ? expectedDate.toISOString() : undefined,
         shippingCost: parseFloat(shippingCost) || 0,
         taxes: effectiveTaxAmount,
-        lines: lineItems.map(line => ({
-          itemId: line.itemId,
-          qtyOrdered: line.qtyOrdered,
-          unitCost: line.unitCost,
-          taxAmount: line.taxAmount || 0,
-        })),
+        // Only submit lines the user actually filled in — pre-populated rows
+        // with qty=0 are skipped.
+        lines: lineItems
+          .filter((line) => line.qtyOrdered > 0)
+          .map((line) => ({
+            itemId: line.itemId,
+            qtyOrdered: line.qtyOrdered,
+            unitCost: line.unitCost,
+            taxAmount: line.taxAmount || 0,
+          })),
       };
 
       // Step 1: Create the PO
@@ -395,9 +452,11 @@ export function CreatePODialog({
   }, [items, selectedItemIds]);
 
   const handleUpdateLineQty = useCallback((lineId: string, qty: number) => {
-    if (qty < 1) return;
-    setLineItems(prev => prev.map(l => 
-      l.id === lineId ? { ...l, qtyOrdered: qty } : l
+    // Allow 0 — pre-populated supplier rows start at 0; user types qty for the
+    // ones being ordered, and zero-qty rows are filtered out at submit time.
+    if (qty < 0 || !Number.isFinite(qty)) return;
+    setLineItems(prev => prev.map(l =>
+      l.id === lineId ? { ...l, qtyOrdered: Math.floor(qty) } : l
     ));
   }, []);
 
@@ -679,26 +738,54 @@ export function CreatePODialog({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {lineItems.map((line) => (
-                        <TableRow key={line.id} data-testid={`row-line-${line.id}`}>
-                          <TableCell>
-                            <div>
-                              <span className="font-medium">{line.sku}</span>
-                              <p className="text-sm text-muted-foreground truncate max-w-[250px]">
-                                {line.name}
-                              </p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number"
-                              min="1"
-                              value={line.qtyOrdered}
-                              onChange={(e) => handleUpdateLineQty(line.id, parseInt(e.target.value) || 1)}
-                              className="w-20 text-center mx-auto"
-                              data-testid={`input-qty-${line.id}`}
-                            />
-                          </TableCell>
+                      {lineItems.map((line) => {
+                        // Suggested 30-day re-up: enough to cover a month at
+                        // current burn rate, minus what's already on hand.
+                        const suggested = line.dailyUsage != null && line.currentStock != null
+                          ? Math.max(0, Math.ceil(line.dailyUsage * 30 - line.currentStock))
+                          : 0;
+                        const showSuggested = suggested > 0 && suggested !== line.qtyOrdered;
+                        return (
+                          <TableRow key={line.id} data-testid={`row-line-${line.id}`}>
+                            <TableCell>
+                              <div>
+                                <span className="font-medium">{line.name}</span>
+                                {line.currentStock != null && (
+                                  <p className="text-xs text-muted-foreground">
+                                    On hand: <span className="tabular-nums">{line.currentStock}</span>
+                                    {line.dailyUsage != null && line.dailyUsage > 0 && (
+                                      <>
+                                        {" · "}
+                                        {line.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day
+                                      </>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-col items-center gap-1">
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={line.qtyOrdered === 0 ? "" : line.qtyOrdered}
+                                  onChange={(e) => handleUpdateLineQty(line.id, parseInt(e.target.value) || 0)}
+                                  placeholder="0"
+                                  className="w-20 text-center"
+                                  data-testid={`input-qty-${line.id}`}
+                                />
+                                {showSuggested && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateLineQty(line.id, suggested)}
+                                    className="text-[11px] text-muted-foreground hover:text-foreground underline"
+                                    data-testid={`button-suggested-${line.id}`}
+                                  >
+                                    Suggested: {suggested}
+                                  </button>
+                                )}
+                              </div>
+                            </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
                               <span className="text-muted-foreground">$</span>
@@ -742,7 +829,8 @@ export function CreatePODialog({
                             </Button>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

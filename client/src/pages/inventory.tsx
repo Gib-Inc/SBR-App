@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle } from "lucide-react";
 import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
 import { WriteOffStockDialog } from "@/components/write-off-stock-dialog";
+import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -129,6 +130,14 @@ function SortableHeader({
 }
 
 export default function Inventory() {
+  // Refetch the three queries this page reads when any item's stock changes
+  // server-side. Sales-orders too — committed/available depend on it.
+  useInventoryRealtime([
+    "/api/inventory/snapshot",
+    "/api/items",
+    "/api/sales-orders",
+  ]);
+
   const { data, isLoading, error } = useQuery<SnapshotRow[]>({
     queryKey: ["/api/inventory/snapshot"],
   });

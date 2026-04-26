@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
 import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock } from "lucide-react";
 
 interface MaterialRow {
@@ -59,6 +60,13 @@ export default function RawMaterials() {
   const [editValue, setEditValue] = useState<string>("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "order" | "critical">("all");
+
+  // Refetch the dashboard when any item's stock changes server-side. Also
+  // catches /api/items invalidations so any hidden cache stays in sync.
+  useInventoryRealtime([
+    "/api/raw-materials/dashboard",
+    "/api/items",
+  ]);
 
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["/api/raw-materials/dashboard"],

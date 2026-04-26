@@ -1,6 +1,7 @@
 import type { IStorage } from "../storage";
 import type { Item } from "@shared/schema";
 import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBase } from "./audit-logger";
+import { wsInventoryService } from "./websocket-inventory";
 
 /**
  * INVENTORY MOVEMENT PATTERN DOCUMENTATION
@@ -373,6 +374,18 @@ export class InventoryMovement {
       if (Object.keys(updates).length > 0) {
         updates.forecastDirty = true;
         await this.storage.updateItem(params.itemId, updates);
+        // Realtime broadcast: only the fields we actually mutated. forecastDirty
+        // is a bookkeeping flag and not relevant to the UI, so we strip it.
+        const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
+        if (changedFields.length > 0) {
+          wsInventoryService.broadcast({
+            itemIds: [params.itemId],
+            fields: changedFields,
+            reason: params.eventType === "TRANSFER" ? "TRANSFER"
+              : params.eventType === "SALES_ORDER_SHIPPED" ? "SHIP"
+              : "MOVEMENT",
+          });
+        }
       }
 
       const afterItem = await this.storage.getItem(params.itemId);

@@ -11,6 +11,7 @@ import {
   resolveCountList,
   type CountLocation,
 } from "./services/count-inventory";
+import { wsInventoryService } from "./services/websocket-inventory";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
@@ -11783,6 +11784,18 @@ Notes: ${po.notes || 'None'}
       }
 
       const successCount = results.filter((r) => r.success).length;
+
+      // Realtime broadcast for every received item that actually changed
+      // stock — the Raw Materials page will re-fetch on receipt.
+      const receivedIds = results.filter((r) => r.success && r.quantity > 0).map((r) => r.itemId);
+      if (receivedIds.length > 0) {
+        wsInventoryService.broadcast({
+          itemIds: receivedIds,
+          fields: ["currentStock"],
+          reason: "RECEIVE",
+        });
+      }
+
       res.status(successCount === 0 ? 400 : 201).json({
         supplierId,
         summary: { total: results.length, success: successCount, failed: results.length - successCount },
@@ -11863,6 +11876,14 @@ Notes: ${po.notes || 'None'}
         reason,
         createdBy: userId,
         notes: cleanNotes || null,
+      });
+
+      // Realtime broadcast so any open Inventory / Raw Materials page sees
+      // the new balance without a manual refresh.
+      wsInventoryService.broadcast({
+        itemIds: [item.id],
+        fields: [field],
+        reason: "WRITEOFF",
       });
 
       res.status(201).json({
@@ -22619,6 +22640,14 @@ Generate only the email body text, no subject line.`;
   }).catch((error) => {
     console.error("[Server] Failed to initialize WebSocket logs service:", error);
   });
+
+  // Initialize WebSocket for real-time inventory updates (separate channel
+  // from logs so each consumer can subscribe to only what it needs).
+  import("./services/websocket-inventory").then(({ wsInventoryService }) => {
+    wsInventoryService.initialize(httpServer);
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize WebSocket inventory service:", error);
+  });
   
   // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time
   import("./services/briefing-scheduler").then(({ initializeBriefingScheduler }) => {
@@ -23088,6 +23117,18 @@ Generate only the email body text, no subject line.`;
       const changed = results.filter((r) => r.success && r.difference !== 0).length;
       const unchanged = results.filter((r) => r.success && r.difference === 0).length;
       const failed = results.filter((r) => !r.success).length;
+
+      // Realtime: notify subscribers about every item that actually moved so
+      // the Inventory and Raw Materials pages re-fetch without a manual refresh.
+      const changedItemIds = results.filter((r) => r.success && r.difference !== 0).map((r) => r.itemId);
+      if (changedItemIds.length > 0) {
+        wsInventoryService.broadcast({
+          itemIds: changedItemIds,
+          fields: [field],
+          reason: "COUNT",
+        });
+      }
+
       res.status(failed === results.length ? 400 : 201).json({
         location,
         submittedBy,

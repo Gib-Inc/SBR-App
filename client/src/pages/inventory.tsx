@@ -199,13 +199,16 @@ export default function Inventory() {
 
   // Build a lookup map: SKU → committed units across active sales orders.
   // "Committed" = unshipped portion (qtyOrdered − qtyShipped) on any order
-  // that hasn't been cancelled/refunded/delivered. Shipped lines drop out
-  // automatically because their unshipped portion is zero.
+  // that hasn't been cancelled/refunded/delivered/fulfilled. Shipped lines
+  // drop out automatically because their unshipped portion is zero.
+  // qtyOrdered/qtyShipped use ?? 0 so a null qtyShipped is treated as
+  // "nothing shipped yet" (committed = full ordered quantity), not NaN.
   const committedMap = useMemo(() => {
     const TERMINAL = new Set([
+      "FULFILLED",
       "CANCELLED",
-      "REFUNDED",
       "DELIVERED",
+      "REFUNDED",
       "PENDING_REFUND",
     ]);
     const map = new Map<string, number>();
@@ -314,6 +317,15 @@ export default function Inventory() {
   }, [rows, bySku]);
 
   const snapshotDate = rows[0]?.snapshot_date ?? null;
+  // Hide the badge entirely when the snapshot is older than 48 hours so
+  // we don't display a stale "Snapshot: APR 10" that misleads anyone.
+  const FRESH_WINDOW_MS = 48 * 60 * 60 * 1000;
+  const snapshotIsFresh = (() => {
+    if (!snapshotDate) return false;
+    const t = new Date(snapshotDate).getTime();
+    if (Number.isNaN(t)) return false;
+    return Date.now() - t <= FRESH_WINDOW_MS;
+  })();
 
   if (isLoading) {
     return (
@@ -351,9 +363,9 @@ export default function Inventory() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {snapshotDate && (
-            <Badge variant="outline" className="text-sm">
-              Snapshot: {snapshotDate}
+          {snapshotDate && snapshotIsFresh && (
+            <Badge variant="outline" className="text-sm" data-testid="snapshot-badge">
+              Last updated: {snapshotDate}
             </Badge>
           )}
           <Button

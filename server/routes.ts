@@ -11728,6 +11728,8 @@ Notes: ${po.notes || 'None'}
       }
 
       const userId = req.session.userId!;
+      const receiveUser = await storage.getUser(userId);
+      const receiveUserName = receiveUser?.email ?? null;
 
       const results: Array<{
         itemId: string;
@@ -11774,6 +11776,7 @@ Notes: ${po.notes || 'None'}
             quantity: qty,
             supplierId,
             createdBy: userId,
+            createdByName: receiveUserName,
             notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
           });
 
@@ -11866,6 +11869,7 @@ Notes: ${po.notes || 'None'}
       await storage.updateItem(item.id, { [field]: after } as any);
 
       const userId = req.session.userId!;
+      const writeoffUser = await storage.getUser(userId);
       const cleanNotes = typeof notes === "string" ? notes.trim() : "";
       await storage.createInventoryTransaction({
         itemId: item.id,
@@ -11875,6 +11879,7 @@ Notes: ${po.notes || 'None'}
         quantity: -qty, // stored negative so SUM(quantity) gives net stock change
         reason,
         createdBy: userId,
+        createdByName: writeoffUser?.email ?? null,
         notes: cleanNotes || null,
       });
 
@@ -19608,6 +19613,7 @@ Generate only the email body text, no subject line.`;
           location,
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
           createdBy: userId.toString(),
+          createdByName: user?.email ?? null,
         });
 
         // Update line: qtyShipped += shipQty, qtyFulfilled = qtyShipped, qtyAllocated = 0, recalculate backorderQty

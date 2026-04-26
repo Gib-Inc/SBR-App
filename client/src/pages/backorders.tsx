@@ -139,33 +139,24 @@ export default function Backorders() {
     };
     const bySku = new Map<string, Acc>();
 
-    // Active orders only — closed/cancelled don't count even if they once had
-    // a backorder. Status set is permissive on purpose since legacy values
-    // exist in the table.
-    const activeStatuses = new Set([
-      "DRAFT",
-      "ORDERED",
-      "SHIPPED",
-      "PARTIAL",
-      "PARTIALLY_FULFILLED",
-      "PENDING",
-      "PURCHASED",
+    // Match the Inventory page's "Committed" pattern exactly: exclude
+    // terminal statuses, then derive backlog as (qtyOrdered − qtyShipped)
+    // for any line where the order isn't done. backorderQty is unreliable
+    // (often null even when there's a backlog), so we don't depend on it.
+    const TERMINAL = new Set([
       "FULFILLED",
+      "CANCELLED",
+      "DELIVERED",
+      "REFUNDED",
+      "PENDING_REFUND",
     ]);
 
     for (const o of orders) {
-      if (!activeStatuses.has(o.status)) continue;
+      if (TERMINAL.has(o.status)) continue;
       for (const line of o.lines ?? []) {
-        // Backordered if there's an explicit backorderQty, or if shipped < ordered.
-        const explicit = Number(line.backorderQty ?? 0);
-        const inferred = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyShipped ?? 0));
-        const backordered = explicit > 0 ? explicit : 0;
-        // If status hints at backorder ('backorder' substring, case-insensitive),
-        // fall back to the inferred unshipped qty.
-        const statusHints = /backorder/i.test(o.status);
-        const qty = backordered > 0 ? backordered : (statusHints ? inferred : 0);
-        if (qty <= 0) continue;
         if (!line.sku) continue;
+        const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyShipped ?? 0));
+        if (open <= 0) continue;
 
         const acc =
           bySku.get(line.sku) ?? {
@@ -176,7 +167,7 @@ export default function Backorders() {
           };
         acc.ordersWaiting.add(o.id);
         acc.orderIds.add(o.id);
-        acc.unitsNeeded += qty;
+        acc.unitsNeeded += open;
         bySku.set(line.sku, acc);
       }
     }

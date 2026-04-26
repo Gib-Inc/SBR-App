@@ -891,6 +891,10 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   reason: text("reason"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   createdBy: text("created_by"), // User ID or system identifier
+  // Snapshot of the user's display name (typically email) at write time so
+  // the audit trail still reads cleanly if the underlying user is later
+  // renamed or deleted. Nullable for legacy rows + system-driven events.
+  createdByName: text("created_by_name"),
   notes: text("notes"), // Optional reason/description
 }, (table) => ({
   itemIdIdx: index("inventory_transactions_item_id_idx").on(table.itemId),

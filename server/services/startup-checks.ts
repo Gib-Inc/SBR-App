@@ -1,20 +1,25 @@
 // Startup checks — runs once during boot to verify the schema migrations and
 // data migrations the rest of the app assumes are in place.
 //
-// Two purposes:
+// Three purposes:
 //
-//   1. Fail-loud table existence check for the tables we added in recent
-//      commits (production_logs, shop_issues, daily_briefings). Railway's
-//      build script calls drizzle-kit push automatically, but if that step
-//      ever fails silently the server still boots — without these checks
-//      the first user to hit the affected route gets an unfriendly 500.
+//   1. Force-create production_logs / shop_issues / daily_briefings via
+//      CREATE TABLE IF NOT EXISTS. Railway's build script calls
+//      drizzle-kit push automatically but production was caught with two
+//      of those tables missing, so this is the belt-and-suspenders
+//      safety net. Followed by an existence check that fails LOUD if a
+//      table is still missing afterwards.
 //
 //   2. Idempotent data migration for the FX Industries / Pednar lead times
-//      from migration_set_supplier_lead_times.sql. The UPDATE is gated on
-//      "where current value != expected" so re-runs are no-ops.
+//      from migration_set_supplier_lead_times.sql. UPDATE is gated on
+//      lead_time_days IS NULL — never overrides a manually set value.
 //
-// Boot continues even if a check fails — we want the server up so other
-// routes work, but the failure is logged loudly so it's caught fast.
+//   3. One-time cleanup of legacy production_logs rows where
+//      action_type = 'rolls_made' (that action was removed; the rows are
+//      stale test data).
+//
+// Boot continues even if a step fails — we want the server up so other
+// routes work, but failures are logged loudly so they're caught fast.
 
 import pg from "pg";
 
@@ -32,6 +37,75 @@ type CheckResult = {
   exists: boolean;
 };
 
+// CREATE TABLE IF NOT EXISTS statements that mirror the Drizzle schema. Kept
+// inline (rather than read from a .sql file) so the safety net is bundled
+// with the running server. Drizzle remains the source of truth — these are
+// only fallbacks that fire when drizzle-kit push didn't apply.
+const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = {
+  production_logs: `
+    CREATE TABLE IF NOT EXISTS production_logs (
+      id            VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      item_id       VARCHAR NOT NULL REFERENCES items(id),
+      action_type   TEXT NOT NULL,
+      quantity      INTEGER NOT NULL,
+      production_date TEXT NOT NULL,
+      notes         TEXT,
+      created_by    TEXT,
+      created_at    TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS production_logs_item_id_idx ON production_logs(item_id);
+    CREATE INDEX IF NOT EXISTS production_logs_production_date_idx ON production_logs(production_date);
+  `,
+  shop_issues: `
+    CREATE TABLE IF NOT EXISTS shop_issues (
+      id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      item_id     VARCHAR NOT NULL REFERENCES items(id),
+      issue_type  TEXT NOT NULL,
+      notes       TEXT NOT NULL,
+      reported_by TEXT,
+      created_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS shop_issues_item_id_idx ON shop_issues(item_id);
+    CREATE INDEX IF NOT EXISTS shop_issues_created_at_idx ON shop_issues(created_at);
+  `,
+  daily_briefings: `
+    CREATE TABLE IF NOT EXISTS daily_briefings (
+      id           VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      date         TEXT NOT NULL UNIQUE,
+      content_json JSONB NOT NULL,
+      created_at   TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS daily_briefings_date_idx ON daily_briefings(date);
+  `,
+};
+
+async function ensureTablesExist(client: pg.PoolClient): Promise<void> {
+  for (const table of REQUIRED_TABLES) {
+    try {
+      await client.query(CREATE_TABLE_STATEMENTS[table]);
+    } catch (err: any) {
+      console.error(`[Startup Checks] CREATE TABLE IF NOT EXISTS ${table} failed:`, err?.message ?? err);
+    }
+  }
+}
+
+// Additive column adds for tables that already exist. Postgres 9.6+ supports
+// ADD COLUMN IF NOT EXISTS so this is safe to run on every boot.
+async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
+  const ADDS = [
+    `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS created_by_name TEXT`,
+    `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS supplier_id VARCHAR REFERENCES suppliers(id)`,
+    `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS reason TEXT`,
+  ];
+  for (const stmt of ADDS) {
+    try {
+      await client.query(stmt);
+    } catch (err: any) {
+      console.error(`[Startup Checks] ${stmt.split("\n")[0].slice(0, 80)}… failed:`, err?.message ?? err);
+    }
+  }
+}
+
 async function checkTablesExist(client: pg.PoolClient): Promise<CheckResult[]> {
   const result = await client.query<{ table_name: string }>(
     `SELECT table_name FROM information_schema.tables
@@ -46,24 +120,37 @@ async function applyLeadTimeMigration(client: pg.PoolClient): Promise<{
   fxUpdated: number;
   pednarUpdated: number;
 }> {
+  // User-spec WHERE clause: only fill in null values. Existing non-null
+  // entries (someone manually set a different lead time) are preserved.
   const fx = await client.query(
     `UPDATE supplier_items
      SET lead_time_days = $1
-     WHERE supplier_id IN (SELECT id FROM suppliers WHERE LOWER(name) LIKE 'fx industries%')
-       AND (lead_time_days IS NULL OR lead_time_days <> $1)`,
+     WHERE supplier_id = (SELECT id FROM suppliers WHERE name = 'FX Industries')
+       AND lead_time_days IS NULL`,
     [FX_INDUSTRIES_LEAD_TIME],
   );
   const pednar = await client.query(
     `UPDATE supplier_items
      SET lead_time_days = $1
-     WHERE supplier_id IN (SELECT id FROM suppliers WHERE LOWER(name) LIKE 'pednar%')
-       AND (lead_time_days IS NULL OR lead_time_days <> $1)`,
+     WHERE supplier_id = (SELECT id FROM suppliers WHERE name = 'Pednar')
+       AND lead_time_days IS NULL`,
     [PEDNAR_LEAD_TIME],
   );
   return {
     fxUpdated: fx.rowCount ?? 0,
     pednarUpdated: pednar.rowCount ?? 0,
   };
+}
+
+async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
+  // The "rolls_made" action was removed when we discovered SBR buys
+  // foam rollers from Pednar rather than producing them. Existing rows
+  // from before the removal are stale test data. Idempotent — first run
+  // deletes them, subsequent runs find none.
+  const result = await client.query(
+    `DELETE FROM production_logs WHERE action_type = 'rolls_made'`,
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function runStartupChecks(): Promise<void> {
@@ -77,7 +164,22 @@ export async function runStartupChecks(): Promise<void> {
   try {
     client = await pool.connect();
 
-    // ── Table existence ─────────────────────────────────────────────────
+    // ── Force-create then verify ───────────────────────────────────────
+    // Belt-and-suspenders: drizzle-kit push is the canonical migration
+    // path, but production was caught with two of these tables missing
+    // anyway. Running CREATE TABLE IF NOT EXISTS first means the
+    // existence check below should always pass on a healthy database.
+    try {
+      await ensureTablesExist(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] ensureTablesExist failed:", err?.message ?? err);
+    }
+    try {
+      await ensureColumnsExist(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] ensureColumnsExist failed:", err?.message ?? err);
+    }
+
     let allOk = true;
     try {
       const tableResults = await checkTablesExist(client);
@@ -88,8 +190,8 @@ export async function runStartupChecks(): Promise<void> {
           allOk = false;
           console.error(
             `[Startup Checks] MISSING TABLE: ${r.table}. ` +
-            `Run "npm run db:push" against the database to create it ` +
-            `(it's defined in shared/schema.ts but the schema push didn't apply).`,
+            `CREATE TABLE IF NOT EXISTS attempted but the table is still ` +
+            `missing — investigate the previous error log line.`,
           );
         }
       }
@@ -104,7 +206,8 @@ export async function runStartupChecks(): Promise<void> {
     }
 
     // ── Lead-time data migration ────────────────────────────────────────
-    // Idempotent — only writes when the stored value differs from spec.
+    // Idempotent — only fills in NULL values; existing non-null entries
+    // are preserved so manual edits aren't clobbered.
     try {
       const { fxUpdated, pednarUpdated } = await applyLeadTimeMigration(client);
       if (fxUpdated > 0 || pednarUpdated > 0) {
@@ -114,12 +217,22 @@ export async function runStartupChecks(): Promise<void> {
           `Pednar=${PEDNAR_LEAD_TIME}d (${pednarUpdated} row${pednarUpdated === 1 ? "" : "s"})`,
         );
       } else {
-        console.log("[Startup Checks] Lead-time migration already applied (no rows needed updating)");
+        console.log("[Startup Checks] Lead-time migration already applied (no NULL rows remaining)");
       }
     } catch (err: any) {
       // Most likely cause: supplier_items table doesn't exist yet (fresh DB).
       // Don't crash — just log so an operator can investigate.
       console.error("[Startup Checks] Lead-time migration failed:", err?.message ?? err);
+    }
+
+    // ── Cleanup legacy rolls_made rows ──────────────────────────────────
+    try {
+      const deleted = await cleanupRollsMadeRows(client);
+      if (deleted > 0) {
+        console.log(`[Startup Checks] Removed ${deleted} legacy rolls_made row${deleted === 1 ? "" : "s"} from production_logs`);
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] rolls_made cleanup failed:", err?.message ?? err);
     }
   } catch (err: any) {
     console.error("[Startup Checks] Could not connect to database:", err?.message ?? err);

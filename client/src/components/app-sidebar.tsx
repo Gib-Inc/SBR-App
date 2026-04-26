@@ -27,6 +27,7 @@ const dashboardItems = [
 
 const salesItems = [
   { title: "Sales Orders",      url: "/sales-orders",       icon: ShoppingCart  },
+  { title: "Backorders",        url: "/backorders",         icon: PackageCheck  },
   { title: "In-House Shipping", url: "/in-house-shipping",  icon: Truck         },
   { title: "Returns",           url: "/returns",            icon: PackageOpen   },
 ];

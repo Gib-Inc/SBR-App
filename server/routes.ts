@@ -18138,6 +18138,7 @@ Generate only the email body text, no subject line.`;
                     sku: l.sku,
                     qtyOrdered: l.qtyOrdered,
                     qtyShipped: l.qtyShipped,
+                    backorderQty: l.backorderQty ?? 0,
                     unitPrice: l.unitPrice,
                   })),
                 }

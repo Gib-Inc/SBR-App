@@ -52,40 +52,23 @@ type CardConfig = {
 };
 
 const CARDS: CardConfig[] = [
-  {
-    key: "push-1-0",
-    label: "Push Model 1.0",
-    skus: ["101-PSH-M1"],
-    foamComponentSku: "SBR-COMP-ROLLER-12",
-  },
-  {
-    key: "push-2-0",
-    label: "Push Model 2.0",
-    skus: ["201-PSH-M2"],
-    foamComponentSku: "SBR-COMP-ROLLER-18",
-  },
+  { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"] },
+  { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"] },
   {
     key: "pull-behind",
     label: "Pull-Behind",
-    skus: ["1001-PB-M1", "1200-PB-M2"],
-    variantLabels: { "1001-PB-M1": "Original", "1200-PB-M2": "Bigfoot" },
+    skus: ["SBR-PB-ORIG", "SBR-PB-BIGFOOT"],
+    variantLabels: { "SBR-PB-ORIG": "Original", "SBR-PB-BIGFOOT": "Bigfoot" },
   },
-  {
-    key: "bigfoot",
-    label: "Bigfoot",
-    skus: ["SBR-PB-BIGFOOT"],
-    fallbackNameRegex: /bigfoot/i,
-    fallbackTypeFilter: "finished_product",
-  },
+  { key: "bigfoot", label: "Bigfoot", skus: ["SBR-PB-BIGFOOT"] },
 ];
 
 // Short display names used in the "This Week" copy/list. Falls back to the
 // catalog name when a SKU isn't mapped here.
 const SHORT_NAMES_BY_SKU: Record<string, string> = {
-  "101-PSH-M1": "Push 1.0",
-  "201-PSH-M2": "Push 2.0",
-  "1001-PB-M1": "Pull-Behind Original",
-  "1200-PB-M2": "Bigfoot",
+  "SBR-PUSH-1.0": "Push 1.0",
+  "SBR-Extrawide2.0": "Push 2.0",
+  "SBR-PB-ORIG": "Pull-Behind Original",
   "SBR-PB-BIGFOOT": "Bigfoot",
 };
 

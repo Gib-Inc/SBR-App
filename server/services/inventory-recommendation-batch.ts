@@ -393,6 +393,38 @@ export class InventoryRecommendationBatch {
   }
 
   /**
+   * Walk finished-product BOMs × 90-day sales velocity to derive how many of
+   * each component get consumed per day. Mirrors the math
+   * /api/raw-materials/dashboard already uses, so AI counts agree with the
+   * Raw Materials page. Returns componentId → daily usage (units/day).
+   */
+  private async computeComponentDailyUsageMap(): Promise<Map<string, number>> {
+    const allItems = await this.storage.getAllItems();
+    const finishedProducts = allItems.filter((i) => i.type === "finished_product");
+    const velocity = await this.storage.getSkuSalesVelocity(90);
+    const velocityMap = new Map(velocity.map((v) => [v.sku, v.unitsSold]));
+
+    const componentUsage = new Map<string, number>();
+    for (const product of finishedProducts) {
+      const bom = await this.storage.getBillOfMaterialsByProductId(product.id);
+      if (!bom || bom.length === 0) continue;
+      const unitsSold90d = velocityMap.get(product.sku) ?? 0;
+      const dailySales = unitsSold90d / 90;
+      if (dailySales <= 0) continue;
+      for (const entry of bom) {
+        const wastage = (entry as any).wastagePercent ?? 0;
+        const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+        const dailyComponentUsage = effectiveQty * dailySales;
+        componentUsage.set(
+          entry.componentId,
+          (componentUsage.get(entry.componentId) ?? 0) + dailyComponentUsage,
+        );
+      }
+    }
+    return componentUsage;
+  }
+
+  /**
    * Build context for each SKU including inventory, velocity, lead times, etc.
    */
   private async buildSKUContexts(items: Item[], settings: Settings | undefined): Promise<SKUContext[]> {
@@ -400,6 +432,9 @@ export class InventoryRecommendationBatch {
     const purchaseOrders = await this.storage.getAllPurchaseOrders();
     const poLines = await this.storage.getAllPurchaseOrderLines();
     const salesOrders = await this.storage.getAllSalesOrders();
+    // Same BOM × velocity walk that powers the Raw Materials page so the
+    // AI sees the actual demand pulled through finished-product sales.
+    const componentDailyUsageMap = await this.computeComponentDailyUsageMap();
 
     // Build PO inbound map
     const inboundMap = new Map<string, number>();
@@ -446,7 +481,17 @@ export class InventoryRecommendationBatch {
       const pivotQty = isFinished ? (item.pivotQty ?? 0) : 0;
       const hildaleQty = isFinished ? (item.hildaleQty ?? 0) : 0;
       const availableForSale = isFinished ? (item.availableForSaleQty ?? pivotQty) : item.currentStock;
-      const dailyVelocity = item.dailyUsage || 0.1; // Avoid division by zero
+      // For components: derive daily velocity from BOM × finished-good sales —
+      // items.dailyUsage is rarely populated for raw materials and was masking
+      // every component as having ~infinite supply. Finished products keep the
+      // existing item.dailyUsage path. The 0.1 floor preserves the legacy
+      // divide-by-zero guard for items with no measurable demand.
+      const computedComponentUsage = !isFinished
+        ? (componentDailyUsageMap.get(item.id) ?? 0)
+        : 0;
+      const dailyVelocity = isFinished
+        ? (item.dailyUsage || 0.1)
+        : (computedComponentUsage > 0 ? computedComponentUsage : (item.dailyUsage || 0.1));
       const daysUntilStockout = dailyVelocity > 0 ? availableForSale / dailyVelocity : 999;
       const leadTimeDays = leadTimeMap.get(item.id) || 14;
       const supplierMOQ = moqMap.get(item.id) || 0;

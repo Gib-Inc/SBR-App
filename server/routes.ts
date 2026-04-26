@@ -11718,6 +11718,91 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // POST /api/inventory/writeoff — write off damaged/lost/scrap stock.
+  // Decrements the appropriate field (hildale_qty for finished products at
+  // HILDALE; current_stock for components) and records a negative-quantity
+  // inventory_transactions row tagged with type='WRITEOFF', so SUM(quantity)
+  // over an item returns the net stock movement directly.
+  // Hard floor: refuses to drop the resulting balance below -10 to prevent
+  // accidental wipeouts from typos.
+  app.post("/api/inventory/writeoff", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, location, quantity, reason, notes } = req.body as {
+        itemId?: string;
+        location?: string;
+        quantity?: number;
+        reason?: string;
+        notes?: string;
+      };
+
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (location !== "HILDALE" && location !== "COMPONENT") {
+        return res.status(400).json({ error: "location must be 'HILDALE' or 'COMPONENT'" });
+      }
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "quantity must be a positive whole number" });
+      }
+      const validReasons = ["Damaged", "Defective", "Lost", "Scrap", "Other"];
+      if (!reason || !validReasons.includes(reason)) {
+        return res.status(400).json({ error: `reason must be one of: ${validReasons.join(", ")}` });
+      }
+
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(400).json({ error: "Item not found" });
+      }
+
+      // Location must match item type. Pyvott write-offs aren't supported here
+      // — Extensiv owns that field per the inventory invariants.
+      if (location === "HILDALE" && item.type !== "finished_product") {
+        return res.status(400).json({ error: "HILDALE write-offs require a finished product" });
+      }
+      if (location === "COMPONENT" && item.type !== "component") {
+        return res.status(400).json({ error: "COMPONENT write-offs require a component" });
+      }
+
+      const field = location === "HILDALE" ? "hildaleQty" : "currentStock";
+      const before = ((item as any)[field] as number | null | undefined) ?? 0;
+      const after = before - qty;
+      const FLOOR = -10;
+      if (after < FLOOR) {
+        return res.status(400).json({
+          error: `Result would be ${after} (below floor of ${FLOOR}). Current stock is ${before}; max write-off is ${before - FLOOR}.`,
+        });
+      }
+
+      await storage.updateItem(item.id, { [field]: after } as any);
+
+      const userId = req.session.userId!;
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      await storage.createInventoryTransaction({
+        itemId: item.id,
+        itemType: item.type === "finished_product" ? "FINISHED" : "RAW",
+        type: "WRITEOFF",
+        location: location === "HILDALE" ? "HILDALE" : "N/A",
+        quantity: -qty, // stored negative so SUM(quantity) gives net stock change
+        reason,
+        createdBy: userId,
+        notes: cleanNotes || null,
+      });
+
+      res.status(201).json({
+        success: true,
+        itemId: item.id,
+        itemName: item.name,
+        before,
+        after,
+        quantity: qty,
+      });
+    } catch (error: any) {
+      console.error("[Writeoff] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to write off stock" });
+    }
+  });
+
   // Batch production - produce multiple products at once
   app.post("/api/production/batch-build", requireAuth, async (req: Request, res: Response) => {
     try {

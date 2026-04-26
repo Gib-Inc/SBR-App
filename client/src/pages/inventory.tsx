@@ -4,8 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle } from "lucide-react";
 import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
+import { WriteOffStockDialog } from "@/components/write-off-stock-dialog";
 
 type SnapshotRow = {
   snapshot_date: string;
@@ -125,6 +126,7 @@ export default function Inventory() {
 
   const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
   const [transferOpen, setTransferOpen] = useState(false);
+  const [writeOffOpen, setWriteOffOpen] = useState(false);
 
   const onSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -292,12 +294,25 @@ export default function Inventory() {
             <ArrowRightLeft className="mr-2 h-4 w-4" />
             Transfer to Pyvott
           </Button>
+          <Button
+            variant="destructive"
+            onClick={() => setWriteOffOpen(true)}
+            data-testid="button-open-write-off-stock"
+          >
+            <MinusCircle className="mr-2 h-4 w-4" />
+            Write Off Stock
+          </Button>
         </div>
       </div>
 
       <TransferToPyvottDialog
         isOpen={transferOpen}
         onClose={() => setTransferOpen(false)}
+      />
+
+      <WriteOffStockDialog
+        isOpen={writeOffOpen}
+        onClose={() => setWriteOffOpen(false)}
       />
 
       {/* KPI cards */}

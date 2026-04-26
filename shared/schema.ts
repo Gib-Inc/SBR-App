@@ -869,6 +869,9 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   // Optional supplier link — populated by /receive-stock when Clarence picks
   // a supplier; null when the source isn't tracked (skipped or non-supplier event).
   supplierId: varchar("supplier_id").references(() => suppliers.id),
+  // Optional reason code for write-offs etc. ('Damaged' | 'Defective' | 'Lost' |
+  // 'Scrap' | 'Other' for type='WRITEOFF'). Null for other transaction types.
+  reason: text("reason"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   createdBy: text("created_by"), // User ID or system identifier
   notes: text("notes"), // Optional reason/description

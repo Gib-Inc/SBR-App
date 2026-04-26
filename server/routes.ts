@@ -14159,7 +14159,7 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         paidAt: new Date(),
       });
-      
+
       if (!updated) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
@@ -14168,6 +14168,14 @@ Notes: ${po.notes || 'None'}
       const { triggerPOSync } = await import("./services/ghl-sync-triggers");
       triggerPOSync(req.session.userId!, id, "paid").catch(err => {
         console.error(`[PurchaseOrder] GHL sync error:`, err.message);
+      });
+
+      // Mark linked QuickBooks Bill as paid (non-blocking)
+      const userId = req.session.userId || 'system';
+      import("./services/po-quickbooks-sync").then(({ markPOBillAsPaidInQuickBooks }) =>
+        markPOBillAsPaidInQuickBooks(id, userId)
+      ).catch(err => {
+        console.error(`[PurchaseOrder] QuickBooks Bill paid sync error for PO ${id}:`, err.message);
       });
 
       res.json(updated);
@@ -14288,7 +14296,7 @@ Notes: ${po.notes || 'None'}
     try {
       const { id } = req.params;
       const po = await storage.getPurchaseOrder(id);
-      
+
       if (!po) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
@@ -14300,6 +14308,14 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'APPROVED',
         approvedAt: new Date(),
+      });
+
+      // Fire-and-forget: create QuickBooks Bill. Failures must NOT block PO approval.
+      const userId = req.session.userId || 'system';
+      import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
+        syncApprovedPOToQuickBooks(id, userId)
+      ).catch(err => {
+        console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${id}:`, err.message);
       });
 
       res.json(updated);

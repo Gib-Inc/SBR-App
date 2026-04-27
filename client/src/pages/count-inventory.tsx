@@ -4,9 +4,12 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/hooks/use-toast";
+import { useBarcodeDetector } from "@/hooks/use-barcode-scanner";
 import {
   ArrowLeft,
   ArrowRight,
+  Barcode,
   Boxes,
   Check,
   ClipboardList,
@@ -332,6 +335,7 @@ function CountStep({
     storedValue == null ? "" : String(storedValue),
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const { toast } = useToast();
 
   // Reset the draft on item change. Autofocus the input.
   useEffect(() => {
@@ -340,6 +344,50 @@ function CountStep({
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex]);
+
+  // Hardware (USB wedge) barcode scan → jump to that item in the count.
+  // Items not in the current location's list get a clear toast so Sammie
+  // doesn't think the scanner is broken.
+  useBarcodeDetector({
+    enabled: true,
+    onScan: async (code: string) => {
+      try {
+        const res = await fetch(`/api/items/by-barcode?code=${encodeURIComponent(code)}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          toast({
+            variant: "destructive",
+            title: "Code not recognized",
+            description: code.length > 24 ? code.slice(0, 24) + "…" : code,
+          });
+          return;
+        }
+        const scanned = (await res.json()) as { id: string; name: string };
+        const idx = items.findIndex((it) => it.itemId === scanned.id);
+        if (idx === -1) {
+          toast({
+            variant: "destructive",
+            title: "Not in this list",
+            description: `${scanned.name} isn't part of the ${location.replace("-", " ")} count.`,
+          });
+          return;
+        }
+        if (idx === currentIndex) {
+          toast({ title: `Already on ${scanned.name}` });
+        } else {
+          setCurrentIndex(idx);
+          toast({ title: `Jumped to ${scanned.name}` });
+        }
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Scan failed",
+          description: err?.message ?? String(err),
+        });
+      }
+    },
+  });
 
   if (!item) {
     return <ErrorPanel message="Item index out of range." onBack={onCancel} />;
@@ -384,7 +432,16 @@ function CountStep({
       {/* Header with progress + cancel */}
       <header className="space-y-2">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">{meta.label}</span>
+          <span className="text-muted-foreground inline-flex items-center gap-2">
+            {meta.label}
+            <span
+              className="text-[11px] text-muted-foreground inline-flex items-center gap-1"
+              data-testid="scanner-ready-hint"
+            >
+              <Barcode className="h-3 w-3" />
+              Scan to jump
+            </span>
+          </span>
           <button
             type="button"
             onClick={onCancel}

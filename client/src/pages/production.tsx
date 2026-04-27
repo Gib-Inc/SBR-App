@@ -12,6 +12,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ProductionPlan } from "@/components/production-plan";
+import { useToast } from "@/hooks/use-toast";
+import { useBarcodeDetector } from "@/hooks/use-barcode-scanner";
 import {
   Select,
   SelectContent,
@@ -161,6 +163,11 @@ function actionVerb(action: ActionKey, qty: number): string {
 
 export default function Production() {
   const [openSheetKey, setOpenSheetKey] = useState<string | null>(null);
+  // When a scan opens the sheet for a multi-variant card (e.g. Pull-Behind),
+  // pre-select the variant the barcode resolved to so the user doesn't have
+  // to pick again.
+  const [pendingSku, setPendingSku] = useState<string | null>(null);
+  const { toast } = useToast();
   const today = todayISO();
 
   const { data: items = [], isLoading: itemsLoading } = useQuery<Item[]>({
@@ -212,6 +219,56 @@ export default function Production() {
   };
 
   const openCard = openSheetKey ? CARDS.find((c) => c.key === openSheetKey) ?? null : null;
+
+  // Hardware (USB wedge) barcode scan → open the matching product card.
+  // We map the scanned itemId to whichever card's resolvedItems contains it,
+  // and remember the exact SKU so a multi-variant card opens with the right
+  // variant pre-selected.
+  useBarcodeDetector({
+    enabled: true,
+    onScan: async (code: string) => {
+      try {
+        const res = await fetch(`/api/items/by-barcode?code=${encodeURIComponent(code)}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          toast({
+            variant: "destructive",
+            title: "Code not recognized",
+            description: code.length > 24 ? code.slice(0, 24) + "…" : code,
+          });
+          return;
+        }
+        const item = (await res.json()) as { id: string; name: string; sku: string };
+        // Find which card owns this item.
+        let matchedCardKey: string | null = null;
+        for (const card of CARDS) {
+          const items = cardItems.get(card.key) ?? [];
+          if (items.some((it) => it.id === item.id || it.sku === item.sku)) {
+            matchedCardKey = card.key;
+            break;
+          }
+        }
+        if (!matchedCardKey) {
+          toast({
+            variant: "destructive",
+            title: "Not on this page",
+            description: `${item.name} isn't one of the four product cards.`,
+          });
+          return;
+        }
+        setPendingSku(item.sku);
+        setOpenSheetKey(matchedCardKey);
+        toast({ title: `Opened ${item.name}` });
+      } catch (err: any) {
+        toast({
+          variant: "destructive",
+          title: "Scan failed",
+          description: err?.message ?? String(err),
+        });
+      }
+    },
+  });
 
   return (
     <div className="p-4 mx-auto max-w-2xl space-y-6" data-testid="page-production">
@@ -282,7 +339,11 @@ export default function Production() {
           card={openCard}
           resolvedItems={cardItems.get(openCard.key) ?? []}
           itemBySku={itemBySku}
-          onClose={() => setOpenSheetKey(null)}
+          initialSku={pendingSku}
+          onClose={() => {
+            setOpenSheetKey(null);
+            setPendingSku(null);
+          }}
         />
       )}
 
@@ -298,18 +359,25 @@ function ProductionSheet({
   card,
   resolvedItems,
   itemBySku,
+  initialSku,
   onClose,
 }: {
   card: CardConfig;
   resolvedItems: Item[];
   itemBySku: Map<string, Item>;
+  /** When the sheet is opened by a barcode scan, the SKU to pre-select
+   *  for multi-variant cards (Pull-Behind). Falls through to the existing
+   *  "ask the user to pick" UX when null/unmatched. */
+  initialSku?: string | null;
   onClose: () => void;
 }) {
   const today = todayISO();
   const requiresVariant = resolvedItems.length > 1;
-  const [selectedSku, setSelectedSku] = useState<string | null>(
-    requiresVariant ? null : resolvedItems[0]?.sku ?? null,
-  );
+  const initialResolved =
+    initialSku && resolvedItems.some((r) => r.sku === initialSku)
+      ? initialSku
+      : (requiresVariant ? null : resolvedItems[0]?.sku ?? null);
+  const [selectedSku, setSelectedSku] = useState<string | null>(initialResolved);
   const [date, setDate] = useState(today);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [notes, setNotes] = useState("");

@@ -6094,17 +6094,13 @@ TOTAL: $${subtotal.toFixed(2)}
           const extensivQty = extensivItem.quantity;
           const delta = extensivQty - currentPivotQty;
 
-          // B-009a: mirror extensiv-sync.js current_stock CASE wiring (lines 183-196).
-          // For finished products, current_stock = Pyvott on-hand + Hildale on-hand.
-          // For other types (raw materials, components), leave current_stock alone.
-          const updatePayload: Record<string, any> = {
+          // Finished products use extensivOnHandSnapshot (Pyvott) + hildaleQty as on-hand.
+          // currentStock is reserved for components/raw materials and is force-zeroed by
+          // PostgresStorage.updateItem() for finished_product, so do not write it here.
+          await storage.updateItem(item.id, {
             extensivOnHandSnapshot: extensivQty,
             extensivLastSyncAt: new Date(),
-          };
-          if (item.type === 'finished_product') {
-            updatePayload.currentStock = (extensivQty ?? 0) + (item.hildaleQty ?? 0);
-          }
-          await storage.updateItem(item.id, updatePayload);
+          });
 
           if (delta !== 0 && userId) {
             const result = await inventoryMovement.apply({

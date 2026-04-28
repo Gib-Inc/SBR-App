@@ -131,6 +131,27 @@ async function ensureTablesExist(client: pg.PoolClient): Promise<void> {
   }
 }
 
+// Insurance: production_logs may have legacy NOT NULL constraints from older
+// schema revisions on production DBs. The current Drizzle schema does not
+// require these to be NOT NULL, but a fresh deploy that inherits an old DB
+// could still have them. DO blocks swallow the error if the column is
+// already nullable (or doesn't exist), so this is safe to run on every boot.
+async function ensureProductionLogsShape(client: pg.PoolClient): Promise<void> {
+  const stmts = [
+    `DO $$ BEGIN ALTER TABLE production_logs ALTER COLUMN quantity_built DROP NOT NULL; EXCEPTION WHEN others THEN null; END $$;`,
+    `DO $$ BEGIN ALTER TABLE production_logs ALTER COLUMN finished_good_sku DROP NOT NULL; EXCEPTION WHEN others THEN null; END $$;`,
+    `DO $$ BEGIN ALTER TABLE production_logs ALTER COLUMN built_by DROP NOT NULL; EXCEPTION WHEN others THEN null; END $$;`,
+    `DO $$ BEGIN ALTER TABLE production_logs ALTER COLUMN built_at DROP NOT NULL; EXCEPTION WHEN others THEN null; END $$;`,
+  ];
+  for (const stmt of stmts) {
+    try {
+      await client.query(stmt);
+    } catch (err: any) {
+      console.error(`[Startup Checks] ensureProductionLogsShape stmt failed:`, err?.message ?? err);
+    }
+  }
+}
+
 // Additive column adds for tables that already exist. Postgres 9.6+ supports
 // ADD COLUMN IF NOT EXISTS so this is safe to run on every boot.
 async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
@@ -221,6 +242,11 @@ export async function runStartupChecks(): Promise<void> {
       await ensureColumnsExist(client);
     } catch (err: any) {
       console.error("[Startup Checks] ensureColumnsExist failed:", err?.message ?? err);
+    }
+    try {
+      await ensureProductionLogsShape(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] ensureProductionLogsShape failed:", err?.message ?? err);
     }
 
     let allOk = true;

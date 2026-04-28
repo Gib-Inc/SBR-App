@@ -206,6 +206,37 @@ async function applyLeadTimeMigration(client: pg.PoolClient): Promise<{
   };
 }
 
+// Push 1.0 / Push 2.0 packaging box swap. Mirrors
+// migration_swap_push_packaging_boxes.sql so a Railway deploy auto-applies
+// the change without a manual psql step. Idempotent — the JOIN against
+// items.sku means once the swap has happened, the old component_id is no
+// longer in any bill_of_materials row and re-runs match nothing.
+async function swapPushPackagingBoxes(client: pg.PoolClient): Promise<{
+  push10Updated: number;
+  push20Updated: number;
+}> {
+  const push10 = await client.query(
+    `UPDATE bill_of_materials
+     SET component_id = new_box.id
+     FROM items AS old_box, items AS new_box
+     WHERE bill_of_materials.component_id = old_box.id
+       AND old_box.sku = 'SBR-PKG-BOXP10'
+       AND new_box.sku = 'SBR-PKG-BOXP10-NEW'`,
+  );
+  const push20 = await client.query(
+    `UPDATE bill_of_materials
+     SET component_id = new_box.id
+     FROM items AS old_box, items AS new_box
+     WHERE bill_of_materials.component_id = old_box.id
+       AND old_box.sku = 'SBR-PKG-BOXP20'
+       AND new_box.sku = 'SBR-PKG-BOXP20-NEW'`,
+  );
+  return {
+    push10Updated: push10.rowCount ?? 0,
+    push20Updated: push20.rowCount ?? 0,
+  };
+}
+
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
   // The "rolls_made" action was removed when we discovered SBR buys
   // foam rollers from Pednar rather than producing them. Existing rows
@@ -292,6 +323,22 @@ export async function runStartupChecks(): Promise<void> {
       // Most likely cause: supplier_items table doesn't exist yet (fresh DB).
       // Don't crash — just log so an operator can investigate.
       console.error("[Startup Checks] Lead-time migration failed:", err?.message ?? err);
+    }
+
+    // ── Push 1.0 / Push 2.0 packaging box swap ─────────────────────────
+    // Idempotent BOM data migration. Once the old component_id has been
+    // replaced, subsequent runs match zero rows and stay silent.
+    try {
+      const { push10Updated, push20Updated } = await swapPushPackagingBoxes(client);
+      if (push10Updated > 0 || push20Updated > 0) {
+        console.log(
+          `[Startup Checks] Swapped Push packaging boxes in BOM: ` +
+          `Push 1.0=${push10Updated} row${push10Updated === 1 ? "" : "s"}, ` +
+          `Push 2.0=${push20Updated} row${push20Updated === 1 ? "" : "s"}`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] Push packaging box swap failed:", err?.message ?? err);
     }
 
     // ── Cleanup legacy rolls_made rows ──────────────────────────────────

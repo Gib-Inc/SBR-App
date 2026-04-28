@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
-import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock } from "lucide-react";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search } from "lucide-react";
 
 interface MaterialRow {
   id: string;
@@ -60,6 +60,7 @@ export default function RawMaterials() {
   const [editValue, setEditValue] = useState<string>("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "order" | "critical">("all");
+  const [search, setSearch] = useState("");
 
   // Refetch the dashboard when any item's stock changes server-side. Also
   // catches /api/items invalidations so any hidden cache stays in sync.
@@ -90,9 +91,13 @@ export default function RawMaterials() {
   const materials = data?.materials ?? [];
   const summary = data?.summary ?? { totalComponents: 0, needsOrder: 0, criticalLow: 0, totalOrderCost: 0 };
 
+  const trimmedSearch = search.trim();
+  const searchLower = trimmedSearch.toLowerCase();
+
   const filtered = materials.filter((m) => {
-    if (filter === "order") return m.orderQty > 0;
-    if (filter === "critical") return m.daysOfSupply < 7 && m.dailyUsage > 0;
+    if (filter === "order" && !(m.orderQty > 0)) return false;
+    if (filter === "critical" && !(m.daysOfSupply < 7 && m.dailyUsage > 0)) return false;
+    if (searchLower && !m.name.toLowerCase().includes(searchLower)) return false;
     return true;
   });
 
@@ -229,6 +234,30 @@ export default function RawMaterials() {
         </div>
       )}
 
+      {/* Search */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search materials..."
+          className="pl-9 pr-9"
+          data-testid="input-material-search"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 h-6 w-6 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            aria-label="Clear search"
+            data-testid="button-clear-search"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Materials table */}
       <Card>
         <CardContent className="p-0">
@@ -362,7 +391,11 @@ export default function RawMaterials() {
                 {filtered.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                      {filter !== "all" ? "No materials match this filter." : "No raw materials found. Add components in the Products page."}
+                      {trimmedSearch
+                        ? `No materials found matching "${trimmedSearch}"`
+                        : filter !== "all"
+                        ? "No materials match this filter."
+                        : "No raw materials found. Add components in the Products page."}
                     </TableCell>
                   </TableRow>
                 )}

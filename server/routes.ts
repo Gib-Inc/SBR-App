@@ -21029,15 +21029,15 @@ Generate only the email body text, no subject line.`;
 
   // OAuth callback route - handle QuickBooks OAuth redirect
   // INTUIT COMPLIANCE: Uses pure 302 redirect with no HTML body to prevent Referer header token leakage
-  app.get("/api/quickbooks/callback", async (req: Request, res: Response) => {
+  app.get("/api/integrations/quickbooks/callback", async (req: Request, res: Response) => {
     // Set Intuit-compliant security headers immediately
     res.setHeader('Cache-Control', 'no-cache, no-store');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    
+
     try {
       const { code, realmId, state } = req.query;
-      
+
       if (!code || !realmId) {
         // Pure 302 redirect with no HTML body
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=missing_params');
@@ -21045,7 +21045,7 @@ Generate only the email body text, no subject line.`;
 
       const clientId = process.env.QUICKBOOKS_CLIENT_ID;
       const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET;
-      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/integrations/quickbooks/callback`;
 
       if (!clientId || !clientSecret) {
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
@@ -21365,8 +21365,8 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || 
-        `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI ||
+        `${req.protocol}://${req.get('host')}/api/integrations/quickbooks/callback`;
       
       const scope = 'com.intuit.quickbooks.accounting';
       // URL-encode the state to handle any special characters

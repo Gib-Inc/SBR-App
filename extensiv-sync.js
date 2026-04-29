@@ -183,10 +183,6 @@ async function syncToDatabase(stockItems) {
       `UPDATE items SET
         pivot_qty = $1,
         extensiv_on_hand_snapshot = $2,
-        current_stock = CASE
-          WHEN type = 'finished_product' THEN COALESCE($2, 0) + COALESCE(hildale_qty, 0)
-          ELSE current_stock
-        END,
         extensiv_last_sync_at = $3,
         forecast_dirty = true,
         updated_at = $3

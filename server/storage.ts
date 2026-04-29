@@ -4479,13 +4479,9 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateItem(id: string, updateData: Partial<InsertItem>): Promise<Item | undefined> {
-    // Storage-level guard: Force currentStock to 0 for finished products
-    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
-    // Get the existing item to check its type
     const existingItem = await this.getItem(id);
     if (!existingItem) return undefined;
-    
-    // Normalize type/productKind in update data to keep them in sync
+
     let normalizedUpdateData = { ...updateData };
     if (updateData.type === 'finished_product' && !updateData.productKind) {
       normalizedUpdateData.productKind = 'FINISHED';
@@ -4496,40 +4492,37 @@ export class PostgresStorage implements IStorage {
     } else if (updateData.productKind === 'RAW' && !updateData.type) {
       normalizedUpdateData.type = 'component';
     }
-    
-    // Merge to get preliminary final state
-    let mergedItem = { ...existingItem, ...normalizedUpdateData };
-    
-    // Normalize FINAL merged state by ALWAYS favoring finished_product classification
-    // This fixes pre-existing inconsistencies and ensures NO bypass
+
+    const mergedItem = { ...existingItem, ...normalizedUpdateData };
     if (mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED') {
-      // ALWAYS favor finished_product: force both fields to finished state
       mergedItem.type = 'finished_product';
       mergedItem.productKind = 'FINISHED';
     } else if (mergedItem.type === 'component' || mergedItem.productKind === 'RAW') {
-      // Both indicate component: normalize to component/RAW
       mergedItem.type = 'component';
       mergedItem.productKind = 'RAW';
     }
-    
-    // Determine if final state is finished product
-    const willBeFinished = mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED';
-    
-    if (willBeFinished) {
-      // Force currentStock to 0 and ensure type/productKind are fully synced
-      mergedItem.currentStock = 0;
-      mergedItem.type = 'finished_product';
-      mergedItem.productKind = 'FINISHED';
-    }
-    
-    // Prepare final update data with all normalized fields
-    const finalUpdateData = {
+
+    const willBeFinished = mergedItem.type === 'finished_product';
+    const wasFinished = existingItem.type === 'finished_product' || existingItem.productKind === 'FINISHED';
+    const typeChangedToFinished = willBeFinished && !wasFinished;
+
+    const finalUpdateData: Partial<InsertItem> = {
       ...normalizedUpdateData,
       type: mergedItem.type,
       productKind: mergedItem.productKind,
-      currentStock: mergedItem.currentStock,
     };
-    
+
+    // currentStock rules for finished products:
+    //   - Caller explicitly set it → clamp to 0 (architectural invariant)
+    //   - Type just transitioned from component → finished → reset to 0
+    //   - Otherwise leave currentStock untouched. Unrelated updates (e.g. Extensiv
+    //     sync writing only extensiv_on_hand_snapshot) must not silently zero it.
+    if (willBeFinished) {
+      if ('currentStock' in normalizedUpdateData || typeChangedToFinished) {
+        finalUpdateData.currentStock = 0;
+      }
+    }
+
     const results = await this.db.update(schema.items).set(finalUpdateData).where(eq(schema.items.id, id)).returning();
     return results[0];
   }

@@ -19,6 +19,7 @@ WORKDIR /app
 # Copy pre-compiled production node_modules from builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/package.json ./
 
 RUN mkdir -p uploads

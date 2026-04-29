@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
-import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search } from "lucide-react";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText } from "lucide-react";
 
 interface MaterialRow {
   id: string;
@@ -71,6 +71,35 @@ export default function RawMaterials() {
 
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["/api/raw-materials/dashboard"],
+  });
+
+  const generateDraftsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/purchase-orders/auto-draft", {});
+      return res.json() as Promise<{
+        created: { supplierId: string; supplierName: string; poId: string; lineCount: number; totalValue: number }[];
+        skipped: { itemId: string; itemName: string; reason: string }[];
+        alreadyExists: { supplierId: string; supplierName: string; poId: string }[];
+      }>;
+    },
+    onSuccess: (data) => {
+      const parts: string[] = [];
+      if (data.created.length > 0) {
+        const names = data.created.map((c) => c.supplierName).join(", ");
+        parts.push(`${data.created.length} draft PO${data.created.length === 1 ? "" : "s"} created for ${names}.`);
+      }
+      if (data.alreadyExists.length > 0) {
+        parts.push(`${data.alreadyExists.length} draft${data.alreadyExists.length === 1 ? "" : "s"} already exist for today.`);
+      }
+      if (data.skipped.length > 0) {
+        parts.push(`${data.skipped.length} item${data.skipped.length === 1 ? "" : "s"} skipped — no supplier linked.`);
+      }
+      if (parts.length === 0) parts.push("No items currently need ordering.");
+      toast({ title: "Generate Draft POs", description: parts.join(" ") });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to generate draft POs", variant: "destructive" });
+    },
   });
 
   const updateStockMutation = useMutation({
@@ -175,14 +204,28 @@ export default function RawMaterials() {
       )}
 
       {/* Page header */}
-      <div>
-        <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
-          <Boxes className="h-7 w-7" />
-          Raw Materials
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Current stock, daily usage, and what to order. Tap a count to update it.
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
+            <Boxes className="h-7 w-7" />
+            Raw Materials
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Current stock, daily usage, and what to order. Tap a count to update it.
+          </p>
+        </div>
+        <Button
+          onClick={() => generateDraftsMutation.mutate()}
+          disabled={generateDraftsMutation.isPending}
+          data-testid="button-generate-draft-pos"
+        >
+          {generateDraftsMutation.isPending ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <FileText className="h-4 w-4 mr-2" />
+          )}
+          Generate Draft POs
+        </Button>
       </div>
 
       {/* KPI cards */}

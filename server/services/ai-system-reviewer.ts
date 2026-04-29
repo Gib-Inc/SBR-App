@@ -230,6 +230,21 @@ class AISystemReviewerService {
         duration,
       });
 
+      // Side effect: generate auto-draft POs from deterministic reorder math.
+      // Failures here must not abort the review — the review's own
+      // recommendations are already persisted and the operator can re-run
+      // /api/purchase-orders/auto-draft directly to retry.
+      try {
+        const { runAutoDraftPoGeneration } = await import("./auto-draft-po-service");
+        const draftResult = await runAutoDraftPoGeneration();
+        console.log(
+          `[AISystemReviewer] Auto-draft POs: created=${draftResult.created.length}, ` +
+          `alreadyExists=${draftResult.alreadyExists.length}, skipped=${draftResult.skipped.length}`,
+        );
+      } catch (draftError: any) {
+        console.error("[AISystemReviewer] Auto-draft PO generation failed:", draftError?.message ?? draftError);
+      }
+
       return {
         success: true,
         periodStart,

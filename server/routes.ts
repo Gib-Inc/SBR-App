@@ -13712,11 +13712,24 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Auto-draft POs from the deterministic reorder calculation. Idempotent:
+  // re-running the same day stacks already-created drafts into alreadyExists[].
+  app.post("/api/purchase-orders/auto-draft", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runAutoDraftPoGeneration } = await import("./services/auto-draft-po-service");
+      const result = await runAutoDraftPoGeneration();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Auto-Draft PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to generate auto-draft POs" });
+    }
+  });
+
   app.post("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     let createdPOId: string | null = null;
     try {
       const { lines, ...poData } = req.body;
-      
+
       // Auto-generate PO number if not provided
       if (!poData.poNumber) {
         const allPOs = await storage.getAllPurchaseOrders();

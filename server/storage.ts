@@ -17,6 +17,8 @@ import {
   type InsertSupplier,
   type SupplierItem,
   type InsertSupplierItem,
+  type VendorCommunication,
+  type InsertVendorCommunication,
   type PurchaseOrder,
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
@@ -280,6 +282,11 @@ export interface IStorage {
   createSupplierItem(supplierItem: InsertSupplierItem): Promise<SupplierItem>;
   updateSupplierItem(id: string, supplierItem: Partial<InsertSupplierItem>): Promise<SupplierItem | undefined>;
   deleteSupplierItem(id: string): Promise<boolean>;
+
+  // Vendor Communications
+  getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]>;
+  getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]>;
+  createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication>;
 
   // Sales History
   getAllSalesHistory(): Promise<SalesHistory[]>;
@@ -1675,6 +1682,28 @@ export class MemStorage implements IStorage {
 
   async deleteSupplierItem(id: string): Promise<boolean> {
     return this.supplierItems.delete(id);
+  }
+
+  // Vendor Communications (MemStorage stub — Postgres is the real backend)
+  async getVendorCommunicationsBySupplierId(_supplierId: string): Promise<VendorCommunication[]> {
+    return [];
+  }
+  async getRecentVendorCommunications(_limit: number): Promise<VendorCommunication[]> {
+    return [];
+  }
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    return {
+      id: crypto.randomUUID(),
+      supplierId: comm.supplierId,
+      itemId: comm.itemId ?? null,
+      actionType: comm.actionType,
+      sentBy: comm.sentBy,
+      status: comm.status ?? "PENDING",
+      expectedDate: comm.expectedDate ?? null,
+      notes: comm.notes ?? null,
+      createdAt: new Date(),
+      createdBy: comm.createdBy ?? null,
+    };
   }
 
   // Sales History
@@ -4906,6 +4935,28 @@ export class PostgresStorage implements IStorage {
   async deleteSupplierItem(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.supplierItems).where(eq(schema.supplierItems.id, id)).returning();
     return results.length > 0;
+  }
+
+  // Vendor Communications
+  async getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .where(eq(schema.vendorCommunications.supplierId, supplierId))
+      .orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .orderBy(desc(schema.vendorCommunications.createdAt))
+      .limit(limit);
+  }
+
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    const results = await this.db.insert(schema.vendorCommunications).values(comm).returning();
+    return results[0];
   }
 
   // Sales History

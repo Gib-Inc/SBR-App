@@ -4550,6 +4550,75 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Vendor Communications — per-supplier message log
+  app.get("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const supplierId = typeof req.query.supplierId === "string" ? req.query.supplierId : "";
+      if (!supplierId) {
+        return res.status(400).json({ error: "supplierId query parameter is required" });
+      }
+      const rows = await storage.getVendorCommunicationsBySupplierId(supplierId);
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Vendor Communications] List error:", error);
+      res.status(500).json({ error: error.message || "Failed to list communications" });
+    }
+  });
+
+  app.get("/api/vendor-communications/recent", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const rawLimit = Number(req.query.limit ?? 5);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(50, Math.floor(rawLimit)) : 5;
+      const rows = await storage.getRecentVendorCommunications(limit);
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Vendor Communications] Recent error:", error);
+      res.status(500).json({ error: error.message || "Failed to load recent communications" });
+    }
+  });
+
+  app.post("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const actionType = typeof body.actionType === "string" ? body.actionType.trim() : "";
+      const sentBy = typeof body.sentBy === "string" ? body.sentBy.trim() : "";
+
+      if (!supplierId || !actionType || !sentBy) {
+        return res.status(400).json({ error: "supplierId, actionType, and sentBy are required" });
+      }
+
+      const validActions = new Set(["REORDER_REQUEST", "PAYMENT_SENT", "DELIVERY_CONFIRMED", "ISSUE_FLAGGED"]);
+      if (!validActions.has(actionType)) {
+        return res.status(400).json({ error: `actionType must be one of: ${[...validActions].join(", ")}` });
+      }
+      const status = typeof body.status === "string" && ["PENDING", "IN_PROGRESS", "RESOLVED"].includes(body.status)
+        ? body.status
+        : "PENDING";
+
+      const expectedDate = body.expectedDate ? new Date(body.expectedDate) : null;
+      if (expectedDate && Number.isNaN(expectedDate.getTime())) {
+        return res.status(400).json({ error: "expectedDate is not a valid date" });
+      }
+
+      const created = await storage.createVendorCommunication({
+        supplierId,
+        itemId: typeof body.itemId === "string" && body.itemId ? body.itemId : null,
+        actionType,
+        sentBy,
+        status,
+        expectedDate,
+        notes: typeof body.notes === "string" ? body.notes : null,
+        createdBy: req.session.userId ?? null,
+      });
+
+      res.status(201).json(created);
+    } catch (error: any) {
+      console.error("[Vendor Communications] Create error:", error);
+      res.status(500).json({ error: error.message || "Failed to create communication" });
+    }
+  });
+
   // Get designated supplier for an item
   app.get("/api/items/:itemId/designated-supplier", requireAuth, async (req: Request, res: Response) => {
     try {

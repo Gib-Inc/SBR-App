@@ -338,6 +338,30 @@ export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
 
 // ============================================================================
+// VENDOR COMMUNICATIONS (per-supplier message log)
+// ============================================================================
+
+export const vendorCommunications = pgTable("vendor_communications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id, { onDelete: 'cascade' }),
+  itemId: varchar("item_id").references(() => items.id, { onDelete: 'set null' }), // optional — SKU affected
+  actionType: text("action_type").notNull(), // 'REORDER_REQUEST' | 'PAYMENT_SENT' | 'DELIVERY_CONFIRMED' | 'ISSUE_FLAGGED'
+  sentBy: text("sent_by").notNull(), // free-text name (Sammie / Matt / Stacy / Clarence)
+  status: text("status").notNull().default('PENDING'), // 'PENDING' | 'IN_PROGRESS' | 'RESOLVED'
+  expectedDate: timestamp("expected_date"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  createdBy: varchar("created_by"), // session user id; not FK so legacy rows survive user deletion
+}, (table) => ({
+  supplierIdIdx: index("vendor_communications_supplier_id_idx").on(table.supplierId),
+  createdAtIdx: index("vendor_communications_created_at_idx").on(table.createdAt),
+}));
+
+export const insertVendorCommunicationSchema = createInsertSchema(vendorCommunications).omit({ id: true, createdAt: true });
+export type InsertVendorCommunication = z.infer<typeof insertVendorCommunicationSchema>;
+export type VendorCommunication = typeof vendorCommunications.$inferSelect;
+
+// ============================================================================
 // PURCHASE ORDERS (Full PO System - This App is System of Record)
 // ============================================================================
 // LEGAL NOTICE: Purchase orders created here are official purchasing documents.

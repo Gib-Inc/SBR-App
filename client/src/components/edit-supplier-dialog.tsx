@@ -27,6 +27,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Save, Building2, ShoppingBag, Wrench } from "lucide-react";
 import { SupplierPerformance } from "@/components/supplier-performance";
+import { SupplierCommunications } from "@/components/supplier-communications";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -186,12 +187,16 @@ export function EditSupplierDialog({
 
         {mode === "edit" && supplier ? (
           <Tabs defaultValue="details" className="w-full">
-            <TabsList className="grid w-full max-w-sm grid-cols-2">
+            <TabsList className="grid w-full max-w-sm grid-cols-3">
               <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
               <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
+              <TabsTrigger value="communications" data-testid="tab-supplier-communications">Communications</TabsTrigger>
             </TabsList>
             <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
               <SupplierPerformance supplierId={supplier.id} />
+            </TabsContent>
+            <TabsContent value="communications" className="mt-4 max-h-[60vh] overflow-y-auto">
+              <SupplierCommunications supplierId={supplier.id} supplierName={supplier.name} />
             </TabsContent>
             <TabsContent value="details" className="mt-4">
               <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 // ─── TODAY'S DATE ─────────────────────────────────────────────────────────────
 const TODAY = new Date("2026-04-11");
@@ -415,6 +416,73 @@ function InvCard({ item }: { item: InventoryItem }) {
   );
 }
 
+type RecentCommunication = {
+  id: string;
+  supplierId: string;
+  itemId: string | null;
+  actionType: string;
+  sentBy: string;
+  status: string;
+  expectedDate: string | null;
+  notes: string | null;
+  createdAt: string;
+};
+
+const COMM_ACTION_LABEL: Record<string, string> = {
+  REORDER_REQUEST: "Reorder",
+  PAYMENT_SENT: "Payment",
+  DELIVERY_CONFIRMED: "Delivery",
+  ISSUE_FLAGGED: "Issue",
+};
+
+function RecentCommunicationsCard() {
+  const { data, isLoading } = useQuery<RecentCommunication[]>({
+    queryKey: ["/api/vendor-communications/recent"],
+  });
+  const rows = data ?? [];
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: 16, color: "var(--si-muted)", fontSize: 14 }}>Loading…</div>
+    );
+  }
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: 16, color: "var(--si-muted)", fontSize: 14 }}>
+        No communications logged yet. Use the Communications tab on any supplier to log activity.
+      </div>
+    );
+  }
+  return (
+    <div className="si-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((c) => {
+        const date = new Date(c.createdAt);
+        const dateStr = Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString();
+        const statusColor = c.status === "RESOLVED" ? "#10b981" : c.status === "IN_PROGRESS" ? "#f59e0b" : "#ef4444";
+        return (
+          <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600 }}>
+                {COMM_ACTION_LABEL[c.actionType] ?? c.actionType}
+                <span style={{ color: "var(--si-muted)", fontWeight: 400 }}> · by {c.sentBy}</span>
+              </div>
+              {c.notes && (
+                <div style={{ color: "var(--si-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.notes}
+                </div>
+              )}
+            </div>
+            <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+              <div style={{ color: "var(--si-muted)", fontSize: 11 }}>{dateStr}</div>
+              <div style={{ color: statusColor, fontSize: 11, fontWeight: 600 }}>{c.status}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── MAIN COMPONENT ─────────────────────────────────────────────────────────────
 export default function SupplierIntel() {
   const [tab, setTab] = useState("today");
@@ -491,6 +559,10 @@ export default function SupplierIntel() {
                 <div className="si-sec-hdr">Order This Week</div>
                 {INVENTORY.filter(i => i.status === "REORDER" || i.status === "ORDER_SOON")
                   .map(item => <TodayCard key={item.sku} item={item} />)}
+
+                <div className="si-divider" />
+                <div className="si-sec-hdr">Recent Communications</div>
+                <RecentCommunicationsCard />
               </>
             )}
 

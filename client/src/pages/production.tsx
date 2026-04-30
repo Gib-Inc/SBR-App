@@ -55,12 +55,7 @@ type CardConfig = {
 const CARDS: CardConfig[] = [
   { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"] },
   { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"] },
-  {
-    key: "pull-behind",
-    label: "Pull-Behind",
-    skus: ["SBR-PB-ORIG", "SBR-PB-BIGFOOT"],
-    variantLabels: { "SBR-PB-ORIG": "Original", "SBR-PB-BIGFOOT": "Bigfoot" },
-  },
+  { key: "pull-behind", label: "Pull-Behind", skus: ["SBR-PB-ORIG"] },
   { key: "bigfoot", label: "Bigfoot", skus: ["SBR-PB-BIGFOOT"] },
 ];
 

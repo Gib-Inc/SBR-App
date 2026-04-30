@@ -8041,6 +8041,17 @@ export class PostgresStorage implements IStorage {
         'hildale_qty' AS source
       FROM items
       WHERE extensiv_sku IS NOT NULL
+      UNION ALL
+      SELECT
+        CURRENT_DATE::text AS snapshot_date,
+        'FX' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(fx_in_process_qty, 0) AS qty,
+        0 AS promised,
+        'fx_in_process_qty' AS source
+      FROM items
+      WHERE type = 'finished_product'
     `);
     return result.rows ?? result ?? [];
   }

@@ -11662,6 +11662,92 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Receive finished units from FX Industries into Hildale. Decrements
+  // fxInProcessQty and increments hildaleQty atomically per item, and writes
+  // an inventoryTransactions row with type='RECEIVED_FROM_FX' for the audit
+  // trail. Operates on finished products only.
+  app.post("/api/inventory/receive-from-fx", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { lines, reason } = req.body as {
+        lines?: Array<{ itemId?: string; quantity?: number }>;
+        reason?: string;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item is required" });
+      }
+
+      const cleanReason = typeof reason === "string" ? reason.trim() : "";
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const results: Array<{
+        itemId: string;
+        sku: string;
+        quantity: number;
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", sku: "", quantity: 0, success: false, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, sku: "", quantity: 0, success: false, error: `Line ${i + 1}: quantity must be a positive integer` });
+          continue;
+        }
+
+        const item = await storage.getItem(itemId);
+        if (!item) {
+          results.push({ itemId, sku: "", quantity: qty, success: false, error: "Item not found" });
+          continue;
+        }
+        if (item.type !== "finished_product") {
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: "FX receipts apply only to finished products" });
+          continue;
+        }
+        const fxAvailable = item.fxInProcessQty ?? 0;
+        if (qty > fxAvailable) {
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: `Only ${fxAvailable} in process at FX` });
+          continue;
+        }
+
+        const newFx = fxAvailable - qty;
+        const newHildale = (item.hildaleQty ?? 0) + qty;
+        await storage.updateItem(itemId, {
+          fxInProcessQty: newFx,
+          hildaleQty: newHildale,
+        });
+
+        await storage.createInventoryTransaction({
+          itemId,
+          itemType: "FINISHED",
+          type: "RECEIVED_FROM_FX",
+          location: "HILDALE",
+          quantity: qty,
+          createdBy: userId,
+          createdByName: userName,
+          notes: cleanReason ? `[receive_from_fx] ${cleanReason}` : `[receive_from_fx]`,
+        });
+
+        results.push({ itemId, sku: item.sku, quantity: qty, success: true });
+      }
+
+      const allFailed = results.every((r) => !r.success);
+      res.status(allFailed ? 400 : 201).json({ results });
+    } catch (error: any) {
+      console.error("[Receive from FX] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to record FX receipt" });
+    }
+  });
+
   app.post("/api/transactions/transfer", requireAuth, async (req: Request, res: Response) => {
     try {
       const { itemId, fromLocation, toLocation, quantity, notes } = req.body;

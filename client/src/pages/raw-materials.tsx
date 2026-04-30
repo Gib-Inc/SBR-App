@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
-import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText } from "lucide-react";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send } from "lucide-react";
+import { NotifyVendorDialog, type NotifyVendorContext } from "@/components/notify-vendor-dialog";
 
 interface MaterialRow {
   id: string;
@@ -36,6 +37,9 @@ interface MaterialRow {
   orderQty: number;
   orderCost: number | null;
   unitCost: number | null;
+  supplierId: string | null;
+  supplierName: string | null;
+  leadTimeDays: number | null;
   usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[];
 }
 
@@ -61,6 +65,7 @@ export default function RawMaterials() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "order" | "critical">("all");
   const [search, setSearch] = useState("");
+  const [notifyContext, setNotifyContext] = useState<NotifyVendorContext | null>(null);
 
   // Refetch the dashboard when any item's stock changes server-side. Also
   // catches /api/items invalidations so any hidden cache stays in sync.
@@ -167,6 +172,36 @@ export default function RawMaterials() {
     return <Badge variant="default">OK</Badge>;
   };
 
+  // Lead-time-based urgency: red when we'll stock out before a reorder can
+  // arrive, amber when we're inside a 1.5× safety buffer. Falls back to the
+  // 7/14 day heuristic when the item has no designated supplier lead time.
+  const leadTimeUrgency = (m: MaterialRow): "red" | "amber" | "ok" => {
+    if (m.dailyUsage <= 0) return "ok";
+    const lead = m.leadTimeDays ?? 0;
+    if (lead > 0) {
+      if (m.daysOfSupply < lead) return "red";
+      if (m.daysOfSupply < lead * 1.5) return "amber";
+      return "ok";
+    }
+    if (m.daysOfSupply < 7) return "red";
+    if (m.daysOfSupply < 14) return "amber";
+    return "ok";
+  };
+
+  const openNotify = (m: MaterialRow) => {
+    if (!m.supplierId || !m.supplierName) return;
+    setNotifyContext({
+      supplierId: m.supplierId,
+      supplierName: m.supplierName,
+      itemId: m.id,
+      itemName: m.name,
+      sku: m.sku,
+      currentStock: m.onHand,
+      daysLeft: m.dailyUsage > 0 ? m.daysOfSupply : null,
+      suggestedQty: m.orderQty > 0 ? m.orderQty : Math.max(1, Math.ceil(m.dailyUsage * 30)),
+    });
+  };
+
   if (isLoading) {
     return (
       <div className="p-8 flex items-center justify-center">
@@ -193,13 +228,31 @@ export default function RawMaterials() {
     <div className="p-4 md:p-8 space-y-6" data-testid="page-raw-materials">
       {reorderCount > 0 && (
         <div
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm flex items-center gap-2 text-amber-700 dark:text-amber-400"
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm flex items-center justify-between gap-2 text-amber-700 dark:text-amber-400"
           data-testid="banner-reorder"
         >
-          <AlertTriangle className="h-4 w-4" />
-          <span>
-            <strong className="tabular-nums">{reorderCount}</strong> component{reorderCount === 1 ? "" : "s"} need reordering
-          </span>
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            <span>
+              <strong className="tabular-nums">{reorderCount}</strong> component{reorderCount === 1 ? "" : "s"} need reordering
+            </span>
+          </div>
+          {(() => {
+            const firstRed = materials.find((m) => leadTimeUrgency(m) === "red" && m.supplierId);
+            if (!firstRed) return null;
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7"
+                onClick={() => openNotify(firstRed)}
+                data-testid="button-banner-notify"
+              >
+                <Send className="h-3 w-3 mr-1" />
+                Notify {firstRed.supplierName}
+              </Button>
+            );
+          })()}
         </div>
       )}
 
@@ -315,6 +368,7 @@ export default function RawMaterials() {
                   <TableHead className="text-right">Order Qty</TableHead>
                   <TableHead className="text-right hidden md:table-cell">Order Cost</TableHead>
                   <TableHead className="text-right">Status</TableHead>
+                  <TableHead className="text-right">Notify</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -391,7 +445,16 @@ export default function RawMaterials() {
                       </TableCell>
                       <TableCell className="text-right">
                         {m.dailyUsage > 0 ? (
-                          <span className={m.daysOfSupply < 7 ? "text-destructive font-bold" : m.daysOfSupply < 14 ? "text-amber-600 font-semibold" : ""}>
+                          <span
+                            className={
+                              leadTimeUrgency(m) === "red"
+                                ? "text-destructive font-bold"
+                                : leadTimeUrgency(m) === "amber"
+                                  ? "text-amber-600 font-semibold"
+                                  : ""
+                            }
+                            title={m.leadTimeDays ? `Lead time: ${m.leadTimeDays}d` : "No lead time on file"}
+                          >
                             {m.daysOfSupply}d
                           </span>
                         ) : (
@@ -407,11 +470,30 @@ export default function RawMaterials() {
                       <TableCell className="text-right">
                         {getStatusBadge(m)}
                       </TableCell>
+                      <TableCell className="text-right">
+                        {leadTimeUrgency(m) === "red" && m.supplierId ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openNotify(m);
+                            }}
+                            data-testid={`button-notify-${m.id}`}
+                          >
+                            <Send className="h-3 w-3 mr-1" />
+                            Notify
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">–</span>
+                        )}
+                      </TableCell>
                     </TableRow>
                     {/* Expanded row: shows which products use this material */}
                     {expandedId === m.id && m.usedIn.length > 0 && (
                       <TableRow key={`${m.id}-detail`} className="bg-muted/30">
-                        <TableCell colSpan={7} className="py-3">
+                        <TableCell colSpan={8} className="py-3">
                           <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                             <Clock className="h-3 w-3" />
                             Used in {m.usedIn.length} product{m.usedIn.length > 1 ? "s" : ""}:
@@ -433,7 +515,7 @@ export default function RawMaterials() {
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                       {trimmedSearch
                         ? `No materials found matching "${trimmedSearch}"`
                         : filter !== "all"
@@ -450,8 +532,16 @@ export default function RawMaterials() {
 
       <p className="text-xs text-muted-foreground">
         Daily usage is calculated from sales velocity over the last 90 days × BOM quantities.
-        "Order Qty" targets 30 days of supply. Tap any On Hand number to update the count.
+        "Order Qty" targets 30 days of supply. Days Left turns red when below the supplier's
+        lead time (you'll run out before reorder arrives) and amber inside a 1.5× buffer.
+        Tap any On Hand number to update the count.
       </p>
+
+      <NotifyVendorDialog
+        isOpen={notifyContext != null}
+        onClose={() => setNotifyContext(null)}
+        context={notifyContext}
+      />
     </div>
   );
 }

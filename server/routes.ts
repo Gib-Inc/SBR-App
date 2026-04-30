@@ -4577,6 +4577,79 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Notify vendor — logs a REORDER_REQUEST communication and emails the
+  // supplier via SendGrid when configured. The email is best-effort: a
+  // failure to send still returns 201 with emailSent=false so the comm row
+  // is preserved as a paper trail.
+  app.post("/api/vendor-communications/notify", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const sentBy = typeof body.sentBy === "string" ? body.sentBy.trim() : "";
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+
+      if (!supplierId || !sentBy || !message) {
+        return res.status(400).json({ error: "supplierId, sentBy, and message are required" });
+      }
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found" });
+      }
+
+      const itemId = typeof body.itemId === "string" && body.itemId ? body.itemId : null;
+      const item = itemId ? await storage.getItem(itemId) : null;
+
+      const comm = await storage.createVendorCommunication({
+        supplierId,
+        itemId,
+        actionType: "REORDER_REQUEST",
+        sentBy,
+        status: "PENDING",
+        expectedDate: null,
+        notes: message,
+        createdBy: req.session.userId ?? null,
+      });
+
+      let emailSent = false;
+      let emailError: string | null = null;
+      const supplierEmail = supplier.email;
+
+      if (supplierEmail && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = (await import("@sendgrid/mail")).default;
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          const subject = item
+            ? `Reorder request: ${item.sku} — ${item.name}`
+            : `Reorder request from Sticker Burr Roller`;
+          await sgMail.send({
+            to: supplierEmail,
+            from: {
+              email: process.env.SENDGRID_FROM_EMAIL,
+              name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
+            },
+            subject,
+            text: message,
+          });
+          emailSent = true;
+        } catch (err: any) {
+          emailError = err?.message ?? "send failed";
+          console.error("[Notify Vendor] SendGrid send failed:", emailError);
+        }
+      }
+
+      res.status(201).json({
+        communication: comm,
+        emailSent,
+        emailError,
+        recipientEmail: supplierEmail ?? null,
+      });
+    } catch (error: any) {
+      console.error("[Notify Vendor] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send notification" });
+    }
+  });
+
   app.post("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
     try {
       const body = req.body as Record<string, any>;
@@ -23058,6 +23131,29 @@ Generate only the email body text, no subject line.`;
       const velocity = await storage.getSkuSalesVelocity(90);
       const velocityMap = new Map(velocity.map(v => [v.sku, v.unitsSold]));
 
+      // Designated-supplier lookup for each component, including lead time.
+      // Tiebreak when there's no designated row: lowest non-zero price, else
+      // first row. Mirrors auto-draft-po-service so the two views agree on
+      // which supplier is "the" supplier for a given item.
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const allSuppliers = await storage.getAllSuppliers();
+      const supplierById = new Map(allSuppliers.map(s => [s.id, s]));
+      const supplierItemsByItemId = new Map<string, typeof allSupplierItems>();
+      for (const si of allSupplierItems) {
+        const arr = supplierItemsByItemId.get(si.itemId) ?? [];
+        arr.push(si);
+        supplierItemsByItemId.set(si.itemId, arr);
+      }
+      const pickSupplierItem = (itemId: string) => {
+        const list = supplierItemsByItemId.get(itemId) ?? [];
+        if (list.length === 0) return null;
+        const designated = list.find(s => s.isDesignatedSupplier);
+        if (designated) return designated;
+        const priced = list.filter(s => s.price != null && s.price > 0)
+          .sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+        return priced[0] ?? list[0];
+      };
+
       // Build a map: componentId → { totalDailyUsage, usedIn[] }
       const componentUsage = new Map<string, { totalDailyUsage: number; usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[] }>();
 
@@ -23098,6 +23194,9 @@ Generate only the email body text, no subject line.`;
         const orderQty = dailyUsage > 0 ? Math.max(0, Math.ceil(dailyUsage * targetDays) - onHand) : 0;
         const orderCost = orderQty > 0 && comp.defaultPurchaseCost ? Math.round(orderQty * comp.defaultPurchaseCost * 100) / 100 : null;
 
+        const si = pickSupplierItem(comp.id);
+        const supplier = si ? supplierById.get(si.supplierId) ?? null : null;
+
         return {
           id: comp.id,
           name: comp.name,
@@ -23111,6 +23210,9 @@ Generate only the email body text, no subject line.`;
           orderQty,
           orderCost,
           unitCost: comp.defaultPurchaseCost ?? null,
+          supplierId: supplier?.id ?? null,
+          supplierName: supplier?.name ?? null,
+          leadTimeDays: si?.leadTimeDays ?? null,
           usedIn: usage.usedIn,
         };
       });

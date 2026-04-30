@@ -26,6 +26,7 @@ let forecastContextTimer: NodeJS.Timeout | null = null;
 let aiSystemReviewTimer: NodeJS.Timeout | null = null;
 let extensivSyncTimer: NodeJS.Timeout | null = null;
 let morningTrapTimer: NodeJS.Timeout | null = null;
+let velocityTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -230,6 +231,46 @@ async function performMorningTrapCheck(): Promise<void> {
 }
 
 /**
+ * Refresh items.daily_usage from sales velocity. Runs nightly at 12:05
+ * AM MT (just after the morning's sales sync would settle a UTC day) so
+ * the day's order activity is reflected in the next day's reorder
+ * calculations.
+ */
+async function performVelocityRefresh(opts: { onlyZeroOrNull: boolean }): Promise<void> {
+  console.log(`[Scheduler] Refreshing item daily_usage (onlyZeroOrNull=${opts.onlyZeroOrNull})...`);
+  const startTime = Date.now();
+  try {
+    const { refreshAllItems } = await import("./services/velocity-service");
+    const result = await refreshAllItems(opts);
+    const duration = Date.now() - startTime;
+    console.log(
+      `[Scheduler] Velocity refresh: scanned=${result.itemsScanned}, ` +
+      `finished updated=${result.finishedProductsUpdated}, ` +
+      `components updated=${result.componentsUpdated}, ` +
+      `duration=${duration}ms`,
+    );
+  } catch (error) {
+    console.error("[Scheduler] Velocity refresh failed:", error);
+  }
+}
+
+/**
+ * Calculate milliseconds until the next 12:05 AM MT firing. Mirrors the
+ * morning-trap MST math; +5 minutes so the daily sales scheduler settles
+ * before we read totals.
+ */
+function msUntilNextMidnightMT(): number {
+  const now = new Date();
+  const mstOffset = -7 * 60; // minutes — MST is UTC-7
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const mstMinutes = utcMinutes + mstOffset;
+  const targetMstMinutes = 5; // 00:05 MT
+  let minutesUntil = targetMstMinutes - mstMinutes;
+  if (minutesUntil <= 0) minutesUntil += 24 * 60;
+  return minutesUntil * 60 * 1000;
+}
+
+/**
  * Calculate milliseconds until next 7 AM MST (UTC-7)
  */
 function msUntilNext7amMST(): number {
@@ -344,6 +385,27 @@ export async function startScheduler(): Promise<void> {
         });
       }, 24 * 60 * 60 * 1000);
     }, msUntil7am);
+
+    // Boot-time velocity backfill — fire-and-forget, only writes items
+    // whose daily_usage is currently 0/null so any hand-entered values are
+    // preserved. Runs in the background so it doesn't block scheduler init.
+    performVelocityRefresh({ onlyZeroOrNull: true }).catch((err) => {
+      console.error("[Scheduler] Boot-time velocity backfill failed:", err);
+    });
+
+    // Schedule daily velocity refresh (12:05 AM MT)
+    if (velocityTimer) {
+      clearTimeout(velocityTimer);
+    }
+    const msUntilVelocity = msUntilNextMidnightMT();
+    const hoursUntilVelocity = (msUntilVelocity / (1000 * 60 * 60)).toFixed(1);
+    console.log(`[Scheduler] Velocity refresh scheduled. Next run in ${hoursUntilVelocity} hours (12:05 AM MT)`);
+    velocityTimer = setTimeout(() => {
+      performVelocityRefresh({ onlyZeroOrNull: false }).catch(() => {});
+      velocityTimer = setInterval(() => {
+        performVelocityRefresh({ onlyZeroOrNull: false }).catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilVelocity);
 
     console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
   } catch (error) {

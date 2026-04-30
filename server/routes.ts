@@ -11804,6 +11804,21 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Recompute items.daily_usage from sales velocity and BOM rollups.
+  // Always overwrites (the same job runs nightly via the scheduler at 12:05
+  // AM MT) — operators hit this after big sales events so the dashboard
+  // reflects today's traffic without waiting.
+  app.post("/api/inventory/refresh-velocity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { refreshAllItems } = await import("./services/velocity-service");
+      const result = await refreshAllItems({ onlyZeroOrNull: false });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Refresh Velocity] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to refresh velocity" });
+    }
+  });
+
   // Receive finished units from FX Industries into Hildale. Decrements
   // fxInProcessQty and increments hildaleQty atomically per item, and writes
   // an inventoryTransactions row with type='RECEIVED_FROM_FX' for the audit

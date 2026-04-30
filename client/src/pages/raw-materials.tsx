@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
-import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send } from "lucide-react";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send, RefreshCw } from "lucide-react";
 import { NotifyVendorDialog, type NotifyVendorContext } from "@/components/notify-vendor-dialog";
 
 interface MaterialRow {
@@ -104,6 +104,29 @@ export default function RawMaterials() {
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message || "Failed to generate draft POs", variant: "destructive" });
+    },
+  });
+
+  const refreshVelocityMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/inventory/refresh-velocity", {});
+      return res.json() as Promise<{
+        finishedProductsUpdated: number;
+        componentsUpdated: number;
+        itemsScanned: number;
+        durationMs: number;
+      }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-materials/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Velocity refreshed",
+        description: `Updated ${data.finishedProductsUpdated} finished + ${data.componentsUpdated} components (scanned ${data.itemsScanned}, ${data.durationMs}ms).`,
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to refresh velocity", variant: "destructive" });
     },
   });
 
@@ -267,18 +290,33 @@ export default function RawMaterials() {
             Current stock, daily usage, and what to order. Tap a count to update it.
           </p>
         </div>
-        <Button
-          onClick={() => generateDraftsMutation.mutate()}
-          disabled={generateDraftsMutation.isPending}
-          data-testid="button-generate-draft-pos"
-        >
-          {generateDraftsMutation.isPending ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <FileText className="h-4 w-4 mr-2" />
-          )}
-          Generate Draft POs
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => refreshVelocityMutation.mutate()}
+            disabled={refreshVelocityMutation.isPending}
+            data-testid="button-refresh-velocity"
+          >
+            {refreshVelocityMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Refresh Velocity
+          </Button>
+          <Button
+            onClick={() => generateDraftsMutation.mutate()}
+            disabled={generateDraftsMutation.isPending}
+            data-testid="button-generate-draft-pos"
+          >
+            {generateDraftsMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <FileText className="h-4 w-4 mr-2" />
+            )}
+            Generate Draft POs
+          </Button>
+        </div>
       </div>
 
       {/* KPI cards */}

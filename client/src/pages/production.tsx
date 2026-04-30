@@ -80,6 +80,9 @@ type Item = {
   sku: string;
   name: string;
   type: string;
+  hildaleQty?: number | null;
+  extensivOnHandSnapshot?: number | null;
+  fxInProcessQty?: number | null;
 };
 
 type TodayTotals = {
@@ -570,6 +573,7 @@ function ProductionSheet({
         {mode === "main" && selectedSku && selectedItem && (
           <div className="mt-4 space-y-4">
             <BuildableHint itemId={selectedItem.id} />
+            <FxIncomingHint item={selectedItem} />
             <ActionRow
               icon="🔨"
               label="Built"
@@ -728,6 +732,24 @@ function BuildableHint({ itemId }: { itemId: string }) {
       data-testid="buildable-hint"
     >
       🔴 Missing components — check stock
+    </div>
+  );
+}
+
+// Surfaces FX incoming units alongside on-hand stock so Clarence can plan
+// around in-flight production at FX Industries. Hidden when fx_in_process_qty
+// is zero. on-hand here = Hildale + Extensiv snapshot (Pyvott).
+function FxIncomingHint({ item }: { item: Item }) {
+  const fx = item.fxInProcessQty ?? 0;
+  if (fx <= 0) return null;
+  const onHand = (item.hildaleQty ?? 0) + (item.extensivOnHandSnapshot ?? 0);
+  const total = onHand + fx;
+  return (
+    <div
+      className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
+      data-testid="fx-incoming-hint"
+    >
+      📦 {onHand} on hand + {fx} incoming from FX = {total} total available
     </div>
   );
 }

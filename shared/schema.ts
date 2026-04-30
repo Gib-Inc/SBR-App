@@ -78,6 +78,7 @@ export const items = pgTable("items", {
   // Finished product location quantities
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
+  fxInProcessQty: integer("fx_in_process_qty").notNull().default(0), // Finished-goods units being built at FX Industries — moves to hildaleQty on receipt
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // V1: Extensiv read-only snapshot for reconciliation/variance display
   extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)

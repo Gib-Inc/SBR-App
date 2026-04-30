@@ -4166,16 +4166,50 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // GET /api/items/by-barcode?code=X — purpose-built lookup for the
-  // shop-floor scanner integration. Tries every identifier field on items
-  // in the same priority order a human would: barcodeValue → barcode →
-  // upc → amazonAsin → sku → shopifySku → extensivSku.
+  // shop-floor scanner integration. Lookup order:
+  //   1. barcodes table (the canonical mapping for printed UPC stickers,
+  //      keyed on barcodes.value → items.id via barcodes.referenceId)
+  //   2. items.barcodeValue / items.barcode / items.upc
+  //   3. items.amazonAsin / items.sku / items.shopifySku / items.extensivSku
+  //
+  // Scanners can emit either UPC-A (12 digits) or EAN-13 (13 digits with a
+  // leading zero for North-American UPCs). We try the raw input plus a
+  // leading-zero-added and leading-zero-stripped variant so a sticker
+  // stored as 700433684258 still resolves when the wedge sends 0700433684258.
   app.get("/api/items/by-barcode", requireAuth, async (req: Request, res: Response) => {
     try {
       const raw = typeof req.query.code === "string" ? req.query.code.trim() : "";
       if (!raw) return res.status(400).json({ error: "code is required" });
 
+      const candidates = new Set<string>([raw]);
+      if (/^\d{12}$/.test(raw)) candidates.add("0" + raw); // UPC-A → EAN-13
+      if (/^0\d{12}$/.test(raw)) candidates.add(raw.slice(1)); // EAN-13 leading-0 → UPC-A
+
+      // 1. barcodes table — the primary mapping for printed UPCs.
+      for (const code of candidates) {
+        const barcode = await storage.getBarcodeByValue(code);
+        if (barcode?.referenceId) {
+          const item = await storage.getItem(barcode.referenceId);
+          if (item) {
+            return res.json({
+              id: item.id,
+              sku: item.sku,
+              name: item.name,
+              type: item.type,
+              currentStock: item.currentStock,
+              hildaleQty: (item as any).hildaleQty ?? 0,
+              pivotQty: (item as any).pivotQty ?? 0,
+            });
+          }
+        }
+      }
+
+      // 2 + 3. Direct match on items.* fields, in priority order. Try every
+      // candidate against every identifier so leading-zero variants resolve
+      // even when the value is stored on items.upc instead of barcodes.
       const items = await storage.getAllItems();
-      const exact = (val: string | null | undefined) => !!val && val.trim() === raw;
+      const exact = (val: string | null | undefined) =>
+        !!val && candidates.has(val.trim());
       const found =
         items.find((i) => exact((i as any).barcodeValue)) ??
         items.find((i) => exact(i.barcode)) ??

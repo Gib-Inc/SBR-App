@@ -45,11 +45,11 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 const SENDERS = ["Sammie", "Matt", "Stacy"];
-const FX_SUPPLIER_NAMES = new Set([
-  "FX Industries",
-  "FX Industries LLC",
-  "Fx Industries",
-]);
+
+// FX Industries' supplier row is id='1' in the DB. Pinning to the id (not
+// the name) means renames or capitalization edits never break the Send
+// button.
+const FX_SUPPLIER_ID = "1";
 
 type SalesOrderLineLite = {
   sku: string;
@@ -156,7 +156,7 @@ export default function ProductionPriority() {
   }, [itemBySku, openBySku]);
 
   const fxSupplier = useMemo(
-    () => suppliers.find((s) => FX_SUPPLIER_NAMES.has(s.name)) ?? null,
+    () => suppliers.find((s) => s.id === FX_SUPPLIER_ID) ?? null,
     [suppliers],
   );
 
@@ -245,8 +245,8 @@ export default function ProductionPriority() {
         >
           <AlertTriangle className="h-4 w-4" />
           <span>
-            No supplier named "FX Industries" found. The "Send to FX" button is disabled until one
-            exists in the suppliers list.
+            FX Industries supplier (id="{FX_SUPPLIER_ID}") not found. The "Send to FX" button is
+            disabled until that row exists in the suppliers table.
           </span>
         </div>
       )}

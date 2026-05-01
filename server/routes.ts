@@ -15246,6 +15246,322 @@ Notes: ${po.notes || 'None'}
   // total/qty so the line totals are still meaningful. Status is hard-set
   // to 'ordered' on both axes (status='ordered' and po_status='ordered')
   // since the operator has just placed the order externally.
+  // Invoice OCR — accepts a multipart upload, hands the buffer to Claude
+  // vision, returns the parsed JSON for the /log-order Tab A form to
+  // pre-fill. The image is NOT persisted in this endpoint (S3/Supabase
+  // storage is a separate workstream); the buffer lives only in memory
+  // for the duration of the call.
+  app.post(
+    "/api/orders/parse-invoice",
+    requireAuth,
+    upload.single("file"),
+    async (req: Request, res: Response) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: "No file uploaded (field name 'file')" });
+        }
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+          return res.status(503).json({ error: "ANTHROPIC_API_KEY not configured" });
+        }
+        const { parseInvoiceImage } = await import("./services/invoice-parser-service");
+        const result = await parseInvoiceImage(req.file.buffer, req.file.mimetype, apiKey);
+        if (!result.parsed) {
+          return res.json({ parsed: null, error: result.error ?? "Parse failed" });
+        }
+        res.json({ parsed: result.parsed });
+      } catch (error: any) {
+        console.error("[Parse Invoice] Error:", error);
+        res.status(500).json({ error: error.message ?? "Parse failed" });
+      }
+    },
+  );
+
+  // Tab A submit — supplier order (manual or post-OCR review). Creates a
+  // multi-line PO with entry_source set to 'manual' | 'invoice_upload'.
+  // Roger is notified by default unless notifyRoger=false.
+  app.post("/api/orders/log-supplier-invoice", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const lines: Array<{ itemId?: string; sku?: string; description?: string; qty: number; unitCost: number }> =
+        Array.isArray(body.lines) ? body.lines : [];
+      const orderedBy = typeof body.orderedBy === "string" && body.orderedBy.trim() ? body.orderedBy.trim() : "Clarence";
+      const entrySource =
+        body.entrySource === "invoice_upload" ? "invoice_upload" : "manual";
+      const notifyRoger = body.notifyRoger !== false;
+
+      if (!supplierId) return res.status(400).json({ error: "supplierId is required" });
+      if (lines.length === 0) return res.status(400).json({ error: "At least one line item is required" });
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const orderDateStr = typeof body.orderDate === "string" ? body.orderDate : null;
+      const expectedDeliveryStr = typeof body.expectedDelivery === "string" ? body.expectedDelivery : null;
+      const invoiceNumber = typeof body.invoiceNumber === "string" ? body.invoiceNumber.trim() : "";
+      const invoiceTotal =
+        body.invoiceTotal != null && Number.isFinite(Number(body.invoiceTotal))
+          ? Number(body.invoiceTotal)
+          : null;
+
+      // Tally and validate lines.
+      let subtotal = 0;
+      let expectedQty = 0;
+      const validatedLines: Array<{
+        itemId: string | null;
+        sku: string | null;
+        description: string | null;
+        qty: number;
+        unitCost: number;
+        lineTotal: number;
+      }> = [];
+      for (const line of lines) {
+        const qty = Number(line.qty);
+        const unitCost = Number(line.unitCost);
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          return res.status(400).json({ error: "Each line qty must be a positive integer" });
+        }
+        if (!Number.isFinite(unitCost) || unitCost < 0) {
+          return res.status(400).json({ error: "Each line unitCost must be ≥ 0" });
+        }
+        const itemId = typeof line.itemId === "string" && line.itemId ? line.itemId : null;
+        const lineTotal = Math.round(qty * unitCost * 100) / 100;
+        subtotal += lineTotal;
+        expectedQty += qty;
+        validatedLines.push({
+          itemId,
+          sku: typeof line.sku === "string" ? line.sku.trim() : null,
+          description: typeof line.description === "string" ? line.description : null,
+          qty,
+          unitCost,
+          lineTotal,
+        });
+      }
+
+      const poNumber = await storage.getNextPONumber();
+      const noteParts = [`[order-log] ${entrySource} entry by ${orderedBy}`];
+      if (invoiceNumber) noteParts.push(`invoice/order #: ${invoiceNumber}`);
+
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        supplierEmail: supplier.email ?? null,
+        currency: "USD",
+        status: "SENT",
+        poStatus: "ordered",
+        subtotal: Math.round(subtotal * 100) / 100,
+        total: Math.round(subtotal * 100) / 100,
+        totalItemsOrdered: expectedQty,
+        orderDate: orderDateStr ? new Date(orderDateStr) : new Date(),
+        expectedDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedDelivery: expectedDeliveryStr ?? null,
+        expectedQty,
+        invoiceTotal,
+        entrySource,
+        notes: noteParts.join(" — "),
+      } as any);
+
+      for (const line of validatedLines) {
+        // Resolve SKU through items + sku_mappings if no itemId was supplied.
+        let resolvedItemId = line.itemId;
+        if (!resolvedItemId && line.sku) {
+          const stripped = line.sku.replace(/^SKU:\s*/i, "");
+          const direct = await storage.getItemBySku(stripped);
+          if (direct) resolvedItemId = direct.id;
+          if (!resolvedItemId) {
+            const canonical =
+              (await storage.findCanonicalSku(line.sku, "shopify")) ??
+              (await storage.findCanonicalSku(stripped, "shopify"));
+            if (canonical) {
+              const item = await storage.getItemBySku(canonical);
+              if (item) resolvedItemId = item.id;
+            }
+          }
+        }
+        if (!resolvedItemId) {
+          // Skip the line if we can't resolve — the PO header is still
+          // worth keeping for the audit trail. Operators can clean up
+          // unmapped SKUs from /sku-mappings and edit the line later.
+          continue;
+        }
+        await storage.createPurchaseOrderLine({
+          purchaseOrderId: po.id,
+          itemId: resolvedItemId,
+          sku: line.sku ?? null,
+          itemName: line.description ?? null,
+          unitOfMeasure: "EA",
+          qtyOrdered: line.qty,
+          unitCost: line.unitCost,
+          lineTotal: line.lineTotal,
+        });
+      }
+
+      if (notifyRoger) {
+        void (async () => {
+          const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+          notifyRogerOfNewPO({ poId: po.id, orderedBy, source: "log-order" }).catch(() => {});
+        })();
+      }
+
+      res.status(201).json({ purchaseOrder: po, notifyRoger });
+    } catch (error: any) {
+      console.error("[Log Supplier Invoice] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to log order" });
+    }
+  });
+
+  // Tab B submit — FX anticipated production. Creates a single-line FX PO
+  // with entry_source='fx_anticipated' and po_status='confirmed', then
+  // increments fx_in_process_qty directly (the auto-update on po_status
+  // transitions doesn't fire for 'confirmed' so we do it inline). Does NOT
+  // notify Roger (these aren't real invoices yet).
+  app.post("/api/orders/log-fx-anticipated", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
+      const qty = Number(body.qty);
+      const expectedDeliveryStr = typeof body.expectedDelivery === "string" ? body.expectedDelivery : null;
+      const loggedBy = typeof body.loggedBy === "string" && body.loggedBy.trim() ? body.loggedBy.trim() : "Christopher";
+      const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "qty must be a positive integer" });
+      }
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      if (item.type !== "finished_product") {
+        return res.status(400).json({ error: "FX anticipated production only supports finished products" });
+      }
+
+      const fxSupplier = await storage.getSupplier("1");
+      if (!fxSupplier) return res.status(404).json({ error: "FX Industries supplier (id=1) not found" });
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const poNumber = await storage.getNextPONumber();
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: fxSupplier.id,
+        supplierName: fxSupplier.name,
+        supplierEmail: fxSupplier.email ?? null,
+        currency: "USD",
+        status: "DRAFT",
+        poStatus: "confirmed",
+        subtotal: 0,
+        total: 0,
+        totalItemsOrdered: qty,
+        orderDate: new Date(),
+        expectedDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedDelivery: expectedDeliveryStr ?? null,
+        expectedCompletionDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedQty: qty,
+        confirmedQty: qty,
+        entrySource: "fx_anticipated",
+        notes: notes ? `[fx-anticipated] logged by ${loggedBy}: ${notes}` : `[fx-anticipated] logged by ${loggedBy}`,
+      } as any);
+
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po.id,
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        unitOfMeasure: "EA",
+        qtyOrdered: qty,
+        unitCost: 0,
+        lineTotal: 0,
+      });
+
+      // Bump fx_in_process_qty inline since po_status='confirmed' is below
+      // the auto-update threshold by design (confirmed = not yet building).
+      // The user spec explicitly says "Increment fx_in_process_qty on the
+      // item" for FX anticipated entries, so we override the rule here.
+      const fxBefore = item.fxInProcessQty ?? 0;
+      await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+      await storage.createInventoryTransaction({
+        itemId: item.id,
+        itemType: "FINISHED",
+        type: "FX_ADJUSTMENT",
+        location: "HILDALE",
+        quantity: qty,
+        createdBy: userId,
+        createdByName: userName,
+        notes: `[fx-anticipated] +${qty} on PO ${po.poNumber} — ${loggedBy}`,
+      });
+
+      res.status(201).json({ purchaseOrder: po });
+    } catch (error: any) {
+      console.error("[Log FX Anticipated] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to log FX anticipated order" });
+    }
+  });
+
+  // Supplier reliability — last-90-days roll-up of accuracy + delivery
+  // variance computed from the receive-time fields on closed POs. Excludes
+  // POs that don't have an actual_delivery yet (still in flight).
+  app.get("/api/suppliers/:id/reliability", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const allPOs = await storage.getPurchaseOrdersBySupplierId(id);
+      const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      const eligible = allPOs.filter((po) => {
+        const ad = (po as any).actualDelivery ?? po.receivedAt ?? null;
+        if (!ad) return false;
+        const t = new Date(ad).getTime();
+        return Number.isFinite(t) && t >= ninetyDaysAgo;
+      });
+
+      let accSum = 0;
+      let accCount = 0;
+      let varSum = 0;
+      let varCount = 0;
+      for (const po of eligible) {
+        const acc = (po as any).accuracyScore;
+        if (acc != null) {
+          accSum += acc;
+          accCount += 1;
+        }
+        const dv = (po as any).deliveryVarianceDays;
+        if (dv != null) {
+          varSum += dv;
+          varCount += 1;
+        }
+      }
+      const avgAccuracy = accCount > 0 ? accSum / accCount : null;
+      const avgDeliveryVarianceDays = varCount > 0 ? varSum / varCount : null;
+
+      // Color thresholds per spec — green when great, amber when watch-list,
+      // red when chronically off. "On time" is variance ≤ 0.
+      let band: "green" | "amber" | "red" | "unknown" = "unknown";
+      if (avgAccuracy != null && avgDeliveryVarianceDays != null) {
+        if (avgAccuracy >= 0.95 && avgDeliveryVarianceDays <= 0) {
+          band = "green";
+        } else if (avgAccuracy < 0.85 || avgDeliveryVarianceDays > 3) {
+          band = "red";
+        } else {
+          band = "amber";
+        }
+      }
+
+      res.json({
+        ordersCount: eligible.length,
+        avgAccuracy,
+        avgDeliveryVarianceDays,
+        band,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Reliability] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to compute reliability" });
+    }
+  });
+
   app.post("/api/purchase-orders/quick-log", requireAuth, async (req: Request, res: Response) => {
     try {
       const body = req.body as Record<string, any>;
@@ -15436,10 +15752,37 @@ Notes: ${po.notes || 'None'}
         } as any);
       }
 
+      // Compute accuracy + delivery variance for reliability scoring.
+      // expected_qty defaults to the sum of line.qtyOrdered if it wasn't
+      // recorded at PO creation (older POs from before this column shipped).
+      const expectedQty =
+        (po as any).expectedQty ?? lines.reduce((s, l) => s + (l.qtyOrdered ?? 0), 0);
+      const actualQty = qty;
+      const accuracyScore =
+        expectedQty > 0
+          ? Math.max(0, Math.min(1, actualQty / expectedQty))
+          : null;
+      const today = new Date();
+      const todayDateStr = today.toISOString().slice(0, 10);
+      const expectedDelivery: string | null =
+        (po as any).expectedDelivery ??
+        (po.expectedDate
+          ? new Date(po.expectedDate).toISOString().slice(0, 10)
+          : null);
+      const deliveryVarianceDays = expectedDelivery
+        ? Math.round(
+            (today.getTime() - new Date(expectedDelivery).getTime()) / (1000 * 60 * 60 * 24),
+          )
+        : null;
+
       const updated = await storage.updatePurchaseOrder(id, {
         status: "RECEIVED",
         poStatus: "received",
-        receivedAt: new Date(),
+        receivedAt: today,
+        actualQty,
+        actualDelivery: todayDateStr,
+        accuracyScore,
+        deliveryVarianceDays,
       } as any);
 
       res.json({ purchaseOrder: updated, applied });

@@ -30,6 +30,7 @@ import { SupplierPerformance } from "@/components/supplier-performance";
 import { SupplierCommunications } from "@/components/supplier-communications";
 import { SupplierForecast } from "@/components/supplier-forecast";
 import { SupplierTimeline } from "@/components/supplier-timeline";
+import { SupplierReliability } from "@/components/supplier-reliability";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -202,7 +203,8 @@ export function EditSupplierDialog({
                     Communications
                   </TabsTrigger>
                 </TabsList>
-                <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
+                <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto space-y-4">
+                  <SupplierReliability supplierId={supplier.id} />
                   <SupplierPerformance supplierId={supplier.id} />
                 </TabsContent>
                 {isStrategic && (

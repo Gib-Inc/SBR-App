@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -530,7 +530,11 @@ function ItemTableRow({
   };
 
   return (
-    <tr className="h-11 border-b hover-elevate transition-all duration-300" data-testid={`row-item-${item.id}`} data-item-id={item.id}>
+    <tr
+      className={`${item.reorderPriority === "core_build" ? "h-12 bg-primary/5" : "h-11"} border-b hover-elevate transition-all duration-300`}
+      data-testid={`row-item-${item.id}`}
+      data-item-id={item.id}
+    >
       {/* Name Column */}
       <td className="px-3 align-middle whitespace-nowrap">
         {editingField === "name" ? (
@@ -551,8 +555,8 @@ function ItemTableRow({
             </Button>
           </div>
         ) : (
-          <div 
-            className="cursor-pointer rounded px-2 py-1 hover-elevate" 
+          <div
+            className={`cursor-pointer rounded px-2 py-1 hover-elevate ${item.reorderPriority === "core_build" ? "font-semibold" : ""}`}
             onClick={() => startEdit("name", item.name)}
             data-testid={`text-item-name-${item.id}`}
           >
@@ -2170,6 +2174,13 @@ export default function BOM() {
   const [searchQuery, setSearchQuery] = useState("");
   const [stockSortField, setStockSortField] = useState<string>("category");
   const [stockSortDir, setStockSortDir] = useState<"asc" | "desc">("asc");
+
+  // Finished-products sort. Priority is the default — within each priority
+  // group, items sort alphabetically by SKU. Other modes apply WITHIN
+  // groups so Core Builds always stay at the top.
+  const [productsSort, setProductsSort] = useState<
+    "priority" | "stock" | "margin" | "days" | "alphabetical"
+  >("priority");
   const [groupByCategory, setGroupByCategory] = useState(true);
   const [isCreateFinishedDialogOpen, setIsCreateFinishedDialogOpen] = useState(false);
   const [isCreateStockDialogOpen, setIsCreateStockDialogOpen] = useState(false);
@@ -2279,6 +2290,65 @@ export default function BOM() {
 
   const finishedProducts = filteredItems.filter((item: any) => item.type === "finished_product");
   const stockInventory = filteredItems.filter((item: any) => item.type === "component");
+
+  // ── Priority grouping for the Finished Products table ──
+  // Five buckets in fixed order. Within each bucket the secondary sort
+  // honours `productsSort`. Items without a recognised priority value
+  // fall into the accessory bucket so nothing disappears from the table.
+  const PRIORITY_GROUPS = [
+    { key: "core_build",  label: "Core Builds" },
+    { key: "combo",       label: "Combos" },
+    { key: "refurbished", label: "Refurbished" },
+    { key: "replacement", label: "Replacements & Parts" },
+    { key: "accessory",   label: "Accessories & Apparel" },
+  ] as const;
+  // Hand-rolled order INSIDE the Core Builds + Combos + Refurbished
+  // groups so the four canonical SKUs in each appear in the spec order
+  // rather than alphabetical (which would put 2.0 before 1.0 etc.). The
+  // user spec calls these out explicitly. Anything not in the rank map
+  // falls to alphabetical.
+  const SKU_RANK: Record<string, number> = {
+    "SBR-PUSH-1.0": 1, "SBR-Extrawide2.0": 2, "SBR-PB-ORIG": 3, "SBR-PB-BIGFOOT": 4,
+    "#701-CMB-1": 1, "#702-CMB-2": 2, "#703-CMB-3": 3, "#704-CMB-4": 4,
+    "#RF-141-PSH-M1": 1, "#RF-241-PSH-M2": 2, "#RF-1041-PB-M1": 3, "#RF-1241-PB-M2": 4,
+  };
+  const groupKeyOf = (it: any): string => {
+    const v = it.reorderPriority;
+    return PRIORITY_GROUPS.some((g) => g.key === v) ? v : "accessory";
+  };
+  const innerSort = (a: any, b: any): number => {
+    if (productsSort === "stock") {
+      const aQty = (a.hildaleQty ?? 0) + (a.extensivOnHandSnapshot ?? 0);
+      const bQty = (b.hildaleQty ?? 0) + (b.extensivOnHandSnapshot ?? 0);
+      return bQty - aQty;
+    }
+    if (productsSort === "margin") {
+      const am = (a.sellingPrice ?? 0) - (a.defaultPurchaseCost ?? 0);
+      const bm = (b.sellingPrice ?? 0) - (b.defaultPurchaseCost ?? 0);
+      return bm - am;
+    }
+    if (productsSort === "days") {
+      const aD = (a.dailyUsage ?? 0) > 0 ? ((a.hildaleQty ?? 0) + (a.extensivOnHandSnapshot ?? 0)) / a.dailyUsage : Infinity;
+      const bD = (b.dailyUsage ?? 0) > 0 ? ((b.hildaleQty ?? 0) + (b.extensivOnHandSnapshot ?? 0)) / b.dailyUsage : Infinity;
+      return aD - bD; // soonest stockout first
+    }
+    if (productsSort === "alphabetical") {
+      return a.name.localeCompare(b.name);
+    }
+    // 'priority' (the default) — use the hand-rolled rank inside known
+    // groups; alphabetical by SKU otherwise.
+    const aR = SKU_RANK[a.sku];
+    const bR = SKU_RANK[b.sku];
+    if (aR != null && bR != null) return aR - bR;
+    if (aR != null) return -1;
+    if (bR != null) return 1;
+    return (a.sku ?? "").localeCompare(b.sku ?? "");
+  };
+  const groupedFinishedProducts = PRIORITY_GROUPS.map((g) => ({
+    key: g.key,
+    label: g.label,
+    items: finishedProducts.filter((i: any) => groupKeyOf(i) === g.key).sort(innerSort),
+  })).filter((g) => g.items.length > 0);
 
   // Sort stock inventory
   const sortedStockInventory = [...stockInventory].sort((a: any, b: any) => {
@@ -2562,9 +2632,26 @@ export default function BOM() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Finished Products</h2>
-            <p className="text-sm text-muted-foreground">Products with component recipes</p>
+            <p className="text-sm text-muted-foreground">
+              Products with component recipes · grouped by priority — Core Builds always at top.
+            </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center flex-wrap">
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-muted-foreground">Sort by:</span>
+              <select
+                value={productsSort}
+                onChange={(e) => setProductsSort(e.target.value as typeof productsSort)}
+                className="h-8 rounded-md border bg-background px-2 text-xs"
+                data-testid="select-products-sort"
+              >
+                <option value="priority">Priority (default)</option>
+                <option value="stock">Stock</option>
+                <option value="margin">Margin</option>
+                <option value="days">Days to Stockout</option>
+                <option value="alphabetical">Alphabetical</option>
+              </select>
+            </div>
             {/* Edit Columns Popover (only affects Finished Products table) */}
             <Popover>
               <PopoverTrigger asChild>
@@ -2734,17 +2821,42 @@ export default function BOM() {
                 </tr>
               </thead>
               <tbody>
-                {finishedProducts.map((item: any) => (
-                  <ItemTableRow
-                    key={item.id}
-                    item={item}
-                    onUpdate={handleUpdate}
-                    onDelete={handleDelete}
-                    onEditBOM={setEditingBOMItem}
-                    onTransfer={setTransferItem}
-                    backorderSnapshots={backorderSnapshots}
-                    columnVisibility={columnVisibility}
-                  />
+                {groupedFinishedProducts.map((group) => (
+                  <Fragment key={group.key}>
+                    {/* Section header — colSpan is intentionally larger than
+                        the visible column count so the header spans the full
+                        row regardless of which optional columns are toggled
+                        on. Browsers cap to the actual column count. */}
+                    <tr
+                      className={
+                        group.key === "core_build"
+                          ? "bg-primary/10 border-y border-primary/30"
+                          : "bg-muted/40 border-y"
+                      }
+                      data-testid={`section-${group.key}`}
+                    >
+                      <td
+                        colSpan={99}
+                        className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide ${
+                          group.key === "core_build" ? "text-primary" : "text-muted-foreground"
+                        }`}
+                      >
+                        {group.label} · {group.items.length} item{group.items.length === 1 ? "" : "s"}
+                      </td>
+                    </tr>
+                    {group.items.map((item: any) => (
+                      <ItemTableRow
+                        key={item.id}
+                        item={item}
+                        onUpdate={handleUpdate}
+                        onDelete={handleDelete}
+                        onEditBOM={setEditingBOMItem}
+                        onTransfer={setTransferItem}
+                        backorderSnapshots={backorderSnapshots}
+                        columnVisibility={columnVisibility}
+                      />
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

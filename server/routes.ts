@@ -4695,7 +4695,18 @@ TOTAL: $${subtotal.toFixed(2)}
         return res.status(400).json({ error: "supplierId, actionType, and sentBy are required" });
       }
 
-      const validActions = new Set(["REORDER_REQUEST", "PAYMENT_SENT", "DELIVERY_CONFIRMED", "ISSUE_FLAGGED"]);
+      const validActions = new Set([
+        "REORDER_REQUEST",
+        "PAYMENT_SENT",
+        "DELIVERY_CONFIRMED",
+        "ISSUE_FLAGGED",
+        // Take Action modal — supplemental entries written when an operator
+        // picks a non-email path. CREATE_PO is logged at PO save (notes hold
+        // the new poNumber); ONLINE_ORDER is logged on click (no completion
+        // signal back from the vendor site).
+        "CREATE_PO",
+        "ONLINE_ORDER",
+      ]);
       if (!validActions.has(actionType)) {
         return res.status(400).json({ error: `actionType must be one of: ${[...validActions].join(", ")}` });
       }

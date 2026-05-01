@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Loader2, AlertTriangle, ArrowRight, Send } from "lucide-react";
-import { NotifyVendorDialog, type NotifyVendorContext } from "@/components/notify-vendor-dialog";
+import { SupplierActionDialog, type SupplierActionContext } from "@/components/supplier-action-dialog";
+import { CreatePODialog } from "@/components/create-po-dialog";
 
 // Default Reports dashboard widgets. Each fetches its own data from existing
 // endpoints — no new API surface — and handles its own loading state.
@@ -377,10 +378,13 @@ type AttentionRow =
       minStock: number;
       dailyUsage: number;
       daysOfSupply: number;
+      daysLeft: number | null;
       leadTimeDays: number | null;
       supplierId: string | null;
       supplierName: string | null;
+      supplierSku: string | null;
       orderQty: number;
+      unitCost: number | null;
       rate: number;
     };
 
@@ -392,14 +396,22 @@ type DashboardMaterial = {
   minStock: number;
   dailyUsage: number;
   daysOfSupply: number;
+  daysLeft: number | null;
   orderQty: number;
   supplierId: string | null;
   supplierName: string | null;
+  supplierSku: string | null;
   leadTimeDays: number | null;
+  unitCost: number | null;
 };
 
 function CriticalStockWidget() {
-  const [notifyContext, setNotifyContext] = useState<NotifyVendorContext | null>(null);
+  const [actionContext, setActionContext] = useState<SupplierActionContext | null>(null);
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
+  const [poInitial, setPoInitial] = useState<{
+    supplierId: string;
+    lines: { itemId: string; qtyOrdered: number; unitCost?: number }[];
+  } | null>(null);
 
   const { data: snapshot, isLoading: snapLoading } = useQuery<SnapshotRow[]>({
     queryKey: ["/api/inventory/snapshot"],
@@ -472,10 +484,13 @@ function CriticalStockWidget() {
           minStock: i.minStock ?? 0,
           dailyUsage,
           daysOfSupply,
+          daysLeft: enriched?.daysLeft ?? null,
           leadTimeDays: enriched?.leadTimeDays ?? null,
           supplierId: enriched?.supplierId ?? null,
           supplierName: enriched?.supplierName ?? null,
+          supplierSku: enriched?.supplierSku ?? null,
           orderQty: enriched?.orderQty ?? 0,
+          unitCost: enriched?.unitCost ?? null,
           rate: dailyUsage,
         };
       });
@@ -580,21 +595,31 @@ function CriticalStockWidget() {
                             size="sm"
                             variant="outline"
                             className="h-7 px-2"
-                            onClick={() =>
-                              setNotifyContext({
+                            onClick={() => {
+                              const recommendedQty =
+                                row.orderQty > 0
+                                  ? row.orderQty
+                                  : Math.max(1, Math.ceil(row.dailyUsage * 30));
+                              const estimatedCost =
+                                row.unitCost != null
+                                  ? Math.round(recommendedQty * row.unitCost * 100) / 100
+                                  : null;
+                              setActionContext({
                                 supplierId: row.supplierId!,
                                 supplierName: row.supplierName!,
+                                supplierSku: row.supplierSku,
                                 itemId: row.itemId,
                                 itemName: row.name,
                                 sku: row.sku,
                                 currentStock: row.onHand,
-                                daysLeft: row.daysOfSupply,
-                                suggestedQty:
-                                  row.orderQty > 0
-                                    ? row.orderQty
-                                    : Math.max(1, Math.ceil(row.dailyUsage * 30)),
-                              })
-                            }
+                                dailyUsage: row.dailyUsage,
+                                daysLeft: row.daysLeft,
+                                leadTimeDays: row.leadTimeDays,
+                                recommendedQty,
+                                estimatedCost,
+                                unitCost: row.unitCost,
+                              });
+                            }}
                             data-testid={`button-widget-notify-${row.itemId}`}
                           >
                             <Send className="h-3 w-3 mr-1" />
@@ -615,10 +640,32 @@ function CriticalStockWidget() {
           </ul>
         )}
       </CardContent>
-      <NotifyVendorDialog
-        isOpen={notifyContext != null}
-        onClose={() => setNotifyContext(null)}
-        context={notifyContext}
+      <SupplierActionDialog
+        isOpen={actionContext != null}
+        onClose={() => setActionContext(null)}
+        context={actionContext}
+        onCreatePO={() => {
+          if (!actionContext) return;
+          setPoInitial({
+            supplierId: actionContext.supplierId,
+            lines: [
+              {
+                itemId: actionContext.itemId,
+                qtyOrdered: actionContext.recommendedQty,
+                unitCost: actionContext.unitCost ?? undefined,
+              },
+            ],
+          });
+          setPoDialogOpen(true);
+        }}
+      />
+      <CreatePODialog
+        open={poDialogOpen}
+        onOpenChange={(open) => {
+          setPoDialogOpen(open);
+          if (!open) setPoInitial(null);
+        }}
+        initial={poInitial ?? undefined}
       />
     </Card>
   );

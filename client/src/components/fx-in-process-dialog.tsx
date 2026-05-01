@@ -27,12 +27,10 @@ export function FxInProcessDialog({
   isOpen,
   onClose,
   item,
-  prefillZero = false,
 }: {
   isOpen: boolean;
   onClose: () => void;
   item: FxItem | null;
-  prefillZero?: boolean;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -40,11 +38,13 @@ export function FxInProcessDialog({
   const [notes, setNotes] = useState("");
 
   // Re-seed inputs when the modal (re-)opens or the target item changes.
+  // Pre-fills with the current FX qty so Sammie can see the existing total
+  // and add to it (e.g. 50 → 250) rather than recompute from zero.
   useEffect(() => {
     if (!isOpen || !item) return;
-    setQuantity(prefillZero ? "0" : String(item.fxInProcessQty ?? 0));
+    setQuantity(String(item.fxInProcessQty ?? 0));
     setNotes("");
-  }, [isOpen, item, prefillZero]);
+  }, [isOpen, item]);
 
   const invalidateAfterChange = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/inventory/snapshot"] });
@@ -123,7 +123,7 @@ export function FxInProcessDialog({
     <Dialog open={isOpen} onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{prefillZero ? "Log FX Order" : "FX In-Production"}</DialogTitle>
+          <DialogTitle>FX In-Production</DialogTitle>
           <DialogDescription>
             {item ? (
               <span className="font-mono">{item.sku}</span>

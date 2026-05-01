@@ -184,7 +184,6 @@ export default function Inventory() {
   const [writeOffOpen, setWriteOffOpen] = useState(false);
   const [fxOpen, setFxOpen] = useState(false);
   const [fxItem, setFxItem] = useState<FxItem | null>(null);
-  const [fxPrefillZero, setFxPrefillZero] = useState(false);
 
   const onSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -223,7 +222,7 @@ export default function Inventory() {
     return map;
   }, [items]);
 
-  const openFxModal = (sku: string, prefillZero: boolean) => {
+  const openFxModal = (sku: string) => {
     const item = finishedBySku.get(sku);
     if (!item) return;
     setFxItem({
@@ -232,7 +231,6 @@ export default function Inventory() {
       name: item.name,
       fxInProcessQty: item.fxInProcessQty ?? 0,
     });
-    setFxPrefillZero(prefillZero);
     setFxOpen(true);
   };
 
@@ -435,7 +433,7 @@ export default function Inventory() {
                 .map((it) => (
                   <DropdownMenuItem
                     key={it.id}
-                    onSelect={() => openFxModal(it.sku, true)}
+                    onSelect={() => openFxModal(it.sku)}
                     data-testid={`fx-log-pick-${it.sku}`}
                   >
                     <span className="font-mono text-xs mr-2">{it.sku}</span>
@@ -469,7 +467,6 @@ export default function Inventory() {
         isOpen={fxOpen}
         onClose={() => setFxOpen(false)}
         item={fxItem}
-        prefillZero={fxPrefillZero}
       />
 
       {/* KPI cards */}
@@ -578,7 +575,7 @@ export default function Inventory() {
                       {finishedBySku.has(s.sku) ? (
                         <button
                           type="button"
-                          onClick={() => openFxModal(s.sku, false)}
+                          onClick={() => openFxModal(s.sku)}
                           className="inline-flex items-center gap-1 hover:underline tabular-nums"
                           data-testid={`fx-edit-${s.sku}`}
                         >

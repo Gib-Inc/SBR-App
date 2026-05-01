@@ -1618,13 +1618,21 @@ RULES:
           const unitCost = supplierItem?.price ?? 10;
           const moq = supplierItem?.minimumOrderQuantity ?? 1;
           
-          // Calculate recommended quantity (target 30 days coverage)
+          // Calculate recommended quantity (target 30 days coverage). When
+          // an item has no measured demand we used to floor at 1/day, which
+          // produced phantom reorder lines for components nobody actually
+          // consumes. Now: if there's no demand, recommend 0 so zero-velocity
+          // items drop out of the suggested PO entirely. The MOQ floor still
+          // applies when there IS demand.
           const targetCoverageDays = 30;
-          const avgDailyDemand = item.dailyUsage || 1;
-          const recommendedQty = Math.max(
-            Math.ceil(targetCoverageDays * avgDailyDemand - item.currentStock),
-            moq
-          );
+          const avgDailyDemand = item.dailyUsage ?? 0;
+          const recommendedQty =
+            avgDailyDemand > 0
+              ? Math.max(
+                  Math.ceil(targetCoverageDays * avgDailyDemand - item.currentStock),
+                  moq,
+                )
+              : 0;
           
           const lineTotal = recommendedQty * unitCost;
           subtotal += lineTotal;
@@ -4652,16 +4660,19 @@ TOTAL: $${subtotal.toFixed(2)}
       if (supplierEmail && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
         try {
           const sgMail = (await import("@sendgrid/mail")).default;
+          const { emailForSender } = await import("./services/sender-emails");
           sgMail.setApiKey(process.env.SENDGRID_API_KEY);
           const subject = item
             ? `Reorder request: ${item.sku} — ${item.name}`
             : `Reorder request from Sticker Burr Roller`;
+          const replyTo = emailForSender(sentBy);
           await sgMail.send({
             to: supplierEmail,
             from: {
               email: process.env.SENDGRID_FROM_EMAIL,
               name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
             },
+            replyTo: replyTo ?? undefined,
             subject,
             text: message,
           });
@@ -14280,6 +14291,16 @@ Notes: ${po.notes || 'None'}
         console.warn('[PurchaseOrder] Failed to log PO creation:', logError);
       }
 
+      // Roger notification — fire and forget. Try to honour the optional
+      // orderedBy field from the body (the Take Action / Auto-Draft flows
+      // pass it explicitly), otherwise the email signs as "Unknown" — which
+      // is still better than no notification.
+      const orderedBy = typeof req.body?.orderedBy === "string" ? req.body.orderedBy.trim() : null;
+      void (async () => {
+        const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+        notifyRogerOfNewPO({ poId: purchaseOrder.id, orderedBy, source: "manual" }).catch(() => {});
+      })();
+
       res.status(201).json({ ...purchaseOrder, lines: createdLines });
     } catch (error: any) {
       if (createdPOId) {
@@ -14753,6 +14774,16 @@ Notes: ${po.notes || 'None'}
         unitCost,
         lineTotal,
       });
+
+      // Best-effort Roger notification — fire and forget so a SendGrid
+      // hiccup never blocks a PO save. The orderedBy hint defaults to
+      // Clarence since /quick-log is wired to the post-Order-Online flow.
+      const orderedBy =
+        typeof body.orderedBy === "string" && body.orderedBy.trim() ? body.orderedBy.trim() : "Clarence";
+      void (async () => {
+        const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+        notifyRogerOfNewPO({ poId: po.id, orderedBy, source: "quick-log" }).catch(() => {});
+      })();
 
       res.status(201).json({ purchaseOrder: po });
     } catch (error: any) {

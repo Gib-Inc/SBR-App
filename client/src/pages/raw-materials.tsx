@@ -228,7 +228,15 @@ export default function RawMaterials() {
 
   const openNotify = (m: MaterialRow) => {
     if (!m.supplierId || !m.supplierName) return;
-    const recommendedQty = m.orderQty > 0 ? m.orderQty : Math.max(1, Math.ceil(m.dailyUsage * 30));
+    // No floor — when there's no measured demand the recommendation is 0
+    // (the operator can still type a number into the quick-log form if they
+    // genuinely need to order something with no recorded velocity).
+    const recommendedQty =
+      m.orderQty > 0
+        ? m.orderQty
+        : m.dailyUsage > 0
+          ? Math.ceil(m.dailyUsage * 30)
+          : 0;
     const estimatedCost = m.unitCost != null ? Math.round(recommendedQty * m.unitCost * 100) / 100 : null;
     setActionContext({
       itemId: m.id,
@@ -312,7 +320,7 @@ export default function RawMaterials() {
                 data-testid="button-banner-notify"
               >
                 <Send className="h-3 w-3 mr-1" />
-                Notify {firstRed.supplierName}
+                Order from {firstRed.supplierName}
               </Button>
             );
           })()}
@@ -445,7 +453,7 @@ export default function RawMaterials() {
                   <TableHead className="text-right">Order Qty</TableHead>
                   <TableHead className="text-right hidden md:table-cell">Order Cost</TableHead>
                   <TableHead className="text-right">Status</TableHead>
-                  <TableHead className="text-right">Notify</TableHead>
+                  <TableHead className="text-right">Order</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -603,10 +611,10 @@ export default function RawMaterials() {
                               e.stopPropagation();
                               openNotify(m);
                             }}
-                            data-testid={`button-notify-${m.id}`}
+                            data-testid={`button-order-${m.id}`}
                           >
                             <Send className="h-3 w-3 mr-1" />
-                            Notify
+                            Order
                           </Button>
                         ) : (
                           <span className="text-muted-foreground">–</span>

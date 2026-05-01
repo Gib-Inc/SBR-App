@@ -1432,11 +1432,14 @@ function ReorderDialog({ isOpen, onClose, item, aiRecommendations = [] }: { isOp
     ? (item.hildaleQty ?? 0) + (item.pivotQty ?? 0)
     : (item.currentStock ?? 0);
   
-  const dailyUsage = item.dailyUsage ?? 1;
+  // No floor on dailyUsage — when nothing is selling we want days-of-cover
+  // and safety-stock gap to honestly read 0/—, not a phantom number derived
+  // from a pretend 1/day rate.
+  const dailyUsage = item.dailyUsage ?? 0;
   const daysOfCover = dailyUsage > 0 ? Math.floor(totalStock / dailyUsage) : 0;
-  
+
   // Calculate safety stock gap (21-day buffer)
-  const safetyStockGap = Math.max(0, Math.ceil(dailyUsage * 21 - totalStock));
+  const safetyStockGap = dailyUsage > 0 ? Math.max(0, Math.ceil(dailyUsage * 21 - totalStock)) : 0;
   const supplierMOQ = item.primarySupplier?.minimumOrderQuantity || 0;
 
   // Fetch purchase orders and suppliers

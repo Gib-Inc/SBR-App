@@ -34,7 +34,10 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { getOnlineSupplier } from "@/lib/online-suppliers";
 
-const SENDERS = ["Sammie", "Matt", "Stacy"];
+// Clarence is the primary requester (he's the one physically placing orders)
+// so he sits first and is the default. The send endpoints look up his email
+// server-side via the SENDER_EMAILS map and use it as the SendGrid reply-to.
+const SENDERS = ["Clarence", "Sammie", "Matt", "Stacy"];
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -103,7 +106,7 @@ export function SupplierActionDialog({
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [sentBy, setSentBy] = useState("Matt");
+  const [sentBy, setSentBy] = useState("Clarence");
   const [emailMode, setEmailMode] = useState(false);
   const [message, setMessage] = useState("");
   const [actionsTaken, setActionsTaken] = useState<ActionTaken[]>([]);
@@ -121,7 +124,7 @@ export function SupplierActionDialog({
     [context, sentBy],
   );
 
-  const prevSenderRef = useRef("Matt");
+  const prevSenderRef = useRef("Clarence");
 
   useEffect(() => {
     if (isOpen) {
@@ -292,6 +295,7 @@ export function SupplierActionDialog({
         totalCost: cNum,
         invoiceNumber: logInvoice.trim() || undefined,
         expectedDate: logExpected || undefined,
+        orderedBy: sentBy,
       });
       return res.json() as Promise<{ purchaseOrder: { id: string; poNumber: string } }>;
     },

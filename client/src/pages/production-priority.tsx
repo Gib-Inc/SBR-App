@@ -44,7 +44,7 @@ const TERMINAL_STATUSES = new Set([
   "PENDING_REFUND",
 ]);
 
-const SENDERS = ["Sammie", "Matt", "Stacy"];
+const SENDERS = ["Clarence", "Sammie", "Matt", "Stacy"];
 
 // FX Industries' supplier row is id='1' in the DB. Pinning to the id (not
 // the name) means renames or capitalization edits never break the Send
@@ -106,7 +106,7 @@ const formatToday = () => {
 export default function ProductionPriority() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [sentBy, setSentBy] = useState("Matt");
+  const [sentBy, setSentBy] = useState("Clarence");
   const [editedEmail, setEditedEmail] = useState<string | null>(null);
 
   const { data: orders = [], isLoading: ordersLoading } = useQuery<SalesOrderWithLines[]>({

@@ -19,6 +19,8 @@ import {
   type InsertSupplierItem,
   type VendorCommunication,
   type InsertVendorCommunication,
+  type SkuMapping,
+  type InsertSkuMapping,
   type PurchaseOrder,
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
@@ -287,6 +289,14 @@ export interface IStorage {
   getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]>;
   getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]>;
   createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication>;
+
+  // SKU Mappings (External → Canonical)
+  getAllSkuMappings(): Promise<SkuMapping[]>;
+  getSkuMapping(id: string): Promise<SkuMapping | undefined>;
+  findCanonicalSku(externalSku: string, source: string): Promise<string | null>;
+  createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping>;
+  updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined>;
+  deleteSkuMapping(id: string): Promise<boolean>;
 
   // Sales History
   getAllSalesHistory(): Promise<SalesHistory[]>;
@@ -1705,6 +1715,24 @@ export class MemStorage implements IStorage {
       createdBy: comm.createdBy ?? null,
     };
   }
+
+  // SKU Mappings (MemStorage stub — Postgres is the real backend)
+  async getAllSkuMappings(): Promise<SkuMapping[]> { return []; }
+  async getSkuMapping(_id: string): Promise<SkuMapping | undefined> { return undefined; }
+  async findCanonicalSku(_externalSku: string, _source: string): Promise<string | null> { return null; }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    return {
+      id: crypto.randomUUID(),
+      externalSku: mapping.externalSku,
+      canonicalSku: mapping.canonicalSku,
+      source: mapping.source,
+      notes: mapping.notes ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+  async updateSkuMapping(_id: string, _updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> { return undefined; }
+  async deleteSkuMapping(_id: string): Promise<boolean> { return false; }
 
   // Sales History
   async getAllSalesHistory(): Promise<SalesHistory[]> {
@@ -4957,6 +4985,53 @@ export class PostgresStorage implements IStorage {
   async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
     const results = await this.db.insert(schema.vendorCommunications).values(comm).returning();
     return results[0];
+  }
+
+  // SKU Mappings
+  async getAllSkuMappings(): Promise<SkuMapping[]> {
+    return await this.db.select().from(schema.skuMappings).orderBy(desc(schema.skuMappings.createdAt));
+  }
+  async getSkuMapping(id: string): Promise<SkuMapping | undefined> {
+    const results = await this.db.select().from(schema.skuMappings).where(eq(schema.skuMappings.id, id));
+    return results[0];
+  }
+  async findCanonicalSku(externalSku: string, source: string): Promise<string | null> {
+    // Strip the legacy "SKU: " prefix that some imports leave on values, and
+    // try BOTH the raw and stripped form so a row stored either way still
+    // resolves. Also try lowercased source for compat with seed values.
+    const stripped = externalSku.replace(/^SKU:\s*/i, "");
+    const sourceLower = source.toLowerCase();
+    const candidates = [externalSku, stripped];
+    for (const cand of candidates) {
+      const rows = await this.db
+        .select()
+        .from(schema.skuMappings)
+        .where(
+          and(
+            eq(schema.skuMappings.externalSku, cand),
+            eq(schema.skuMappings.source, sourceLower),
+          ),
+        )
+        .limit(1);
+      if (rows[0]) return rows[0].canonicalSku;
+    }
+    return null;
+  }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    const results = await this.db.insert(schema.skuMappings).values(mapping).returning();
+    return results[0];
+  }
+  async updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> {
+    const results = await this.db
+      .update(schema.skuMappings)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.skuMappings.id, id))
+      .returning();
+    return results[0];
+  }
+  async deleteSkuMapping(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.skuMappings).where(eq(schema.skuMappings.id, id)).returning();
+    return results.length > 0;
   }
 
   // Sales History

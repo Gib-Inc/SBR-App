@@ -865,6 +865,43 @@ export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSche
 export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
 
 // ============================================================================
+// SKU MAPPINGS (External SKU → Canonical SKU)
+// ============================================================================
+// Shopify, Amazon, etc. sometimes ship orders under a different SKU than what
+// our items table calls them. Examples:
+//   • Shopify "SBR-Classic1.0"  → our "SBR-PUSH-1.0"
+//   • "SKU: 700433684258" prefix has to be stripped before matching
+// We store the alias here so webhook handlers + the backfill endpoint can
+// resolve external SKUs to a canonical SKU before looking up the item.
+
+export const skuMappings = pgTable("sku_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  externalSku: text("external_sku").notNull(),
+  canonicalSku: text("canonical_sku").notNull(),
+  source: text("source").notNull(), // 'shopify' | 'amazon' | 'windsor' | 'manual'
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  // Each (external_sku, source) pair must be unique so we don't end up with
+  // ambiguous mappings (one external SKU resolving to two different canonical
+  // SKUs from the same source).
+  externalSkuSourceIdx: uniqueIndex("sku_mappings_external_source_idx").on(
+    table.externalSku,
+    table.source,
+  ),
+  canonicalSkuIdx: index("sku_mappings_canonical_sku_idx").on(table.canonicalSku),
+}));
+
+export const insertSkuMappingSchema = createInsertSchema(skuMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertSkuMapping = z.infer<typeof insertSkuMappingSchema>;
+export type SkuMapping = typeof skuMappings.$inferSelect;
+
+// ============================================================================
 // BARCODES
 // ============================================================================
 

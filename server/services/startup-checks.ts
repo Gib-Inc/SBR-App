@@ -160,6 +160,11 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS supplier_id VARCHAR REFERENCES suppliers(id)`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS reason TEXT`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS lot_number TEXT`,
+    // PO build-progress + FX confirmation fields. Belt-and-suspenders for
+    // when drizzle-kit push hasn't run yet on a fresh deploy.
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS po_status TEXT NOT NULL DEFAULT 'ordered'`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS confirmed_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_completion_date TIMESTAMP`,
   ];
   for (const stmt of ADDS) {
     try {

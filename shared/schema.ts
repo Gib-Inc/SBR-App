@@ -479,6 +479,13 @@ export const purchaseOrders = pgTable("purchase_orders", {
   // Transitions on FX POs (supplierId='1') auto-update the linked finished
   // products' fx_in_process_qty — see PATCH /api/purchase-orders/:id/po-status.
   poStatus: text("po_status").notNull().default('ordered'),
+
+  // FX confirmation fields. confirmed_qty is what FX agreed to build (often
+  // less than ordered if they're capacity-constrained). expected_completion_
+  // date is the FX build completion date (distinct from expected_date which
+  // is the delivery ETA).
+  confirmedQty: integer("confirmed_qty"),
+  expectedCompletionDate: timestamp("expected_completion_date"),
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),

@@ -11853,6 +11853,70 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Set fxInProcessQty directly — used when logging an FX order without
+  // receiving stock yet. Body: { itemId, quantity, notes? }. Writes an
+  // inventoryTransactions row with type='FX_ADJUSTMENT' and quantity=abs(delta)
+  // so the audit trail shows the change. Operates on finished products only.
+  app.patch("/api/inventory/fx-in-process", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, quantity, notes } = req.body as {
+        itemId?: string;
+        quantity?: number;
+        notes?: string;
+      };
+
+      const id = typeof itemId === "string" ? itemId.trim() : "";
+      const qty = Number(quantity);
+
+      if (!id) {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 0) {
+        return res.status(400).json({ error: "quantity must be a non-negative integer" });
+      }
+
+      const item = await storage.getItem(id);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      if (item.type !== "finished_product") {
+        return res.status(400).json({ error: "FX in-production tracking applies only to finished products" });
+      }
+
+      const previous = item.fxInProcessQty ?? 0;
+      const delta = qty - previous;
+
+      if (delta === 0) {
+        return res.json({ item, delta: 0 });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const updated = await storage.updateItem(id, { fxInProcessQty: qty });
+
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      const noteTag = cleanNotes
+        ? `[fx_adjustment ${previous}→${qty}] ${cleanNotes}`
+        : `[fx_adjustment ${previous}→${qty}]`;
+
+      await storage.createInventoryTransaction({
+        itemId: id,
+        itemType: "FINISHED",
+        type: "FX_ADJUSTMENT",
+        location: "HILDALE", // schema requires a location; FX activity lands at Hildale
+        quantity: Math.abs(delta),
+        createdBy: userId,
+        createdByName: userName,
+        notes: noteTag,
+      });
+
+      res.json({ item: updated, delta });
+    } catch (error: any) {
+      console.error("[FX In-Process Update] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update FX in-process quantity" });
+    }
+  });
+
   // Receive finished units from FX Industries into Hildale. Decrements
   // fxInProcessQty and increments hildaleQty atomically per item, and writes
   // an inventoryTransactions row with type='RECEIVED_FROM_FX' for the audit

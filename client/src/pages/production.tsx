@@ -733,18 +733,21 @@ function BuildableHint({ itemId }: { itemId: string }) {
 
 // Surfaces FX incoming units alongside on-hand stock so Clarence can plan
 // around in-flight production at FX Industries. Hidden when fx_in_process_qty
-// is zero. on-hand here = Hildale + Extensiv snapshot (Pyvott).
+// is zero. on-hand here = Hildale + Extensiv snapshot (Pyvott). "Total
+// incoming" today is just the FX number, but is split out so additional
+// inbound sources (open POs, transfers in flight, etc.) can be added later
+// without changing the layout.
 function FxIncomingHint({ item }: { item: Item }) {
   const fx = item.fxInProcessQty ?? 0;
   if (fx <= 0) return null;
   const onHand = (item.hildaleQty ?? 0) + (item.extensivOnHandSnapshot ?? 0);
-  const total = onHand + fx;
+  const totalIncoming = fx;
   return (
     <div
       className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
       data-testid="fx-incoming-hint"
     >
-      📦 {onHand} on hand + {fx} incoming from FX = {total} total available
+      📦 {onHand} on hand · {fx} in production at FX · {totalIncoming} total incoming
     </div>
   );
 }

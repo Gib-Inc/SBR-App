@@ -86,12 +86,24 @@ interface CreatePODialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPOCreated?: (poId: string) => void;
+  /**
+   * Optional pre-fill for one-click flows like the Take Action modal.
+   * supplierId selects the supplier; lines.qtyOrdered (and optional
+   * unitCost) are patched onto the matching seeded rows after the
+   * supplier-items effect runs. Lines whose itemId isn't in the
+   * supplier's seeded set are silently skipped.
+   */
+  initial?: {
+    supplierId?: string | null;
+    lines?: Array<{ itemId: string; qtyOrdered: number; unitCost?: number }>;
+  };
 }
 
-export function CreatePODialog({ 
-  open, 
+export function CreatePODialog({
+  open,
   onOpenChange,
   onPOCreated,
+  initial,
 }: CreatePODialogProps) {
   const { toast } = useToast();
   
@@ -128,6 +140,19 @@ export function CreatePODialog({
       queryKey: [`/api/supplier-items?supplierId=${supplierId}`],
       enabled: open && !!supplierId,
     });
+  // Pre-fill from the optional `initial` prop. Holds the requested per-line
+  // qtys until the supplier-items seed runs; cleared when applied so a stale
+  // value from a prior open doesn't bleed into the next.
+  const pendingInitialLinesRef = useRef<Array<{ itemId: string; qtyOrdered: number; unitCost?: number }> | null>(null);
+  useEffect(() => {
+    if (open) {
+      pendingInitialLinesRef.current = initial?.lines ?? null;
+      if (initial?.supplierId) {
+        setSupplierId(initial.supplierId);
+      }
+    }
+  }, [open, initial?.supplierId, initial?.lines]);
+
   const lastPopulatedSupplierRef = useRef<string | null>(null);
   useEffect(() => {
     if (!supplierId) {
@@ -150,6 +175,22 @@ export function CreatePODialog({
       currentStock: row.currentStock,
       dailyUsage: row.dailyUsage,
     }));
+
+    // Apply any pending pre-fill from `initial.lines` to matching seeded rows.
+    // Pre-fill always wins over the qty=0 default. unitCost is overridden only
+    // when explicitly provided so we don't clobber the supplier-items price.
+    const pending = pendingInitialLinesRef.current;
+    if (pending) {
+      for (const wanted of pending) {
+        const target = seeded.find((s) => s.itemId === wanted.itemId);
+        if (target) {
+          target.qtyOrdered = wanted.qtyOrdered;
+          if (wanted.unitCost != null) target.unitCost = wanted.unitCost;
+        }
+      }
+      pendingInitialLinesRef.current = null;
+    }
+
     setLineItems(seeded);
     lastPopulatedSupplierRef.current = supplierId;
   }, [supplierId, supplierItemRows, supplierItemsLoading]);

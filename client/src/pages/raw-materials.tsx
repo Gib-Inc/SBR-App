@@ -22,7 +22,8 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
 import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send, RefreshCw, ExternalLink } from "lucide-react";
-import { NotifyVendorDialog, type NotifyVendorContext } from "@/components/notify-vendor-dialog";
+import { SupplierActionDialog, type SupplierActionContext } from "@/components/supplier-action-dialog";
+import { CreatePODialog } from "@/components/create-po-dialog";
 import { getOnlineSupplier } from "@/lib/online-suppliers";
 
 interface MaterialRow {
@@ -72,7 +73,12 @@ export default function RawMaterials() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "order" | "critical">("all");
   const [search, setSearch] = useState("");
-  const [notifyContext, setNotifyContext] = useState<NotifyVendorContext | null>(null);
+  const [actionContext, setActionContext] = useState<SupplierActionContext | null>(null);
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
+  const [poInitial, setPoInitial] = useState<{
+    supplierId: string;
+    lines: { itemId: string; qtyOrdered: number; unitCost?: number }[];
+  } | null>(null);
 
   // Refetch the dashboard when any item's stock changes server-side. Also
   // catches /api/items invalidations so any hidden cache stays in sync.
@@ -222,16 +228,41 @@ export default function RawMaterials() {
 
   const openNotify = (m: MaterialRow) => {
     if (!m.supplierId || !m.supplierName) return;
-    setNotifyContext({
-      supplierId: m.supplierId,
-      supplierName: m.supplierName,
+    const recommendedQty = m.orderQty > 0 ? m.orderQty : Math.max(1, Math.ceil(m.dailyUsage * 30));
+    const estimatedCost = m.unitCost != null ? Math.round(recommendedQty * m.unitCost * 100) / 100 : null;
+    setActionContext({
       itemId: m.id,
       itemName: m.name,
       sku: m.sku,
+      supplierId: m.supplierId,
+      supplierName: m.supplierName,
+      supplierSku: m.supplierSku,
       currentStock: m.onHand,
-      daysLeft: m.dailyUsage > 0 ? m.daysOfSupply : null,
-      suggestedQty: m.orderQty > 0 ? m.orderQty : Math.max(1, Math.ceil(m.dailyUsage * 30)),
+      dailyUsage: m.dailyUsage,
+      daysLeft: m.daysLeft,
+      leadTimeDays: m.leadTimeDays,
+      recommendedQty,
+      estimatedCost,
+      unitCost: m.unitCost,
     });
+  };
+
+  // Handler invoked by the action dialog when the operator picks "Create PO".
+  // We close the action modal and open CreatePODialog with the supplier and
+  // line pre-filled from the active context.
+  const handleCreatePOFromAction = () => {
+    if (!actionContext) return;
+    setPoInitial({
+      supplierId: actionContext.supplierId,
+      lines: [
+        {
+          itemId: actionContext.itemId,
+          qtyOrdered: actionContext.recommendedQty,
+          unitCost: actionContext.unitCost ?? undefined,
+        },
+      ],
+    });
+    setPoDialogOpen(true);
   };
 
   if (isLoading) {
@@ -631,10 +662,20 @@ export default function RawMaterials() {
         update the count.
       </p>
 
-      <NotifyVendorDialog
-        isOpen={notifyContext != null}
-        onClose={() => setNotifyContext(null)}
-        context={notifyContext}
+      <SupplierActionDialog
+        isOpen={actionContext != null}
+        onClose={() => setActionContext(null)}
+        context={actionContext}
+        onCreatePO={handleCreatePOFromAction}
+      />
+
+      <CreatePODialog
+        open={poDialogOpen}
+        onOpenChange={(open) => {
+          setPoDialogOpen(open);
+          if (!open) setPoInitial(null);
+        }}
+        initial={poInitial ?? undefined}
       />
     </div>
   );

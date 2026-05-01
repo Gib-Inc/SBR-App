@@ -33,7 +33,23 @@ type PO = {
   confirmedQty?: number | null;
   total: number | null;
   isHistorical?: boolean | null;
+  entrySource?: string | null;
 };
+
+const ENTRY_SOURCE_BADGE: Record<string, { label: string; emoji: string; className: string }> = {
+  invoice_upload: { label: "Invoice", emoji: "📷", className: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30" },
+  fx_anticipated: { label: "Anticipated", emoji: "📅", className: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30" },
+  manual:         { label: "Manual",     emoji: "⌨️", className: "bg-muted text-muted-foreground border-muted-foreground/20" },
+};
+function EntrySourceBadge({ src }: { src: string | null | undefined }) {
+  const meta = ENTRY_SOURCE_BADGE[src ?? "manual"] ?? ENTRY_SOURCE_BADGE.manual;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${meta.className}`}>
+      <span>{meta.emoji}</span>
+      {meta.label}
+    </span>
+  );
+}
 
 type POLineLite = {
   id: string;
@@ -240,9 +256,12 @@ export default function Incoming() {
                         <div className="text-xs"><DaysCell iso={row.expectedDate} /></div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={PO_STATUS_VARIANT[ps] ?? "secondary"}>
-                          {PO_STATUS_LABEL[ps] ?? ps}
-                        </Badge>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant={PO_STATUS_VARIANT[ps] ?? "secondary"}>
+                            {PO_STATUS_LABEL[ps] ?? ps}
+                          </Badge>
+                          <EntrySourceBadge src={row.entrySource} />
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
@@ -321,9 +340,12 @@ export default function Incoming() {
                         <div className="text-xs"><DaysCell iso={expected} /></div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={PO_STATUS_VARIANT[ps] ?? "secondary"}>
-                          {PO_STATUS_LABEL[ps] ?? ps}
-                        </Badge>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant={PO_STATUS_VARIANT[ps] ?? "secondary"}>
+                            {PO_STATUS_LABEL[ps] ?? ps}
+                          </Badge>
+                          <EntrySourceBadge src={row.entrySource} />
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

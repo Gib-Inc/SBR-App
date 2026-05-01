@@ -512,6 +512,23 @@ export const purchaseOrders = pgTable("purchase_orders", {
   // is the delivery ETA).
   confirmedQty: integer("confirmed_qty"),
   expectedCompletionDate: timestamp("expected_completion_date"),
+
+  // ── Order-logging + receive-accuracy fields ─────────────────────────
+  // expected_qty / expected_delivery are recorded on PO creation; the
+  // actual_* counterparts are written on quick-receive. accuracy_score
+  // and delivery_variance_days are derived on receive so reliability
+  // queries don't have to recompute. entry_source carries provenance
+  // for the Incoming page badges; invoice_total is the operator-typed
+  // invoice grand total which we trust over line-sum for accounting.
+  expectedQty: integer("expected_qty"),
+  actualQty: integer("actual_qty"),
+  expectedDelivery: date("expected_delivery"),
+  actualDelivery: date("actual_delivery"),
+  accuracyScore: real("accuracy_score"),
+  deliveryVarianceDays: integer("delivery_variance_days"),
+  entrySource: text("entry_source").notNull().default('manual'),
+  invoiceImageUrl: text("invoice_image_url"),
+  invoiceTotal: real("invoice_total"),
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),

@@ -175,6 +175,16 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // Products page priority grouping ('core_build' | 'combo' |
     // 'refurbished' | 'replacement' | 'accessory'; default accessory).
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS reorder_priority TEXT NOT NULL DEFAULT 'accessory'`,
+    // Order-logging + receive-accuracy fields on purchase_orders.
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS actual_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_delivery DATE`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS actual_delivery DATE`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS accuracy_score REAL`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delivery_variance_days INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS entry_source TEXT NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_image_url TEXT`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_total REAL`,
     // SKU mappings — created here too in case drizzle-kit push hasn't run.
     `CREATE TABLE IF NOT EXISTS sku_mappings (
        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

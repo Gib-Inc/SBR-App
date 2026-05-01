@@ -23477,20 +23477,26 @@ Generate only the email body text, no subject line.`;
         const supplier = si ? supplierById.get(si.supplierId) ?? null : null;
 
         // Units Buildable = MIN over products of floor(currentStock / qtyPerUnit).
-        // Tells the operator: "if I devoted this entire pile to the most-
-        // constrained product, how many of that product could I build?"
-        // Constrained-by name + velocity is the small-print hint under the
-        // headline in the UI cell.
+        // Tells the operator: "if I devoted this entire pile to the one product
+        // that needs the most components per build, how many could I build?"
         let unitsBuildable: number | null = null;
-        let constrainedByName: string | null = null;
-        let constrainedByDailySales = 0;
         for (const entry of usage.usedIn) {
           if (entry.qtyPerUnit <= 0) continue;
           const buildable = Math.floor(onHand / entry.qtyPerUnit);
           if (unitsBuildable == null || buildable < unitsBuildable) {
             unitsBuildable = buildable;
+          }
+        }
+        // Constrained-by hint surfaces the single highest-velocity product
+        // using this component. Per spec — the product moving the fastest is
+        // the one most likely to drain the component first; not necessarily
+        // the same product that produces the lowest buildable count.
+        let constrainedByName: string | null = null;
+        let constrainedByDailySales = 0;
+        for (const entry of usage.usedIn) {
+          if ((entry.dailySales || 0) > constrainedByDailySales) {
+            constrainedByDailySales = entry.dailySales || 0;
             constrainedByName = entry.productName;
-            constrainedByDailySales = entry.dailySales;
           }
         }
 

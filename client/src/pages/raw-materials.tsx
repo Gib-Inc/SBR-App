@@ -21,8 +21,9 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
-import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send, RefreshCw } from "lucide-react";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send, RefreshCw, ExternalLink } from "lucide-react";
 import { NotifyVendorDialog, type NotifyVendorContext } from "@/components/notify-vendor-dialog";
+import { getOnlineSupplier } from "@/lib/online-suppliers";
 
 interface MaterialRow {
   id: string;
@@ -39,7 +40,13 @@ interface MaterialRow {
   unitCost: number | null;
   supplierId: string | null;
   supplierName: string | null;
+  supplierSku: string | null;
   leadTimeDays: number | null;
+  unitsBuildable: number | null;
+  constrainedByName: string | null;
+  constrainedByDailySales: number;
+  totalProductVelocity: number;
+  daysLeft: number | null;
   usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[];
 }
 
@@ -196,18 +203,20 @@ export default function RawMaterials() {
   };
 
   // Lead-time-based urgency: red when we'll stock out before a reorder can
-  // arrive, amber when we're inside a 1.5× safety buffer. Falls back to the
-  // 7/14 day heuristic when the item has no designated supplier lead time.
+  // arrive, amber when we're inside a 1.5× safety buffer. Uses the new
+  // daysLeft (unitsBuildable / Σ velocity) as the primary signal; falls back
+  // to a 7/14-day heuristic when there's no demand or no lead time on file.
   const leadTimeUrgency = (m: MaterialRow): "red" | "amber" | "ok" => {
-    if (m.dailyUsage <= 0) return "ok";
+    const days = m.daysLeft;
+    if (days == null) return "ok";
     const lead = m.leadTimeDays ?? 0;
     if (lead > 0) {
-      if (m.daysOfSupply < lead) return "red";
-      if (m.daysOfSupply < lead * 1.5) return "amber";
+      if (days < lead) return "red";
+      if (days < lead * 1.5) return "amber";
       return "ok";
     }
-    if (m.daysOfSupply < 7) return "red";
-    if (m.daysOfSupply < 14) return "amber";
+    if (days < 7) return "red";
+    if (days < 14) return "amber";
     return "ok";
   };
 
@@ -401,8 +410,7 @@ export default function RawMaterials() {
                 <TableRow>
                   <TableHead className="min-w-[200px]">Material</TableHead>
                   <TableHead className="text-right min-w-[100px]">On Hand</TableHead>
-                  <TableHead className="text-right hidden md:table-cell">Daily Use</TableHead>
-                  <TableHead className="text-right">Days Left</TableHead>
+                  <TableHead className="text-right min-w-[180px]">Stock · Days</TableHead>
                   <TableHead className="text-right">Order Qty</TableHead>
                   <TableHead className="text-right hidden md:table-cell">Order Cost</TableHead>
                   <TableHead className="text-right">Status</TableHead>
@@ -427,6 +435,23 @@ export default function RawMaterials() {
                                 ⚠️ Reorder
                               </Badge>
                             )}
+                            {(() => {
+                              const online = getOnlineSupplier(m.supplierName);
+                              if (!online) return null;
+                              const query = (m.supplierSku?.trim() || m.name).trim();
+                              return (
+                                <a
+                                  href={online.searchUrl(query)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+                                  data-testid={`order-online-${m.id}`}
+                                >
+                                  Order <ExternalLink className="h-3 w-3" />
+                                </a>
+                              );
+                            })()}
                           </div>
                           <div className="text-xs text-muted-foreground font-mono">{m.sku}</div>
                           {suggestedMin(m) !== null && (
@@ -477,27 +502,56 @@ export default function RawMaterials() {
                           </TooltipProvider>
                         )}
                       </TableCell>
-                      <TableCell className="text-right hidden md:table-cell text-muted-foreground">
-                        {m.dailyUsage > 0 ? m.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 }) : "–"}
-                        {m.dailyUsage > 0 && <span className="text-xs ml-0.5">/{m.unit}</span>}
-                      </TableCell>
                       <TableCell className="text-right">
-                        {m.dailyUsage > 0 ? (
-                          <span
-                            className={
-                              leadTimeUrgency(m) === "red"
-                                ? "text-destructive font-bold"
-                                : leadTimeUrgency(m) === "amber"
-                                  ? "text-amber-600 font-semibold"
-                                  : ""
-                            }
-                            title={m.leadTimeDays ? `Lead time: ${m.leadTimeDays}d` : "No lead time on file"}
-                          >
-                            {m.daysOfSupply}d
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">–</span>
-                        )}
+                        {(() => {
+                          const urgency = leadTimeUrgency(m);
+                          const colorClass =
+                            urgency === "red"
+                              ? "text-destructive font-bold"
+                              : urgency === "amber"
+                                ? "text-amber-600 font-semibold"
+                                : "text-green-700 dark:text-green-400 font-semibold";
+                          const buildable = m.unitsBuildable;
+                          const days = m.daysLeft;
+                          if (buildable == null || m.totalProductVelocity <= 0) {
+                            return <span className="text-muted-foreground">–</span>;
+                          }
+                          // Tooltip: per-product breakdown showing how the
+                          // component-daily-usage figure is built up. Different
+                          // from the daysLeft denominator (Σ product velocities)
+                          // — this view is "what depletes the component".
+                          const breakdown = m.usedIn
+                            .filter((u) => u.dailySales > 0)
+                            .map(
+                              (u) =>
+                                `${u.productName}: ${u.dailySales.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day × ${u.qtyPerUnit} = ${(u.dailySales * u.qtyPerUnit).toLocaleString(undefined, { maximumFractionDigits: 1 })}`,
+                            )
+                            .join("\n");
+                          const tooltipText = breakdown
+                            ? `${breakdown}\n= ${m.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day total component depletion`
+                            : "No demand on this component";
+                          return (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex flex-col items-end leading-tight cursor-help">
+                                    <span className={`tabular-nums ${colorClass}`}>
+                                      {buildable.toLocaleString()} units · {days != null ? `${days}d` : "—"}
+                                    </span>
+                                    {m.constrainedByName && (
+                                      <span className="text-[11px] text-muted-foreground">
+                                        Constrained by: {m.constrainedByName} ({m.constrainedByDailySales.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day)
+                                      </span>
+                                    )}
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-md whitespace-pre-line">
+                                  {tooltipText}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-right font-semibold">
                         {m.orderQty > 0 ? m.orderQty.toLocaleString() : "–"}
@@ -531,7 +585,7 @@ export default function RawMaterials() {
                     {/* Expanded row: shows which products use this material */}
                     {expandedId === m.id && m.usedIn.length > 0 && (
                       <TableRow key={`${m.id}-detail`} className="bg-muted/30">
-                        <TableCell colSpan={8} className="py-3">
+                        <TableCell colSpan={7} className="py-3">
                           <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                             <Clock className="h-3 w-3" />
                             Used in {m.usedIn.length} product{m.usedIn.length > 1 ? "s" : ""}:
@@ -553,7 +607,7 @@ export default function RawMaterials() {
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                       {trimmedSearch
                         ? `No materials found matching "${trimmedSearch}"`
                         : filter !== "all"
@@ -569,10 +623,12 @@ export default function RawMaterials() {
       </Card>
 
       <p className="text-xs text-muted-foreground">
-        Daily usage is calculated from sales velocity over the last 90 days × BOM quantities.
-        "Order Qty" targets 30 days of supply. Days Left turns red when below the supplier's
-        lead time (you'll run out before reorder arrives) and amber inside a 1.5× buffer.
-        Tap any On Hand number to update the count.
+        Stock · Days reads as "{`{units buildable} units · {days left}d`}". Units Buildable is
+        the most-constrained product (floor(stock / qty-per-unit)); Days Left = Units Buildable
+        ÷ Σ daily sales across all products that use this component, sourced live from the last
+        90 days of sales_order_lines. Color turns red below the supplier's lead time, amber
+        inside a 1.5× buffer. Hover for the per-product breakdown. Tap any On Hand number to
+        update the count.
       </p>
 
       <NotifyVendorDialog

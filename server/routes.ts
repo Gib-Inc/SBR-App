@@ -23476,6 +23476,34 @@ Generate only the email body text, no subject line.`;
         const si = pickSupplierItem(comp.id);
         const supplier = si ? supplierById.get(si.supplierId) ?? null : null;
 
+        // Units Buildable = MIN over products of floor(currentStock / qtyPerUnit).
+        // Tells the operator: "if I devoted this entire pile to the most-
+        // constrained product, how many of that product could I build?"
+        // Constrained-by name + velocity is the small-print hint under the
+        // headline in the UI cell.
+        let unitsBuildable: number | null = null;
+        let constrainedByName: string | null = null;
+        let constrainedByDailySales = 0;
+        for (const entry of usage.usedIn) {
+          if (entry.qtyPerUnit <= 0) continue;
+          const buildable = Math.floor(onHand / entry.qtyPerUnit);
+          if (unitsBuildable == null || buildable < unitsBuildable) {
+            unitsBuildable = buildable;
+            constrainedByName = entry.productName;
+            constrainedByDailySales = entry.dailySales;
+          }
+        }
+
+        // daysLeft = unitsBuildable / Σ(dailySales). Operator-facing
+        // "how long until I can no longer build the most-constrained product
+        // if all sales pull through". Distinct from daysOfSupply (which is
+        // component-on-hand / component-daily-usage).
+        const totalProductVelocity = usage.usedIn.reduce((s, e) => s + (e.dailySales || 0), 0);
+        const daysLeft =
+          unitsBuildable != null && totalProductVelocity > 0
+            ? Math.round((unitsBuildable / totalProductVelocity) * 10) / 10
+            : null;
+
         return {
           id: comp.id,
           name: comp.name,
@@ -23491,7 +23519,13 @@ Generate only the email body text, no subject line.`;
           unitCost: comp.defaultPurchaseCost ?? null,
           supplierId: supplier?.id ?? null,
           supplierName: supplier?.name ?? null,
+          supplierSku: si?.supplierSku ?? null,
           leadTimeDays: si?.leadTimeDays ?? null,
+          unitsBuildable,
+          constrainedByName,
+          constrainedByDailySales: Math.round(constrainedByDailySales * 10) / 10,
+          totalProductVelocity: Math.round(totalProductVelocity * 10) / 10,
+          daysLeft,
           usedIn: usage.usedIn,
         };
       });

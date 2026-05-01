@@ -63,6 +63,8 @@ type POForSection = {
   supplierId: string | null;
   orderDate: string | null;
   expectedDate: string | null;
+  expectedCompletionDate?: string | null;
+  confirmedQty?: number | null;
   poStatus?: string | null;
 };
 
@@ -197,6 +199,8 @@ export function POInTransitSection({
           </div>
         </div>
 
+        {isFxPO && <FxConfirmationFields po={po} />}
+
         <div className="flex items-center gap-3">
           <div className="text-sm font-medium">Build status:</div>
           <Select
@@ -262,5 +266,104 @@ export function POInTransitSection({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// Inline editable confirmation fields for FX POs. Saves via the existing
+// PATCH /api/purchase-orders/:id (which accepts partial updates of any
+// schema field). Lets Matt or Sammie record what FX agreed to build and
+// when, separate from the operator-facing build-status dropdown.
+function FxConfirmationFields({ po }: { po: POForSection }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [confirmedQty, setConfirmedQty] = useState(
+    po.confirmedQty != null ? String(po.confirmedQty) : "",
+  );
+  const [completionDate, setCompletionDate] = useState(
+    po.expectedCompletionDate
+      ? new Date(po.expectedCompletionDate).toISOString().slice(0, 10)
+      : "",
+  );
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const body: Record<string, any> = {};
+      if (confirmedQty.trim() === "") {
+        body.confirmedQty = null;
+      } else {
+        const n = Number(confirmedQty);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+          throw new Error("Confirmed qty must be a non-negative integer");
+        }
+        body.confirmedQty = n;
+      }
+      body.expectedCompletionDate = completionDate
+        ? new Date(completionDate).toISOString()
+        : null;
+      const res = await apiRequest("PATCH", `/api/purchase-orders/${po.id}`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/purchase-orders/${po.id}/composite`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      toast({ title: "FX confirmation saved" });
+    },
+    onError: (err: Error) => {
+      toast({ variant: "destructive", title: "Save failed", description: err.message });
+    },
+  });
+
+  return (
+    <div className="rounded-md border bg-amber-500/5 border-amber-500/30 p-3 space-y-2">
+      <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+        FX confirmation
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground" htmlFor={`fx-conf-qty-${po.id}`}>
+            Confirmed qty
+          </label>
+          <input
+            id={`fx-conf-qty-${po.id}`}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            step={1}
+            value={confirmedQty}
+            onChange={(e) => setConfirmedQty(e.target.value)}
+            className="flex h-9 w-full rounded-md border bg-background px-3 py-1 text-sm"
+            placeholder="(blank = same as ordered)"
+            data-testid="input-fx-confirmed-qty"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-muted-foreground" htmlFor={`fx-comp-date-${po.id}`}>
+            Expected completion
+          </label>
+          <input
+            id={`fx-comp-date-${po.id}`}
+            type="date"
+            value={completionDate}
+            onChange={(e) => setCompletionDate(e.target.value)}
+            className="flex h-9 w-full rounded-md border bg-background px-3 py-1 text-sm"
+            data-testid="input-fx-completion-date"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => mutation.mutate()}
+          disabled={mutation.isPending}
+          className="h-9 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          data-testid="button-save-fx-confirmation"
+        >
+          {mutation.isPending ? "Saving…" : "Save"}
+        </button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Confirmed qty is what FX agreed to build (often less than ordered if they're capacity-
+        constrained). When set on a single-line PO, the auto-update on status changes uses this
+        value instead of the original qty.
+      </p>
+    </div>
   );
 }

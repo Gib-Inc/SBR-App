@@ -14680,6 +14680,207 @@ Notes: ${po.notes || 'None'}
   //                      they actually need to undo a real receipt)
   //
   // Non-FX POs and component lines update poStatus only — no side effects.
+  // Quick-log: create a single-line PO when an operator placed an order
+  // directly on a supplier site (e.g. McMaster, Uline). Body shape:
+  //   { supplierId, itemId, qtyOrdered, unitCost? | totalCost?,
+  //     invoiceNumber?, expectedDate? }
+  // Total cost wins when both are passed; we back-derive unit cost from
+  // total/qty so the line totals are still meaningful. Status is hard-set
+  // to 'ordered' on both axes (status='ordered' and po_status='ordered')
+  // since the operator has just placed the order externally.
+  app.post("/api/purchase-orders/quick-log", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
+      const qtyOrdered = Number(body.qtyOrdered);
+      const totalCost = body.totalCost != null ? Number(body.totalCost) : null;
+      const unitCostRaw = body.unitCost != null ? Number(body.unitCost) : null;
+      const invoiceNumber = typeof body.invoiceNumber === "string" ? body.invoiceNumber.trim() : "";
+
+      if (!supplierId) return res.status(400).json({ error: "supplierId is required" });
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!Number.isFinite(qtyOrdered) || !Number.isInteger(qtyOrdered) || qtyOrdered <= 0) {
+        return res.status(400).json({ error: "qtyOrdered must be a positive integer" });
+      }
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+
+      const unitCost =
+        totalCost != null && totalCost > 0
+          ? Math.round((totalCost / qtyOrdered) * 100) / 100
+          : unitCostRaw != null && unitCostRaw > 0
+            ? unitCostRaw
+            : 0;
+      const lineTotal = Math.round(qtyOrdered * unitCost * 100) / 100;
+      const subtotal = lineTotal;
+
+      let expectedDate: Date | null = null;
+      if (body.expectedDate) {
+        const d = new Date(body.expectedDate);
+        if (!Number.isNaN(d.getTime())) expectedDate = d;
+      }
+
+      const poNumber = await storage.getNextPONumber();
+      const noteParts: string[] = [`[quick-log] external order placed by operator`];
+      if (invoiceNumber) noteParts.push(`invoice/order #: ${invoiceNumber}`);
+
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        supplierEmail: supplier.email ?? null,
+        currency: "USD",
+        status: "SENT",
+        poStatus: "ordered",
+        subtotal,
+        total: subtotal,
+        totalItemsOrdered: qtyOrdered,
+        expectedDate,
+        notes: noteParts.join(" — "),
+      } as any);
+
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po.id,
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        unitOfMeasure: (item as any).unit ?? "EA",
+        qtyOrdered,
+        unitCost,
+        lineTotal,
+      });
+
+      res.status(201).json({ purchaseOrder: po });
+    } catch (error: any) {
+      console.error("[Quick-Log PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to log order" });
+    }
+  });
+
+  // Simplified one-screen receive flow used by Clarence's /incoming page.
+  // Closes the entire PO regardless of partial qty. Body:
+  //   { quantityReceived: number, notes?: string }
+  // For FX POs (supplierId='1') with finished_product lines, runs the
+  // RECEIVED_FROM_FX flow per line: fxInProcessQty -= line.qtyOrdered
+  // (floor 0), hildaleQty += quantityReceived (split evenly across finished
+  // lines if multiple). For component POs, currentStock += quantityReceived
+  // (split evenly across component lines).
+  //
+  // The "received qty" is treated as a single number for the whole PO since
+  // Clarence's typical case is single-line. For multi-line POs we do a
+  // proportional best-effort split — operators with multi-line discrepancies
+  // should use the existing Receive Stock workflow instead.
+  app.post("/api/purchase-orders/:id/quick-receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const qty = Number(req.body?.quantityReceived);
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 0) {
+        return res.status(400).json({ error: "quantityReceived must be a non-negative integer" });
+      }
+
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) return res.status(404).json({ error: "Purchase order not found" });
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      if (lines.length === 0) {
+        return res.status(400).json({ error: "PO has no lines to receive" });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const isFx = po.supplierId === "1";
+      const noteTag = notes
+        ? `[quick-receive] ${notes}`
+        : `[quick-receive] received as ordered`;
+
+      // Split the operator's single qty across lines proportionally to each
+      // line's qtyOrdered. Single-line POs get the full number; multi-line
+      // POs get a best-effort distribution that adds up to the input.
+      const totalOrdered = lines.reduce((s, l) => s + (l.qtyOrdered ?? 0), 0);
+      const allocated: number[] = [];
+      let remaining = qty;
+      for (let i = 0; i < lines.length; i++) {
+        if (i === lines.length - 1) {
+          allocated.push(remaining);
+        } else {
+          const share = totalOrdered > 0
+            ? Math.round((qty * (lines[i].qtyOrdered ?? 0)) / totalOrdered)
+            : 0;
+          allocated.push(share);
+          remaining -= share;
+        }
+      }
+
+      const applied: Array<{ sku: string; received: number; effect: string }> = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const recv = Math.max(0, allocated[i] ?? 0);
+        if (recv === 0) continue;
+        const item = await storage.getItem(line.itemId);
+        if (!item) continue;
+
+        if (isFx && item.type === "finished_product") {
+          const fxBefore = item.fxInProcessQty ?? 0;
+          const lineQty = line.qtyOrdered ?? 0;
+          const fxAfter = Math.max(0, fxBefore - lineQty);
+          const hildaleAfter = (item.hildaleQty ?? 0) + recv;
+          await storage.updateItem(item.id, {
+            fxInProcessQty: fxAfter,
+            hildaleQty: hildaleAfter,
+          });
+          await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "FINISHED",
+            type: "RECEIVED_FROM_FX",
+            location: "HILDALE",
+            quantity: recv,
+            createdBy: userId,
+            createdByName: userName,
+            notes: noteTag + ` (PO ${po.poNumber})`,
+          });
+          applied.push({ sku: item.sku, received: recv, effect: "fx→hildale" });
+        } else if (item.type === "component") {
+          const newStock = (item.currentStock ?? 0) + recv;
+          await storage.updateItem(item.id, { currentStock: newStock });
+          await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "RAW",
+            type: "RECEIVE",
+            location: "N/A",
+            quantity: recv,
+            supplierId: po.supplierId ?? null,
+            createdBy: userId,
+            createdByName: userName,
+            notes: noteTag + ` (PO ${po.poNumber})`,
+          });
+          applied.push({ sku: item.sku, received: recv, effect: "stock+=" });
+        }
+        // Bump qtyReceived on the line for the audit trail.
+        await storage.updatePurchaseOrderLine(line.id, {
+          qtyReceived: (line.qtyReceived ?? 0) + recv,
+        } as any);
+      }
+
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: "RECEIVED",
+        poStatus: "received",
+        receivedAt: new Date(),
+      } as any);
+
+      res.json({ purchaseOrder: updated, applied });
+    } catch (error: any) {
+      console.error("[Quick-Receive PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to receive PO" });
+    }
+  });
+
   app.patch("/api/purchase-orders/:id/po-status", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -14713,10 +14914,18 @@ Notes: ${po.notes || 'None'}
 
       if (inventoryEligible) {
         const lines = await storage.getPurchaseOrderLinesByPOId(id);
+        // If FX confirmedQty is set and the PO is single-line, use the
+        // confirmed amount instead of the originally-ordered qty so the
+        // fx_in_process_qty delta reflects what FX actually agreed to
+        // build. Multi-line POs fall back to qtyOrdered — no clean way
+        // to apportion a single confirmedQty across lines without extra
+        // metadata; the operator can adjust via the inventory FX modal.
+        const useConfirmed =
+          lines.length === 1 && (po as any).confirmedQty != null && (po as any).confirmedQty >= 0;
         for (const line of lines) {
           const item = await storage.getItem(line.itemId);
           if (!item || item.type !== "finished_product") continue;
-          const qty = line.qtyOrdered ?? 0;
+          const qty = useConfirmed ? ((po as any).confirmedQty as number) : (line.qtyOrdered ?? 0);
           if (qty <= 0) continue;
           const fxBefore = item.fxInProcessQty ?? 0;
           const hildaleBefore = item.hildaleQty ?? 0;

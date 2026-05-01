@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -106,6 +107,14 @@ export function SupplierActionDialog({
   const [emailMode, setEmailMode] = useState(false);
   const [message, setMessage] = useState("");
   const [actionsTaken, setActionsTaken] = useState<ActionTaken[]>([]);
+  // After "Order Online", give the operator a follow-up form to log the
+  // order they just placed externally (invoice number, total cost, ETA).
+  // Hidden until they actually click Order Online.
+  const [logOrderMode, setLogOrderMode] = useState(false);
+  const [logQty, setLogQty] = useState("");
+  const [logInvoice, setLogInvoice] = useState("");
+  const [logCost, setLogCost] = useState("");
+  const [logExpected, setLogExpected] = useState("");
 
   const defaultMessage = useMemo(
     () => (context ? buildEmailMessage(context, sentBy) : ""),
@@ -117,9 +126,19 @@ export function SupplierActionDialog({
   useEffect(() => {
     if (isOpen) {
       setEmailMode(false);
+      setLogOrderMode(false);
       setMessage(defaultMessage);
       setActionsTaken([]);
       prevSenderRef.current = sentBy;
+      // Seed log-order defaults from the situation context.
+      if (context) {
+        setLogQty(String(context.recommendedQty));
+        setLogCost(context.estimatedCost != null ? String(context.estimatedCost) : "");
+        const eta = new Date();
+        eta.setDate(eta.getDate() + (context.leadTimeDays ?? 7));
+        setLogExpected(eta.toISOString().slice(0, 10));
+        setLogInvoice("");
+      }
     }
     // Re-seed only on (re)open or item swap. Sender changes are handled by
     // the next effect.
@@ -258,7 +277,47 @@ export function SupplierActionDialog({
     });
   };
 
-  const busy = sendEmailMutation.isPending;
+  const quickLogMutation = useMutation({
+    mutationFn: async () => {
+      if (!context) throw new Error("No context");
+      const qNum = Number(logQty);
+      const cNum = logCost ? Number(logCost) : null;
+      if (!Number.isFinite(qNum) || !Number.isInteger(qNum) || qNum <= 0) {
+        throw new Error("Quantity must be a positive whole number");
+      }
+      const res = await apiRequest("POST", "/api/purchase-orders/quick-log", {
+        supplierId: context.supplierId,
+        itemId: context.itemId,
+        qtyOrdered: qNum,
+        totalCost: cNum,
+        invoiceNumber: logInvoice.trim() || undefined,
+        expectedDate: logExpected || undefined,
+      });
+      return res.json() as Promise<{ purchaseOrder: { id: string; poNumber: string } }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      invalidateAfter();
+      toast({
+        title: "Order logged",
+        description: `PO ${data.purchaseOrder.poNumber} created.`,
+      });
+      recordAction({
+        kind: "online",
+        label: `Logged: ${data.purchaseOrder.poNumber}`,
+        sentBy,
+        at: new Date(),
+        detail: logInvoice ? `invoice ${logInvoice}` : `${logQty} units`,
+      });
+      setLogOrderMode(false);
+    },
+    onError: (err: Error) => {
+      toast({ variant: "destructive", title: "Log failed", description: err.message });
+    },
+  });
+
+  const busy = sendEmailMutation.isPending || quickLogMutation.isPending;
+  const lastActionWasOnline = actionsTaken.some((a) => a.kind === "online");
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && !busy && onClose()}>
@@ -413,6 +472,109 @@ export function SupplierActionDialog({
             </div>
           )}
         </section>
+
+        {/* "Just ordered this" follow-up — appears after Order Online,
+            offers a 4-field form that creates a PO from the externally-
+            placed order. Hidden until the operator clicks Order Online
+            so we don't clutter the modal up-front. */}
+        {context && lastActionWasOnline && !logOrderMode && (
+          <section
+            className="rounded-md border border-blue-500/40 bg-blue-500/10 p-3 flex items-center justify-between gap-3"
+            data-testid="just-ordered-prompt"
+          >
+            <span className="text-sm font-medium">Did you place the order? Log it so it shows on Incoming.</span>
+            <Button size="sm" onClick={() => setLogOrderMode(true)} data-testid="button-open-log-order">
+              Log it →
+            </Button>
+          </section>
+        )}
+
+        {context && logOrderMode && (
+          <section
+            className="rounded-md border bg-background p-3 space-y-3"
+            data-testid="log-order-form"
+          >
+            <div className="font-semibold text-sm">Log the order you just placed</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="text-xs text-muted-foreground">Supplier</div>
+                <div className="font-medium">{context.supplierName}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Item</div>
+                <div className="font-medium truncate">{context.sku} — {context.itemName}</div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="log-qty">Quantity</Label>
+                <Input
+                  id="log-qty"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
+                  value={logQty}
+                  onChange={(e) => setLogQty(e.target.value)}
+                  data-testid="input-log-qty"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="log-cost">Total cost</Label>
+                <Input
+                  id="log-cost"
+                  type="number"
+                  inputMode="decimal"
+                  min={0}
+                  step={0.01}
+                  value={logCost}
+                  onChange={(e) => setLogCost(e.target.value)}
+                  data-testid="input-log-cost"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="log-invoice">Invoice / order #</Label>
+                <Input
+                  id="log-invoice"
+                  type="text"
+                  value={logInvoice}
+                  onChange={(e) => setLogInvoice(e.target.value)}
+                  data-testid="input-log-invoice"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="log-expected">Expected delivery</Label>
+                <Input
+                  id="log-expected"
+                  type="date"
+                  value={logExpected}
+                  onChange={(e) => setLogExpected(e.target.value)}
+                  data-testid="input-log-expected"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Defaults to today + supplier lead time ({context.leadTimeDays ?? 7}d).
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setLogOrderMode(false)}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => quickLogMutation.mutate()}
+                disabled={busy || !logQty}
+                data-testid="button-confirm-log-order"
+              >
+                {quickLogMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : null}
+                Confirm Order
+              </Button>
+            </div>
+          </section>
+        )}
 
         {/* SECTION 3 — Log */}
         {actionsTaken.length > 0 && (

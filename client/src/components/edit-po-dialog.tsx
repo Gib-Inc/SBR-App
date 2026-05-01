@@ -409,6 +409,12 @@ export function EditPODialog({
                   ? purchaseOrder.expectedDate
                   : (purchaseOrder.expectedDate as Date).toISOString()
                 : null,
+              expectedCompletionDate: (purchaseOrder as any).expectedCompletionDate
+                ? typeof (purchaseOrder as any).expectedCompletionDate === "string"
+                  ? (purchaseOrder as any).expectedCompletionDate
+                  : ((purchaseOrder as any).expectedCompletionDate as Date).toISOString()
+                : null,
+              confirmedQty: (purchaseOrder as any).confirmedQty ?? null,
               poStatus: (purchaseOrder as any).poStatus ?? "ordered",
             }}
             supplier={compositeData.supplier ?? null}

@@ -114,7 +114,21 @@ export async function handleOrderCreated(
       if (payload.line_items) {
         for (const lineItem of payload.line_items) {
           const sku = lineItem.sku || `SHOPIFY-${lineItem.id}`;
-          const item = await storage.getItemBySku(sku);
+          // Try the raw SKU first (most orders match directly), then fall
+          // through to the sku_mappings table for legacy aliases like
+          // "SBR-Classic1.0" → "SBR-PUSH-1.0". Strip the "SKU: " prefix as
+          // a final fallback to match historical imports.
+          let item = await storage.getItemBySku(sku);
+          if (!item) {
+            const stripped = sku.replace(/^SKU:\s*/i, "");
+            if (stripped !== sku) item = await storage.getItemBySku(stripped);
+          }
+          if (!item) {
+            const canonical =
+              (await storage.findCanonicalSku(sku, "shopify")) ??
+              (await storage.findCanonicalSku(sku.replace(/^SKU:\s*/i, ""), "shopify"));
+            if (canonical) item = await storage.getItemBySku(canonical);
+          }
           const productName = lineItem.title || lineItem.name || sku;
           
           lineItemsWithProducts.push({

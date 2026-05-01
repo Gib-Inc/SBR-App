@@ -6977,6 +6977,298 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // Shopify - Sync Recent Orders (with merge/replace mode support)
+  // SKU MAPPINGS — list, orphan detection, CRUD. Used by /sku-mappings page
+  // and consulted by the Shopify backfill endpoint.
+  app.get("/api/sku-mappings", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const mappings = await storage.getAllSkuMappings();
+      res.json(mappings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message ?? "Failed to load mappings" });
+    }
+  });
+
+  // Orphan detection — SKUs that appear on sales_order_lines but have no
+  // mapping AND no exact match on items.sku. These are the rows the operator
+  // needs to triage from the SKU mappings admin page.
+  app.get("/api/sku-mappings/orphans", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const allItems = await storage.getAllItems();
+      const knownSkus = new Set(allItems.map((i) => i.sku));
+      const allMappings = await storage.getAllSkuMappings();
+      const mapped = new Set(allMappings.map((m) => `${m.source.toLowerCase()}:${m.externalSku}`));
+
+      const allOrders = await storage.getAllSalesOrders();
+      const counts = new Map<string, { sku: string; source: string; orderCount: number; totalUnits: number }>();
+      for (const order of allOrders) {
+        const lines = await storage.getSalesOrderLines(order.id);
+        const channel = (order.channel ?? "shopify").toLowerCase();
+        for (const line of lines) {
+          if (!line.sku) continue;
+          // Strip the "SKU: " prefix the same way findCanonicalSku does so
+          // we don't show a stripped/unstripped pair as two orphans.
+          const stripped = line.sku.replace(/^SKU:\s*/i, "");
+          if (knownSkus.has(stripped)) continue;
+          if (mapped.has(`${channel}:${stripped}`) || mapped.has(`${channel}:${line.sku}`)) continue;
+          const key = `${channel}::${stripped}`;
+          const existing = counts.get(key) ?? { sku: stripped, source: channel, orderCount: 0, totalUnits: 0 };
+          existing.orderCount += 1;
+          existing.totalUnits += line.qtyOrdered ?? 0;
+          counts.set(key, existing);
+        }
+      }
+      const orphans = Array.from(counts.values()).sort((a, b) => b.totalUnits - a.totalUnits);
+      res.json({ orphans });
+    } catch (error: any) {
+      console.error("[SKU Orphans] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to compute orphans" });
+    }
+  });
+
+  app.post("/api/sku-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const externalSku = typeof body.externalSku === "string" ? body.externalSku.trim() : "";
+      const canonicalSku = typeof body.canonicalSku === "string" ? body.canonicalSku.trim() : "";
+      const source = typeof body.source === "string" ? body.source.trim().toLowerCase() : "manual";
+      const notes = typeof body.notes === "string" ? body.notes : null;
+      if (!externalSku || !canonicalSku) {
+        return res.status(400).json({ error: "externalSku and canonicalSku are required" });
+      }
+      const created = await storage.createSkuMapping({ externalSku, canonicalSku, source, notes });
+      res.status(201).json(created);
+    } catch (error: any) {
+      // Unique-violation on (external_sku, source).
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A mapping already exists for that external SKU + source." });
+      }
+      res.status(500).json({ error: error.message ?? "Failed to create mapping" });
+    }
+  });
+
+  app.patch("/api/sku-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const body = req.body as Record<string, any>;
+      const patch: any = {};
+      if (typeof body.externalSku === "string") patch.externalSku = body.externalSku.trim();
+      if (typeof body.canonicalSku === "string") patch.canonicalSku = body.canonicalSku.trim();
+      if (typeof body.source === "string") patch.source = body.source.trim().toLowerCase();
+      if ("notes" in body) patch.notes = typeof body.notes === "string" ? body.notes : null;
+      const updated = await storage.updateSkuMapping(id, patch);
+      if (!updated) return res.status(404).json({ error: "Mapping not found" });
+      res.json(updated);
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A mapping already exists for that external SKU + source." });
+      }
+      res.status(500).json({ error: error.message ?? "Failed to update mapping" });
+    }
+  });
+
+  app.delete("/api/sku-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const ok = await storage.deleteSkuMapping(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Mapping not found" });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message ?? "Failed to delete mapping" });
+    }
+  });
+
+  // SHOPIFY HISTORICAL BACKFILL — fetches orders from the Shopify Admin API
+  // for a date range and inserts them into sales_orders + sales_order_lines.
+  // Idempotent on externalOrderId (skips orders already in the DB). Resolves
+  // line-item SKUs through sku_mappings before looking up items.id, so
+  // legacy aliases like "SBR-Classic1.0" land on "SBR-PUSH-1.0".
+  //
+  // Body: { dateFrom: 'YYYY-MM-DD', dateTo: 'YYYY-MM-DD' (optional) }
+  // Response shape:
+  //   { totalFetched, inserted, skippedExisting, unmappedSkuCount, durationMs }
+  //
+  // NB: Bypasses inventory side-effects on purpose. Backfilling 2 years of
+  // sales orders should not retroactively decrement availableForSaleQty —
+  // that would corrupt the live position. Lines are inserted with
+  // qtyAllocated=0 and the rawPayload preserved on the order so the
+  // historical record is intact.
+  app.post("/api/integrations/shopify/backfill-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const dateFromStr = typeof body.dateFrom === "string" ? body.dateFrom.trim() : "";
+      const dateToStr = typeof body.dateTo === "string" ? body.dateTo.trim() : "";
+      if (!dateFromStr) return res.status(400).json({ error: "dateFrom is required (YYYY-MM-DD)" });
+      const dateFrom = new Date(dateFromStr);
+      if (Number.isNaN(dateFrom.getTime())) {
+        return res.status(400).json({ error: "dateFrom is not a valid date" });
+      }
+      const dateTo = dateToStr ? new Date(dateToStr) : new Date();
+      if (Number.isNaN(dateTo.getTime())) {
+        return res.status(400).json({ error: "dateTo is not a valid date" });
+      }
+
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, "SHOPIFY");
+      const apiKey = config?.apiKey || process.env.SHOPIFY_ADMIN_API_KEY || process.env.SHOPIFY_ACCESS_TOKEN;
+      const cfg = (config?.config as Record<string, any>) || {};
+      const shopDomain = cfg.shopDomain || cfg.storeUrl || process.env.SHOPIFY_STORE_DOMAIN;
+      if (!apiKey || !shopDomain) {
+        return res.status(400).json({ error: "Shopify integration not configured" });
+      }
+
+      const startedAt = Date.now();
+      const allItems = await storage.getAllItems();
+      const itemBySku = new Map(allItems.map((i) => [i.sku, i] as const));
+
+      let totalFetched = 0;
+      let inserted = 0;
+      let skippedExisting = 0;
+      let pageCount = 0;
+      const unmappedSkus = new Set<string>();
+
+      // Iterate Shopify's cursor pagination using the same Link-header pattern
+      // the existing client uses. We deliberately don't use the existing
+      // ShopifyClient.syncAllOrders helper because it has no date-range
+      // bound and we want to chunk by 100 for progress reporting.
+      const PAGE_SIZE = 100;
+      const baseUrl = shopDomain.startsWith("http") ? shopDomain : `https://${shopDomain}`;
+      const adminUrl = `${baseUrl.replace(/\/$/, "")}/admin/api/2024-01`;
+      const params = new URLSearchParams({
+        status: "any",
+        created_at_min: dateFrom.toISOString(),
+        created_at_max: dateTo.toISOString(),
+        limit: String(PAGE_SIZE),
+      });
+      let nextUrl: string | null = `${adminUrl}/orders.json?${params.toString()}`;
+      const headers = { "X-Shopify-Access-Token": apiKey, "Content-Type": "application/json" };
+
+      while (nextUrl) {
+        const response = await fetch(nextUrl, { headers });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Shopify API ${response.status}: ${text.slice(0, 200)}`);
+        }
+        const data = await response.json();
+        const orders: any[] = data.orders ?? [];
+        pageCount++;
+        totalFetched += orders.length;
+        console.log(`[Shopify Backfill] Page ${pageCount}: ${orders.length} orders (running total ${totalFetched})`);
+
+        for (const order of orders) {
+          const externalId = String(order.id);
+          // Idempotency: skip if we already have this order on file.
+          const existing = await storage.getSalesOrdersByExternalId("SHOPIFY", externalId);
+          if (existing.length > 0) {
+            skippedExisting++;
+            continue;
+          }
+
+          const customer = order.customer ?? {};
+          const ship = order.shipping_address ?? {};
+          const customerName =
+            [customer.first_name, customer.last_name].filter(Boolean).join(" ") ||
+            order.email ||
+            "Shopify customer";
+
+          const so = await storage.createSalesOrder({
+            externalOrderId: externalId,
+            orderName: order.name ?? null,
+            channel: "SHOPIFY",
+            customerName,
+            customerEmail: customer.email ?? order.email ?? null,
+            customerPhone: customer.phone ?? order.phone ?? null,
+            // Map Shopify status loosely. Backfilled orders are usually closed.
+            status: order.cancelled_at
+              ? "CANCELLED"
+              : order.fulfillment_status === "fulfilled"
+                ? "DELIVERED"
+                : order.financial_status === "refunded"
+                  ? "REFUNDED"
+                  : "DELIVERED",
+            orderDate: order.created_at ? new Date(order.created_at) : new Date(),
+            deliveredAt: order.closed_at ? new Date(order.closed_at) : null,
+            cancelledAt: order.cancelled_at ? new Date(order.cancelled_at) : null,
+            sourceUrl: shopDomain ? `https://${shopDomain.replace(/^https?:\/\//, "")}/admin/orders/${externalId}` : null,
+            totalAmount: order.total_price ? parseFloat(order.total_price) : 0,
+            currency: order.currency ?? "USD",
+            fulfillmentSource: "PIVOT_EXTENSIV",
+            isHistorical: true,
+            archivedAt: new Date(),
+            rawPayload: order,
+            shipToStreet: ship.address1 ?? null,
+            shipToCity: ship.city ?? null,
+            shipToState: ship.province_code ?? ship.province ?? null,
+            shipToZip: ship.zip ?? null,
+            shipToCountry: ship.country_code ?? ship.country ?? null,
+          } as any);
+
+          for (const li of order.line_items ?? []) {
+            const rawSku = (li.sku ?? "").trim();
+            const stripped = rawSku.replace(/^SKU:\s*/i, "");
+            // Resolution order: items.sku exact → mapping by raw → mapping by stripped.
+            let canonical = stripped;
+            if (!itemBySku.has(canonical)) {
+              const mapped =
+                (await storage.findCanonicalSku(rawSku, "shopify")) ??
+                (await storage.findCanonicalSku(stripped, "shopify"));
+              if (mapped) canonical = mapped;
+            }
+            const item = itemBySku.get(canonical) ?? null;
+            if (!item && rawSku) unmappedSkus.add(rawSku);
+
+            await storage.createSalesOrderLine({
+              salesOrderId: so.id,
+              productId: item?.id ?? null,
+              sku: rawSku || canonical || "",
+              productName: li.name ?? li.title ?? null,
+              qtyOrdered: li.quantity ?? 0,
+              qtyAllocated: 0,
+              qtyShipped: 0,
+              qtyFulfilled: 0,
+              backorderQty: 0,
+              unitPrice: li.price ? parseFloat(li.price) : null,
+            });
+          }
+
+          inserted++;
+        }
+
+        // Cursor pagination via Link header. The existing client's
+        // extractNextLinkUrl logic is replicated inline so we don't depend
+        // on it here.
+        const linkHeader = response.headers.get("link") ?? response.headers.get("Link");
+        nextUrl = null;
+        if (linkHeader) {
+          for (const part of linkHeader.split(",")) {
+            const m = part.match(/<([^>]+)>;\s*rel="next"/);
+            if (m) {
+              nextUrl = m[1];
+              break;
+            }
+          }
+        }
+      }
+
+      const durationMs = Date.now() - startedAt;
+      console.log(
+        `[Shopify Backfill] Complete: fetched=${totalFetched}, inserted=${inserted}, skipped=${skippedExisting}, ` +
+          `unmappedSkus=${unmappedSkus.size}, pages=${pageCount}, duration=${durationMs}ms`,
+      );
+
+      res.json({
+        totalFetched,
+        inserted,
+        skippedExisting,
+        unmappedSkuCount: unmappedSkus.size,
+        unmappedSkus: Array.from(unmappedSkus).slice(0, 50),
+        pages: pageCount,
+        durationMs,
+      });
+    } catch (error: any) {
+      console.error("[Shopify Backfill] Error:", error);
+      res.status(500).json({ error: error.message ?? "Backfill failed" });
+    }
+  });
+
   app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;

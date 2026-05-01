@@ -172,6 +172,18 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_forecast_brief_sent_at TIMESTAMP`,
     // Per-item seasonal demand multiplier.
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS seasonal_multiplier REAL NOT NULL DEFAULT 1.0`,
+    // SKU mappings — created here too in case drizzle-kit push hasn't run.
+    `CREATE TABLE IF NOT EXISTS sku_mappings (
+       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+       external_sku TEXT NOT NULL,
+       canonical_sku TEXT NOT NULL,
+       source TEXT NOT NULL,
+       notes TEXT,
+       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
+    `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
   ];
   for (const stmt of ADDS) {
     try {
@@ -290,6 +302,33 @@ async function seedSupplierTiers(client: pg.PoolClient): Promise<{
     [STRATEGIC_DEFAULT_BRIEF_CADENCE],
   );
   return { strategicUpdated, cadenceUpdated: cadence.rowCount ?? 0 };
+}
+
+// Seed initial Shopify SKU aliases. ON CONFLICT DO NOTHING means re-runs
+// don't trample operator-edited rows. The "SBR-PB-Industrial" mapping is
+// flagged as needs-verify in notes since the spec wasn't sure which
+// canonical SKU it actually maps to.
+async function seedSkuMappings(client: pg.PoolClient): Promise<number> {
+  const SEED_ROWS: { external: string; canonical: string; source: string; notes?: string }[] = [
+    { external: "SBR-Classic1.0", canonical: "SBR-PUSH-1.0", source: "shopify" },
+    {
+      external: "SBR-PB-Industrial",
+      canonical: "SBR-PB-BIGFOOT",
+      source: "shopify",
+      notes: "VERIFY: imported from spec; confirm Shopify variant maps to Bigfoot vs Original",
+    },
+  ];
+  let inserted = 0;
+  for (const row of SEED_ROWS) {
+    const r = await client.query(
+      `INSERT INTO sku_mappings (external_sku, canonical_sku, source, notes)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (external_sku, source) DO NOTHING`,
+      [row.external, row.canonical, row.source, row.notes ?? null],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  return inserted;
 }
 
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
@@ -411,6 +450,16 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] Supplier tier seed failed:", err?.message ?? err);
+    }
+
+    // ── SKU mapping seed ────────────────────────────────────────────────
+    try {
+      const seeded = await seedSkuMappings(client);
+      if (seeded > 0) {
+        console.log(`[Startup Checks] Seeded ${seeded} SKU mapping${seeded === 1 ? "" : "s"}`);
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] SKU mapping seed failed:", err?.message ?? err);
     }
 
     // ── Cleanup legacy rolls_made rows ──────────────────────────────────

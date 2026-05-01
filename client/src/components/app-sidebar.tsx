@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, ListOrdered } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, ListOrdered, Link2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -47,6 +47,7 @@ const supplyChainItems = [
 
 const toolItems = [
   { title: "Barcodes",   url: "/barcodes",   icon: Barcode  },
+  { title: "SKU Mappings", url: "/sku-mappings", icon: Link2 },
   { title: "Marketing",  url: "/marketing",  icon: Megaphone },
   { title: "AI Agent",   url: "/ai",         icon: Brain    },
   { title: "App Flow",   url: "/app-flow",   icon: Workflow },

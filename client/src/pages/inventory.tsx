@@ -4,9 +4,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle, Plus } from "lucide-react";
 import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
 import { WriteOffStockDialog } from "@/components/write-off-stock-dialog";
+import { FxInProcessDialog, type FxItem } from "@/components/fx-in-process-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
 
 type SnapshotRow = {
@@ -24,10 +31,15 @@ type SkuVelocity = {
   unitsSold: number;
 };
 
-// Minimal shape from /api/items — only the fields we need for the price column.
+// Minimal shape from /api/items — fields used by the price column and the
+// FX in-production modal.
 type ItemsRow = {
+  id: string;
   sku: string;
+  name: string;
+  type: string;
   sellingPrice: number | null;
+  fxInProcessQty: number | null;
 };
 
 // /api/sales-orders?view=all&withLines=true returns each order with its lines.
@@ -170,6 +182,9 @@ export default function Inventory() {
   const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
   const [transferOpen, setTransferOpen] = useState(false);
   const [writeOffOpen, setWriteOffOpen] = useState(false);
+  const [fxOpen, setFxOpen] = useState(false);
+  const [fxItem, setFxItem] = useState<FxItem | null>(null);
+  const [fxPrefillZero, setFxPrefillZero] = useState(false);
 
   const onSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -198,6 +213,28 @@ export default function Inventory() {
     }
     return map;
   }, [items]);
+
+  // SKU → finished-product item (id, name, fxInProcessQty) for the FX modal.
+  const finishedBySku = useMemo(() => {
+    const map = new Map<string, ItemsRow>();
+    for (const item of items) {
+      if (item.type === "finished_product") map.set(item.sku, item);
+    }
+    return map;
+  }, [items]);
+
+  const openFxModal = (sku: string, prefillZero: boolean) => {
+    const item = finishedBySku.get(sku);
+    if (!item) return;
+    setFxItem({
+      id: item.id,
+      sku: item.sku,
+      name: item.name,
+      fxInProcessQty: item.fxInProcessQty ?? 0,
+    });
+    setFxPrefillZero(prefillZero);
+    setFxOpen(true);
+  };
 
   // Build a lookup map: SKU → committed units across active sales orders.
   // "Committed" = unshipped portion (qtyOrdered − qtyShipped) on any order
@@ -381,6 +418,32 @@ export default function Inventory() {
             <ArrowRightLeft className="mr-2 h-4 w-4" />
             Transfer to Pyvott
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                data-testid="button-log-fx-order"
+                disabled={finishedBySku.size === 0}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Log FX Order
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+              {Array.from(finishedBySku.values())
+                .sort((a, b) => a.sku.localeCompare(b.sku))
+                .map((it) => (
+                  <DropdownMenuItem
+                    key={it.id}
+                    onSelect={() => openFxModal(it.sku, true)}
+                    data-testid={`fx-log-pick-${it.sku}`}
+                  >
+                    <span className="font-mono text-xs mr-2">{it.sku}</span>
+                    <span className="truncate">{it.name}</span>
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="destructive"
             onClick={() => setWriteOffOpen(true)}
@@ -400,6 +463,13 @@ export default function Inventory() {
       <WriteOffStockDialog
         isOpen={writeOffOpen}
         onClose={() => setWriteOffOpen(false)}
+      />
+
+      <FxInProcessDialog
+        isOpen={fxOpen}
+        onClose={() => setFxOpen(false)}
+        item={fxItem}
+        prefillZero={fxPrefillZero}
       />
 
       {/* KPI cards */}
@@ -505,7 +575,18 @@ export default function Inventory() {
                       {s.committed > 0 ? s.committed.toLocaleString() : "–"}
                     </TableCell>
                     <TableCell className="text-right text-amber-700 dark:text-amber-400">
-                      {s.fx > 0 ? s.fx.toLocaleString() : "–"}
+                      {finishedBySku.has(s.sku) ? (
+                        <button
+                          type="button"
+                          onClick={() => openFxModal(s.sku, false)}
+                          className="inline-flex items-center gap-1 hover:underline tabular-nums"
+                          data-testid={`fx-edit-${s.sku}`}
+                        >
+                          {s.fx > 0 ? s.fx.toLocaleString() : "–"}
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">–</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">{s.hildale.toLocaleString()}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{s.promised.toLocaleString()}</TableCell>

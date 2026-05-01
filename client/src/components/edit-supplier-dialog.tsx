@@ -28,6 +28,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Save, Building2, ShoppingBag, Wrench } from "lucide-react";
 import { SupplierPerformance } from "@/components/supplier-performance";
 import { SupplierCommunications } from "@/components/supplier-communications";
+import { SupplierForecast } from "@/components/supplier-forecast";
+import { SupplierTimeline } from "@/components/supplier-timeline";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -186,23 +188,41 @@ export function EditSupplierDialog({
         </DialogHeader>
 
         {mode === "edit" && supplier ? (
-          <Tabs defaultValue="details" className="w-full">
-            <TabsList className="grid w-full max-w-sm grid-cols-3">
-              <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
-              <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
-              <TabsTrigger value="communications" data-testid="tab-supplier-communications">Communications</TabsTrigger>
-            </TabsList>
-            <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
-              <SupplierPerformance supplierId={supplier.id} />
-            </TabsContent>
-            <TabsContent value="communications" className="mt-4 max-h-[60vh] overflow-y-auto">
-              <SupplierCommunications supplierId={supplier.id} supplierName={supplier.name} />
-            </TabsContent>
-            <TabsContent value="details" className="mt-4 space-y-4">
-              {supplier.id === "1" && <FxAdditionalContacts />}
-              <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
-            </TabsContent>
-          </Tabs>
+          {(() => {
+            const isStrategic = (supplier as any).tier === "strategic";
+            return (
+              <Tabs defaultValue="details" className="w-full">
+                <TabsList className={`grid w-full ${isStrategic ? "max-w-2xl grid-cols-4" : "max-w-sm grid-cols-3"}`}>
+                  <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
+                  <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
+                  {isStrategic && (
+                    <TabsTrigger value="forecast" data-testid="tab-supplier-forecast">Forecast</TabsTrigger>
+                  )}
+                  <TabsTrigger value="communications" data-testid="tab-supplier-communications">
+                    Communications
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
+                  <SupplierPerformance supplierId={supplier.id} />
+                </TabsContent>
+                {isStrategic && (
+                  <TabsContent value="forecast" className="mt-4 max-h-[60vh] overflow-y-auto">
+                    <SupplierForecast supplierId={supplier.id} />
+                  </TabsContent>
+                )}
+                <TabsContent value="communications" className="mt-4 max-h-[60vh] overflow-y-auto space-y-4">
+                  <SupplierTimeline supplierId={supplier.id} />
+                  <div className="border-t pt-4">
+                    <SupplierCommunications supplierId={supplier.id} supplierName={supplier.name} />
+                  </div>
+                </TabsContent>
+                <TabsContent value="details" className="mt-4 space-y-4">
+                  {supplier.id === "1" && <FxAdditionalContacts />}
+                  <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
+                </TabsContent>
+              </Tabs>
+            );
+          })()}
         ) : (
           <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
         )}

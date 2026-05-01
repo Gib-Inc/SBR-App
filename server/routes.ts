@@ -4593,6 +4593,251 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // Vendor Communications — per-supplier message log
+  // GET /api/suppliers/:id/forecast — current standing + 30/60/90-day
+  // outlook for every item this supplier provides. Math:
+  //   effectiveVelocity   = item.daily_usage × item.seasonal_multiplier
+  //   need(N)             = max(0, effectiveVelocity × N − stock − openPoQty)
+  // openPoQty is summed across every non-terminal PO line for that item
+  // from this supplier (qtyOrdered − qtyReceived).
+  app.get("/api/suppliers/:id/forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const supplierItems = allSupplierItems.filter((si) => si.supplierId === id);
+
+      // Open PO line totals for THIS supplier, grouped by itemId.
+      const supplierPOs = await storage.getPurchaseOrdersBySupplierId(id);
+      const openByItemId = new Map<string, number>();
+      const TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      for (const po of supplierPOs) {
+        if (TERMINAL.has(po.status)) continue;
+        if (((po as any).poStatus ?? "ordered") === "received") continue;
+        const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+        for (const line of lines) {
+          const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0));
+          if (open <= 0) continue;
+          openByItemId.set(line.itemId, (openByItemId.get(line.itemId) ?? 0) + open);
+        }
+      }
+
+      const items = await Promise.all(
+        supplierItems.map(async (si) => {
+          const item = await storage.getItem(si.itemId);
+          if (!item) return null;
+          const dailyUsage = item.dailyUsage ?? 0;
+          const stock = item.currentStock ?? 0;
+          const seasonal = (item as any).seasonalMultiplier ?? 1;
+          const openPo = openByItemId.get(item.id) ?? 0;
+          const effectiveVelocity = dailyUsage * seasonal;
+          const need = (n: number) => {
+            if (effectiveVelocity <= 0) return 0;
+            const projectedDemand = effectiveVelocity * n;
+            return Math.max(0, Math.ceil(projectedDemand - stock - openPo));
+          };
+          const daysOfSupply = effectiveVelocity > 0 ? Math.round(stock / effectiveVelocity) : null;
+          return {
+            itemId: item.id,
+            sku: item.sku,
+            name: item.name,
+            type: item.type,
+            currentStock: stock,
+            dailyUsage,
+            seasonalMultiplier: seasonal,
+            effectiveVelocity: Math.round(effectiveVelocity * 100) / 100,
+            daysOfSupply,
+            openPoQty: openPo,
+            need30: need(30),
+            need60: need(60),
+            need90: need(90),
+            unitCost: si.price ?? null,
+            leadTimeDays: si.leadTimeDays ?? null,
+          };
+        }),
+      );
+
+      const filtered = items.filter((x): x is NonNullable<typeof x> => !!x);
+      // Sort highest 30-day need first; ties go to 90-day need so growing
+      // items rise above plateauing ones.
+      filtered.sort((a, b) => b.need30 - a.need30 || b.need90 - a.need90);
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          contactName: supplier.contactName,
+          email: supplier.email,
+          tier: (supplier as any).tier ?? "transactional",
+          forecastBriefSchedule: (supplier as any).forecastBriefSchedule ?? "never",
+          autoSendBriefs: (supplier as any).autoSendBriefs ?? false,
+          lastForecastBriefSentAt: (supplier as any).lastForecastBriefSentAt ?? null,
+        },
+        items: filtered,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Forecast] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch forecast" });
+    }
+  });
+
+  // PATCH a single item's seasonal multiplier from the supplier Forecast tab.
+  // Bounded between 0 and 10 so a fat-fingered "100" doesn't recommend a
+  // year of orders. Logs a vendor_communications entry with action_type=
+  // 'FORECAST_BRIEF' and status='PENDING' as a draft for the operator to
+  // optionally send to the supplier — that draft is the Part 6 hand-off.
+  app.patch("/api/items/:id/seasonal-multiplier", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const value = Number(req.body?.seasonalMultiplier);
+      if (!Number.isFinite(value) || value < 0 || value > 10) {
+        return res.status(400).json({ error: "seasonalMultiplier must be between 0 and 10" });
+      }
+
+      const item = await storage.getItem(id);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      const previous = (item as any).seasonalMultiplier ?? 1;
+      if (previous === value) {
+        return res.json({ item, changed: false });
+      }
+
+      const updated = await storage.updateItem(id, { seasonalMultiplier: value } as any);
+      res.json({ item: updated, changed: true, previous });
+    } catch (error: any) {
+      console.error("[Seasonal Multiplier] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update multiplier" });
+    }
+  });
+
+  // POST /api/suppliers/:id/forecast-brief — sends the pre-written brief to
+  // the supplier (SendGrid when configured) and logs a vendor_communications
+  // entry with action_type='FORECAST_BRIEF'. Body: { sentBy, message }.
+  app.post("/api/suppliers/:id/forecast-brief", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const sentBy = typeof req.body?.sentBy === "string" ? req.body.sentBy.trim() : "";
+      const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+
+      if (!sentBy) return res.status(400).json({ error: "sentBy is required" });
+      if (!message) return res.status(400).json({ error: "message is required" });
+
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const comm = await storage.createVendorCommunication({
+        supplierId: id,
+        itemId: null,
+        actionType: "FORECAST_BRIEF",
+        sentBy,
+        status: "PENDING",
+        expectedDate: null,
+        notes: message,
+        createdBy: req.session.userId ?? null,
+      });
+
+      let emailSent = false;
+      let emailError: string | null = null;
+      const supplierEmail = supplier.email;
+
+      if (supplierEmail && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = (await import("@sendgrid/mail")).default;
+          const { emailForSender } = await import("./services/sender-emails");
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          const replyTo = emailForSender(sentBy);
+          await sgMail.send({
+            to: supplierEmail,
+            from: {
+              email: process.env.SENDGRID_FROM_EMAIL,
+              name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
+            },
+            replyTo: replyTo ?? undefined,
+            subject: `90-day demand forecast — Sticker Burr Roller`,
+            text: message,
+          });
+          emailSent = true;
+        } catch (err: any) {
+          emailError = err?.message ?? "send failed";
+          console.error("[Forecast Brief] SendGrid send failed:", emailError);
+        }
+      }
+
+      // Stamp the supplier so the auto-scheduler doesn't re-fire.
+      await storage.updateSupplier(id, { lastForecastBriefSentAt: new Date() } as any);
+
+      res.status(201).json({
+        communication: comm,
+        emailSent,
+        emailError,
+        recipientEmail: supplierEmail ?? null,
+      });
+    } catch (error: any) {
+      console.error("[Forecast Brief] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send forecast brief" });
+    }
+  });
+
+  // Communications timeline for a single supplier — last forecast brief +
+  // recent ad-hoc comms + recent POs. Aggregates client-side would mean
+  // three round trips; folding into one endpoint keeps the supplier detail
+  // page fast.
+  app.get("/api/suppliers/:id/timeline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const [allComms, allPOs] = await Promise.all([
+        storage.getVendorCommunicationsBySupplierId(id),
+        storage.getPurchaseOrdersBySupplierId(id),
+      ]);
+
+      const lastBrief =
+        allComms.find((c) => c.actionType === "FORECAST_BRIEF") ?? null;
+      // Most recent across briefs + ad-hoc comms + POs determines "days since
+      // last contact". Using createdAt for comms and orderDate for POs.
+      const newestCommAt = allComms[0]?.createdAt ?? null;
+      const newestPoAt =
+        [...allPOs].sort((a, b) => {
+          const aT = a.orderDate ? new Date(a.orderDate).getTime() : 0;
+          const bT = b.orderDate ? new Date(b.orderDate).getTime() : 0;
+          return bT - aT;
+        })[0]?.orderDate ?? null;
+      const candidates = [newestCommAt, newestPoAt]
+        .filter(Boolean)
+        .map((d) => new Date(d as any).getTime());
+      const lastContactAt = candidates.length > 0 ? new Date(Math.max(...candidates)) : null;
+      const daysSinceContact = lastContactAt
+        ? Math.floor((Date.now() - lastContactAt.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+
+      res.json({
+        lastBrief,
+        recentCommunications: allComms.slice(0, 5),
+        recentPurchaseOrders: [...allPOs]
+          .sort((a, b) => {
+            const aT = a.orderDate ? new Date(a.orderDate).getTime() : 0;
+            const bT = b.orderDate ? new Date(b.orderDate).getTime() : 0;
+            return bT - aT;
+          })
+          .slice(0, 5)
+          .map((po) => ({
+            id: po.id,
+            poNumber: po.poNumber,
+            status: po.status,
+            orderDate: po.orderDate,
+            total: po.total,
+          })),
+        lastContactAt,
+        daysSinceContact,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Timeline] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to load timeline" });
+    }
+  });
+
   app.get("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
     try {
       const supplierId = typeof req.query.supplierId === "string" ? req.query.supplierId : "";

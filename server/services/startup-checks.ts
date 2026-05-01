@@ -165,6 +165,13 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS po_status TEXT NOT NULL DEFAULT 'ordered'`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS confirmed_qty INTEGER`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_completion_date TIMESTAMP`,
+    // Supplier forecast-tier columns.
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'transactional'`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS forecast_brief_schedule TEXT NOT NULL DEFAULT 'never'`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS auto_send_briefs BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_forecast_brief_sent_at TIMESTAMP`,
+    // Per-item seasonal demand multiplier.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS seasonal_multiplier REAL NOT NULL DEFAULT 1.0`,
   ];
   for (const stmt of ADDS) {
     try {
@@ -240,6 +247,49 @@ async function swapPushPackagingBoxes(client: pg.PoolClient): Promise<{
     push10Updated: push10.rowCount ?? 0,
     push20Updated: push20.rowCount ?? 0,
   };
+}
+
+// Seed the tier on known suppliers. Idempotent — runs an UPDATE for the
+// strategic set and a separate UPDATE for the transactional set, gated on
+// `tier = 'transactional'` (the default) so we never clobber a value an
+// operator has set deliberately. Match by ILIKE so casing variants in the
+// DB ("FX Industries", "FX INDUSTRIES", "Fx Industries") all resolve.
+const STRATEGIC_NAMES = [
+  "FX Industries",
+  "Silver Fox",
+  "Acu-Form",
+  "Pednar",
+  "Liston Metalworks",
+  "Austi Enterprises",
+];
+// Default brief cadence for strategic suppliers — operators can override
+// per-row from the supplier detail page.
+const STRATEGIC_DEFAULT_BRIEF_CADENCE = "monthly";
+
+async function seedSupplierTiers(client: pg.PoolClient): Promise<{
+  strategicUpdated: number;
+  cadenceUpdated: number;
+}> {
+  let strategicUpdated = 0;
+  for (const name of STRATEGIC_NAMES) {
+    const r = await client.query(
+      `UPDATE suppliers
+       SET tier = 'strategic'
+       WHERE LOWER(name) LIKE LOWER($1) AND tier = 'transactional'`,
+      [`${name}%`],
+    );
+    strategicUpdated += r.rowCount ?? 0;
+  }
+  // Set the default brief cadence on any strategic supplier that doesn't
+  // have one yet. Separate from tier seeding so an operator promoting a
+  // row to strategic later still gets a sensible default.
+  const cadence = await client.query(
+    `UPDATE suppliers
+     SET forecast_brief_schedule = $1
+     WHERE tier = 'strategic' AND forecast_brief_schedule = 'never'`,
+    [STRATEGIC_DEFAULT_BRIEF_CADENCE],
+  );
+  return { strategicUpdated, cadenceUpdated: cadence.rowCount ?? 0 };
 }
 
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
@@ -344,6 +394,23 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] Push packaging box swap failed:", err?.message ?? err);
+    }
+
+    // ── Strategic-supplier tier seed ────────────────────────────────────
+    // Marks the six strategic suppliers as such (idempotent — only updates
+    // rows still on the 'transactional' default) and sets a monthly brief
+    // cadence on any strategic supplier still on 'never'.
+    try {
+      const { strategicUpdated, cadenceUpdated } = await seedSupplierTiers(client);
+      if (strategicUpdated > 0 || cadenceUpdated > 0) {
+        console.log(
+          `[Startup Checks] Supplier tier seed: ` +
+          `${strategicUpdated} promoted to strategic, ` +
+          `${cadenceUpdated} set to monthly cadence`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] Supplier tier seed failed:", err?.message ?? err);
     }
 
     // ── Cleanup legacy rolls_made rows ──────────────────────────────────

@@ -47,6 +47,7 @@ import RawMaterials from "@/pages/raw-materials";
 import CountInventory from "@/pages/count-inventory";
 import ReceiveStock from "@/pages/receive-stock";
 import Backorders from "@/pages/backorders";
+import ProductionPriority from "@/pages/production-priority";
 import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
 import SupplierIntel from "@/pages/supplier-intel";
@@ -138,6 +139,7 @@ function AuthenticatedApp() {
                     <Route path="/purchase-orders" component={PurchaseOrders} />
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/backorders" component={Backorders} />
+                    <Route path="/production-priority" component={ProductionPriority} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
                     <Route path="/marketing" component={Marketing} />

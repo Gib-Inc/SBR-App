@@ -172,6 +172,9 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_forecast_brief_sent_at TIMESTAMP`,
     // Per-item seasonal demand multiplier.
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS seasonal_multiplier REAL NOT NULL DEFAULT 1.0`,
+    // Products page priority grouping ('core_build' | 'combo' |
+    // 'refurbished' | 'replacement' | 'accessory'; default accessory).
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS reorder_priority TEXT NOT NULL DEFAULT 'accessory'`,
     // SKU mappings — created here too in case drizzle-kit push hasn't run.
     `CREATE TABLE IF NOT EXISTS sku_mappings (
        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -331,6 +334,51 @@ async function seedSkuMappings(client: pg.PoolClient): Promise<number> {
   return inserted;
 }
 
+// Seed reorder_priority for known finished-product SKUs. Idempotent — only
+// touches rows still on the 'accessory' default so an operator who manually
+// re-grouped an item via the items table isn't clobbered.
+async function seedReorderPriority(client: pg.PoolClient): Promise<{
+  coreUpdated: number;
+  comboUpdated: number;
+  refurbishedUpdated: number;
+  replacementUpdated: number;
+}> {
+  const setGroup = async (skus: string[], group: string) => {
+    if (skus.length === 0) return 0;
+    const r = await client.query(
+      `UPDATE items SET reorder_priority = $1
+       WHERE reorder_priority = 'accessory' AND sku = ANY($2::text[])`,
+      [group, skus],
+    );
+    return r.rowCount ?? 0;
+  };
+
+  const coreUpdated = await setGroup(
+    ["SBR-PUSH-1.0", "SBR-Extrawide2.0", "SBR-PB-ORIG", "SBR-PB-BIGFOOT"],
+    "core_build",
+  );
+  const comboUpdated = await setGroup(
+    ["#701-CMB-1", "#702-CMB-2", "#703-CMB-3", "#704-CMB-4"],
+    "combo",
+  );
+  const refurbishedUpdated = await setGroup(
+    ["#RF-141-PSH-M1", "#RF-241-PSH-M2", "#RF-1041-PB-M1", "#RF-1241-PB-M2"],
+    "refurbished",
+  );
+  // Replacement SKUs follow a "#<digits>-REP-..." pattern (e.g. #301-REP-M1).
+  const repResult = await client.query(
+    `UPDATE items SET reorder_priority = 'replacement'
+     WHERE reorder_priority = 'accessory' AND sku ~ '^#[0-9]+-REP-'`,
+  );
+
+  return {
+    coreUpdated,
+    comboUpdated,
+    refurbishedUpdated,
+    replacementUpdated: repResult.rowCount ?? 0,
+  };
+}
+
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
   // The "rolls_made" action was removed when we discovered SBR buys
   // foam rollers from Pednar rather than producing them. Existing rows
@@ -450,6 +498,21 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] Supplier tier seed failed:", err?.message ?? err);
+    }
+
+    // ── Products page priority seed ─────────────────────────────────────
+    try {
+      const r = await seedReorderPriority(client);
+      const total = r.coreUpdated + r.comboUpdated + r.refurbishedUpdated + r.replacementUpdated;
+      if (total > 0) {
+        console.log(
+          `[Startup Checks] Reorder priority seed: ` +
+          `core=${r.coreUpdated}, combo=${r.comboUpdated}, ` +
+          `refurbished=${r.refurbishedUpdated}, replacement=${r.replacementUpdated}`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] Reorder priority seed failed:", err?.message ?? err);
     }
 
     // ── SKU mapping seed ────────────────────────────────────────────────

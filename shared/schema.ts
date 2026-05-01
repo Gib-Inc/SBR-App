@@ -85,6 +85,12 @@ export const items = pgTable("items", {
   // Forecast tab. We don't try to infer seasonality from data we don't
   // have a year of yet.
   seasonalMultiplier: real("seasonal_multiplier").notNull().default(1.0),
+  // Group used by the Products page priority sort. Values:
+  // 'core_build' | 'combo' | 'refurbished' | 'replacement' | 'accessory'.
+  // Stored as text rather than a Postgres enum so operators can edit
+  // groupings from the UI without a schema migration. Default is
+  // 'accessory' — the bottom bucket on the page.
+  reorderPriority: text("reorder_priority").notNull().default('accessory'),
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // V1: Extensiv read-only snapshot for reconciliation/variance display
   extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)

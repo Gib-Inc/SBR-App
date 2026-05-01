@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { POInTransitSection } from "@/components/po-in-transit-section";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -388,10 +389,37 @@ export function EditPODialog({
           );
         })()}
 
+        {/* In-Transit section — visible for every PO regardless of editability.
+            Lets Sammie/Matt update the FX build status (Ordered → Confirmed →
+            In Production → Shipped → Received) and surfaces line items, order
+            date, expected delivery, and days remaining. */}
+        {purchaseOrder && compositeData?.lines && (
+          <POInTransitSection
+            po={{
+              id: purchaseOrder.id,
+              poNumber: purchaseOrder.poNumber,
+              supplierId: purchaseOrder.supplierId ?? null,
+              orderDate: purchaseOrder.orderDate
+                ? typeof purchaseOrder.orderDate === "string"
+                  ? purchaseOrder.orderDate
+                  : (purchaseOrder.orderDate as Date).toISOString()
+                : null,
+              expectedDate: purchaseOrder.expectedDate
+                ? typeof purchaseOrder.expectedDate === "string"
+                  ? purchaseOrder.expectedDate
+                  : (purchaseOrder.expectedDate as Date).toISOString()
+                : null,
+              poStatus: (purchaseOrder as any).poStatus ?? "ordered",
+            }}
+            supplier={compositeData.supplier ?? null}
+            lines={compositeData.lines}
+          />
+        )}
+
         {!canEdit ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground">
-            <AlertCircle className="h-5 w-5 mr-2" />
-            Only draft purchase orders can be edited.
+          <div className="flex items-center justify-center py-4 text-muted-foreground text-sm">
+            <AlertCircle className="h-4 w-4 mr-2" />
+            Line edits are locked once a PO is sent. Use Build Status above to track FX progress.
           </div>
         ) : isLoadingComposite ? (
           <div className="flex items-center justify-center py-12">

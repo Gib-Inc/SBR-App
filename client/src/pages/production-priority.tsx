@@ -80,11 +80,18 @@ type Supplier = {
 type PriorityRow = {
   rank: number;
   sku: string;
+  itemId: string | null;
   displayName: string;
   openOrders: number;
   stock: number;
   fxInProcess: number;
+  pendingFxPoQty: number;
+  earliestExpected: string | null;
   gap: number;
+};
+
+type FxIncomingResponse = {
+  items: Record<string, { sku: string; pendingQty: number; earliestExpected: string | null }>;
 };
 
 const formatToday = () => {
@@ -110,6 +117,9 @@ export default function ProductionPriority() {
   });
   const { data: suppliers = [] } = useQuery<Supplier[]>({
     queryKey: ["/api/suppliers"],
+  });
+  const { data: fxIncoming } = useQuery<FxIncomingResponse>({
+    queryKey: ["/api/purchase-orders/fx-incoming"],
   });
 
   const itemBySku = useMemo(() => {
@@ -140,12 +150,19 @@ export default function ProductionPriority() {
       const item = itemBySku.get(sku);
       const stock = (item?.hildaleQty ?? 0) + (item?.extensivOnHandSnapshot ?? 0);
       const openOrders = openBySku.get(sku) ?? 0;
+      const incoming = item ? fxIncoming?.items[item.id] : undefined;
       return {
         sku,
+        itemId: item?.id ?? null,
         displayName,
         openOrders,
         stock,
         fxInProcess: item?.fxInProcessQty ?? 0,
+        // Per-item pending PO qty (po_status in ordered/confirmed). Lines that
+        // have moved to in_production/shipped are already counted in
+        // fxInProcessQty by the auto-update, so we don't double-count them.
+        pendingFxPoQty: incoming?.pendingQty ?? 0,
+        earliestExpected: incoming?.earliestExpected ?? null,
         gap: Math.max(0, openOrders - stock),
         rank: 0,
       };
@@ -153,7 +170,7 @@ export default function ProductionPriority() {
     built.sort((a, b) => b.gap - a.gap);
     built.forEach((r, i) => (r.rank = i + 1));
     return built;
-  }, [itemBySku, openBySku]);
+  }, [itemBySku, openBySku, fxIncoming]);
 
   const fxSupplier = useMemo(
     () => suppliers.find((s) => s.id === FX_SUPPLIER_ID) ?? null,
@@ -275,6 +292,7 @@ export default function ProductionPriority() {
                   <TableHead className="text-right">Open Orders</TableHead>
                   <TableHead className="text-right">Stock</TableHead>
                   <TableHead className="text-right">In Production (FX)</TableHead>
+                  <TableHead className="text-right">Incoming from FX</TableHead>
                   <TableHead className="text-right">Gap</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -298,6 +316,28 @@ export default function ProductionPriority() {
                       <TableCell className="text-right tabular-nums">{r.stock.toLocaleString()}</TableCell>
                       <TableCell className="text-right text-amber-700 dark:text-amber-400 tabular-nums">
                         {r.fxInProcess > 0 ? r.fxInProcess.toLocaleString() : "–"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {(() => {
+                          const incoming = r.fxInProcess + r.pendingFxPoQty;
+                          if (incoming === 0) return <span className="text-muted-foreground">–</span>;
+                          const days =
+                            r.earliestExpected != null
+                              ? Math.ceil(
+                                  (new Date(r.earliestExpected).getTime() - Date.now()) /
+                                    (1000 * 60 * 60 * 24),
+                                )
+                              : null;
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span className="font-semibold">{incoming.toLocaleString()}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {r.stock.toLocaleString()} stock · {incoming.toLocaleString()} incoming
+                                {days != null ? ` · ${days < 0 ? `${Math.abs(days)}d overdue` : `${days}d`}` : ""}
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell
                         className={`text-right font-semibold tabular-nums ${

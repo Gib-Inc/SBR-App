@@ -14652,6 +14652,172 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // PATCH the FX build-progress status on a PO. For FX POs (supplierId='1')
+  // with finished-product line items, transitions auto-adjust
+  // fx_in_process_qty / hildale_qty as follows:
+  //
+  //   below_threshold (ordered, confirmed)  -- no FX contribution
+  //   at_threshold    (in_production, shipped)  -- contributes to fx_in_process_qty
+  //   received        (terminal)
+  //
+  // - below → at:        fx_in_process_qty += line.qtyOrdered
+  // - at    → below:     fx_in_process_qty -= line.qtyOrdered (floor 0)
+  // - any   → received:  if was at, fx -= qty (floor 0); always hildale += qty;
+  //                      log inventory_transactions type='RECEIVED_FROM_FX'
+  // - received → other:  no inventory side effect (paper-trail revert only;
+  //                      operator must manually correct via the FX modal if
+  //                      they actually need to undo a real receipt)
+  //
+  // Non-FX POs and component lines update poStatus only — no side effects.
+  app.patch("/api/purchase-orders/:id/po-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const newStatus = typeof req.body?.poStatus === "string" ? req.body.poStatus.trim() : "";
+      const valid = new Set(["ordered", "confirmed", "in_production", "shipped", "received"]);
+      if (!valid.has(newStatus)) {
+        return res.status(400).json({ error: `poStatus must be one of: ${[...valid].join(", ")}` });
+      }
+
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) return res.status(404).json({ error: "Purchase order not found" });
+
+      const previousStatus = (po as any).poStatus ?? "ordered";
+      if (previousStatus === newStatus) {
+        return res.json({ purchaseOrder: po, applied: [] });
+      }
+
+      const isContributing = (s: string) => s === "in_production" || s === "shipped";
+      const wasContributing = isContributing(previousStatus);
+      const isContributingNow = isContributing(newStatus);
+      const isReceiving = newStatus === "received" && previousStatus !== "received";
+      const isRevertingFromReceived = previousStatus === "received" && newStatus !== "received";
+
+      const FX_SUPPLIER_ID = "1";
+      const inventoryEligible = po.supplierId === FX_SUPPLIER_ID && !isRevertingFromReceived;
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const applied: Array<{ itemId: string; sku: string; effect: string; qty: number }> = [];
+
+      if (inventoryEligible) {
+        const lines = await storage.getPurchaseOrderLinesByPOId(id);
+        for (const line of lines) {
+          const item = await storage.getItem(line.itemId);
+          if (!item || item.type !== "finished_product") continue;
+          const qty = line.qtyOrdered ?? 0;
+          if (qty <= 0) continue;
+          const fxBefore = item.fxInProcessQty ?? 0;
+          const hildaleBefore = item.hildaleQty ?? 0;
+
+          if (isReceiving) {
+            const fxAfter = wasContributing ? Math.max(0, fxBefore - qty) : fxBefore;
+            const hildaleAfter = hildaleBefore + qty;
+            await storage.updateItem(item.id, {
+              fxInProcessQty: fxAfter,
+              hildaleQty: hildaleAfter,
+            });
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              itemType: "FINISHED",
+              type: "RECEIVED_FROM_FX",
+              location: "HILDALE",
+              quantity: qty,
+              createdBy: userId,
+              createdByName: userName,
+              notes: `[po_status received] PO ${po.poNumber}`,
+            });
+            applied.push({ itemId: item.id, sku: item.sku, effect: "received", qty });
+          } else if (!wasContributing && isContributingNow) {
+            await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              itemType: "FINISHED",
+              type: "FX_ADJUSTMENT",
+              location: "HILDALE",
+              quantity: qty,
+              createdBy: userId,
+              createdByName: userName,
+              notes: `[po_status ${previousStatus}→${newStatus}] +${qty} on PO ${po.poNumber}`,
+            });
+            applied.push({ itemId: item.id, sku: item.sku, effect: "fx+=", qty });
+          } else if (wasContributing && !isContributingNow) {
+            const fxAfter = Math.max(0, fxBefore - qty);
+            const actualDelta = fxBefore - fxAfter;
+            await storage.updateItem(item.id, { fxInProcessQty: fxAfter });
+            if (actualDelta > 0) {
+              await storage.createInventoryTransaction({
+                itemId: item.id,
+                itemType: "FINISHED",
+                type: "FX_ADJUSTMENT",
+                location: "HILDALE",
+                quantity: actualDelta,
+                createdBy: userId,
+                createdByName: userName,
+                notes: `[po_status ${previousStatus}→${newStatus}] -${actualDelta} on PO ${po.poNumber}`,
+              });
+            }
+            applied.push({ itemId: item.id, sku: item.sku, effect: "fx-=", qty: actualDelta });
+          }
+        }
+      }
+
+      const updated = await storage.updatePurchaseOrder(id, { poStatus: newStatus } as any);
+      res.json({ purchaseOrder: updated, applied });
+    } catch (error: any) {
+      console.error("[PO Status Update] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update PO status" });
+    }
+  });
+
+  // Per-finished-product summary of incoming FX units that are NOT yet in
+  // fx_in_process_qty. Used by the Production Priority page's Incoming
+  // column. Returns the open-but-not-yet-contributing PO line totals
+  // (po_status in ordered, confirmed) plus the earliest expected delivery
+  // date among any open FX PO touching that item. The page adds this to
+  // the item's fx_in_process_qty to get the total inbound figure without
+  // double-counting in_production/shipped lines (which are already inside
+  // fx_in_process_qty thanks to the auto-update above).
+  app.get("/api/purchase-orders/fx-incoming", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const FX_SUPPLIER_ID = "1";
+      const allPOs = await storage.getPurchaseOrdersBySupplierId(FX_SUPPLIER_ID);
+      const open = allPOs.filter((po) => {
+        const ps = (po as any).poStatus ?? "ordered";
+        return ps !== "received" && po.status !== "CANCELLED";
+      });
+
+      const summary: Record<
+        string,
+        { sku: string; pendingQty: number; earliestExpected: string | null }
+      > = {};
+
+      for (const po of open) {
+        const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+        const ps = (po as any).poStatus ?? "ordered";
+        const pendingContribution = ps === "ordered" || ps === "confirmed"; // not yet in fx_in_process_qty
+        const expected = po.expectedDate ? new Date(po.expectedDate).toISOString() : null;
+
+        for (const line of lines) {
+          const item = await storage.getItem(line.itemId);
+          if (!item || item.type !== "finished_product") continue;
+          const entry =
+            summary[item.id] ?? { sku: item.sku, pendingQty: 0, earliestExpected: null };
+          if (pendingContribution) entry.pendingQty += line.qtyOrdered ?? 0;
+          if (expected && (!entry.earliestExpected || expected < entry.earliestExpected)) {
+            entry.earliestExpected = expected;
+          }
+          summary[item.id] = entry;
+        }
+      }
+
+      res.json({ items: summary });
+    } catch (error: any) {
+      console.error("[FX Incoming] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch FX incoming" });
+    }
+  });
+
   app.patch("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;

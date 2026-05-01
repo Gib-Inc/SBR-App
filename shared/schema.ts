@@ -472,6 +472,13 @@ export const purchaseOrders = pgTable("purchase_orders", {
   
   // AI Auto-Draft flag
   isAutoDraft: boolean("is_auto_draft").notNull().default(false), // true = created by AI system
+
+  // In-Transit / build-progress state for FX POs (parallel to `status`,
+  // which tracks the procurement lifecycle DRAFT→SENT→RECEIVED). Values:
+  // 'ordered' | 'confirmed' | 'in_production' | 'shipped' | 'received'.
+  // Transitions on FX POs (supplierId='1') auto-update the linked finished
+  // products' fx_in_process_qty — see PATCH /api/purchase-orders/:id/po-status.
+  poStatus: text("po_status").notNull().default('ordered'),
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),

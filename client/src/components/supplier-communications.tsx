@@ -70,7 +70,7 @@ const STATUS_LABEL: Record<string, string> = {
   RESOLVED: "Resolved",
 };
 
-const SENDER_OPTIONS = ["Sammie", "Matt", "Stacy", "Clarence"];
+const SENDER_OPTIONS = ["Clarence", "Sammie", "Matt", "Stacy"];
 
 const formatDate = (iso: string | null) => {
   if (!iso) return "—";
@@ -179,7 +179,7 @@ export function LogCommunicationDialog({
   const queryClient = useQueryClient();
 
   const [actionType, setActionType] = useState(defaults?.actionType ?? "REORDER_REQUEST");
-  const [sentBy, setSentBy] = useState(defaults?.sentBy ?? "Matt");
+  const [sentBy, setSentBy] = useState(defaults?.sentBy ?? "Clarence");
   const [status, setStatus] = useState("PENDING");
   const [itemId, setItemId] = useState(defaults?.itemId ?? "");
   const [expectedDate, setExpectedDate] = useState("");

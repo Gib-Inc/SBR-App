@@ -599,7 +599,9 @@ function CriticalStockWidget() {
                               const recommendedQty =
                                 row.orderQty > 0
                                   ? row.orderQty
-                                  : Math.max(1, Math.ceil(row.dailyUsage * 30));
+                                  : row.dailyUsage > 0
+                                    ? Math.ceil(row.dailyUsage * 30)
+                                    : 0;
                               const estimatedCost =
                                 row.unitCost != null
                                   ? Math.round(recommendedQty * row.unitCost * 100) / 100
@@ -620,10 +622,10 @@ function CriticalStockWidget() {
                                 unitCost: row.unitCost,
                               });
                             }}
-                            data-testid={`button-widget-notify-${row.itemId}`}
+                            data-testid={`button-widget-order-${row.itemId}`}
                           >
                             <Send className="h-3 w-3 mr-1" />
-                            Notify
+                            Order
                           </Button>
                         )}
                         <div

@@ -79,6 +79,12 @@ export const items = pgTable("items", {
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
   fxInProcessQty: integer("fx_in_process_qty").notNull().default(0), // Finished-goods units being built at FX Industries — moves to hildaleQty on receipt
+  // Seasonal demand modifier applied on top of measured daily_usage when
+  // computing forward-looking forecasts. 1.0 = no adjustment; 1.5 = peak;
+  // 0.5 = trough. Manual for now — operators set this from the supplier
+  // Forecast tab. We don't try to infer seasonality from data we don't
+  // have a year of yet.
+  seasonalMultiplier: real("seasonal_multiplier").notNull().default(1.0),
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // V1: Extensiv read-only snapshot for reconciliation/variance display
   extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)
@@ -311,6 +317,20 @@ export const suppliers = pgTable("suppliers", {
   poSentCount: integer("po_sent_count").default(0).notNull(),
   poReceivedCount: integer("po_received_count").default(0).notNull(),
   lastPoSentAt: timestamp("last_po_sent_at"),
+
+  // Strategic vs Transactional. Strategic suppliers (FX, Silver Fox, Pednar
+  // etc.) have ongoing-relationship workflows: Forecast tab, scheduled
+  // briefs, communication digest. Transactional suppliers (McMaster, Uline)
+  // are one-and-done — those features stay hidden for them.
+  tier: text("tier").notNull().default('transactional'),
+  // Cadence for the auto-scheduled forecast brief. 'never' disables; the
+  // daily scheduler at 8am MT picks up rows whose
+  // last_forecast_brief_sent_at is older than the cadence.
+  forecastBriefSchedule: text("forecast_brief_schedule").notNull().default('never'),
+  // When true the scheduler fires the email automatically; when false it
+  // creates a draft for Matt to review on the dashboard.
+  autoSendBriefs: boolean("auto_send_briefs").notNull().default(false),
+  lastForecastBriefSentAt: timestamp("last_forecast_brief_sent_at"),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });

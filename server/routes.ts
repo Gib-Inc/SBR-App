@@ -24516,6 +24516,21 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Per-ad-platform rollup. Distinct from /api/marketing/roas (which groups by
+  // sales channel) — this surfaces Meta as its own line so the catastrophic
+  // 1.44x doesn't hide inside the "shopify" total. Each platform's
+  // pixel_revenue uses the platform's own attribution window.
+  app.get("/api/marketing/by-platform", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { from, to } = req.query as { from?: string; to?: string };
+      const rows = await storage.getRoasByPlatform({ from, to });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing By Platform] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch platform ROAS" });
+    }
+  });
+
   // Sales velocity — total units sold per SKU over last N days (default 90)
   // Used by the Inventory page to sort by best sellers
   app.get("/api/inventory/sales-velocity", requireAuth, async (req: Request, res: Response) => {

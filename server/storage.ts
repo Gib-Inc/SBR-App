@@ -748,6 +748,7 @@ export interface IStorage {
 
   // Marketing — ROAS Guardian view
   getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
+  getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]>;
   getInventorySnapshot(params?: { date?: string }): Promise<any[]>;
 }
 
@@ -4219,6 +4220,9 @@ export class MemStorage implements IStorage {
   async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> { return undefined; }
 
   async getRoasGuardian(_params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    return [];
+  }
+  async getRoasByPlatform(_params?: { from?: string; to?: string }): Promise<any[]> {
     return [];
   }
 
@@ -8136,6 +8140,31 @@ export class PostgresStorage implements IStorage {
     const rows = channel
       ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
       : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
+    return (rows as any).rows ?? (rows as any);
+  }
+
+  // Per-ad-platform rollup. Hits the v_roas_guardian_by_platform view that
+  // already aggregates spend + pixel-attributed revenue across the platform's
+  // own attribution window (Meta = 7-day click, Google = its default, etc.).
+  // We return whatever shape the view exports — typed loosely on purpose so
+  // adding a column there doesn't require a code change here.
+  async getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]> {
+    const from = params?.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const to   = params?.to   ?? new Date().toISOString().slice(0, 10);
+    const rows = await this.db.execute(drizzleSql`
+      SELECT
+        platform,
+        SUM(total_spend)::float    AS total_spend,
+        SUM(pixel_revenue)::float  AS pixel_revenue,
+        CASE
+          WHEN SUM(total_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(total_spend)::float
+          ELSE 0
+        END AS pixel_roas
+      FROM v_roas_guardian_by_platform
+      WHERE date >= ${from}::date AND date <= ${to}::date
+      GROUP BY platform
+      ORDER BY total_spend DESC
+    `);
     return (rows as any).rows ?? (rows as any);
   }
 

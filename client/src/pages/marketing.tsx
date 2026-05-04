@@ -1119,6 +1119,52 @@ function RoasGuardianTab() {
   const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   const fmtRoas = (n: number) => `${n.toFixed(2)}x`;
 
+  // Platform-level rollup. Sourced from v_roas_guardian_by_platform via a
+  // separate endpoint so spend hits each platform's own attribution window
+  // rather than rolling up under a single sales-channel bucket. Date params
+  // re-use the same start/end the channel section is bound to.
+  type PlatformRow = {
+    platform: string;
+    total_spend: number;
+    pixel_revenue: number;
+    pixel_roas: number;
+  };
+  const { data: platformRows = [], isLoading: platformLoading } = useQuery<PlatformRow[]>({
+    queryKey: ["/api/marketing/by-platform", startDate, endDate],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/marketing/by-platform?from=${startDate}&to=${endDate}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error("Failed to fetch platform ROAS");
+      return res.json();
+    },
+  });
+
+  // Pixel-ROAS thresholds per spec — peak season Apr–Sep is harder to hit
+  // because traffic is hot, so floors are lower; off-peak we expect Meta
+  // and friends to be more efficient. Uses the END date's month so a
+  // window that straddles the Mar/Apr boundary picks the more recent
+  // regime.
+  const platformStatus = (roas: number, dateForSeason: string) => {
+    const m = new Date(dateForSeason).getUTCMonth() + 1; // 1-12
+    const isPeak = m >= 4 && m <= 9;
+    const redFloor   = isPeak ? 5  : 10;
+    const amberFloor = isPeak ? 8  : 15;
+    if (!Number.isFinite(roas) || roas <= 0) {
+      return { color: "muted" as const, label: "—" };
+    }
+    if (roas < redFloor)   return { color: "red"   as const, label: `🔴 Below ${redFloor}x floor` };
+    if (roas < amberFloor) return { color: "amber" as const, label: `🟡 ${redFloor}–${amberFloor}x watch` };
+    return { color: "green" as const, label: "🟢 Healthy" };
+  };
+  const STATUS_BADGE_CLASS: Record<"red" | "amber" | "green" | "muted", string> = {
+    red:    "bg-destructive/10 text-destructive border-destructive/30",
+    amber:  "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30",
+    green:  "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30",
+    muted:  "bg-muted text-muted-foreground border-muted-foreground/20",
+  };
+
   return (
     <div className="space-y-4 mt-4">
       <div className="flex gap-4 items-end flex-wrap">
@@ -1194,6 +1240,62 @@ function RoasGuardianTab() {
               ))}
             </tbody>
           </table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>By Ad Platform</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {platformLoading && platformRows.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4">Loading…</div>
+          ) : platformRows.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4">
+              No platform data in the selected window.
+            </div>
+          ) : (
+            <table className="w-full text-sm" data-testid="platform-roas-table">
+              <thead>
+                <tr className="border-b text-left">
+                  <th className="py-2">Platform</th>
+                  <th className="py-2 text-right">Spend</th>
+                  <th className="py-2 text-right">Pixel Revenue</th>
+                  <th className="py-2 text-right">Pixel ROAS</th>
+                  <th className="py-2 text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {platformRows.map((p) => {
+                  const roas = Number(p.pixel_roas) || 0;
+                  const status = platformStatus(roas, endDate);
+                  return (
+                    <tr key={p.platform} className="border-b" data-testid={`platform-row-${p.platform}`}>
+                      <td className="py-2 font-medium">{p.platform}</td>
+                      <td className="py-2 text-right tabular-nums">{fmt$(Number(p.total_spend) || 0)}</td>
+                      <td className="py-2 text-right tabular-nums">{fmt$(Number(p.pixel_revenue) || 0)}</td>
+                      <td className="py-2 text-right">
+                        <Badge variant={status.color === "green" ? "default" : "destructive"}>
+                          {fmtRoas(roas)}
+                        </Badge>
+                      </td>
+                      <td className="py-2 text-right">
+                        <span
+                          className={`inline-flex items-center text-xs px-2 py-0.5 rounded border ${STATUS_BADGE_CLASS[status.color]}`}
+                        >
+                          {status.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          <p className="text-xs italic text-muted-foreground mt-3">
+            Pixel ROAS uses each platform's own attribution. Real attributed revenue is higher
+            due to cross-channel halo (Meta drives Amazon sales, etc).
+          </p>
         </CardContent>
       </Card>
 

@@ -189,7 +189,7 @@ export function EditSupplierDialog({
         </DialogHeader>
 
         {mode === "edit" && supplier ? (
-          {(() => {
+          (() => {
             const isStrategic = (supplier as any).tier === "strategic";
             return (
               <Tabs defaultValue="details" className="w-full">
@@ -224,7 +224,7 @@ export function EditSupplierDialog({
                 </TabsContent>
               </Tabs>
             );
-          })()}
+          })()
         ) : (
           <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
         )}

@@ -36,7 +36,7 @@ export async function computeDailyUsage(itemId: string): Promise<number | null> 
   const velocityBySku = new Map(velocity.map((v) => [v.sku, v.unitsSold]));
 
   if (item.type === "finished_product") {
-    return computeFinishedFromMap(item.sku, velocityBySku);
+    return computeFinishedFromMap(item, velocityBySku);
   }
 
   // For components we need every finished product's freshly computed
@@ -46,14 +46,38 @@ export async function computeDailyUsage(itemId: string): Promise<number | null> 
   const finishedDailyUsageById = new Map<string, number>();
   for (const it of allItems) {
     if (it.type === "finished_product") {
-      finishedDailyUsageById.set(it.id, computeFinishedFromMap(it.sku, velocityBySku));
+      finishedDailyUsageById.set(it.id, computeFinishedFromMap(it, velocityBySku));
     }
   }
   return await computeComponentDailyUsage(itemId, finishedDailyUsageById);
 }
 
-function computeFinishedFromMap(sku: string, velocityBySku: Map<string, number>): number {
-  const units = velocityBySku.get(sku) ?? 0;
+// Build the full set of SKU strings that can identify this item across
+// channels: canonical sku, the operator-curated sku_aliases array, and the
+// per-channel SKU columns (shopify/amazon/extensiv). Channel columns
+// occasionally arrive with a "SKU: " prefix from older imports — strip it
+// and try both forms so a row stored either way still matches.
+function aliasSkusFor(item: any): string[] {
+  const out = new Set<string>();
+  if (item.sku) out.add(item.sku);
+  for (const a of (item.skuAliases ?? []) as string[]) {
+    if (a) out.add(a);
+  }
+  for (const channel of [item.shopifySku, item.amazonSku, item.extensivSku] as (string | null | undefined)[]) {
+    if (!channel) continue;
+    out.add(channel);
+    const stripped = channel.replace(/^SKU:\s*/i, "");
+    if (stripped !== channel) out.add(stripped);
+  }
+  return Array.from(out);
+}
+
+// Sum velocity across every alias for this item. Missing aliases just add 0.
+function computeFinishedFromMap(item: any, velocityBySku: Map<string, number>): number {
+  let units = 0;
+  for (const sku of aliasSkusFor(item)) {
+    units += velocityBySku.get(sku) ?? 0;
+  }
   return units / VELOCITY_WINDOW_DAYS;
 }
 
@@ -111,7 +135,7 @@ export async function refreshAllItems(opts: { onlyZeroOrNull: boolean }): Promis
   const newDailyUsageById = new Map<string, number>();
   let finishedUpdated = 0;
   for (const item of finished) {
-    const computed = computeFinishedFromMap(item.sku, velocityBySku);
+    const computed = computeFinishedFromMap(item, velocityBySku);
     newDailyUsageById.set(item.id, computed);
     bomByProductId.set(item.id, await storage.getBillOfMaterialsByProductId(item.id));
     if (shouldWrite(item.dailyUsage, computed)) {

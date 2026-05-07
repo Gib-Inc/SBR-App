@@ -156,6 +156,21 @@ export default async function runApp(
     console.error("[Startup Checks] Failed to run:", err?.message ?? err);
   }
 
+  // Arm the recurring schedulers (Extensiv sync, AI System Review,
+  // Morning Trap, channel sync timers). These were previously declared
+  // in scheduler-service.ts but startScheduler() was never called from
+  // boot — only from a runtime route — so the timers never armed and
+  // every recurring job ghosted. Fire-and-forget so a slow channel
+  // config fetch doesn't block the listen() below.
+  void (async () => {
+    try {
+      const { startScheduler } = await import("./scheduler-service");
+      await startScheduler();
+    } catch (err: any) {
+      console.error("[Scheduler] Failed to start:", err?.message ?? err);
+    }
+  })();
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

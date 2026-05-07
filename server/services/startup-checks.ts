@@ -389,6 +389,56 @@ async function seedReorderPriority(client: pg.PoolClient): Promise<{
   };
 }
 
+/**
+ * Soft check for Extensiv credentials at boot. The 4-hour sync scheduler
+ * iterates users and skips per-user when credentials are missing; this
+ * just surfaces the gate at boot so an operator scanning the deploy log
+ * sees the issue without having to wait for the first scheduled tick.
+ *
+ * Looks in two places:
+ *   1. Per-user integration_settings (apiKey + warehouseId)
+ *   2. Env-var fallbacks (EXTENSIV_CLIENT_ID + EXTENSIV_CLIENT_SECRET,
+ *      or EXTENSIV_API_KEY for the legacy single-key flow)
+ *
+ * Doesn't block boot — fail-soft pattern, just logs.
+ */
+async function checkExtensivCredentials(client: pg.PoolClient): Promise<void> {
+  const envOk =
+    !!(process.env.EXTENSIV_CLIENT_ID && process.env.EXTENSIV_CLIENT_SECRET) ||
+    !!process.env.EXTENSIV_API_KEY;
+
+  // integration_settings is keyed (user_id, integration_name); we just
+  // want to know if ANY user has Extensiv set up.
+  let dbHasCreds = false;
+  try {
+    const result = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM integration_settings
+        WHERE LOWER(integration_name) = 'extensiv'
+          AND api_key IS NOT NULL
+          AND api_key <> ''`,
+    );
+    dbHasCreds = (result.rows[0]?.count ?? "0") !== "0";
+  } catch (err: any) {
+    // Table missing on a fresh DB is not a problem worth raising here —
+    // the scheduler will fail-soft on the actual sync attempt.
+    console.warn(
+      "[Startup Checks] Could not read integration_settings while checking Extensiv creds:",
+      err?.message ?? err,
+    );
+  }
+
+  if (envOk || dbHasCreds) {
+    console.log(
+      `[Extensiv] Credentials available (env=${envOk}, db=${dbHasCreds}) — sync scheduler can run.`,
+    );
+  } else {
+    console.warn(
+      "[Extensiv] Credentials not configured — sync scheduler will run but skip with warning.",
+    );
+  }
+}
+
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
   // The "rolls_made" action was removed when we discovered SBR buys
   // foam rollers from Pednar rather than producing them. Existing rows
@@ -543,6 +593,13 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] rolls_made cleanup failed:", err?.message ?? err);
+    }
+
+    // ── Extensiv credential availability ────────────────────────────────
+    try {
+      await checkExtensivCredentials(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Extensiv credential check failed:", err?.message ?? err);
     }
   } catch (err: any) {
     console.error("[Startup Checks] Could not connect to database:", err?.message ?? err);

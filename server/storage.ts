@@ -167,6 +167,26 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
 import * as schema from "@shared/schema";
 
+// Row shape returned by the v_money_maker_health view (per-build capacity
+// snapshot for the four core finished products). Keys mirror the SQL
+// column aliases — the view is the source of truth, this type is just a
+// compile-time mirror for the route + UI.
+export interface MoneyMakerHealthRow {
+  buildSku: string;
+  buildName: string;
+  buildsPerDay: number;
+  finishedStock: number;
+  finishedDaysLeft: number | null;
+  bindingComponent: string | null;
+  bindingStock: number | null;
+  maxBuildsUntilConstraint: number | null;
+  bindingDaysLeft: number | null;
+  bindingSupplier: string | null;
+  bindingLeadTime: number | null;
+  uncountedComponents: number;
+  status: string;
+}
+
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
@@ -759,6 +779,7 @@ export interface IStorage {
   // Marketing — ROAS Guardian view
   getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
   getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]>;
+  getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]>;
   getInventorySnapshot(params?: { date?: string }): Promise<any[]>;
 }
 
@@ -4296,6 +4317,9 @@ export class MemStorage implements IStorage {
     return [];
   }
   async getRoasByPlatform(_params?: { from?: string; to?: string }): Promise<any[]> {
+    return [];
+  }
+  async getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]> {
     return [];
   }
 
@@ -8275,6 +8299,41 @@ export class PostgresStorage implements IStorage {
       ORDER BY total_spend DESC
     `);
     return (rows as any).rows ?? (rows as any);
+  }
+
+  // Backed by the v_money_maker_health view — per-build capacity snapshot
+  // for the four core finished products (binding component, days to
+  // stockout, supplier, etc). The view does the heavy joins; we just
+  // surface it with camelCase keys for the UI. Sorted server-side by
+  // status priority so the urgent rows always appear first.
+  async getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]> {
+    const result = await this.db.execute(drizzleSql`
+      SELECT
+        build_sku                     AS "buildSku",
+        build_name                    AS "buildName",
+        builds_per_day                AS "buildsPerDay",
+        finished_stock                AS "finishedStock",
+        finished_days_left            AS "finishedDaysLeft",
+        binding_component             AS "bindingComponent",
+        binding_stock                 AS "bindingStock",
+        max_builds_until_constraint   AS "maxBuildsUntilConstraint",
+        binding_days_left             AS "bindingDaysLeft",
+        binding_supplier              AS "bindingSupplier",
+        binding_lead_time             AS "bindingLeadTime",
+        uncounted_components          AS "uncountedComponents",
+        status
+      FROM v_money_maker_health
+      ORDER BY
+        CASE status
+          WHEN '🔴 ORDER NOW' THEN 1
+          WHEN '🟡 ORDER THIS WEEK' THEN 2
+          WHEN '🟢 OK' THEN 3
+          WHEN '✅ HEALTHY' THEN 4
+          ELSE 5
+        END,
+        binding_days_left ASC NULLS LAST
+    `);
+    return ((result as any).rows ?? (result as any)) as MoneyMakerHealthRow[];
   }
 
   async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {

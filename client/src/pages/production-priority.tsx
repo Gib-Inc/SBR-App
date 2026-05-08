@@ -90,6 +90,22 @@ type PriorityRow = {
   gap: number;
 };
 
+type MoneyMakerHealthRow = {
+  buildSku: string;
+  buildName: string;
+  buildsPerDay: number;
+  finishedStock: number;
+  finishedDaysLeft: number | null;
+  bindingComponent: string | null;
+  bindingStock: number | null;
+  maxBuildsUntilConstraint: number | null;
+  bindingDaysLeft: number | null;
+  bindingSupplier: string | null;
+  bindingLeadTime: number | null;
+  uncountedComponents: number;
+  status: string;
+};
+
 type FxIncomingResponse = {
   items: Record<string, { sku: string; pendingQty: number; earliestExpected: string | null }>;
 };
@@ -120,6 +136,13 @@ export default function ProductionPriority() {
   });
   const { data: fxIncoming } = useQuery<FxIncomingResponse>({
     queryKey: ["/api/purchase-orders/fx-incoming"],
+  });
+  const {
+    data: moneyMakerHealth = [],
+    isLoading: moneyMakerLoading,
+    dataUpdatedAt: moneyMakerUpdatedAt,
+  } = useQuery<MoneyMakerHealthRow[]>({
+    queryKey: ["/api/money-maker-health"],
   });
 
   const itemBySku = useMemo(() => {
@@ -267,6 +290,105 @@ export default function ProductionPriority() {
           </span>
         </div>
       )}
+
+      {/* Money Maker Status — backed by the v_money_maker_health view.
+          Surfaces per-build capacity (which component is the binding
+          constraint, days to stockout, supplier) so the operator sees
+          where production hits a wall before opening the FX flow below. */}
+      <Card data-testid="money-maker-card">
+        <CardHeader>
+          <CardTitle>Money Maker Status — Build Capacity</CardTitle>
+          <CardDescription>
+            Per-build capacity for the four core finished products. Sorted by
+            urgency: red rows need orders today, yellow this week.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {moneyMakerLoading ? (
+            <div className="flex items-center gap-2 py-6 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading…
+            </div>
+          ) : moneyMakerHealth.length === 0 ? (
+            <div className="py-6 text-sm text-muted-foreground">
+              No data — verify <code>v_money_maker_health</code> view exists in Supabase.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Build</TableHead>
+                  <TableHead className="text-right">Builds/Day</TableHead>
+                  <TableHead className="text-right">Finished Stock</TableHead>
+                  <TableHead className="text-right">Days of FG Left</TableHead>
+                  <TableHead>Binding Constraint</TableHead>
+                  <TableHead className="text-right">Constraint Stock</TableHead>
+                  <TableHead className="text-right">Days to Stockout</TableHead>
+                  <TableHead>Supplier</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {moneyMakerHealth.map((r) => {
+                  const rowClass =
+                    r.status.startsWith("🔴")
+                      ? "bg-destructive/10"
+                      : r.status.startsWith("🟡")
+                        ? "bg-amber-500/10"
+                        : r.status.startsWith("🟢")
+                          ? "bg-green-500/10"
+                          : "";
+                  return (
+                    <TableRow key={r.buildSku} className={rowClass} data-testid={`money-maker-row-${r.buildSku}`}>
+                      <TableCell>
+                        <div className="font-medium">{r.buildName}</div>
+                        <div className="text-xs text-muted-foreground font-mono">{r.buildSku}</div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {Number(r.buildsPerDay).toFixed(1)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {r.finishedStock.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {r.finishedDaysLeft != null ? `${r.finishedDaysLeft}d` : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {r.bindingComponent ?? (
+                          <span className="text-muted-foreground italic">needs counting</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {r.bindingStock != null ? r.bindingStock.toLocaleString() : "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {r.bindingDaysLeft != null ? `${r.bindingDaysLeft}d` : "—"}
+                      </TableCell>
+                      <TableCell>
+                        {r.bindingSupplier ?? <span className="text-muted-foreground">—</span>}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs whitespace-nowrap">{r.status}</span>
+                          {r.uncountedComponents > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border">
+                              {r.uncountedComponents} uncounted
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+          <p className="mt-3 text-xs italic text-muted-foreground">
+            Components without a recent count are excluded from this analysis. Last updated:{" "}
+            {moneyMakerUpdatedAt ? new Date(moneyMakerUpdatedAt).toLocaleString() : "—"}
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Priority table */}
       <Card>

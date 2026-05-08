@@ -78,6 +78,19 @@ export const items = pgTable("items", {
   // Finished product location quantities
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
+  fxInProcessQty: integer("fx_in_process_qty").notNull().default(0), // Finished-goods units being built at FX Industries — moves to hildaleQty on receipt
+  // Seasonal demand modifier applied on top of measured daily_usage when
+  // computing forward-looking forecasts. 1.0 = no adjustment; 1.5 = peak;
+  // 0.5 = trough. Manual for now — operators set this from the supplier
+  // Forecast tab. We don't try to infer seasonality from data we don't
+  // have a year of yet.
+  seasonalMultiplier: real("seasonal_multiplier").notNull().default(1.0),
+  // Group used by the Products page priority sort. Values:
+  // 'core_build' | 'combo' | 'refurbished' | 'replacement' | 'accessory'.
+  // Stored as text rather than a Postgres enum so operators can edit
+  // groupings from the UI without a schema migration. Default is
+  // 'accessory' — the bottom bucket on the page.
+  reorderPriority: text("reorder_priority").notNull().default('accessory'),
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // V1: Extensiv read-only snapshot for reconciliation/variance display
   extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)
@@ -310,6 +323,20 @@ export const suppliers = pgTable("suppliers", {
   poSentCount: integer("po_sent_count").default(0).notNull(),
   poReceivedCount: integer("po_received_count").default(0).notNull(),
   lastPoSentAt: timestamp("last_po_sent_at"),
+
+  // Strategic vs Transactional. Strategic suppliers (FX, Silver Fox, Pednar
+  // etc.) have ongoing-relationship workflows: Forecast tab, scheduled
+  // briefs, communication digest. Transactional suppliers (McMaster, Uline)
+  // are one-and-done — those features stay hidden for them.
+  tier: text("tier").notNull().default('transactional'),
+  // Cadence for the auto-scheduled forecast brief. 'never' disables; the
+  // daily scheduler at 8am MT picks up rows whose
+  // last_forecast_brief_sent_at is older than the cadence.
+  forecastBriefSchedule: text("forecast_brief_schedule").notNull().default('never'),
+  // When true the scheduler fires the email automatically; when false it
+  // creates a draft for Matt to review on the dashboard.
+  autoSendBriefs: boolean("auto_send_briefs").notNull().default(false),
+  lastForecastBriefSentAt: timestamp("last_forecast_brief_sent_at"),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });
@@ -342,28 +369,34 @@ export type SupplierItem = typeof supplierItems.$inferSelect;
 
 export const vendorCommunications = pgTable("vendor_communications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id, { onDelete: "cascade" }),
   itemId: varchar("item_id").references(() => items.id, { onDelete: "set null" }),
   reorderAlertId: varchar("reorder_alert_id").references(() => reorderAlerts.id, { onDelete: "set null" }),
   purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
   communicationType: text("communication_type").notNull().default("REORDER_REQUEST"),
+  actionType: text("action_type").notNull().default("REORDER_REQUEST"),
   channel: text("channel").notNull().default("EMAIL"),
   direction: text("direction").notNull().default("OUTBOUND"),
   recipientEmail: text("recipient_email"),
   subject: text("subject"),
   bodyText: text("body_text"),
-  status: text("status").notNull().default("pending"), // pending | sent | acknowledged | dismissed | received | failed
+  sentBy: text("sent_by").notNull().default("system"),
+  status: text("status").notNull().default("pending"),
+  expectedDate: timestamp("expected_date"),
+  notes: text("notes"),
   providerMessageId: text("provider_message_id"),
   metadata: jsonb("metadata"),
   sentAt: timestamp("sent_at"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  createdBy: varchar("created_by"),
 }, (table) => ({
   supplierIdx: index("vendor_communications_supplier_id_idx").on(table.supplierId),
   itemIdx: index("vendor_communications_item_id_idx").on(table.itemId),
   reorderAlertIdx: index("vendor_communications_reorder_alert_id_idx").on(table.reorderAlertId),
   statusIdx: index("vendor_communications_status_idx").on(table.status),
   sentAtIdx: index("vendor_communications_sent_at_idx").on(table.sentAt),
+  createdAtIdx: index("vendor_communications_created_at_idx").on(table.createdAt),
 }));
 
 export const insertVendorCommunicationSchema = createInsertSchema(vendorCommunications).omit({
@@ -485,6 +518,37 @@ export const purchaseOrders = pgTable("purchase_orders", {
   
   // AI Auto-Draft flag
   isAutoDraft: boolean("is_auto_draft").notNull().default(false), // true = created by AI system
+
+  // In-Transit / build-progress state for FX POs (parallel to `status`,
+  // which tracks the procurement lifecycle DRAFT→SENT→RECEIVED). Values:
+  // 'ordered' | 'confirmed' | 'in_production' | 'shipped' | 'received'.
+  // Transitions on FX POs (supplierId='1') auto-update the linked finished
+  // products' fx_in_process_qty — see PATCH /api/purchase-orders/:id/po-status.
+  poStatus: text("po_status").notNull().default('ordered'),
+
+  // FX confirmation fields. confirmed_qty is what FX agreed to build (often
+  // less than ordered if they're capacity-constrained). expected_completion_
+  // date is the FX build completion date (distinct from expected_date which
+  // is the delivery ETA).
+  confirmedQty: integer("confirmed_qty"),
+  expectedCompletionDate: timestamp("expected_completion_date"),
+
+  // ── Order-logging + receive-accuracy fields ─────────────────────────
+  // expected_qty / expected_delivery are recorded on PO creation; the
+  // actual_* counterparts are written on quick-receive. accuracy_score
+  // and delivery_variance_days are derived on receive so reliability
+  // queries don't have to recompute. entry_source carries provenance
+  // for the Incoming page badges; invoice_total is the operator-typed
+  // invoice grand total which we trust over line-sum for accounting.
+  expectedQty: integer("expected_qty"),
+  actualQty: integer("actual_qty"),
+  expectedDelivery: date("expected_delivery"),
+  actualDelivery: date("actual_delivery"),
+  accuracyScore: real("accuracy_score"),
+  deliveryVarianceDays: integer("delivery_variance_days"),
+  entrySource: text("entry_source").notNull().default('manual'),
+  invoiceImageUrl: text("invoice_image_url"),
+  invoiceTotal: real("invoice_total"),
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),
@@ -842,6 +906,43 @@ export const integrationConfigs = pgTable("integration_configs", {
 export const insertIntegrationConfigSchema = createInsertSchema(integrationConfigs).omit({ id: true, lastTokenCheckAt: true, lastTokenCheckStatus: true, lastAlertSentAt: true, consecutiveFailures: true });
 export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSchema>;
 export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
+
+// ============================================================================
+// SKU MAPPINGS (External SKU → Canonical SKU)
+// ============================================================================
+// Shopify, Amazon, etc. sometimes ship orders under a different SKU than what
+// our items table calls them. Examples:
+//   • Shopify "SBR-Classic1.0"  → our "SBR-PUSH-1.0"
+//   • "SKU: 700433684258" prefix has to be stripped before matching
+// We store the alias here so webhook handlers + the backfill endpoint can
+// resolve external SKUs to a canonical SKU before looking up the item.
+
+export const skuMappings = pgTable("sku_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  externalSku: text("external_sku").notNull(),
+  canonicalSku: text("canonical_sku").notNull(),
+  source: text("source").notNull(), // 'shopify' | 'amazon' | 'windsor' | 'manual'
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  // Each (external_sku, source) pair must be unique so we don't end up with
+  // ambiguous mappings (one external SKU resolving to two different canonical
+  // SKUs from the same source).
+  externalSkuSourceIdx: uniqueIndex("sku_mappings_external_source_idx").on(
+    table.externalSku,
+    table.source,
+  ),
+  canonicalSkuIdx: index("sku_mappings_canonical_sku_idx").on(table.canonicalSku),
+}));
+
+export const insertSkuMappingSchema = createInsertSchema(skuMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertSkuMapping = z.infer<typeof insertSkuMappingSchema>;
+export type SkuMapping = typeof skuMappings.$inferSelect;
 
 // ============================================================================
 // BARCODES

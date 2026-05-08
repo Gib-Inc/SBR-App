@@ -27,6 +27,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Save, Building2, ShoppingBag, Wrench } from "lucide-react";
 import { SupplierPerformance } from "@/components/supplier-performance";
+import { SupplierCommunications } from "@/components/supplier-communications";
+import { SupplierForecast } from "@/components/supplier-forecast";
+import { SupplierTimeline } from "@/components/supplier-timeline";
+import { SupplierReliability } from "@/components/supplier-reliability";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -185,23 +189,91 @@ export function EditSupplierDialog({
         </DialogHeader>
 
         {mode === "edit" && supplier ? (
-          <Tabs defaultValue="details" className="w-full">
-            <TabsList className="grid w-full max-w-sm grid-cols-2">
-              <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
-              <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
-            </TabsList>
-            <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto">
-              <SupplierPerformance supplierId={supplier.id} />
-            </TabsContent>
-            <TabsContent value="details" className="mt-4">
-              <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
-            </TabsContent>
-          </Tabs>
+          (() => {
+            const isStrategic = (supplier as any).tier === "strategic";
+            return (
+              <Tabs defaultValue="details" className="w-full">
+                <TabsList className={`grid w-full ${isStrategic ? "max-w-2xl grid-cols-4" : "max-w-sm grid-cols-3"}`}>
+                  <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
+                  <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
+                  {isStrategic && (
+                    <TabsTrigger value="forecast" data-testid="tab-supplier-forecast">Forecast</TabsTrigger>
+                  )}
+                  <TabsTrigger value="communications" data-testid="tab-supplier-communications">
+                    Communications
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto space-y-4">
+                  <SupplierReliability supplierId={supplier.id} />
+                  <SupplierPerformance supplierId={supplier.id} />
+                </TabsContent>
+                {isStrategic && (
+                  <TabsContent value="forecast" className="mt-4 max-h-[60vh] overflow-y-auto">
+                    <SupplierForecast supplierId={supplier.id} />
+                  </TabsContent>
+                )}
+                <TabsContent value="communications" className="mt-4 max-h-[60vh] overflow-y-auto space-y-4">
+                  <SupplierTimeline supplierId={supplier.id} />
+                  <div className="border-t pt-4">
+                    <SupplierCommunications supplierId={supplier.id} supplierName={supplier.name} />
+                  </div>
+                </TabsContent>
+                <TabsContent value="details" className="mt-4 space-y-4">
+                  {supplier.id === "1" && <FxAdditionalContacts />}
+                  <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
+                </TabsContent>
+              </Tabs>
+            );
+          })()
         ) : (
           <SupplierFormBody form={form} onSubmit={onSubmit} mutationPending={updateMutation.isPending} mode={mode} onClose={() => onOpenChange(false)} />
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// FX Industries has three working contacts the team rotates between. The
+// suppliers schema only carries one contact triplet, so we surface the other
+// two here as a static block keyed on supplier.id="1". When/if other suppliers
+// need multiple contacts we'd promote this to a real supplier_contacts table —
+// keeping it inline today since it's the only one.
+const FX_CONTACTS = [
+  { name: "Beth Lock",       role: "President", email: "beth@fxindustries.net",  phone: "435-635-0239" },
+  { name: "Wyatt Anderson",  role: "CFO",       email: "wyatt@fxindustries.net", phone: "435-979-0309" },
+  { name: "James",           role: "Orders",    email: "james@fxindustries.net", phone: "435-229-6641" },
+] as const;
+
+function FxAdditionalContacts() {
+  return (
+    <div
+      className="rounded-md border bg-muted/30 p-3 space-y-2"
+      data-testid="fx-additional-contacts"
+    >
+      <div className="text-sm font-semibold">FX Industries — All Contacts</div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
+        {FX_CONTACTS.map((c) => (
+          <div key={c.email} className="rounded border bg-background p-2 space-y-0.5">
+            <div className="font-medium">{c.name}</div>
+            <div className="text-xs text-muted-foreground">{c.role}</div>
+            <a
+              href={`mailto:${c.email}`}
+              className="block text-primary hover:underline truncate"
+              data-testid={`fx-contact-email-${c.name.replace(/\s+/g, "-").toLowerCase()}`}
+            >
+              {c.email}
+            </a>
+            <a
+              href={`tel:${c.phone.replace(/[^\d+]/g, "")}`}
+              className="block text-primary hover:underline"
+              data-testid={`fx-contact-phone-${c.name.replace(/\s+/g, "-").toLowerCase()}`}
+            >
+              {c.phone}
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

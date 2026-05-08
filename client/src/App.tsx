@@ -48,7 +48,11 @@ import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
 import CountInventory from "@/pages/count-inventory";
 import ReceiveStock from "@/pages/receive-stock";
+import Incoming from "@/pages/incoming";
+import SkuMappings from "@/pages/sku-mappings";
+import LogOrder from "@/pages/log-order";
 import Backorders from "@/pages/backorders";
+import ProductionPriority from "@/pages/production-priority";
 import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
 import SupplierIntel from "@/pages/supplier-intel";
@@ -142,6 +146,7 @@ function AuthenticatedApp() {
                     <Route path="/purchase-orders" component={PurchaseOrders} />
                     <Route path="/sales-orders" component={SalesOrders} />
                     <Route path="/backorders" component={Backorders} />
+                    <Route path="/production-priority" component={ProductionPriority} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
                     <Route path="/marketing" component={Marketing} />
@@ -149,6 +154,9 @@ function AuthenticatedApp() {
                     <Route path="/raw-materials" component={RawMaterials} />
                     <Route path="/count-inventory" component={CountInventory} />
                     <Route path="/receive-stock" component={ReceiveStock} />
+                    <Route path="/incoming" component={Incoming} />
+                    <Route path="/sku-mappings" component={SkuMappings} />
+                    <Route path="/log-order" component={LogOrder} />
                     <Route path="/in-house-shipping" component={InHouseShipping} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />

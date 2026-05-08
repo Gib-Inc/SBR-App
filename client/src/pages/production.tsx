@@ -55,12 +55,7 @@ type CardConfig = {
 const CARDS: CardConfig[] = [
   { key: "push-1-0", label: "Push Model 1.0", skus: ["SBR-PUSH-1.0"] },
   { key: "push-2-0", label: "Push Model 2.0", skus: ["SBR-Extrawide2.0"] },
-  {
-    key: "pull-behind",
-    label: "Pull-Behind",
-    skus: ["SBR-PB-ORIG", "SBR-PB-BIGFOOT"],
-    variantLabels: { "SBR-PB-ORIG": "Original", "SBR-PB-BIGFOOT": "Bigfoot" },
-  },
+  { key: "pull-behind", label: "Pull-Behind", skus: ["SBR-PB-ORIG"] },
   { key: "bigfoot", label: "Bigfoot", skus: ["SBR-PB-BIGFOOT"] },
 ];
 
@@ -80,6 +75,9 @@ type Item = {
   sku: string;
   name: string;
   type: string;
+  hildaleQty?: number | null;
+  extensivOnHandSnapshot?: number | null;
+  fxInProcessQty?: number | null;
 };
 
 type TodayTotals = {
@@ -570,6 +568,7 @@ function ProductionSheet({
         {mode === "main" && selectedSku && selectedItem && (
           <div className="mt-4 space-y-4">
             <BuildableHint itemId={selectedItem.id} />
+            <FxIncomingHint item={selectedItem} />
             <ActionRow
               icon="🔨"
               label="Built"
@@ -728,6 +727,27 @@ function BuildableHint({ itemId }: { itemId: string }) {
       data-testid="buildable-hint"
     >
       🔴 Missing components — check stock
+    </div>
+  );
+}
+
+// Surfaces FX incoming units alongside on-hand stock so Clarence can plan
+// around in-flight production at FX Industries. Hidden when fx_in_process_qty
+// is zero. on-hand here = Hildale + Extensiv snapshot (Pyvott). "Total
+// incoming" today is just the FX number, but is split out so additional
+// inbound sources (open POs, transfers in flight, etc.) can be added later
+// without changing the layout.
+function FxIncomingHint({ item }: { item: Item }) {
+  const fx = item.fxInProcessQty ?? 0;
+  if (fx <= 0) return null;
+  const onHand = (item.hildaleQty ?? 0) + (item.extensivOnHandSnapshot ?? 0);
+  const totalIncoming = fx;
+  return (
+    <div
+      className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium text-amber-700 dark:text-amber-400"
+      data-testid="fx-incoming-hint"
+    >
+      📦 {onHand} on hand · {fx} in production at FX · {totalIncoming} total incoming
     </div>
   );
 }

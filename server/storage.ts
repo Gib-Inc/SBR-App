@@ -21,6 +21,8 @@ import {
   type InsertReorderAlert,
   type VendorCommunication,
   type InsertVendorCommunication,
+  type SkuMapping,
+  type InsertSkuMapping,
   type PurchaseOrder,
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
@@ -293,6 +295,18 @@ export interface IStorage {
   createSupplierItem(supplierItem: InsertSupplierItem): Promise<SupplierItem>;
   updateSupplierItem(id: string, supplierItem: Partial<InsertSupplierItem>): Promise<SupplierItem | undefined>;
   deleteSupplierItem(id: string): Promise<boolean>;
+
+  // Vendor Communications
+  getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]>;
+  getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]>;
+
+  // SKU Mappings (External → Canonical)
+  getAllSkuMappings(): Promise<SkuMapping[]>;
+  getSkuMapping(id: string): Promise<SkuMapping | undefined>;
+  findCanonicalSku(externalSku: string, source: string): Promise<string | null>;
+  createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping>;
+  updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined>;
+  deleteSkuMapping(id: string): Promise<boolean>;
 
   // Sales History
   getAllSalesHistory(): Promise<SalesHistory[]>;
@@ -744,6 +758,7 @@ export interface IStorage {
 
   // Marketing — ROAS Guardian view
   getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
+  getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]>;
   getInventorySnapshot(params?: { date?: string }): Promise<any[]>;
 }
 
@@ -1204,6 +1219,16 @@ export class MemStorage implements IStorage {
 
   async getVendorCommunications(): Promise<VendorCommunication[]> {
     return Array.from(this.vendorCommunications.values());
+  }
+
+  async getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values()).filter((comm) => comm.supplierId === supplierId);
+  }
+
+  async getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit);
   }
 
   async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
@@ -1764,6 +1789,24 @@ export class MemStorage implements IStorage {
   async deleteSupplierItem(id: string): Promise<boolean> {
     return this.supplierItems.delete(id);
   }
+
+  // SKU Mappings (MemStorage stub — Postgres is the real backend)
+  async getAllSkuMappings(): Promise<SkuMapping[]> { return []; }
+  async getSkuMapping(_id: string): Promise<SkuMapping | undefined> { return undefined; }
+  async findCanonicalSku(_externalSku: string, _source: string): Promise<string | null> { return null; }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    return {
+      id: crypto.randomUUID(),
+      externalSku: mapping.externalSku,
+      canonicalSku: mapping.canonicalSku,
+      source: mapping.source,
+      notes: mapping.notes ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+  async updateSkuMapping(_id: string, _updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> { return undefined; }
+  async deleteSkuMapping(_id: string): Promise<boolean> { return false; }
 
   // Sales History
   async getAllSalesHistory(): Promise<SalesHistory[]> {
@@ -4252,6 +4295,9 @@ export class MemStorage implements IStorage {
   async getRoasGuardian(_params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
     return [];
   }
+  async getRoasByPlatform(_params?: { from?: string; to?: string }): Promise<any[]> {
+    return [];
+  }
 
   async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
     return [];
@@ -4367,6 +4413,22 @@ export class PostgresStorage implements IStorage {
 
   async getVendorCommunications(): Promise<VendorCommunication[]> {
     return await this.db.select().from(schema.vendorCommunications).orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .where(eq(schema.vendorCommunications.supplierId, supplierId))
+      .orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .orderBy(desc(schema.vendorCommunications.createdAt))
+      .limit(limit);
   }
 
   async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
@@ -5034,6 +5096,54 @@ export class PostgresStorage implements IStorage {
 
   async deleteSupplierItem(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.supplierItems).where(eq(schema.supplierItems.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Vendor Communications
+  // SKU Mappings
+  async getAllSkuMappings(): Promise<SkuMapping[]> {
+    return await this.db.select().from(schema.skuMappings).orderBy(desc(schema.skuMappings.createdAt));
+  }
+  async getSkuMapping(id: string): Promise<SkuMapping | undefined> {
+    const results = await this.db.select().from(schema.skuMappings).where(eq(schema.skuMappings.id, id));
+    return results[0];
+  }
+  async findCanonicalSku(externalSku: string, source: string): Promise<string | null> {
+    // Strip the legacy "SKU: " prefix that some imports leave on values, and
+    // try BOTH the raw and stripped form so a row stored either way still
+    // resolves. Also try lowercased source for compat with seed values.
+    const stripped = externalSku.replace(/^SKU:\s*/i, "");
+    const sourceLower = source.toLowerCase();
+    const candidates = [externalSku, stripped];
+    for (const cand of candidates) {
+      const rows = await this.db
+        .select()
+        .from(schema.skuMappings)
+        .where(
+          and(
+            eq(schema.skuMappings.externalSku, cand),
+            eq(schema.skuMappings.source, sourceLower),
+          ),
+        )
+        .limit(1);
+      if (rows[0]) return rows[0].canonicalSku;
+    }
+    return null;
+  }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    const results = await this.db.insert(schema.skuMappings).values(mapping).returning();
+    return results[0];
+  }
+  async updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> {
+    const results = await this.db
+      .update(schema.skuMappings)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.skuMappings.id, id))
+      .returning();
+    return results[0];
+  }
+  async deleteSkuMapping(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.skuMappings).where(eq(schema.skuMappings.id, id)).returning();
     return results.length > 0;
   }
 
@@ -8142,6 +8252,31 @@ export class PostgresStorage implements IStorage {
     return (rows as any).rows ?? (rows as any);
   }
 
+  // Per-ad-platform rollup. Hits the v_roas_guardian_by_platform view that
+  // already aggregates spend + pixel-attributed revenue across the platform's
+  // own attribution window (Meta = 7-day click, Google = its default, etc.).
+  // We return whatever shape the view exports — typed loosely on purpose so
+  // adding a column there doesn't require a code change here.
+  async getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]> {
+    const from = params?.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const to   = params?.to   ?? new Date().toISOString().slice(0, 10);
+    const rows = await this.db.execute(drizzleSql`
+      SELECT
+        platform,
+        SUM(total_spend)::float    AS total_spend,
+        SUM(pixel_revenue)::float  AS pixel_revenue,
+        CASE
+          WHEN SUM(total_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(total_spend)::float
+          ELSE 0
+        END AS pixel_roas
+      FROM v_roas_guardian_by_platform
+      WHERE date >= ${from}::date AND date <= ${to}::date
+      GROUP BY platform
+      ORDER BY total_spend DESC
+    `);
+    return (rows as any).rows ?? (rows as any);
+  }
+
   async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
     // Both warehouses are sourced live from the items table:
     //   - Pyvott qty  = items.extensiv_on_hand_snapshot (written by Extensiv sync)
@@ -8170,6 +8305,17 @@ export class PostgresStorage implements IStorage {
         'hildale_qty' AS source
       FROM items
       WHERE extensiv_sku IS NOT NULL
+      UNION ALL
+      SELECT
+        CURRENT_DATE::text AS snapshot_date,
+        'FX' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(fx_in_process_qty, 0) AS qty,
+        0 AS promised,
+        'fx_in_process_qty' AS source
+      FROM items
+      WHERE type = 'finished_product'
     `);
     return result.rows ?? result ?? [];
   }

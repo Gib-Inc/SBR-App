@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +10,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Loader2, AlertTriangle, ArrowRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Loader2, AlertTriangle, ArrowRight, Send } from "lucide-react";
+import { SupplierActionDialog, type SupplierActionContext } from "@/components/supplier-action-dialog";
+import { CreatePODialog } from "@/components/create-po-dialog";
 
 // Default Reports dashboard widgets. Each fetches its own data from existing
 // endpoints — no new API surface — and handles its own loading state.
@@ -368,14 +371,48 @@ type AttentionRow =
   | {
       key: string;
       kind: "low";
+      itemId: string;
+      sku: string;
       name: string;
       onHand: number;
       minStock: number;
       dailyUsage: number;
+      daysOfSupply: number;
+      daysLeft: number | null;
+      leadTimeDays: number | null;
+      supplierId: string | null;
+      supplierName: string | null;
+      supplierSku: string | null;
+      orderQty: number;
+      unitCost: number | null;
       rate: number;
     };
 
+type DashboardMaterial = {
+  id: string;
+  name: string;
+  sku: string;
+  onHand: number;
+  minStock: number;
+  dailyUsage: number;
+  daysOfSupply: number;
+  daysLeft: number | null;
+  orderQty: number;
+  supplierId: string | null;
+  supplierName: string | null;
+  supplierSku: string | null;
+  leadTimeDays: number | null;
+  unitCost: number | null;
+};
+
 function CriticalStockWidget() {
+  const [actionContext, setActionContext] = useState<SupplierActionContext | null>(null);
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
+  const [poInitial, setPoInitial] = useState<{
+    supplierId: string;
+    lines: { itemId: string; qtyOrdered: number; unitCost?: number }[];
+  } | null>(null);
+
   const { data: snapshot, isLoading: snapLoading } = useQuery<SnapshotRow[]>({
     queryKey: ["/api/inventory/snapshot"],
   });
@@ -385,6 +422,14 @@ function CriticalStockWidget() {
   const { data: items, isLoading: itemsLoading } = useQuery<ItemForWidget[]>({
     queryKey: ["/api/items"],
   });
+  const { data: dashboard } = useQuery<{ materials: DashboardMaterial[] }>({
+    queryKey: ["/api/raw-materials/dashboard"],
+  });
+  const dashboardByItemId = useMemo(() => {
+    const m = new Map<string, DashboardMaterial>();
+    for (const row of dashboard?.materials ?? []) m.set(row.id, row);
+    return m;
+  }, [dashboard]);
 
   const top = useMemo<AttentionRow[]>(() => {
     if (!snapshot || !velocity || !items) return [];
@@ -413,7 +458,9 @@ function CriticalStockWidget() {
         rate: r.unitsSold / VELOCITY_WINDOW_DAYS,
       }));
 
-    // 2. Components at or below their configured minimum (min > 0).
+    // 2. Components at or below their configured minimum (min > 0). Enriched
+    // with supplier + lead time from the raw-materials dashboard so Notify
+    // Vendor and lead-time-based coloring can render inline.
     const lowRows: AttentionRow[] = items
       .filter(
         (i) =>
@@ -421,15 +468,32 @@ function CriticalStockWidget() {
           (i.minStock ?? 0) > 0 &&
           (i.currentStock ?? 0) <= (i.minStock ?? 0),
       )
-      .map((i) => ({
-        key: `low:${i.id}`,
-        kind: "low",
-        name: i.name,
-        onHand: i.currentStock ?? 0,
-        minStock: i.minStock ?? 0,
-        dailyUsage: i.dailyUsage ?? 0,
-        rate: i.dailyUsage ?? 0,
-      }));
+      .map((i) => {
+        const enriched = dashboardByItemId.get(i.id);
+        const dailyUsage = enriched?.dailyUsage ?? i.dailyUsage ?? 0;
+        const onHand = enriched?.onHand ?? i.currentStock ?? 0;
+        const daysOfSupply =
+          enriched?.daysOfSupply ?? (dailyUsage > 0 ? Math.round(onHand / dailyUsage) : 999);
+        return {
+          key: `low:${i.id}`,
+          kind: "low" as const,
+          itemId: i.id,
+          sku: enriched?.sku ?? "",
+          name: i.name,
+          onHand,
+          minStock: i.minStock ?? 0,
+          dailyUsage,
+          daysOfSupply,
+          daysLeft: enriched?.daysLeft ?? null,
+          leadTimeDays: enriched?.leadTimeDays ?? null,
+          supplierId: enriched?.supplierId ?? null,
+          supplierName: enriched?.supplierName ?? null,
+          supplierSku: enriched?.supplierSku ?? null,
+          orderQty: enriched?.orderQty ?? 0,
+          unitCost: enriched?.unitCost ?? null,
+          rate: dailyUsage,
+        };
+      });
 
     // Two-tier sort: out-of-stock first, then below-min; secondary rate desc.
     return [...outRows, ...lowRows]
@@ -485,37 +549,126 @@ function CriticalStockWidget() {
                   </div>
                 </li>
               ) : (
-                <li
-                  key={row.key}
-                  className="py-2 flex items-center justify-between gap-3"
-                  data-testid={`critical-row-${row.key}`}
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{row.name}</div>
-                    <div className="text-xs text-amber-700 dark:text-amber-400 font-medium">Low component stock</div>
-                    <div className="text-xs text-muted-foreground">
-                      {row.onHand} on hand · min {row.minStock}
-                      {row.dailyUsage > 0 && (
-                        <>
-                          {" · "}
-                          {row.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div
-                      className="text-base font-bold tabular-nums text-amber-700 dark:text-amber-400"
+                (() => {
+                  const lead = row.leadTimeDays ?? 0;
+                  const isRed =
+                    row.dailyUsage > 0 &&
+                    ((lead > 0 && row.daysOfSupply < lead) || (lead === 0 && row.daysOfSupply < 7));
+                  const isAmber =
+                    !isRed &&
+                    row.dailyUsage > 0 &&
+                    ((lead > 0 && row.daysOfSupply < lead * 1.5) || (lead === 0 && row.daysOfSupply < 14));
+                  const daysClass = isRed
+                    ? "text-destructive"
+                    : isAmber
+                      ? "text-amber-700 dark:text-amber-400"
+                      : "text-muted-foreground";
+                  return (
+                    <li
+                      key={row.key}
+                      className="py-2 flex items-center justify-between gap-3"
+                      data-testid={`critical-row-${row.key}`}
                     >
-                      {row.onHand}
-                    </div>
-                  </div>
-                </li>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{row.name}</div>
+                        <div className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+                          Low component stock
+                          {row.dailyUsage > 0 && (
+                            <span className={`ml-2 ${daysClass}`}>
+                              · {row.daysOfSupply}d left{lead > 0 ? ` (lead ${lead}d)` : ""}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {row.onHand} on hand · min {row.minStock}
+                          {row.dailyUsage > 0 && (
+                            <>
+                              {" · "}
+                              {row.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isRed && row.supplierId && row.supplierName && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2"
+                            onClick={() => {
+                              const recommendedQty =
+                                row.orderQty > 0
+                                  ? row.orderQty
+                                  : row.dailyUsage > 0
+                                    ? Math.ceil(row.dailyUsage * 30)
+                                    : 0;
+                              const estimatedCost =
+                                row.unitCost != null
+                                  ? Math.round(recommendedQty * row.unitCost * 100) / 100
+                                  : null;
+                              setActionContext({
+                                supplierId: row.supplierId!,
+                                supplierName: row.supplierName!,
+                                supplierSku: row.supplierSku,
+                                itemId: row.itemId,
+                                itemName: row.name,
+                                sku: row.sku,
+                                currentStock: row.onHand,
+                                dailyUsage: row.dailyUsage,
+                                daysLeft: row.daysLeft,
+                                leadTimeDays: row.leadTimeDays,
+                                recommendedQty,
+                                estimatedCost,
+                                unitCost: row.unitCost,
+                              });
+                            }}
+                            data-testid={`button-widget-order-${row.itemId}`}
+                          >
+                            <Send className="h-3 w-3 mr-1" />
+                            Order
+                          </Button>
+                        )}
+                        <div
+                          className="text-base font-bold tabular-nums text-amber-700 dark:text-amber-400"
+                        >
+                          {row.onHand}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })()
               ),
             )}
           </ul>
         )}
       </CardContent>
+      <SupplierActionDialog
+        isOpen={actionContext != null}
+        onClose={() => setActionContext(null)}
+        context={actionContext}
+        onCreatePO={() => {
+          if (!actionContext) return;
+          setPoInitial({
+            supplierId: actionContext.supplierId,
+            lines: [
+              {
+                itemId: actionContext.itemId,
+                qtyOrdered: actionContext.recommendedQty,
+                unitCost: actionContext.unitCost ?? undefined,
+              },
+            ],
+          });
+          setPoDialogOpen(true);
+        }}
+      />
+      <CreatePODialog
+        open={poDialogOpen}
+        onOpenChange={(open) => {
+          setPoDialogOpen(open);
+          if (!open) setPoInitial(null);
+        }}
+        initial={poInitial ?? undefined}
+      />
     </Card>
   );
 }

@@ -4,9 +4,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle } from "lucide-react";
+import { Warehouse, Package, AlertTriangle, Loader2, ArrowUp, ArrowDown, ArrowUpDown, ArrowRightLeft, MinusCircle, Plus } from "lucide-react";
 import { TransferToPyvottDialog } from "@/components/transfer-to-pyvott-dialog";
 import { WriteOffStockDialog } from "@/components/write-off-stock-dialog";
+import { FxInProcessDialog, type FxItem } from "@/components/fx-in-process-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
 
 type SnapshotRow = {
@@ -24,10 +31,15 @@ type SkuVelocity = {
   unitsSold: number;
 };
 
-// Minimal shape from /api/items — only the fields we need for the price column.
+// Minimal shape from /api/items — fields used by the price column and the
+// FX in-production modal.
 type ItemsRow = {
+  id: string;
   sku: string;
+  name: string;
+  type: string;
   sellingPrice: number | null;
+  fxInProcessQty: number | null;
 };
 
 // /api/sales-orders?view=all&withLines=true returns each order with its lines.
@@ -52,6 +64,7 @@ type SkuRow = {
   name: string;
   pyvott: number;
   hildale: number;
+  fx: number;
   promised: number;
   committed: number;
   total: number;
@@ -68,6 +81,7 @@ type SortColumn =
   | "pyvott"
   | "committed"
   | "hildale"
+  | "fx"
   | "promised"
   | "total"
   | "available"
@@ -79,7 +93,7 @@ type SortDirection = "asc" | "desc";
 type SortState = { column: SortColumn; direction: SortDirection };
 
 // Numeric columns default to descending on first click; text columns ascending.
-const NUMERIC_COLUMNS: readonly SortColumn[] = ["unitsSold", "pyvott", "committed", "hildale", "promised", "total", "available", "price"] as const;
+const NUMERIC_COLUMNS: readonly SortColumn[] = ["unitsSold", "pyvott", "committed", "hildale", "fx", "promised", "total", "available", "price"] as const;
 
 // "Available" is the headline number — Total minus what's promised to open
 // orders. We highlight in amber once it dips below this many units AND there
@@ -168,6 +182,8 @@ export default function Inventory() {
   const [sort, setSort] = useState<SortState>({ column: "unitsSold", direction: "desc" });
   const [transferOpen, setTransferOpen] = useState(false);
   const [writeOffOpen, setWriteOffOpen] = useState(false);
+  const [fxOpen, setFxOpen] = useState(false);
+  const [fxItem, setFxItem] = useState<FxItem | null>(null);
 
   const onSort = (column: SortColumn) => {
     setSort((prev) => {
@@ -196,6 +212,27 @@ export default function Inventory() {
     }
     return map;
   }, [items]);
+
+  // SKU → finished-product item (id, name, fxInProcessQty) for the FX modal.
+  const finishedBySku = useMemo(() => {
+    const map = new Map<string, ItemsRow>();
+    for (const item of items) {
+      if (item.type === "finished_product") map.set(item.sku, item);
+    }
+    return map;
+  }, [items]);
+
+  const openFxModal = (sku: string) => {
+    const item = finishedBySku.get(sku);
+    if (!item) return;
+    setFxItem({
+      id: item.id,
+      sku: item.sku,
+      name: item.name,
+      fxInProcessQty: item.fxInProcessQty ?? 0,
+    });
+    setFxOpen(true);
+  };
 
   // Build a lookup map: SKU → committed units across active sales orders.
   // "Committed" = unshipped portion (qtyOrdered − qtyShipped) on any order
@@ -235,6 +272,7 @@ export default function Inventory() {
         name: r.name ?? "",
         pyvott: 0,
         hildale: 0,
+        fx: 0,
         promised: 0,
         committed: committedMap.get(r.sku) ?? 0,
         total: 0,
@@ -248,7 +286,8 @@ export default function Inventory() {
         existing.promised = r.promised ?? 0;
       }
       if (r.location === "Hildale") existing.hildale = r.qty;
-      existing.total = existing.pyvott + existing.hildale;
+      if (r.location === "FX") existing.fx = r.qty;
+      existing.total = existing.pyvott + existing.hildale + existing.fx;
       existing.available = existing.total - existing.committed;
       existing.status =
         existing.total === 0 ? "Out" : existing.total < LOW_STOCK_THRESHOLD ? "Low" : "OK";
@@ -303,13 +342,15 @@ export default function Inventory() {
   const kpis = useMemo(() => {
     const pyvottTotal = rows.filter((r) => r.location === "Pyvott").reduce((s, r) => s + r.qty, 0);
     const hildaleTotal = rows.filter((r) => r.location === "Hildale").reduce((s, r) => s + r.qty, 0);
+    const fxTotal = rows.filter((r) => r.location === "FX").reduce((s, r) => s + r.qty, 0);
     const skuCount = bySku.length;
     const lowStockCount = bySku.filter((s) => s.total > 0 && s.total < LOW_STOCK_THRESHOLD).length;
     const outOfStockCount = bySku.filter((s) => s.total === 0).length;
     return {
       pyvottTotal,
       hildaleTotal,
-      total: pyvottTotal + hildaleTotal,
+      fxTotal,
+      total: pyvottTotal + hildaleTotal + fxTotal,
       skuCount,
       lowStockCount,
       outOfStockCount,
@@ -359,7 +400,7 @@ export default function Inventory() {
             Inventory
           </h1>
           <p className="text-muted-foreground mt-1">
-            Current stock across Pyvott (Spanish Fork) and Hildale warehouses.
+            Current stock across Pyvott (Spanish Fork), Hildale, and FX (in production).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -375,6 +416,32 @@ export default function Inventory() {
             <ArrowRightLeft className="mr-2 h-4 w-4" />
             Transfer to Pyvott
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                data-testid="button-log-fx-order"
+                disabled={finishedBySku.size === 0}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Log FX Order
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+              {Array.from(finishedBySku.values())
+                .sort((a, b) => a.sku.localeCompare(b.sku))
+                .map((it) => (
+                  <DropdownMenuItem
+                    key={it.id}
+                    onSelect={() => openFxModal(it.sku)}
+                    data-testid={`fx-log-pick-${it.sku}`}
+                  >
+                    <span className="font-mono text-xs mr-2">{it.sku}</span>
+                    <span className="truncate">{it.name}</span>
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="destructive"
             onClick={() => setWriteOffOpen(true)}
@@ -396,15 +463,21 @@ export default function Inventory() {
         onClose={() => setWriteOffOpen(false)}
       />
 
+      <FxInProcessDialog
+        isOpen={fxOpen}
+        onClose={() => setFxOpen(false)}
+        item={fxItem}
+      />
+
       {/* KPI cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Units</CardDescription>
             <CardTitle className="text-3xl">{kpis.total.toLocaleString()}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground">Across both warehouses</p>
+            <p className="text-xs text-muted-foreground">Pyvott + Hildale + FX</p>
           </CardContent>
         </Card>
         <Card>
@@ -414,6 +487,17 @@ export default function Inventory() {
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground">3PL fulfillment warehouse</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>In Production (FX)</CardDescription>
+            <CardTitle className="text-3xl text-amber-700 dark:text-amber-400">
+              {kpis.fxTotal.toLocaleString()}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">Being built at FX Industries</p>
           </CardContent>
         </Card>
         <Card>
@@ -463,6 +547,7 @@ export default function Inventory() {
                 <SortableHeader column="unitsSold" label="Sold (90d)" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="pyvott" label="Pyvott" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="committed" label="Committed" align="right" currentSort={sort} onSort={onSort} />
+                <SortableHeader column="fx" label="In Production (FX)" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="hildale" label="Hildale" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="promised" label="Promised" align="right" currentSort={sort} onSort={onSort} />
                 <SortableHeader column="total" label="Total" align="right" currentSort={sort} onSort={onSort} />
@@ -485,6 +570,20 @@ export default function Inventory() {
                     <TableCell className="text-right">{s.pyvott.toLocaleString()}</TableCell>
                     <TableCell className="text-right text-muted-foreground tabular-nums">
                       {s.committed > 0 ? s.committed.toLocaleString() : "–"}
+                    </TableCell>
+                    <TableCell className="text-right text-amber-700 dark:text-amber-400">
+                      {finishedBySku.has(s.sku) ? (
+                        <button
+                          type="button"
+                          onClick={() => openFxModal(s.sku)}
+                          className="inline-flex items-center gap-1 hover:underline tabular-nums"
+                          data-testid={`fx-edit-${s.sku}`}
+                        >
+                          {s.fx > 0 ? s.fx.toLocaleString() : "–"}
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">–</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">{s.hildale.toLocaleString()}</TableCell>
                     <TableCell className="text-right text-muted-foreground">{s.promised.toLocaleString()}</TableCell>

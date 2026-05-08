@@ -160,6 +160,43 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS supplier_id VARCHAR REFERENCES suppliers(id)`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS reason TEXT`,
     `ALTER TABLE inventory_transactions ADD COLUMN IF NOT EXISTS lot_number TEXT`,
+    // PO build-progress + FX confirmation fields. Belt-and-suspenders for
+    // when drizzle-kit push hasn't run yet on a fresh deploy.
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS po_status TEXT NOT NULL DEFAULT 'ordered'`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS confirmed_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_completion_date TIMESTAMP`,
+    // Supplier forecast-tier columns.
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'transactional'`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS forecast_brief_schedule TEXT NOT NULL DEFAULT 'never'`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS auto_send_briefs BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_forecast_brief_sent_at TIMESTAMP`,
+    // Per-item seasonal demand multiplier.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS seasonal_multiplier REAL NOT NULL DEFAULT 1.0`,
+    // Products page priority grouping ('core_build' | 'combo' |
+    // 'refurbished' | 'replacement' | 'accessory'; default accessory).
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS reorder_priority TEXT NOT NULL DEFAULT 'accessory'`,
+    // Order-logging + receive-accuracy fields on purchase_orders.
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS actual_qty INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_delivery DATE`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS actual_delivery DATE`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS accuracy_score REAL`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS delivery_variance_days INTEGER`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS entry_source TEXT NOT NULL DEFAULT 'manual'`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_image_url TEXT`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_total REAL`,
+    // SKU mappings — created here too in case drizzle-kit push hasn't run.
+    `CREATE TABLE IF NOT EXISTS sku_mappings (
+       id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+       external_sku TEXT NOT NULL,
+       canonical_sku TEXT NOT NULL,
+       source TEXT NOT NULL,
+       notes TEXT,
+       created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+       updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
+    `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
   ];
   for (const stmt of ADDS) {
     try {
@@ -235,6 +272,171 @@ async function swapPushPackagingBoxes(client: pg.PoolClient): Promise<{
     push10Updated: push10.rowCount ?? 0,
     push20Updated: push20.rowCount ?? 0,
   };
+}
+
+// Seed the tier on known suppliers. Idempotent — runs an UPDATE for the
+// strategic set and a separate UPDATE for the transactional set, gated on
+// `tier = 'transactional'` (the default) so we never clobber a value an
+// operator has set deliberately. Match by ILIKE so casing variants in the
+// DB ("FX Industries", "FX INDUSTRIES", "Fx Industries") all resolve.
+const STRATEGIC_NAMES = [
+  "FX Industries",
+  "Silver Fox",
+  "Acu-Form",
+  "Pednar",
+  "Liston Metalworks",
+  "Austi Enterprises",
+];
+// Default brief cadence for strategic suppliers — operators can override
+// per-row from the supplier detail page.
+const STRATEGIC_DEFAULT_BRIEF_CADENCE = "monthly";
+
+async function seedSupplierTiers(client: pg.PoolClient): Promise<{
+  strategicUpdated: number;
+  cadenceUpdated: number;
+}> {
+  let strategicUpdated = 0;
+  for (const name of STRATEGIC_NAMES) {
+    const r = await client.query(
+      `UPDATE suppliers
+       SET tier = 'strategic'
+       WHERE LOWER(name) LIKE LOWER($1) AND tier = 'transactional'`,
+      [`${name}%`],
+    );
+    strategicUpdated += r.rowCount ?? 0;
+  }
+  // Set the default brief cadence on any strategic supplier that doesn't
+  // have one yet. Separate from tier seeding so an operator promoting a
+  // row to strategic later still gets a sensible default.
+  const cadence = await client.query(
+    `UPDATE suppliers
+     SET forecast_brief_schedule = $1
+     WHERE tier = 'strategic' AND forecast_brief_schedule = 'never'`,
+    [STRATEGIC_DEFAULT_BRIEF_CADENCE],
+  );
+  return { strategicUpdated, cadenceUpdated: cadence.rowCount ?? 0 };
+}
+
+// Seed initial Shopify SKU aliases. ON CONFLICT DO NOTHING means re-runs
+// don't trample operator-edited rows. The "SBR-PB-Industrial" mapping is
+// flagged as needs-verify in notes since the spec wasn't sure which
+// canonical SKU it actually maps to.
+async function seedSkuMappings(client: pg.PoolClient): Promise<number> {
+  const SEED_ROWS: { external: string; canonical: string; source: string; notes?: string }[] = [
+    { external: "SBR-Classic1.0", canonical: "SBR-PUSH-1.0", source: "shopify" },
+    {
+      external: "SBR-PB-Industrial",
+      canonical: "SBR-PB-BIGFOOT",
+      source: "shopify",
+      notes: "VERIFY: imported from spec; confirm Shopify variant maps to Bigfoot vs Original",
+    },
+  ];
+  let inserted = 0;
+  for (const row of SEED_ROWS) {
+    const r = await client.query(
+      `INSERT INTO sku_mappings (external_sku, canonical_sku, source, notes)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (external_sku, source) DO NOTHING`,
+      [row.external, row.canonical, row.source, row.notes ?? null],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  return inserted;
+}
+
+// Seed reorder_priority for known finished-product SKUs. Idempotent — only
+// touches rows still on the 'accessory' default so an operator who manually
+// re-grouped an item via the items table isn't clobbered.
+async function seedReorderPriority(client: pg.PoolClient): Promise<{
+  coreUpdated: number;
+  comboUpdated: number;
+  refurbishedUpdated: number;
+  replacementUpdated: number;
+}> {
+  const setGroup = async (skus: string[], group: string) => {
+    if (skus.length === 0) return 0;
+    const r = await client.query(
+      `UPDATE items SET reorder_priority = $1
+       WHERE reorder_priority = 'accessory' AND sku = ANY($2::text[])`,
+      [group, skus],
+    );
+    return r.rowCount ?? 0;
+  };
+
+  const coreUpdated = await setGroup(
+    ["SBR-PUSH-1.0", "SBR-Extrawide2.0", "SBR-PB-ORIG", "SBR-PB-BIGFOOT"],
+    "core_build",
+  );
+  const comboUpdated = await setGroup(
+    ["#701-CMB-1", "#702-CMB-2", "#703-CMB-3", "#704-CMB-4"],
+    "combo",
+  );
+  const refurbishedUpdated = await setGroup(
+    ["#RF-141-PSH-M1", "#RF-241-PSH-M2", "#RF-1041-PB-M1", "#RF-1241-PB-M2"],
+    "refurbished",
+  );
+  // Replacement SKUs follow a "#<digits>-REP-..." pattern (e.g. #301-REP-M1).
+  const repResult = await client.query(
+    `UPDATE items SET reorder_priority = 'replacement'
+     WHERE reorder_priority = 'accessory' AND sku ~ '^#[0-9]+-REP-'`,
+  );
+
+  return {
+    coreUpdated,
+    comboUpdated,
+    refurbishedUpdated,
+    replacementUpdated: repResult.rowCount ?? 0,
+  };
+}
+
+/**
+ * Soft check for Extensiv credentials at boot. The 4-hour sync scheduler
+ * iterates users and skips per-user when credentials are missing; this
+ * just surfaces the gate at boot so an operator scanning the deploy log
+ * sees the issue without having to wait for the first scheduled tick.
+ *
+ * Looks in two places:
+ *   1. Per-user integration_settings (apiKey + warehouseId)
+ *   2. Env-var fallbacks (EXTENSIV_CLIENT_ID + EXTENSIV_CLIENT_SECRET,
+ *      or EXTENSIV_API_KEY for the legacy single-key flow)
+ *
+ * Doesn't block boot — fail-soft pattern, just logs.
+ */
+async function checkExtensivCredentials(client: pg.PoolClient): Promise<void> {
+  const envOk =
+    !!(process.env.EXTENSIV_CLIENT_ID && process.env.EXTENSIV_CLIENT_SECRET) ||
+    !!process.env.EXTENSIV_API_KEY;
+
+  // integration_settings is keyed (user_id, integration_name); we just
+  // want to know if ANY user has Extensiv set up.
+  let dbHasCreds = false;
+  try {
+    const result = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+         FROM integration_settings
+        WHERE LOWER(integration_name) = 'extensiv'
+          AND api_key IS NOT NULL
+          AND api_key <> ''`,
+    );
+    dbHasCreds = (result.rows[0]?.count ?? "0") !== "0";
+  } catch (err: any) {
+    // Table missing on a fresh DB is not a problem worth raising here —
+    // the scheduler will fail-soft on the actual sync attempt.
+    console.warn(
+      "[Startup Checks] Could not read integration_settings while checking Extensiv creds:",
+      err?.message ?? err,
+    );
+  }
+
+  if (envOk || dbHasCreds) {
+    console.log(
+      `[Extensiv] Credentials available (env=${envOk}, db=${dbHasCreds}) — sync scheduler can run.`,
+    );
+  } else {
+    console.warn(
+      "[Extensiv] Credentials not configured — sync scheduler will run but skip with warning.",
+    );
+  }
 }
 
 async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
@@ -341,6 +543,48 @@ export async function runStartupChecks(): Promise<void> {
       console.error("[Startup Checks] Push packaging box swap failed:", err?.message ?? err);
     }
 
+    // ── Strategic-supplier tier seed ────────────────────────────────────
+    // Marks the six strategic suppliers as such (idempotent — only updates
+    // rows still on the 'transactional' default) and sets a monthly brief
+    // cadence on any strategic supplier still on 'never'.
+    try {
+      const { strategicUpdated, cadenceUpdated } = await seedSupplierTiers(client);
+      if (strategicUpdated > 0 || cadenceUpdated > 0) {
+        console.log(
+          `[Startup Checks] Supplier tier seed: ` +
+          `${strategicUpdated} promoted to strategic, ` +
+          `${cadenceUpdated} set to monthly cadence`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] Supplier tier seed failed:", err?.message ?? err);
+    }
+
+    // ── Products page priority seed ─────────────────────────────────────
+    try {
+      const r = await seedReorderPriority(client);
+      const total = r.coreUpdated + r.comboUpdated + r.refurbishedUpdated + r.replacementUpdated;
+      if (total > 0) {
+        console.log(
+          `[Startup Checks] Reorder priority seed: ` +
+          `core=${r.coreUpdated}, combo=${r.comboUpdated}, ` +
+          `refurbished=${r.refurbishedUpdated}, replacement=${r.replacementUpdated}`,
+        );
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] Reorder priority seed failed:", err?.message ?? err);
+    }
+
+    // ── SKU mapping seed ────────────────────────────────────────────────
+    try {
+      const seeded = await seedSkuMappings(client);
+      if (seeded > 0) {
+        console.log(`[Startup Checks] Seeded ${seeded} SKU mapping${seeded === 1 ? "" : "s"}`);
+      }
+    } catch (err: any) {
+      console.error("[Startup Checks] SKU mapping seed failed:", err?.message ?? err);
+    }
+
     // ── Cleanup legacy rolls_made rows ──────────────────────────────────
     try {
       const deleted = await cleanupRollsMadeRows(client);
@@ -349,6 +593,13 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] rolls_made cleanup failed:", err?.message ?? err);
+    }
+
+    // ── Extensiv credential availability ────────────────────────────────
+    try {
+      await checkExtensivCredentials(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Extensiv credential check failed:", err?.message ?? err);
     }
   } catch (err: any) {
     console.error("[Startup Checks] Could not connect to database:", err?.message ?? err);

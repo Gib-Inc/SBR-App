@@ -29,7 +29,10 @@ type FinishedProduct = {
   name: string;
   type: string;
   hildaleQty: number | null;
+  fxInProcessQty: number | null;
 };
+
+type Mode = "pyvott" | "fx";
 
 type Line = {
   itemId: string;
@@ -55,6 +58,7 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
   const { toast } = useToast();
   const [lines, setLines] = useState<Line[]>([newLine()]);
   const [reason, setReason] = useState("");
+  const [mode, setMode] = useState<Mode>("pyvott");
 
   const { data: items = [], isLoading: loadingItems } = useQuery<FinishedProduct[]>({
     queryKey: ["/api/items"],
@@ -80,8 +84,16 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
     if (!isOpen) {
       setLines([newLine()]);
       setReason("");
+      setMode("pyvott");
     }
   }, [isOpen]);
+
+  // Reset line quantities when switching modes — the available source pool
+  // changes (Hildale → FX) so any in-flight quantities would reference the
+  // wrong cap.
+  useEffect(() => {
+    setLines((prev) => prev.map((l) => ({ ...l, quantity: "" })));
+  }, [mode]);
 
   const itemById = useMemo(() => {
     const map = new Map<string, FinishedProduct>();
@@ -96,6 +108,10 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
   const removeLine = (index: number) =>
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
 
+  const sourceLabel = mode === "pyvott" ? "Hildale" : "FX";
+  const getAvailable = (item?: FinishedProduct) =>
+    mode === "pyvott" ? (item?.hildaleQty ?? 0) : (item?.fxInProcessQty ?? 0);
+
   // Per-line validation. Returns null when valid.
   const lineErrors = useMemo(() => {
     return lines.map((l) => {
@@ -104,11 +120,11 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
       if (!l.quantity) return "Enter a quantity";
       if (!Number.isInteger(qtyNum) || qtyNum <= 0) return "Quantity must be a positive whole number";
       const item = itemById.get(l.itemId);
-      const available = item?.hildaleQty ?? 0;
-      if (qtyNum > available) return `Only ${available} available at Hildale`;
+      const available = getAvailable(item);
+      if (qtyNum > available) return `Only ${available} available at ${sourceLabel}`;
       return null;
     });
-  }, [lines, itemById]);
+  }, [lines, itemById, mode, sourceLabel]);
 
   const validLines = useMemo(
     () =>
@@ -121,6 +137,12 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
   const hasBlockingError = lineErrors.some((e) => !!e);
   const canSubmit = !hasBlockingError && validLines.length > 0;
 
+  const endpoint = mode === "pyvott" ? "/api/inventory/transfer-to-pyvott" : "/api/inventory/receive-from-fx";
+  const successDescription = (units: number, skuCount: number) =>
+    mode === "pyvott"
+      ? `Moved ${units} unit${units === 1 ? "" : "s"} across ${skuCount} SKU${skuCount === 1 ? "" : "s"} from Hildale to Pyvott.`
+      : `Received ${units} unit${units === 1 ? "" : "s"} across ${skuCount} SKU${skuCount === 1 ? "" : "s"} from FX into Hildale.`;
+
   const mutation = useMutation({
     mutationFn: async () => {
       const payload = {
@@ -130,7 +152,7 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
           quantity: Number(l.quantity),
         })),
       };
-      const res = await apiRequest("POST", "/api/inventory/transfer-to-pyvott", payload);
+      const res = await apiRequest("POST", endpoint, payload);
       return (await res.json()) as { results: TransferResult[] };
     },
     onSuccess: ({ results }) => {
@@ -143,26 +165,26 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
       if (failures.length === 0) {
         const total = successes.reduce((s, r) => s + r.quantity, 0);
         toast({
-          title: "Transfer recorded",
-          description: `Moved ${total} unit${total === 1 ? "" : "s"} across ${successes.length} SKU${successes.length === 1 ? "" : "s"} from Hildale to Pyvott.`,
+          title: mode === "pyvott" ? "Transfer recorded" : "Receipt recorded",
+          description: successDescription(total, successes.length),
         });
         onClose();
       } else if (successes.length === 0) {
         toast({
           variant: "destructive",
-          title: "Transfer failed",
+          title: mode === "pyvott" ? "Transfer failed" : "Receipt failed",
           description: failures.map((f) => `${f.sku || f.itemId}: ${f.error}`).join("; "),
         });
       } else {
         toast({
           variant: "destructive",
-          title: "Partial transfer",
+          title: mode === "pyvott" ? "Partial transfer" : "Partial receipt",
           description: `${successes.length} succeeded, ${failures.length} failed: ${failures.map((f) => `${f.sku || f.itemId} (${f.error})`).join("; ")}`,
         });
       }
     },
     onError: (err: Error) => {
-      toast({ variant: "destructive", title: "Transfer failed", description: err.message });
+      toast({ variant: "destructive", title: mode === "pyvott" ? "Transfer failed" : "Receipt failed", description: err.message });
     },
   });
 
@@ -176,12 +198,34 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh]">
         <DialogHeader>
-          <DialogTitle>Transfer to Pyvott</DialogTitle>
+          <DialogTitle>{mode === "pyvott" ? "Transfer to Pyvott" : "Receive from FX"}</DialogTitle>
           <DialogDescription>
-            Record stock leaving Hildale and arriving at Pyvott. Hildale on-hand will
-            decrement immediately; Pyvott will catch up on the next Extensiv sync.
+            {mode === "pyvott"
+              ? "Record stock leaving Hildale and arriving at Pyvott. Hildale on-hand will decrement immediately; Pyvott will catch up on the next Extensiv sync."
+              : "Record finished units arriving from FX Industries into Hildale. FX in-process count decrements; Hildale on-hand increments."}
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex gap-2 pt-1" data-testid="transfer-mode-toggle">
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "pyvott" ? "default" : "outline"}
+            onClick={() => setMode("pyvott")}
+            data-testid="button-mode-pyvott"
+          >
+            Transfer to Pyvott
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "fx" ? "default" : "outline"}
+            onClick={() => setMode("fx")}
+            data-testid="button-mode-fx"
+          >
+            Receive from FX
+          </Button>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
@@ -203,7 +247,7 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
               <div className="space-y-2 pr-4">
                 {lines.map((line, index) => {
                   const item = line.itemId ? itemById.get(line.itemId) : undefined;
-                  const available = item?.hildaleQty ?? 0;
+                  const available = getAvailable(item);
                   const err = lineErrors[index];
                   return (
                     <div
@@ -226,14 +270,14 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
                               .filter((p) => p.id === line.itemId || !chosenIds.has(p.id))
                               .map((p) => (
                                 <SelectItem key={p.id} value={p.id}>
-                                  {p.sku} — {p.name} (Hildale: {p.hildaleQty ?? 0})
+                                  {p.sku} — {p.name} ({sourceLabel}: {getAvailable(p)})
                                 </SelectItem>
                               ))}
                           </SelectContent>
                         </Select>
                         {item && (
                           <p className="text-xs text-muted-foreground">
-                            Available at Hildale: {available}
+                            Available at {sourceLabel}: {available}
                           </p>
                         )}
                       </div>
@@ -300,7 +344,9 @@ export function TransferToPyvottDialog({ isOpen, onClose }: Props) {
               data-testid="button-submit-transfer-to-pyvott"
             >
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {mutation.isPending ? "Transferring…" : "Transfer to Pyvott"}
+              {mutation.isPending
+                ? mode === "pyvott" ? "Transferring…" : "Receiving…"
+                : mode === "pyvott" ? "Transfer to Pyvott" : "Receive from FX"}
             </Button>
           </DialogFooter>
         </form>

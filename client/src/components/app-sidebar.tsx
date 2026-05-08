@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing, ListOrdered, Link2, ClipboardEdit } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -29,6 +29,7 @@ const dashboardItems = [
 const salesItems = [
   { title: "Sales Orders",      url: "/sales-orders",       icon: ShoppingCart  },
   { title: "Backorders",        url: "/backorders",         icon: PackageCheck  },
+  { title: "Production Priority", url: "/production-priority", icon: ListOrdered  },
   { title: "In-House Shipping", url: "/in-house-shipping",  icon: Truck         },
   { title: "Returns",           url: "/returns",            icon: PackageOpen   },
 ];
@@ -39,6 +40,7 @@ const supplyChainItems = [
   { title: "Count Inventory",  url: "/count-inventory",  icon: ListChecks    },
   { title: "Production",       url: "/production",       icon: Factory       },
   { title: "Receive Stock",    url: "/receive-stock",    icon: PackagePlus   },
+  { title: "Incoming",         url: "/incoming",         icon: Truck         },
   { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
   { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
   { title: "Supplier Intel",   url: "/supplier-intel",   icon: ClipboardCheck },
@@ -47,6 +49,8 @@ const supplyChainItems = [
 const toolItems = [
   { title: "Reorder Alerts", url: "/reorder-alerts", icon: BellRing },
   { title: "Barcodes",   url: "/barcodes",   icon: Barcode  },
+  { title: "Log Order",  url: "/log-order",  icon: ClipboardEdit },
+  { title: "SKU Mappings", url: "/sku-mappings", icon: Link2 },
   { title: "Marketing",  url: "/marketing",  icon: Megaphone },
   { title: "AI Agent",   url: "/ai",         icon: Brain    },
   { title: "App Flow",   url: "/app-flow",   icon: Workflow },

@@ -6,7 +6,40 @@
 
 import { storage } from "../storage";
 import { ROGER_EMAIL, emailForSender } from "./sender-emails";
+import { sendWithRetry } from "./sendgrid-retry";
 import type { PurchaseOrder } from "@shared/schema";
+
+async function notifyOwnersOfFailure(
+  title: string,
+  message: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const users = await storage.getAllUsers();
+    const owners = users.filter((u) => u.role === "admin" || u.role === "owner");
+    const targets = owners.length > 0 ? owners : users.slice(0, 1);
+    for (const user of targets) {
+      try {
+        await storage.createNotification({
+          userId: user.id,
+          type: "OPS_ALERT",
+          title,
+          message,
+          severity: "HIGH",
+          actionUrl: "/health",
+          actionLabel: "View health",
+          isPinned: false,
+          isRead: false,
+          metadata,
+        });
+      } catch (notifError) {
+        console.warn("[Roger Notify] Failed to write fallback notification:", notifError);
+      }
+    }
+  } catch (error) {
+    console.warn("[Roger Notify] Failed to enumerate users for fallback notification:", error);
+  }
+}
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -76,18 +109,61 @@ export async function notifyRogerOfNewPO(opts: NotifyRogerOptions): Promise<{ se
 
     const replyTo = emailForSender(orderedBy);
 
-    await sgMail.send({
-      to: ROGER_EMAIL,
-      from: {
-        email: process.env.SENDGRID_FROM_EMAIL,
-        name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
-      },
-      replyTo: replyTo ?? undefined,
-      subject,
-      text,
-    });
+    const sendResult = await sendWithRetry(
+      () =>
+        sgMail.send({
+          to: ROGER_EMAIL,
+          from: {
+            email: process.env.SENDGRID_FROM_EMAIL!,
+            name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
+          },
+          replyTo: replyTo ?? undefined,
+          subject,
+          text,
+        }),
+      `Roger Notify PO ${po.poNumber}`,
+    );
 
-    console.log(`[Roger Notify] Sent PO ${po.poNumber} → ${ROGER_EMAIL} (${opts.source ?? "manual"})`);
+    if (!sendResult.ok) {
+      const reason = sendResult.error?.message ?? "send failed";
+      try {
+        await storage.createSystemLog({
+          type: "EMAIL",
+          entityType: "PO",
+          entityId: po.id,
+          severity: "ERROR",
+          code: "ROGER_NOTIFY_FAILED",
+          message: `Roger notification failed after ${sendResult.attempts} attempts for PO ${po.poNumber}: ${reason}`,
+          details: {
+            poId: po.id,
+            poNumber: po.poNumber,
+            supplierName,
+            orderedBy,
+            source: opts.source ?? "manual",
+            attempts: sendResult.attempts,
+            error: reason,
+          },
+        });
+      } catch (logError) {
+        console.warn("[Roger Notify] system_log write failed:", logError);
+      }
+
+      await notifyOwnersOfFailure(
+        `Roger notification failed — PO ${po.poNumber}`,
+        `SendGrid did not accept the Roger notification for PO ${po.poNumber} (${supplierName}) after ${sendResult.attempts} attempts. Roger has not been told about this PO. Please notify him manually.`,
+        {
+          poId: po.id,
+          poNumber: po.poNumber,
+          supplierName,
+          attempts: sendResult.attempts,
+          error: reason,
+        },
+      );
+
+      return { sent: false, reason };
+    }
+
+    console.log(`[Roger Notify] Sent PO ${po.poNumber} → ${ROGER_EMAIL} (${opts.source ?? "manual"}, attempt ${sendResult.attempts})`);
     return { sent: true };
   } catch (error: any) {
     console.error("[Roger Notify] Failed to send:", error?.message ?? error);

@@ -6,6 +6,7 @@ import { useLocation } from "wouter";
 type User = {
   id: string;
   email: string;
+  role?: string;
 };
 
 type AuthContextType = {

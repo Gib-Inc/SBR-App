@@ -17,6 +17,10 @@ import {
   type InsertSupplier,
   type SupplierItem,
   type InsertSupplierItem,
+  type ReorderAlert,
+  type InsertReorderAlert,
+  type VendorCommunication,
+  type InsertVendorCommunication,
   type PurchaseOrder,
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
@@ -186,6 +190,15 @@ export interface IStorage {
   getAppSetting(key: string): Promise<string | null>;
   setAppSetting(key: string, value: string): Promise<void>;
   getAllAppSettings(): Promise<AppSetting[]>;
+
+  // Reorder alerts
+  getReorderAlerts(): Promise<ReorderAlert[]>;
+  getReorderAlert(id: string): Promise<ReorderAlert | undefined>;
+  createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert>;
+  updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined>;
+  getVendorCommunications(): Promise<VendorCommunication[]>;
+  createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication>;
+  updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -742,6 +755,8 @@ export class MemStorage implements IStorage {
   private billOfMaterials: Map<string, BillOfMaterials>;
   private suppliers: Map<string, Supplier>;
   private supplierItems: Map<string, SupplierItem>;
+  private reorderAlerts: Map<string, ReorderAlert>;
+  private vendorCommunications: Map<string, VendorCommunication>;
   private salesHistory: Map<string, SalesHistory>;
   private finishedInventorySnapshots: Map<string, FinishedInventorySnapshot>;
   private integrationHealth: Map<string, IntegrationHealth>;
@@ -778,6 +793,8 @@ export class MemStorage implements IStorage {
     this.billOfMaterials = new Map();
     this.suppliers = new Map();
     this.supplierItems = new Map();
+    this.reorderAlerts = new Map();
+    this.vendorCommunications = new Map();
     this.salesHistory = new Map();
     this.finishedInventorySnapshots = new Map();
     this.integrationHealth = new Map();
@@ -1149,6 +1166,77 @@ export class MemStorage implements IStorage {
   }
   async getAllAppSettings(): Promise<AppSetting[]> {
     return Array.from(this.appSettingsMap.entries()).map(([key, value]) => ({ key, value, updatedAt: new Date() }));
+  }
+
+  async getReorderAlerts(): Promise<ReorderAlert[]> {
+    return Array.from(this.reorderAlerts.values());
+  }
+
+  async getReorderAlert(id: string): Promise<ReorderAlert | undefined> {
+    return this.reorderAlerts.get(id);
+  }
+
+  async createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert> {
+    const id = randomUUID();
+    const record: ReorderAlert = {
+      ...alert,
+      id,
+      purchaseOrderId: alert.purchaseOrderId ?? null,
+      emailSentAt: alert.emailSentAt ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.reorderAlerts.set(id, record);
+    return record;
+  }
+
+  async updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined> {
+    const existing = this.reorderAlerts.get(id);
+    if (!existing) return undefined;
+    const updated: ReorderAlert = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.reorderAlerts.set(id, updated);
+    return updated;
+  }
+
+  async getVendorCommunications(): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values());
+  }
+
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    const id = randomUUID();
+    const record: VendorCommunication = {
+      ...comm,
+      id,
+      itemId: comm.itemId ?? null,
+      reorderAlertId: comm.reorderAlertId ?? null,
+      purchaseOrderId: comm.purchaseOrderId ?? null,
+      recipientEmail: comm.recipientEmail ?? null,
+      subject: comm.subject ?? null,
+      bodyText: comm.bodyText ?? null,
+      providerMessageId: comm.providerMessageId ?? null,
+      metadata: comm.metadata ?? null,
+      sentAt: comm.sentAt ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.vendorCommunications.set(id, record);
+    return record;
+  }
+
+  async updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined> {
+    const existing = this.vendorCommunications.get(id);
+    if (!existing) return undefined;
+    const updated: VendorCommunication = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.vendorCommunications.set(id, updated);
+    return updated;
   }
 
   // Items
@@ -4252,6 +4340,47 @@ export class PostgresStorage implements IStorage {
   }
   async getAllAppSettings(): Promise<AppSetting[]> {
     return await this.db.select().from(schema.appSettings);
+  }
+
+  async getReorderAlerts(): Promise<ReorderAlert[]> {
+    return await this.db.select().from(schema.reorderAlerts).orderBy(desc(schema.reorderAlerts.createdAt));
+  }
+
+  async getReorderAlert(id: string): Promise<ReorderAlert | undefined> {
+    const results = await this.db.select().from(schema.reorderAlerts).where(eq(schema.reorderAlerts.id, id));
+    return results[0];
+  }
+
+  async createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert> {
+    const results = await this.db.insert(schema.reorderAlerts).values(alert).returning();
+    return results[0];
+  }
+
+  async updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined> {
+    const results = await this.db
+      .update(schema.reorderAlerts)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.reorderAlerts.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async getVendorCommunications(): Promise<VendorCommunication[]> {
+    return await this.db.select().from(schema.vendorCommunications).orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    const results = await this.db.insert(schema.vendorCommunications).values(comm).returning();
+    return results[0];
+  }
+
+  async updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined> {
+    const results = await this.db
+      .update(schema.vendorCommunications)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.vendorCommunications.id, id))
+      .returning();
+    return results[0];
   }
 
   // Items

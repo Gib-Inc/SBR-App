@@ -1124,7 +1124,7 @@ RULES:
         return res.status(401).json({ error: "User not found" });
       }
       
-      res.json({ id: user.id, email: user.email });
+      res.json({ id: user.id, email: user.email, role: user.role });
     } catch (error) {
       console.error("Error getting current user:", error);
       res.status(500).json({ error: "Failed to get user" });
@@ -2671,6 +2671,139 @@ TOTAL: $${subtotal.toFixed(2)}
     } catch (error: any) {
       console.error("[StaleSyncCheck] Error running stale sync check:", error);
       res.status(500).json({ error: error.message || "Failed to run stale sync check" });
+    }
+  });
+
+  // GET /api/system-health - Scheduler and integration liveness dashboard payload
+  app.get("/api/system-health", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getSystemHealthSummary } = await import("./services/system-health-service");
+      const summary = await getSystemHealthSummary();
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[SystemHealth] Error fetching system health:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch system health" });
+    }
+  });
+
+  // POST /api/system-health/check-alerts - Force stale scheduler alert evaluation
+  app.post("/api/system-health/check-alerts", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { checkSystemHealthAndAlert } = await import("./services/system-health-service");
+      const result = await checkSystemHealthAndAlert();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SystemHealth] Error checking system health alerts:", error);
+      res.status(500).json({ error: error.message || "Failed to check system health alerts" });
+    }
+  });
+
+  app.get("/api/reorder-alerts", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [alerts, items, suppliers, purchaseOrders] = await Promise.all([
+        storage.getReorderAlerts(),
+        storage.getAllItems(),
+        storage.getAllSuppliers(),
+        storage.getAllPurchaseOrders(),
+      ]);
+      const itemById = new Map(items.map((item) => [item.id, item]));
+      const supplierById = new Map(suppliers.map((supplier) => [supplier.id, supplier]));
+      const poById = new Map(purchaseOrders.map((po) => [po.id, po]));
+
+      const recent = alerts
+        .filter((alert) => {
+          if (!["pending", "sent", "acknowledged", "received"].includes(alert.alertStatus)) return false;
+          const createdAt = new Date(alert.createdAt);
+          return !Number.isNaN(createdAt.getTime()) && Date.now() - createdAt.getTime() <= 30 * 24 * 60 * 60 * 1000;
+        })
+        .map((alert) => ({
+          ...alert,
+          item: itemById.get(alert.itemId) ?? null,
+          supplier: supplierById.get(alert.supplierId) ?? null,
+          purchaseOrder: alert.purchaseOrderId ? poById.get(alert.purchaseOrderId) ?? null : null,
+        }));
+
+      res.json(recent);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error fetching alerts:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch reorder alerts" });
+    }
+  });
+
+  app.get("/api/reorder-alerts/settings", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getReorderAutoSendPaused } = await import("./services/reorder-watcher");
+      const paused = await getReorderAutoSendPaused();
+      res.json({ paused });
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error fetching settings:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch reorder alert settings" });
+    }
+  });
+
+  app.patch("/api/reorder-alerts/settings", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const paused = Boolean(req.body?.paused);
+      const { setReorderAutoSendPaused } = await import("./services/reorder-watcher");
+      res.json({ paused: await setReorderAutoSendPaused(paused) });
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error updating settings:", error);
+      res.status(500).json({ error: error.message || "Failed to update reorder alert settings" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/run", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
+    try {
+      const { runReorderWatcher } = await import("./services/reorder-watcher");
+      const result = await runReorderWatcher();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error running watcher:", error);
+      res.status(500).json({ error: error.message || "Failed to run reorder watcher" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/send", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sendReorderAlertNow } = await import("./services/reorder-watcher");
+      const result = await sendReorderAlertNow(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error sending alert:", error);
+      res.status(500).json({ error: error.message || "Failed to send reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/acknowledge", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { acknowledgeReorderAlert } = await import("./services/reorder-watcher");
+      const result = await acknowledgeReorderAlert(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error acknowledging alert:", error);
+      res.status(500).json({ error: error.message || "Failed to acknowledge reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/dismiss", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { dismissReorderAlert } = await import("./services/reorder-watcher");
+      const result = await dismissReorderAlert(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error dismissing alert:", error);
+      res.status(500).json({ error: error.message || "Failed to dismiss reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { markReorderAlertReceived } = await import("./services/reorder-watcher");
+      const result = await markReorderAlertReceived(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error marking alert received:", error);
+      res.status(500).json({ error: error.message || "Failed to mark reorder alert received" });
     }
   });
   
@@ -5981,6 +6114,7 @@ TOTAL: $${subtotal.toFixed(2)}
   // Credentials come from env: EXTENSIV_CLIENT_ID / EXTENSIV_CLIENT_SECRET / optional EXTENSIV_ORG_KEY / optional EXTENSIV_BASE_URL
   // Hardcoded to align mode, zeroMissing=false. Returns compact summary.
   app.post("/api/integrations/extensiv/sync-cron", async (req: Request, res: Response) => {
+    const schedulerStartedAt = new Date();
     try {
       // Auth (timing-safe shared secret)
       const cronSecret = process.env.CRON_SECRET;
@@ -6013,6 +6147,14 @@ TOTAL: $${subtotal.toFixed(2)}
       const userId = systemUser?.id;
       if (!userId) {
         console.error("[Extensiv Cron] No users in DB — cannot resolve credentials or audit trail");
+        const { recordSchedulerRun } = await import("./services/scheduler-run-recorder");
+        await recordSchedulerRun({
+          schedulerId: "extensiv-cron",
+          schedulerName: "Extensiv inventory sync",
+          status: "failed",
+          startedAt: schedulerStartedAt,
+          errorMessage: "No system user available",
+        });
         return res.status(500).json({ ok: false, error: "No system user available" });
       }
 
@@ -6037,6 +6179,14 @@ TOTAL: $${subtotal.toFixed(2)}
 
       if (!clientId || !clientSecret) {
         console.error("[Extensiv Cron] No Extensiv credentials available from env or integration_configs");
+        const { recordSchedulerRun } = await import("./services/scheduler-run-recorder");
+        await recordSchedulerRun({
+          schedulerId: "extensiv-cron",
+          schedulerName: "Extensiv inventory sync",
+          status: "failed",
+          startedAt: schedulerStartedAt,
+          errorMessage: "Extensiv credentials not configured",
+        });
         return res.status(500).json({ ok: false, error: "Extensiv credentials not configured" });
       }
 
@@ -6044,6 +6194,14 @@ TOTAL: $${subtotal.toFixed(2)}
       const client = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
       const warehouses = await client.getWarehouses();
       if (!warehouses || warehouses.length === 0) {
+        const { recordSchedulerRun } = await import("./services/scheduler-run-recorder");
+        await recordSchedulerRun({
+          schedulerId: "extensiv-cron",
+          schedulerName: "Extensiv inventory sync",
+          status: "failed",
+          startedAt: schedulerStartedAt,
+          errorMessage: "No Extensiv warehouses found",
+        });
         return res.status(502).json({ ok: false, error: "No Extensiv warehouses found — check credentials" });
       }
       const pivotWarehouseId = warehouses[0].id;
@@ -6094,13 +6252,13 @@ TOTAL: $${subtotal.toFixed(2)}
           const extensivQty = extensivItem.quantity;
           const delta = extensivQty - currentPivotQty;
 
-          // Finished products use extensivOnHandSnapshot (Pyvott) + hildaleQty as on-hand.
-          // currentStock is reserved for components/raw materials and is force-zeroed by
-          // PostgresStorage.updateItem() for finished_product, so do not write it here.
-          await storage.updateItem(item.id, {
+          // Store Extensiv's read-only on-hand snapshot. Pivot/available
+          // quantities are reconciled below through InventoryMovement.apply().
+          const updatePayload = {
             extensivOnHandSnapshot: extensivQty,
             extensivLastSyncAt: new Date(),
-          });
+          };
+          await storage.updateItem(item.id, updatePayload);
 
           if (delta !== 0 && userId) {
             const result = await inventoryMovement.apply({
@@ -6141,6 +6299,27 @@ TOTAL: $${subtotal.toFixed(2)}
         console.warn('[Extensiv Cron] Failed to log completion event:', logError);
       }
 
+      try {
+        const { recordSchedulerRun } = await import("./services/scheduler-run-recorder");
+        await recordSchedulerRun({
+          schedulerId: "extensiv-cron",
+          schedulerName: "Extensiv inventory sync",
+          status: errors.length > 0 ? "partial" : "success",
+          startedAt: schedulerStartedAt,
+          durationMs,
+          errorMessage: errors.length > 0 ? `${errors.length} item-level error(s)` : null,
+          details: {
+            comparedCount,
+            adjustmentsApplied,
+            autoCreatedCount,
+            unmatchedCount: unmatchedSkus.length,
+            errorCount: errors.length,
+          },
+        });
+      } catch (healthError) {
+        console.warn("[Extensiv Cron] Failed to record scheduler health:", healthError);
+      }
+
       res.json({
         ok: errors.length === 0,
         comparedCount,
@@ -6152,6 +6331,18 @@ TOTAL: $${subtotal.toFixed(2)}
       });
     } catch (error: any) {
       console.error("[Extensiv Cron] Fatal error:", error);
+      try {
+        const { recordSchedulerRun } = await import("./services/scheduler-run-recorder");
+        await recordSchedulerRun({
+          schedulerId: "extensiv-cron",
+          schedulerName: "Extensiv inventory sync",
+          status: "failed",
+          startedAt: schedulerStartedAt,
+          errorMessage: error.message || "Extensiv cron sync failed",
+        });
+      } catch (healthError) {
+        console.warn("[Extensiv Cron] Failed to record scheduler health failure:", healthError);
+      }
       res.status(500).json({ ok: false, error: error.message || "Extensiv cron sync failed" });
     }
   });
@@ -23055,6 +23246,21 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Daily Sales Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Daily Sales Scheduler:", error);
+  });
+
+  import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {
+    initializeReorderWatcher();
+    console.log("[Server] Reorder Watcher initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Reorder Watcher:", error);
+  });
+
+  // Initialize System Health Monitor for stale scheduler alerting
+  import("./services/system-health-service").then(({ initializeSystemHealthMonitor }) => {
+    initializeSystemHealthMonitor();
+    console.log("[Server] System Health Monitor initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize System Health Monitor:", error);
   });
   
   // Startup webhook auto-registration for Shopify (non-blocking)

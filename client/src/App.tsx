@@ -36,6 +36,8 @@ import Returns from "@/pages/returns";
 import Login from "@/pages/login";
 import POAcknowledge from "@/pages/po-acknowledge";
 import Reports from "@/pages/reports";
+import Health from "@/pages/health";
+import ReorderAlerts from "@/pages/reorder-alerts";
 import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
 import LegalPrivacy from "@/pages/legal-privacy";
@@ -128,6 +130,8 @@ function AuthenticatedApp() {
                 <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
                   <Switch>
                     <Route path="/" component={Reports} />
+                    <Route path="/health" component={Health} />
+                    <Route path="/reorder-alerts" component={ReorderAlerts} />
                     <Route path="/products" component={Products} />
                     <Route path="/production" component={Production} />
                     <Route path="/cycle-count" component={CycleCount} />

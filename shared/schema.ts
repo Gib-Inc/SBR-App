@@ -337,6 +337,44 @@ export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
 
 // ============================================================================
+// VENDOR COMMUNICATIONS
+// ============================================================================
+
+export const vendorCommunications = pgTable("vendor_communications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  itemId: varchar("item_id").references(() => items.id, { onDelete: "set null" }),
+  reorderAlertId: varchar("reorder_alert_id").references(() => reorderAlerts.id, { onDelete: "set null" }),
+  purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+  communicationType: text("communication_type").notNull().default("REORDER_REQUEST"),
+  channel: text("channel").notNull().default("EMAIL"),
+  direction: text("direction").notNull().default("OUTBOUND"),
+  recipientEmail: text("recipient_email"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  status: text("status").notNull().default("pending"), // pending | sent | acknowledged | dismissed | received | failed
+  providerMessageId: text("provider_message_id"),
+  metadata: jsonb("metadata"),
+  sentAt: timestamp("sent_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  supplierIdx: index("vendor_communications_supplier_id_idx").on(table.supplierId),
+  itemIdx: index("vendor_communications_item_id_idx").on(table.itemId),
+  reorderAlertIdx: index("vendor_communications_reorder_alert_id_idx").on(table.reorderAlertId),
+  statusIdx: index("vendor_communications_status_idx").on(table.status),
+  sentAtIdx: index("vendor_communications_sent_at_idx").on(table.sentAt),
+}));
+
+export const insertVendorCommunicationSchema = createInsertSchema(vendorCommunications).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertVendorCommunication = z.infer<typeof insertVendorCommunicationSchema>;
+export type VendorCommunication = typeof vendorCommunications.$inferSelect;
+
+// ============================================================================
 // PURCHASE ORDERS (Full PO System - This App is System of Record)
 // ============================================================================
 // LEGAL NOTICE: Purchase orders created here are official purchasing documents.
@@ -3003,25 +3041,39 @@ export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
 
 // ============================================================================
-// REORDER ALERTS (Triggered when stock drops below reorder point)
+// REORDER ALERTS
 // ============================================================================
 
 export const reorderAlerts = pgTable("reorder_alerts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sku: text("sku").notNull(),
-  itemId: varchar("item_id").references(() => items.id),
-  currentStock: integer("current_stock").notNull(),
-  reorderPoint: integer("reorder_point").notNull(),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  currentStock: integer("current_stock").notNull().default(0),
+  reorderPoint: integer("reorder_point").notNull().default(0),
   suggestedOrderQty: integer("suggested_order_qty"),
   supplierName: text("supplier_name"),
-  status: text("status").notNull().default("open"), // 'open', 'acknowledged', 'ordered'
+  status: text("status").notNull().default("open"), // legacy field retained for migration safety
   triggeredAt: timestamp("triggered_at").notNull().default(sql`now()`),
   acknowledgedAt: timestamp("acknowledged_at"),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+  daysLeftAtAlert: numeric("days_left_at_alert", { precision: 10, scale: 2 }).notNull(),
+  recommendedQty: integer("recommended_qty").notNull(),
+  alertStatus: text("alert_status").notNull().default("pending"), // pending | sent | acknowledged | dismissed | received | failed
+  emailSentAt: timestamp("email_sent_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
-  skuIdx: index("reorder_alerts_sku_idx").on(table.sku),
-  statusIdx: index("reorder_alerts_status_idx").on(table.status),
+  itemIdx: index("reorder_alerts_item_id_idx").on(table.itemId),
+  supplierIdx: index("reorder_alerts_supplier_id_idx").on(table.supplierId),
+  statusIdx: index("reorder_alerts_status_idx").on(table.alertStatus),
+  createdAtIdx: index("reorder_alerts_created_at_idx").on(table.createdAt),
 }));
 
-export const insertReorderAlertSchema = createInsertSchema(reorderAlerts).omit({ id: true, triggeredAt: true });
+export const insertReorderAlertSchema = createInsertSchema(reorderAlerts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
 export type InsertReorderAlert = z.infer<typeof insertReorderAlertSchema>;
 export type ReorderAlert = typeof reorderAlerts.$inferSelect;

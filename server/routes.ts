@@ -15909,6 +15909,19 @@ Notes: ${po.notes || 'None'}
   // the item's fx_in_process_qty to get the total inbound figure without
   // double-counting in_production/shipped lines (which are already inside
   // fx_in_process_qty thanks to the auto-update above).
+  // Money Maker Health — per-build capacity snapshot for the four core
+  // finished products. Backed by the v_money_maker_health view; sorted
+  // server-side by status priority so urgent rows appear first.
+  app.get("/api/money-maker-health", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const rows = await storage.getMoneyMakerHealth();
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Money Maker Health] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to load money maker health" });
+    }
+  });
+
   app.get("/api/purchase-orders/fx-incoming", requireAuth, async (_req: Request, res: Response) => {
     try {
       const FX_SUPPLIER_ID = "1";

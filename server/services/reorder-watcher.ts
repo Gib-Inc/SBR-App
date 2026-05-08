@@ -2,6 +2,7 @@ import sgMail from "@sendgrid/mail";
 import { storage } from "../storage";
 import { AuditLogger } from "./audit-logger";
 import { recordSchedulerRun } from "./scheduler-run-recorder";
+import { sendWithRetry } from "./sendgrid-retry";
 import type {
   InsertPurchaseOrder,
   InsertPurchaseOrderLine,
@@ -19,6 +20,98 @@ const AUTO_SEND_FROM_EMAIL = "clarencerohbock@gmail.com";
 const WATCH_INTERVAL_MS = 60 * 60 * 1000;
 const THIRTY_DAYS = 30;
 const COOLDOWN_DAYS = 7;
+
+// Email deliverability guardrails — stop a runaway cascade from blasting
+// suppliers if the math goes sideways. Limits are read from app_settings
+// each send so they can be adjusted without a redeploy.
+const RATE_LIMIT_GLOBAL_KEY = "reorder_email_max_per_hour";
+const RATE_LIMIT_SUPPLIER_KEY = "reorder_email_max_per_supplier_per_day";
+const DEFAULT_MAX_PER_HOUR = 5;
+const DEFAULT_MAX_PER_SUPPLIER_PER_DAY = 1;
+
+async function getRateLimitConfig(): Promise<{ maxPerHour: number; maxPerSupplierPerDay: number }> {
+  const [hourRaw, supplierRaw] = await Promise.all([
+    storage.getAppSetting(RATE_LIMIT_GLOBAL_KEY),
+    storage.getAppSetting(RATE_LIMIT_SUPPLIER_KEY),
+  ]);
+  const parseLimit = (raw: string | null, fallback: number): number => {
+    if (!raw) return fallback;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 ? n : fallback;
+  };
+  return {
+    maxPerHour: parseLimit(hourRaw, DEFAULT_MAX_PER_HOUR),
+    maxPerSupplierPerDay: parseLimit(supplierRaw, DEFAULT_MAX_PER_SUPPLIER_PER_DAY),
+  };
+}
+
+async function checkReorderEmailRateLimit(
+  supplierId: string,
+  opts: { force?: boolean } = {},
+): Promise<{ allowed: boolean; reason?: string }> {
+  if (opts.force) return { allowed: true };
+
+  const { maxPerHour, maxPerSupplierPerDay } = await getRateLimitConfig();
+  const now = Date.now();
+  const oneHourAgo = now - 60 * 60 * 1000;
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+
+  const comms = await storage.getVendorCommunications();
+  const reorderEmails = comms.filter(
+    (c) => c.communicationType === "REORDER_REQUEST" && c.channel === "EMAIL" && c.status === "sent",
+  );
+
+  const recentGlobal = reorderEmails.filter((c) => {
+    const at = c.sentAt ?? c.createdAt;
+    return at ? new Date(at).getTime() > oneHourAgo : false;
+  });
+  if (recentGlobal.length >= maxPerHour) {
+    return { allowed: false, reason: `global rate limit reached (${recentGlobal.length}/${maxPerHour} per hour)` };
+  }
+
+  const recentSupplier = reorderEmails.filter((c) => {
+    if (c.supplierId !== supplierId) return false;
+    const at = c.sentAt ?? c.createdAt;
+    return at ? new Date(at).getTime() > oneDayAgo : false;
+  });
+  if (recentSupplier.length >= maxPerSupplierPerDay) {
+    return { allowed: false, reason: `supplier rate limit reached (${recentSupplier.length}/${maxPerSupplierPerDay} per 24h)` };
+  }
+
+  return { allowed: true };
+}
+
+async function notifyOwnersOfReorderFailure(
+  title: string,
+  message: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const users = await storage.getAllUsers();
+    const owners = users.filter((u) => u.role === "admin" || u.role === "owner");
+    const targets = owners.length > 0 ? owners : users.slice(0, 1);
+    for (const user of targets) {
+      try {
+        await storage.createNotification({
+          userId: user.id,
+          type: "OPS_ALERT",
+          title,
+          message,
+          severity: "HIGH",
+          actionUrl: "/products?tab=reorder-alerts",
+          actionLabel: "View reorder alerts",
+          isPinned: false,
+          isRead: false,
+          metadata,
+        });
+      } catch (notifError) {
+        console.warn("[ReorderWatcher] Failed to write fallback notification:", notifError);
+      }
+    }
+  } catch (error) {
+    console.warn("[ReorderWatcher] Failed to enumerate users for fallback notification:", error);
+  }
+}
 
 let watcherInitialized = false;
 let watcherInterval: NodeJS.Timeout | null = null;
@@ -148,19 +241,89 @@ function ensureSendGridConfigured(): void {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
-async function sendAlertEmail(alert: ReorderAlert, candidate: Candidate): Promise<{ messageId: string | null }> {
+async function sendAlertEmail(
+  alert: ReorderAlert,
+  candidate: Candidate,
+  opts: { force?: boolean } = {},
+): Promise<{ messageId: string | null }> {
   ensureSendGridConfigured();
-  const { to, subject, bodyText } = buildEmailMessage(candidate);
-  const [response] = await sgMail.send({
-    to,
-    from: {
-      email: AUTO_SEND_FROM_EMAIL,
-      name: "Clarence Rohbock",
-    },
-    subject,
-    text: bodyText,
-  });
 
+  const limit = await checkReorderEmailRateLimit(candidate.supplier.id, opts);
+  if (!limit.allowed) {
+    await AuditLogger.logEvent({
+      source: "SYSTEM",
+      eventType: "REORDER_ALERT_RATE_LIMITED",
+      entityType: "ITEM",
+      entityId: candidate.item.id,
+      entityLabel: candidate.item.sku,
+      status: "WARNING",
+      description: `Reorder email blocked by rate limit: ${limit.reason}`,
+      supplierId: candidate.supplier.id,
+      details: {
+        reorderAlertId: alert.id,
+        reason: limit.reason,
+      },
+    });
+    throw new Error(`Rate limit: ${limit.reason}`);
+  }
+
+  const { to, subject, bodyText } = buildEmailMessage(candidate);
+  const sendResult = await sendWithRetry(
+    () =>
+      sgMail.send({
+        to,
+        from: {
+          email: AUTO_SEND_FROM_EMAIL,
+          name: "Clarence Rohbock",
+        },
+        subject,
+        text: bodyText,
+      }),
+    `Reorder Alert ${candidate.item.sku} → ${candidate.supplier.name}`,
+  );
+
+  if (!sendResult.ok) {
+    const reason = sendResult.error?.message ?? "send failed";
+    try {
+      await storage.createSystemLog({
+        type: "EMAIL",
+        entityType: "SUPPLIER",
+        entityId: candidate.supplier.id,
+        severity: "ERROR",
+        code: "REORDER_ALERT_SEND_FAILED",
+        message: `Reorder alert send to ${candidate.supplier.name} failed after ${sendResult.attempts} attempts: ${reason}`,
+        details: {
+          reorderAlertId: alert.id,
+          supplierId: candidate.supplier.id,
+          itemId: candidate.item.id,
+          sku: candidate.item.sku,
+          attempts: sendResult.attempts,
+          error: reason,
+        },
+      });
+    } catch (logError) {
+      console.warn("[ReorderWatcher] system_log write failed:", logError);
+    }
+
+    await notifyOwnersOfReorderFailure(
+      `Reorder email failed — ${candidate.item.sku}`,
+      `SendGrid did not accept the reorder request to ${candidate.supplier.name} for ${candidate.item.sku} after ${sendResult.attempts} attempts. Please follow up manually.`,
+      {
+        reorderAlertId: alert.id,
+        supplierName: candidate.supplier.name,
+        itemSku: candidate.item.sku,
+        attempts: sendResult.attempts,
+        error: reason,
+      },
+    );
+
+    await storage.updateReorderAlert(alert.id, {
+      alertStatus: "failed",
+    });
+    throw sendResult.error ?? new Error(reason);
+  }
+
+  const response = sendResult.result![0];
   const messageId = response.headers?.["x-message-id"] || (response as any).messageId || null;
   await storage.updateReorderAlert(alert.id, {
     alertStatus: "sent",
@@ -238,7 +401,10 @@ async function getCandidateForAlert(alert: ReorderAlert): Promise<Candidate> {
   };
 }
 
-export async function sendReorderAlertNow(alertId: string): Promise<{ alert: ReorderAlert; messageId: string | null }> {
+export async function sendReorderAlertNow(
+  alertId: string,
+  opts: { force?: boolean } = {},
+): Promise<{ alert: ReorderAlert; messageId: string | null }> {
   const alert = await storage.getReorderAlert(alertId);
   if (!alert) throw new Error("Reorder alert not found");
   if (alert.alertStatus === "sent") {
@@ -249,7 +415,7 @@ export async function sendReorderAlertNow(alertId: string): Promise<{ alert: Reo
   }
 
   const candidate = await getCandidateForAlert(alert);
-  const result = await sendAlertEmail(alert, candidate);
+  const result = await sendAlertEmail(alert, candidate, opts);
   const updated = await storage.getReorderAlert(alertId);
   if (!updated) throw new Error("Alert disappeared after send");
   return { alert: updated, messageId: result.messageId };
@@ -486,6 +652,7 @@ export async function runReorderWatcher(): Promise<ReorderWatcherResult> {
       createdCount++;
     }
 
+    let skippedRateLimitCount = 0;
     if (!paused) {
       const alertsToSend = existingAlerts.filter((alert) => alert.alertStatus === "pending");
       for (const alert of alertsToSend) {
@@ -494,22 +661,28 @@ export async function runReorderWatcher(): Promise<ReorderWatcherResult> {
           await sendAlertEmail(alert, candidate);
           sentCount++;
         } catch (error: any) {
-          failedSendCount++;
-          status = "partial";
-          console.error("[ReorderWatcher] Failed to send reorder alert:", error.message);
-          await AuditLogger.logEvent({
-            source: "SYSTEM",
-            eventType: "REORDER_ALERT_SEND_FAILED",
-            entityType: "ITEM",
-            entityId: alert.itemId,
-            status: "ERROR",
-            description: `Failed to send reorder alert`,
-            supplierId: alert.supplierId,
-            details: {
-              reorderAlertId: alert.id,
-              error: error.message,
-            },
-          });
+          const isRateLimit = typeof error?.message === "string" && error.message.startsWith("Rate limit:");
+          if (isRateLimit) {
+            skippedRateLimitCount++;
+            console.log(`[ReorderWatcher] Skipped (rate limit): ${error.message}`);
+          } else {
+            failedSendCount++;
+            status = "partial";
+            console.error("[ReorderWatcher] Failed to send reorder alert:", error.message);
+            await AuditLogger.logEvent({
+              source: "SYSTEM",
+              eventType: "REORDER_ALERT_SEND_FAILED",
+              entityType: "ITEM",
+              entityId: alert.itemId,
+              status: "ERROR",
+              description: `Failed to send reorder alert`,
+              supplierId: alert.supplierId,
+              details: {
+                reorderAlertId: alert.id,
+                error: error.message,
+              },
+            });
+          }
         }
       }
     }

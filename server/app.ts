@@ -25,6 +25,30 @@ const PgSession = connectPgSimple(session);
 
 initializeSecureLogging();
 
+// Process-level safety net for any scheduler tick whose try/catch was
+// missed. We log to system_logs (best-effort, do not crash the process)
+// so the /health page can show that something went off the rails. This
+// is BELOW recordSchedulerRun's per-scheduler crash tracking — that
+// path covers normal failures; this is the last line of defense.
+process.on("unhandledRejection", (reason: any) => {
+  const message = reason?.message ?? String(reason);
+  console.error("[Process] unhandledRejection:", message, reason?.stack ?? "");
+  void (async () => {
+    try {
+      const { storage } = await import("./storage");
+      await storage.createSystemLog({
+        type: "SCHEDULER",
+        severity: "ERROR",
+        code: "SCHEDULER_CRASH",
+        message: `unhandledRejection: ${message}`,
+        details: { stack: reason?.stack ?? null },
+      });
+    } catch {
+      // logging failure is itself non-fatal — never crash here
+    }
+  })();
+});
+
 const securityValidation = validateSecurityConfig();
 if (securityValidation.warnings.length > 0) {
   securityValidation.warnings.forEach(w => console.warn(`[Intuit Security] Warning: ${w}`));

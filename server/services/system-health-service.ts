@@ -3,6 +3,45 @@ import type { AuditLog, IntegrationHealth } from "@shared/schema";
 
 type HealthState = "healthy" | "warning" | "critical" | "unknown";
 
+const PER_SCHEDULER_ALERT_DEDUPE_HOURS = 24;
+const OPS_ALERT_LAST_FIRED_KEY = "ops_alert_last_fired_at";
+const DEFAULT_ALERT_EMAIL = "stickerburrroller@gmail.com";
+
+function alertDedupeKey(schedulerId: string): string {
+  return `ops_alert_last_fired:scheduler:${schedulerId}`;
+}
+
+function getAlertEmailRecipient(): string {
+  return (
+    process.env.SBR_OPS_ALERT_EMAIL ||
+    process.env.SYSTEM_HEALTH_ALERT_EMAIL ||
+    process.env.ALERT_ADMIN_EMAIL ||
+    DEFAULT_ALERT_EMAIL
+  );
+}
+
+function getSlackWebhook(): string | null {
+  return (
+    process.env.SLACK_WEBHOOK_URL ||
+    process.env.SYSTEM_HEALTH_SLACK_WEBHOOK_URL ||
+    null
+  );
+}
+
+function getHealthPageLink(): string {
+  const base =
+    process.env.APP_BASE_URL ||
+    "https://sbr-app-production-f1c4.up.railway.app";
+  return `${base.replace(/\/$/, "")}/health`;
+}
+
+export interface RecentRun {
+  at: string;
+  status: string;
+  durationMs: number | null;
+  errorMessage: string | null;
+}
+
 interface SchedulerDefinition {
   id: string;
   name: string;
@@ -34,6 +73,9 @@ export interface SchedulerHealthCheck {
   lastStatus: string | null;
   errorMessage: string | null;
   notes: string[];
+  lastAlertAt: string | null;
+  recentRuns: RecentRun[];
+  consecutiveFailures: number;
 }
 
 export interface SystemHealthSummary {
@@ -41,12 +83,15 @@ export interface SystemHealthSummary {
   overallStatus: HealthState;
   counts: Record<HealthState, number>;
   schedulers: SchedulerHealthCheck[];
+  errorsLast24h: number;
+  lastOpsAlertAt: string | null;
   alerts: {
     stale: SchedulerHealthCheck[];
     configured: {
       slack: boolean;
       email: boolean;
     };
+    recipient: string;
   };
 }
 
@@ -279,18 +324,62 @@ function latestAuditForScheduler(logs: AuditLog[], schedulerId: string, successO
   return candidates[0] ?? null;
 }
 
+function buildRecentRuns(logs: AuditLog[], schedulerId: string, limit = 5): RecentRun[] {
+  const runs: RecentRun[] = [];
+  for (const log of logs) {
+    if (log.entityType !== "SCHEDULER" || log.entityId !== schedulerId) continue;
+    if (log.eventType !== "SCHEDULER_RUN_COMPLETED" && log.eventType !== "SCHEDULER_RUN_FAILED") continue;
+    const details = (log.details as any) ?? {};
+    runs.push({
+      at: toIso(log.timestamp) ?? "",
+      status: typeof details.status === "string" ? details.status : (log.status?.toLowerCase() ?? "unknown"),
+      durationMs: typeof details.durationMs === "number" ? details.durationMs : null,
+      errorMessage: typeof details.errorMessage === "string"
+        ? details.errorMessage
+        : log.status === "ERROR" ? log.description : null,
+    });
+    if (runs.length >= limit) break;
+  }
+  return runs;
+}
+
+function countErrorsLast24h(logs: AuditLog[], now: Date): number {
+  const cutoff = now.getTime() - 24 * 60 * 60 * 1000;
+  return logs.filter((log) => {
+    if (log.entityType !== "SCHEDULER") return false;
+    if (log.status !== "ERROR") return false;
+    const ts = asDate(log.timestamp);
+    return ts ? ts.getTime() > cutoff : false;
+  }).length;
+}
+
 export async function getSystemHealthSummary(): Promise<SystemHealthSummary> {
   const now = new Date();
-  const [healthRows, auditResult, runtimeStatuses, extensiv] = await Promise.all([
+  const [healthRows, auditResult, runtimeStatuses, extensiv, lastOpsAlertAt] = await Promise.all([
     storage.getAllIntegrationHealth(),
     storage.getAuditLogs({ entityType: "SCHEDULER", limit: 500 }),
     getRuntimeStatuses(),
     getExtensivLastSync(),
+    storage.getAppSetting(OPS_ALERT_LAST_FIRED_KEY),
   ]);
 
   const healthByName = new Map<string, IntegrationHealth>(
     healthRows.map((row) => [row.integrationName, row]),
   );
+
+  const perSchedulerLastAlerts = await Promise.all(
+    SCHEDULERS.map(async (def) => [def.id, await storage.getAppSetting(alertDedupeKey(def.id))] as const),
+  );
+  const lastAlertById = new Map(perSchedulerLastAlerts);
+
+  const perSchedulerFailures = await Promise.all(
+    SCHEDULERS.map(async (def) => {
+      const raw = await storage.getAppSetting(`scheduler_consecutive_failures:${def.id}`);
+      const n = raw ? parseInt(raw, 10) : 0;
+      return [def.id, Number.isFinite(n) ? n : 0] as const;
+    }),
+  );
+  const failuresById = new Map(perSchedulerFailures);
 
   const schedulers = SCHEDULERS.map((definition): SchedulerHealthCheck => {
     const runtime = runtimeStatuses[definition.id] ?? { initialized: null, nextRunAt: null, notes: [] };
@@ -334,6 +423,9 @@ export async function getSystemHealthSummary(): Promise<SystemHealthSummary> {
       lastStatus,
       errorMessage: health?.errorMessage ?? (lastAudit?.status === "ERROR" ? lastAudit.description : null),
       notes,
+      lastAlertAt: lastAlertById.get(definition.id) ?? null,
+      recentRuns: buildRecentRuns(auditResult.logs, definition.id),
+      consecutiveFailures: failuresById.get(definition.id) ?? 0,
     };
   });
 
@@ -355,63 +447,119 @@ export async function getSystemHealthSummary(): Promise<SystemHealthSummary> {
     overallStatus,
     counts,
     schedulers,
+    errorsLast24h: countErrorsLast24h(auditResult.logs, now),
+    lastOpsAlertAt: lastOpsAlertAt ?? null,
     alerts: {
       stale: schedulers.filter((scheduler) => scheduler.status === "critical"),
       configured: {
-        slack: Boolean(process.env.SYSTEM_HEALTH_SLACK_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL),
-        email: Boolean((process.env.SYSTEM_HEALTH_ALERT_EMAIL || process.env.ALERT_ADMIN_EMAIL) && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL),
+        slack: Boolean(getSlackWebhook()),
+        email: Boolean(process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL),
       },
+      recipient: getAlertEmailRecipient(),
     },
   };
 }
 
-async function sendSlackAlert(stale: SchedulerHealthCheck[]): Promise<boolean> {
-  const webhookUrl = process.env.SYSTEM_HEALTH_SLACK_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
-  if (!webhookUrl) return false;
-
-  const text = [
-    `SBR scheduler health alert: ${stale.length} stale scheduler(s)`,
-    ...stale.map((scheduler) => `- ${scheduler.name}: last success ${scheduler.lastSuccessAt ?? "never"} (${scheduler.ageMinutes ?? "unknown"} min old)`),
-  ].join("\n");
-
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  return res.ok;
+export interface OpsAlertOptions {
+  subject: string;
+  lines: string[];
+  reason: "stale-scheduler" | "scheduler-crash" | "test";
 }
 
-async function sendEmailAlert(stale: SchedulerHealthCheck[]): Promise<boolean> {
-  const to = process.env.SYSTEM_HEALTH_ALERT_EMAIL || process.env.ALERT_ADMIN_EMAIL;
+export interface OpsAlertResult {
+  channels: string[];
+  errors: string[];
+  recipient: string;
+}
+
+export async function sendOpsAlert(opts: OpsAlertOptions): Promise<OpsAlertResult> {
+  const channels: string[] = [];
+  const errors: string[] = [];
+  const recipient = getAlertEmailRecipient();
+  const link = getHealthPageLink();
+  const body = [...opts.lines, "", `Health page: ${link}`].join("\n");
+
+  const webhook = getSlackWebhook();
+  if (webhook) {
+    try {
+      const res = await fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `*${opts.subject}*\n${body}` }),
+      });
+      if (res.ok) channels.push("slack");
+      else errors.push(`slack returned ${res.status}`);
+    } catch (error: any) {
+      errors.push(`slack: ${error?.message ?? error}`);
+    }
+  }
+
   const from = process.env.SENDGRID_FROM_EMAIL;
   const apiKey = process.env.SENDGRID_API_KEY;
-  if (!to || !from || !apiKey) return false;
+  if (recipient && from && apiKey) {
+    try {
+      const sgMail = await import("@sendgrid/mail");
+      sgMail.default.setApiKey(apiKey);
+      await sgMail.default.send({
+        to: recipient,
+        from,
+        subject: opts.subject,
+        text: body,
+      });
+      channels.push("email");
+    } catch (error: any) {
+      errors.push(`email: ${error?.message ?? error}`);
+    }
+  }
 
-  const sgMail = await import("@sendgrid/mail");
-  sgMail.default.setApiKey(apiKey);
-  await sgMail.default.send({
-    to,
-    from,
-    subject: `SBR scheduler health alert: ${stale.length} stale`,
-    text: [
-      "One or more SBR schedulers are stale.",
-      "",
-      ...stale.map((scheduler) => [
-        scheduler.name,
-        `Last success: ${scheduler.lastSuccessAt ?? "never"}`,
-        `Expected interval: ${scheduler.expectedIntervalMinutes} minutes`,
-        `Stale after: ${scheduler.staleAfterMinutes} minutes`,
-        scheduler.errorMessage ? `Error: ${scheduler.errorMessage}` : null,
-      ].filter(Boolean).join("\n")),
-    ].join("\n\n"),
+  if (channels.length > 0) {
+    try {
+      await storage.setAppSetting(OPS_ALERT_LAST_FIRED_KEY, new Date().toISOString());
+    } catch (error) {
+      console.warn("[SystemHealth] Failed to record ops alert timestamp:", error);
+    }
+  }
+
+  return { channels, errors, recipient };
+}
+
+export async function sendSchedulerCrashAlert(
+  schedulerId: string,
+  schedulerName: string,
+  errorMessage: string,
+  consecutiveFailures: number,
+): Promise<OpsAlertResult> {
+  return sendOpsAlert({
+    subject: `SBR scheduler crash — ${schedulerName}`,
+    reason: "scheduler-crash",
+    lines: [
+      `Scheduler: ${schedulerName} (${schedulerId})`,
+      `Consecutive failures: ${consecutiveFailures}`,
+      `Latest error: ${errorMessage}`,
+      ``,
+      `The scheduler is still running but has crashed ${consecutiveFailures} times in a row.`,
+      `Investigate before more silent failures pile up.`,
+    ],
   });
-  return true;
+}
+
+export async function sendTestAlert(): Promise<OpsAlertResult> {
+  return sendOpsAlert({
+    subject: "SBR ops alert — test",
+    reason: "test",
+    lines: [
+      `This is a test alert fired manually from /health.`,
+      `If you're reading this, your alert pipeline is wired up correctly.`,
+      `Time: ${new Date().toISOString()}`,
+    ],
+  });
 }
 
 export async function checkSystemHealthAndAlert(): Promise<{
   summary: SystemHealthSummary;
   alertSent: boolean;
+  alerted: string[];
+  skipped: string[];
   channels: string[];
 }> {
   const summary = await getSystemHealthSummary();
@@ -421,39 +569,66 @@ export async function checkSystemHealthAndAlert(): Promise<{
   });
 
   if (stale.length === 0) {
-    return { summary, alertSent: false, channels: [] };
+    return { summary, alertSent: false, alerted: [], skipped: [], channels: [] };
   }
 
-  const alertKey = "scheduler-alerts";
-  const alertRow = await storage.getIntegrationHealth(alertKey);
-  const lastAlertAt = asDate(alertRow?.lastAlertAt);
-  if (lastAlertAt && Date.now() - lastAlertAt.getTime() < 60 * 60 * 1000) {
-    return { summary, alertSent: false, channels: [] };
+  const dedupeMs = PER_SCHEDULER_ALERT_DEDUPE_HOURS * 60 * 60 * 1000;
+  const now = Date.now();
+  const toAlert: SchedulerHealthCheck[] = [];
+  const skipped: string[] = [];
+
+  for (const scheduler of stale) {
+    const last = await storage.getAppSetting(alertDedupeKey(scheduler.id));
+    const lastMs = last ? Date.parse(last) : NaN;
+    if (Number.isFinite(lastMs) && now - lastMs < dedupeMs) {
+      skipped.push(scheduler.id);
+      continue;
+    }
+    toAlert.push(scheduler);
   }
 
-  const channels: string[] = [];
-  try {
-    if (await sendSlackAlert(stale)) channels.push("slack");
-  } catch (error) {
-    console.error("[SystemHealth] Slack alert failed:", error);
+  if (toAlert.length === 0) {
+    return { summary, alertSent: false, alerted: [], skipped, channels: [] };
   }
 
-  try {
-    if (await sendEmailAlert(stale)) channels.push("email");
-  } catch (error) {
-    console.error("[SystemHealth] Email alert failed:", error);
+  const lines = [
+    `${toAlert.length} stale scheduler(s) detected on SBR App:`,
+    ``,
+    ...toAlert.flatMap((scheduler) => [
+      `• ${scheduler.name} (${scheduler.id})`,
+      `   Last success:      ${scheduler.lastSuccessAt ?? "never"}`,
+      `   Expected interval: every ${scheduler.expectedIntervalMinutes} min`,
+      `   Stale after:       ${scheduler.staleAfterMinutes} min`,
+      `   Age:               ${scheduler.ageMinutes ?? "unknown"} min`,
+      scheduler.errorMessage ? `   Last error:        ${scheduler.errorMessage}` : ``,
+      ``,
+    ]).filter((line) => line !== ""),
+  ];
+
+  const result = await sendOpsAlert({
+    subject: `SBR scheduler health alert — ${toAlert.length} stale`,
+    reason: "stale-scheduler",
+    lines,
+  });
+
+  if (result.channels.length > 0) {
+    const stamp = new Date().toISOString();
+    await Promise.all(
+      toAlert.map((scheduler) =>
+        storage
+          .setAppSetting(alertDedupeKey(scheduler.id), stamp)
+          .catch((error) => console.warn(`[SystemHealth] Failed to record dedupe stamp for ${scheduler.id}:`, error)),
+      ),
+    );
   }
 
-  if (channels.length > 0) {
-    await storage.createOrUpdateIntegrationHealth({
-      integrationName: alertKey,
-      lastStatus: "sent",
-      lastAlertAt: new Date(),
-      errorMessage: null,
-    });
-  }
-
-  return { summary, alertSent: channels.length > 0, channels };
+  return {
+    summary,
+    alertSent: result.channels.length > 0,
+    alerted: toAlert.map((s) => s.id),
+    skipped,
+    channels: result.channels,
+  };
 }
 
 export function initializeSystemHealthMonitor(): void {

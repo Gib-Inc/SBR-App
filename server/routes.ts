@@ -2706,6 +2706,25 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // POST /api/system-health/test-alert - Manually fire a test alert through
+  // the same Slack/email pipeline that real stale-scheduler alerts use.
+  // Lets the user verify the alert wiring without waiting for a real failure.
+  app.post("/api/system-health/test-alert", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { sendTestAlert } = await import("./services/system-health-service");
+      const result = await sendTestAlert();
+      res.json({
+        sent: result.channels.length > 0,
+        channels: result.channels,
+        recipient: result.recipient,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("[SystemHealth] Test alert failed:", error);
+      res.status(500).json({ error: error.message || "Failed to send test alert" });
+    }
+  });
+
   app.get("/api/reorder-alerts", requireAuth, async (_req: Request, res: Response) => {
     try {
       const [alerts, items, suppliers, purchaseOrders] = await Promise.all([
@@ -2774,9 +2793,14 @@ TOTAL: $${subtotal.toFixed(2)}
   app.post("/api/reorder-alerts/:id/send", requireAuth, async (req: Request, res: Response) => {
     try {
       const { sendReorderAlertNow } = await import("./services/reorder-watcher");
-      const result = await sendReorderAlertNow(req.params.id);
+      const force = Boolean(req.body?.forceSend);
+      const result = await sendReorderAlertNow(req.params.id, { force });
       res.json(result);
     } catch (error: any) {
+      const isRateLimit = typeof error?.message === "string" && error.message.startsWith("Rate limit:");
+      if (isRateLimit) {
+        return res.status(429).json({ error: error.message, rateLimited: true });
+      }
       console.error("[ReorderAlerts] Error sending alert:", error);
       res.status(500).json({ error: error.message || "Failed to send reorder alert" });
     }

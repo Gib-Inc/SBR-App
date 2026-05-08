@@ -25,7 +25,6 @@ import { GoHighLevelClient } from "./services/gohighlevel-client";
 // PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
 import { requireAuth, requireRole } from "./middleware/auth";
-import { requireRole } from "./middleware/requireRole";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import multer from "multer";

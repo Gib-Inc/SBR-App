@@ -10,6 +10,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 // Role taxonomy used by requireRole below.
 export type Role = "owner" | "manager" | "floor" | "office";
+type RoleInput = Role | "admin" | "member" | "warehouse";
 
 // Legacy values that existed before the four-role split. We map both to
 // 'owner' so nobody who was using the app before this rollout suddenly
@@ -36,8 +37,9 @@ export function normalizeRole(stored: string | null | undefined): Role {
  * `requireRole("manager")` still admits owners — managers and owners can
  * both perform manager-level actions.
  */
-export function requireRole(...allowed: Role[]) {
-  const allowSet = new Set<Role>(allowed);
+export function requireRole(...allowed: Array<RoleInput | RoleInput[]>) {
+  const flattened = allowed.flat();
+  const allowSet = new Set<Role>(flattened.map((role) => normalizeRole(role)));
   // Owner is implicitly allowed for every gate.
   allowSet.add("owner");
   return async (req: Request, res: Response, next: NextFunction) => {

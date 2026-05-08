@@ -16,7 +16,14 @@ import type {
 const REORDER_SCHEDULER_ID = "reorder-watcher";
 const REORDER_SCHEDULER_NAME = "Auto reorder watcher";
 const AUTO_SEND_PAUSE_KEY = "reorder_alerts_auto_send_paused";
-const AUTO_SEND_FROM_EMAIL = "clarencerohbock@gmail.com";
+// From-address for reorder request emails. Reads from env so prod can
+// rotate the sending mailbox without a code change. Fallback is the
+// Sticker Burr Roller-owned address Clarence sends from in 2026.
+const AUTO_SEND_FROM_EMAIL_FALLBACK = "clarence.stickerburrroller@gmail.com";
+function getAutoSendFromEmail(): string {
+  const fromEnv = process.env.SENDGRID_FROM_EMAIL?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : AUTO_SEND_FROM_EMAIL_FALLBACK;
+}
 const WATCH_INTERVAL_MS = 60 * 60 * 1000;
 const THIRTY_DAYS = 30;
 const COOLDOWN_DAYS = 7;
@@ -222,7 +229,7 @@ function buildEmailMessage(candidate: Candidate): {
     `Thanks,`,
     `Clarence Rohbock`,
     `Production / Inspired Tool Design LLC`,
-    `clarencerohbock@gmail.com`,
+    getAutoSendFromEmail(),
   ].filter(Boolean).join("\n");
 
   return { to: recipient, subject, bodyText };
@@ -232,12 +239,9 @@ function ensureSendGridConfigured(): void {
   if (!process.env.SENDGRID_API_KEY) {
     throw new Error("SENDGRID_API_KEY is not configured");
   }
-
-  const configuredFrom = (process.env.SENDGRID_FROM_EMAIL || "").trim().toLowerCase();
-  if (configuredFrom !== AUTO_SEND_FROM_EMAIL) {
-    throw new Error(`SENDGRID_FROM_EMAIL must be ${AUTO_SEND_FROM_EMAIL} for reorder emails`);
+  if (!getAutoSendFromEmail()) {
+    throw new Error("SENDGRID_FROM_EMAIL is not configured (and fallback is empty)");
   }
-
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
@@ -273,7 +277,7 @@ async function sendAlertEmail(
       sgMail.send({
         to,
         from: {
-          email: AUTO_SEND_FROM_EMAIL,
+          email: getAutoSendFromEmail(),
           name: "Clarence Rohbock",
         },
         subject,

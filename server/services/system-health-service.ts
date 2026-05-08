@@ -20,6 +20,17 @@ function getAlertEmailRecipient(): string {
   );
 }
 
+// Comma-separated list support: SBR_OPS_ALERT_EMAIL can hold one or
+// many addresses ("a@x.com,b@y.com,c@z.com"). SendGrid's `to` field
+// accepts either a string or an array, so we always normalize to an
+// array and pass that — works the same for one recipient or four.
+function getAlertEmailRecipients(): string[] {
+  return getAlertEmailRecipient()
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function getSlackWebhook(): string | null {
   return (
     process.env.SLACK_WEBHOOK_URL ||
@@ -476,6 +487,7 @@ export async function sendOpsAlert(opts: OpsAlertOptions): Promise<OpsAlertResul
   const channels: string[] = [];
   const errors: string[] = [];
   const recipient = getAlertEmailRecipient();
+  const recipients = getAlertEmailRecipients();
   const link = getHealthPageLink();
   const body = [...opts.lines, "", `Health page: ${link}`].join("\n");
 
@@ -496,12 +508,12 @@ export async function sendOpsAlert(opts: OpsAlertOptions): Promise<OpsAlertResul
 
   const from = process.env.SENDGRID_FROM_EMAIL;
   const apiKey = process.env.SENDGRID_API_KEY;
-  if (recipient && from && apiKey) {
+  if (recipients.length > 0 && from && apiKey) {
     try {
       const sgMail = await import("@sendgrid/mail");
       sgMail.default.setApiKey(apiKey);
       await sgMail.default.send({
-        to: recipient,
+        to: recipients,
         from,
         subject: opts.subject,
         text: body,

@@ -27,7 +27,7 @@ Alerts are throttled to once per hour through the `integration_health` row named
 
 | Scheduler | Owner | Cadence | Source of truth | Writes |
 | --- | --- | --- | --- | --- |
-| Extensiv inventory sync | Railway service `sweet-hope` | Every 4 hours at `:05` UTC | `items.extensiv_last_sync_at` on Extensiv-mapped items | `items.pivot_qty`, `items.extensiv_on_hand_snapshot`, `items.extensiv_last_sync_at`, audit logs, `integration_health.scheduler:extensiv-cron` |
+| Extensiv inventory sync | SBR-App process | Hourly on the UTC wall-clock boundary | `scheduler:extensiv-sync` health row plus `items.extensiv_last_sync_at` on Extensiv-mapped items | `items.pivot_qty`, `items.extensiv_on_hand_snapshot`, `items.extensiv_last_sync_at`, audit logs, `integration_health.scheduler:extensiv-sync` |
 | QuickBooks token refresh | SBR-App process | Every 45 minutes | `scheduler:quickbooks-token-refresh` health row and audit logs | QuickBooks auth token fields, audit logs |
 | Daily briefing | SBR-App process | Daily at 7:00 AM MT | `scheduler:daily-briefing` health row and audit logs | `daily_briefings`, audit logs |
 | AI inventory batch | SBR-App process | Daily at 10:00 AM and 3:00 PM MT | `scheduler:ai-batch` health row and audit logs | AI recommendation records, audit logs |
@@ -37,12 +37,9 @@ Alerts are throttled to once per hour through the `integration_health` row named
 
 ## Extensiv Canonical Flow
 
-1. Railway `sweet-hope` executes `node scripts/extensiv-cron.js`.
-2. The script POSTs `/api/integrations/extensiv/sync-cron` with `X-Cron-Secret`.
-3. The API reads Extensiv inventory.
-4. Each mapped item receives a read-only `extensiv_on_hand_snapshot` and `extensiv_last_sync_at`.
-5. Pivot quantity changes go through `InventoryMovement.apply({ eventType: "EXTENSIV_SYNC" })`.
-6. The endpoint writes `scheduler:extensiv-cron` health and a `SCHEDULER_RUN_COMPLETED` or `SCHEDULER_RUN_FAILED` audit log.
+The in-process scheduler in `server/scheduler-service.ts` is the canonical Extensiv inventory sync path. It runs hourly on the UTC wall-clock boundary, reads Extensiv inventory through `ExtensivInventorySyncService`, updates mapped item snapshots, and is monitored through `scheduler:extensiv-sync`.
+
+Each mapped item receives a read-only `extensiv_on_hand_snapshot` and `extensiv_last_sync_at`. Pivot quantity changes go through `InventoryMovement.apply({ eventType: "EXTENSIV_SYNC" })`, and scheduler health is recorded as `scheduler:extensiv-sync` with a `SCHEDULER_RUN_COMPLETED` or `SCHEDULER_RUN_FAILED` audit log.
 
 Do not let Extensiv overwrite component `current_stock`. Finished goods use `pivot_qty + hildale_qty`; components use `current_stock`.
 
@@ -58,20 +55,7 @@ FROM items
 WHERE extensiv_sku IS NOT NULL;
 ```
 
-Extensiv should normally be under 4 hours old. At 8 hours it is stale and should alert.
-
-Railway cron:
-
-```bash
-railway deployment list --service sweet-hope --limit 5 --json
-railway logs --service sweet-hope --deployment --lines 100 <deployment-id>
-```
-
-Success line:
-
-```text
-[ExtensivCron] OK
-```
+Extensiv should normally be under 1 hour old. At 2 hours it is stale and should alert through `scheduler:extensiv-sync`.
 
 ## Deployment Guardrail
 

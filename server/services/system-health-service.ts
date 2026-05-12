@@ -108,17 +108,6 @@ export interface SystemHealthSummary {
 
 const SCHEDULERS: SchedulerDefinition[] = [
   {
-    id: "extensiv-cron",
-    name: "Extensiv inventory sync",
-    owner: "Railway sweet-hope",
-    kind: "railway-cron",
-    cadence: "Every 4 hours at :05 UTC",
-    expectedIntervalMinutes: 4 * 60,
-    staleAfterMinutes: 8 * 60,
-    sourceOfTruth: "items.extensiv_last_sync_at on Extensiv-mapped items",
-    alertOnStale: true,
-  },
-  {
     id: "extensiv-sync",
     name: "Extensiv in-process sync fallback",
     owner: "SBR-App process",
@@ -332,23 +321,6 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
   return statuses;
 }
 
-async function getExtensivLastSync(): Promise<{ lastSuccessAt: Date | null; mappedCount: number; justSyncedCount: number }> {
-  const items = await storage.getAllItems();
-  const mapped = items.filter((item) => item.extensivSku || item.extensivLastSyncAt);
-  const lastSuccessAt = mapped.reduce<Date | null>((latest, item) => {
-    const syncAt = asDate(item.extensivLastSyncAt);
-    if (!syncAt) return latest;
-    return !latest || syncAt > latest ? syncAt : latest;
-  }, null);
-  const now = Date.now();
-  const justSyncedCount = mapped.filter((item) => {
-    const syncAt = asDate(item.extensivLastSyncAt);
-    return syncAt ? now - syncAt.getTime() <= 5 * 60 * 1000 : false;
-  }).length;
-
-  return { lastSuccessAt, mappedCount: mapped.length, justSyncedCount };
-}
-
 function latestAuditForScheduler(logs: AuditLog[], schedulerId: string, successOnly = false): AuditLog | null {
   const candidates = logs.filter((log) => {
     if (log.entityType !== "SCHEDULER" || log.entityId !== schedulerId) return false;
@@ -389,11 +361,10 @@ function countErrorsLast24h(logs: AuditLog[], now: Date): number {
 
 export async function getSystemHealthSummary(): Promise<SystemHealthSummary> {
   const now = new Date();
-  const [healthRows, auditResult, runtimeStatuses, extensiv, lastOpsAlertAt] = await Promise.all([
+  const [healthRows, auditResult, runtimeStatuses, lastOpsAlertAt] = await Promise.all([
     storage.getAllIntegrationHealth(),
     storage.getAuditLogs({ entityType: "SCHEDULER", limit: 500 }),
     getRuntimeStatuses(),
-    getExtensivLastSync(),
     storage.getAppSetting(OPS_ALERT_LAST_FIRED_KEY),
   ]);
 
@@ -424,11 +395,6 @@ export async function getSystemHealthSummary(): Promise<SystemHealthSummary> {
     let lastRunAt = asDate(lastAudit?.timestamp);
     let lastSuccessAt = latestDate(asDate(health?.lastSuccessAt), asDate(lastSuccessAudit?.timestamp));
     const notes = [...runtime.notes];
-
-    if (definition.id === "extensiv-cron") {
-      lastSuccessAt = latestDate(lastSuccessAt, extensiv.lastSuccessAt);
-      notes.push(`${extensiv.mappedCount} Extensiv-mapped item(s), ${extensiv.justSyncedCount} synced in the last 5 minutes`);
-    }
 
     if (!lastRunAt && health?.lastStatus) {
       lastRunAt = asDate(health.lastSuccessAt);

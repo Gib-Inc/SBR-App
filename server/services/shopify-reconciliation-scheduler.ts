@@ -13,6 +13,7 @@ import { storage } from "../storage";
 import { ShopifyClient } from "./shopify-client";
 import { logService } from "./log-service";
 import { triggerSalesOrderSync } from "./ghl-sync-triggers";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 import { SystemLogType, SystemLogSeverity, SystemLogEntityType, type User } from "@shared/schema";
 
 const TIMEZONE = "America/Denver";
@@ -332,11 +333,38 @@ async function runReconciliation(reason: string = "SCHEDULED"): Promise<Reconcil
  */
 async function runScheduledReconciliation(day: string): Promise<void> {
   console.log(`[Shopify Reconciliation] Running scheduled ${day} reconciliation`);
+  const startedAt = new Date();
   
   try {
-    await runReconciliation(`SCHEDULED_${day.toUpperCase()}`);
+    const result = await runReconciliation(`SCHEDULED_${day.toUpperCase()}`);
+    await recordSchedulerRun({
+      schedulerId: "shopify-reconciliation",
+      schedulerName: "Shopify reconciliation",
+      status: result.success ? "success" : "failed",
+      startedAt,
+      errorMessage: result.success ? null : result.errors.slice(0, 3).join("; ") || "Shopify reconciliation failed",
+      details: {
+        day,
+        ordersProcessed: result.ordersProcessed,
+        ordersCreated: result.ordersCreated,
+        ordersUpdated: result.ordersUpdated,
+        ordersSkipped: result.ordersSkipped,
+        ghlSynced: result.ghlSynced,
+        errorCount: result.errors.length,
+      },
+    });
   } catch (error: any) {
     console.error(`[Shopify Reconciliation] Scheduled run failed:`, error);
+    await recordSchedulerRun({
+      schedulerId: "shopify-reconciliation",
+      schedulerName: "Shopify reconciliation",
+      status: "failed",
+      startedAt,
+      errorMessage: error?.message ?? String(error),
+      details: { day },
+    }).catch((recordError) => {
+      console.warn("[Shopify Reconciliation] Failed to record scheduler run:", recordError);
+    });
   }
   
   scheduleNextRun();

@@ -119,6 +119,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     alertOnStale: true,
   },
   {
+    id: "extensiv-sync",
+    name: "Extensiv in-process sync fallback",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Hourly",
+    expectedIntervalMinutes: 60,
+    staleAfterMinutes: 120,
+    sourceOfTruth: "scheduler:extensiv-sync health row + audit logs",
+    alertOnStale: true,
+  },
+  {
     id: "quickbooks-token-refresh",
     name: "QuickBooks token refresh",
     owner: "SBR-App process",
@@ -229,6 +240,18 @@ function classifyAge(ageMinutes: number | null, definition: SchedulerDefinition)
 
 async function getRuntimeStatuses(): Promise<Record<string, { initialized: boolean | null; nextRunAt: string | null; notes: string[] }>> {
   const statuses: Record<string, { initialized: boolean | null; nextRunAt: string | null; notes: string[] }> = {};
+
+  try {
+    const scheduler = await import("../scheduler-service");
+    const status = scheduler.getSchedulerStatus();
+    statuses["extensiv-sync"] = {
+      initialized: status.extensivSyncScheduled,
+      nextRunAt: null,
+      notes: ["Runs from the SBR-App process as an hourly fallback"],
+    };
+  } catch (error: any) {
+    statuses["extensiv-sync"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
 
   try {
     const qb = await import("./quickbooks-token-refresh-scheduler");

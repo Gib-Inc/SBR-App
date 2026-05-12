@@ -4,6 +4,7 @@
 // separate from the briefing computation.
 
 import { generateAndPersistBriefing } from "./briefing-service";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 
 const TIMEZONE = "America/Denver";
 const SCHEDULED_HOUR = 7;
@@ -44,9 +45,11 @@ async function checkAndRun(): Promise<void> {
   if (lastRunDateKey === dateKey) return;
 
   lastRunDateKey = dateKey;
+  const startedAt = new Date();
   console.log(`[Briefing Scheduler] Time match at ${hour}:${minute.toString().padStart(2, "0")} MT — generating briefing`);
   try {
     const payload = await generateAndPersistBriefing();
+    const finishedAt = new Date();
     console.log(
       `[Briefing Scheduler] Generated briefing for ${payload.date}: ` +
       `OTDR ${payload.otdr.last7Days ?? "—"}% (${payload.otdr.sampleSize} orders), ` +
@@ -55,8 +58,31 @@ async function checkAndRun(): Promise<void> {
       `${payload.inHouseQueueCount} in-house queue, ` +
       `${payload.shopIssues24h.count} shop issues 24h`,
     );
+    await recordSchedulerRun({
+      schedulerId: "daily-briefing",
+      schedulerName: "Daily briefing",
+      status: "success",
+      startedAt,
+      finishedAt,
+      details: {
+        date: payload.date,
+        criticalComponents: payload.topCriticalComponents.length,
+        draftPOs: payload.draftPOs.count,
+        inHouseQueueCount: payload.inHouseQueueCount,
+        shopIssues24h: payload.shopIssues24h.count,
+      },
+    });
   } catch (error: any) {
     console.error("[Briefing Scheduler] Generation error:", error);
+    await recordSchedulerRun({
+      schedulerId: "daily-briefing",
+      schedulerName: "Daily briefing",
+      status: "failed",
+      startedAt,
+      errorMessage: error?.message ?? String(error),
+    }).catch((recordError) => {
+      console.warn("[Briefing Scheduler] Failed to record scheduler run:", recordError);
+    });
   }
 }
 

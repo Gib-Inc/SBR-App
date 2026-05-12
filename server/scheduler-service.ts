@@ -4,6 +4,7 @@ import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 import { MorningTrapService } from "./services/morning-trap-service";
+import { recordSchedulerRun, type SchedulerRunStatus } from "./services/scheduler-run-recorder";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -31,8 +32,26 @@ let velocityTimer: NodeJS.Timeout | null = null;
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
 
-// Extensiv sync interval: every 4 hours (aligns with 3PL inventory updates)
-const EXTENSIV_SYNC_INTERVAL_HOURS = 4;
+// Extensiv sync interval: hourly. The Railway cron remains the primary
+// external trigger; this in-process runner is a belt-and-suspenders fallback
+// and now uses the same working credential path as the sync service.
+const EXTENSIV_SYNC_INTERVAL_HOURS = 1;
+
+async function recordRunSafe(input: {
+  schedulerId: string;
+  schedulerName: string;
+  status: SchedulerRunStatus;
+  startedAt: Date;
+  durationMs?: number;
+  errorMessage?: string | null;
+  details?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await recordSchedulerRun(input);
+  } catch (error) {
+    console.warn(`[Scheduler] Failed to record run for ${input.schedulerId}:`, error);
+  }
+}
 
 /**
  * Performs a data refresh for a specific channel
@@ -135,6 +154,7 @@ async function performForecastContextRefresh(): Promise<void> {
  * Updates pivotQty from Extensiv on-hand quantities
  */
 async function performExtensivSync(): Promise<void> {
+  const schedulerStartedAt = new Date();
   // Footgun guard: dev environments hammering the live Extensiv API or
   // writing fake pivot_qty into prod data is a real risk. Refuse unless
   // we're production-tier, with an explicit override env var for the rare
@@ -143,45 +163,82 @@ async function performExtensivSync(): Promise<void> {
     console.warn(
       "[Extensiv Sync] Skipped — non-production environment. Set FORCE_EXTENSIV_SYNC=true to override.",
     );
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: "skipped",
+      startedAt: schedulerStartedAt,
+      details: { reason: "non-production guard" },
+    });
     return;
   }
 
   console.log("[Extensiv Sync] Starting inventory sync...");
   const startTime = Date.now();
+  let synced = 0;
+  let skippedUsers = 0;
+  let failed = 0;
+  const errors: string[] = [];
 
   try {
     // Get all users and check their AI Agent Settings for extensivTwoWaySync
     const allUsers = await storage.getAllUsers();
     
     for (const user of allUsers) {
-      const settings = await storage.getAIAgentSettings(user.id);
+      const settings = await storage.getAiAgentSettingsByUserId(user.id);
       if (!settings?.extensivTwoWaySync) {
+        skippedUsers++;
         continue; // Skip users without Extensiv sync enabled
       }
 
-      const extensivSettings = await storage.getIntegrationSettings(user.id, 'extensiv');
-      if (!extensivSettings?.apiKey || !extensivSettings?.warehouseId) {
-        console.warn(`[Scheduler] User ${user.id} has Extensiv sync enabled but missing credentials`);
+      const syncService = new ExtensivInventorySyncService();
+      const initialized = await syncService.initialize(user.id);
+      if (!initialized) {
+        skippedUsers++;
+        console.warn(`[Scheduler] User ${user.id} has Extensiv sync enabled but Extensiv service did not initialize`);
         continue;
       }
 
       try {
-        const syncService = new ExtensivInventorySyncService(
-          extensivSettings.apiKey,
-          extensivSettings.warehouseId,
-          user.id
-        );
-        const result = await syncService.syncInventory();
-        console.log(`[Scheduler] Extensiv sync for user ${user.id}: ${result.synced} items synced, ${result.errors} errors`);
-      } catch (error) {
+        const result = await syncService.bulkSync();
+        synced += result.synced;
+        failed += result.failed;
+        if (result.failed > 0) {
+          errors.push(`user ${user.id}: ${result.failed} item failure(s)`);
+        }
+        console.log(`[Scheduler] Extensiv sync for user ${user.id}: ${result.synced} synced, ${result.failed} failed`);
+      } catch (error: any) {
+        failed++;
+        errors.push(`user ${user.id}: ${error?.message ?? error}`);
         console.error(`[Scheduler] Extensiv sync failed for user ${user.id}:`, error);
       }
     }
 
     const duration = Date.now() - startTime;
     console.log(`[Scheduler] Extensiv inventory sync completed in ${duration}ms`);
-  } catch (error) {
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: failed > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
+      details: {
+        usersChecked: allUsers.length,
+        usersSkipped: skippedUsers,
+        synced,
+        failed,
+      },
+    });
+  } catch (error: any) {
     console.error("[Scheduler] Error during Extensiv sync:", error);
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
   }
 }
 
@@ -271,17 +328,14 @@ async function performVelocityRefresh(opts: { onlyZeroOrNull: boolean }): Promis
  * before we read totals.
  */
 /**
- * ms until the next 4-hour UTC boundary (00:00, 04:00, 08:00, 12:00,
- * 16:00, 20:00). Used by the Extensiv sync scheduler so ticks align to
- * the wall clock rather than drifting from server start time.
+ * ms until the next top-of-hour UTC boundary. Used by the in-process
+ * Extensiv fallback so ticks align to wall clock and do not drift from
+ * server restart time.
  */
-function msUntilNext4HourUTC(): number {
+function msUntilNextHourUTC(): number {
   const now = new Date();
-  const currentHour = now.getUTCHours();
-  const next4Hour = (Math.floor(currentHour / 4) + 1) * 4; // 4, 8, 12, 16, 20, 24
   const target = new Date(now);
-  // setUTCHours(24, ...) correctly rolls over to 00:00 the next day.
-  target.setUTCHours(next4Hour, 0, 0, 0);
+  target.setUTCHours(now.getUTCHours() + 1, 0, 0, 0);
   return target.getTime() - now.getTime();
 }
 
@@ -375,15 +429,14 @@ export async function startScheduler(): Promise<void> {
       });
     }, AI_SYSTEM_REVIEW_INTERVAL_HOURS * 60 * 60 * 1000); // Weekly
 
-    // Schedule Extensiv/Pivot inventory sync — every 4h on the hour at
-    // 00:00 / 04:00 / 08:00 / 12:00 / 16:00 / 20:00 UTC. Aligning to the
+    // Schedule Extensiv/Pivot inventory sync — hourly on the hour. Aligning to the
     // wall clock instead of from-startup means restarts don't shift the
     // sync window and dashboards always read post-tick at the same
     // recognisable times.
     if (extensivSyncTimer) {
       clearTimeout(extensivSyncTimer);
     }
-    const msUntilNextTick = msUntilNext4HourUTC();
+    const msUntilNextTick = msUntilNextHourUTC();
     const target = new Date(Date.now() + msUntilNextTick);
     const targetHHMM = `${String(target.getUTCHours()).padStart(2, "0")}:${String(target.getUTCMinutes()).padStart(2, "0")}`;
     const minutesUntil = Math.round(msUntilNextTick / 60000);
@@ -461,7 +514,7 @@ export async function startScheduler(): Promise<void> {
  */
 export function stopScheduler(): void {
   // Stop all channel schedules
-  for (const [channelId] of channelSchedules) {
+  for (const [channelId] of Array.from(channelSchedules)) {
     unscheduleChannel(channelId);
   }
 

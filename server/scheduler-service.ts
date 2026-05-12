@@ -377,15 +377,13 @@ function msUntilNext7amMST(): number {
  */
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
+  let sectionsStarted = 0;
+  const totalSections = 6;
 
   try {
-    // Fetch all channels
     const channels = await storage.getAllChannels();
-    
-    // Schedule each enabled channel
     for (const channel of channels) {
       if (channel.isActive) {
-        // Default to 24 hours if syncIntervalHours is missing
         const intervalHours = channel.syncIntervalHours || 24;
         scheduleChannel(
           channel.id,
@@ -397,13 +395,16 @@ export async function startScheduler(): Promise<void> {
         console.log(`[Scheduler] Skipping disabled channel: ${channel.name}`);
       }
     }
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Channels failed to initialize:", err);
+  }
 
-    // Schedule forecast context refresh (every 6 hours)
+  try {
     if (forecastContextTimer) {
       clearInterval(forecastContextTimer);
     }
 
-    // Run immediately, then every 6 hours
     performForecastContextRefresh().catch(err => {
       console.error("[Scheduler] Initial forecast refresh failed:", err);
     });
@@ -413,8 +414,12 @@ export async function startScheduler(): Promise<void> {
         console.error("[Scheduler] Scheduled forecast refresh failed:", err);
       });
     }, 6 * 60 * 60 * 1000); // 6 hours
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Forecast context refresh failed to initialize:", err);
+  }
 
-    // Schedule AI System Review (weekly)
+  try {
     if (aiSystemReviewTimer) {
       clearInterval(aiSystemReviewTimer);
     }
@@ -428,11 +433,12 @@ export async function startScheduler(): Promise<void> {
         console.error("[Scheduler] Scheduled AI System Review failed:", err);
       });
     }, AI_SYSTEM_REVIEW_INTERVAL_HOURS * 60 * 60 * 1000); // Weekly
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] AI System Review failed to initialize:", err);
+  }
 
-    // Schedule Extensiv/Pivot inventory sync — hourly on the hour. Aligning to the
-    // wall clock instead of from-startup means restarts don't shift the
-    // sync window and dashboards always read post-tick at the same
-    // recognisable times.
+  try {
     if (extensivSyncTimer) {
       clearTimeout(extensivSyncTimer);
     }
@@ -448,7 +454,7 @@ export async function startScheduler(): Promise<void> {
       performExtensivSync().catch((err) =>
         console.error("[Extensiv Sync] Scheduled run failed:", err),
       );
-      // After the first aligned tick, fall back to a plain 4-hour
+      // After the first aligned tick, fall back to a plain hourly
       // interval. Each subsequent tick lands on the same wall-clock
       // boundary because the first one did.
       extensivSyncTimer = setInterval(() => {
@@ -457,8 +463,12 @@ export async function startScheduler(): Promise<void> {
         );
       }, EXTENSIV_SYNC_INTERVAL_HOURS * 60 * 60 * 1000);
     }, msUntilNextTick);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Extensiv sync failed to initialize:", err);
+  }
 
-    // Schedule Morning Trap Check (daily at 7 AM MST)
+  try {
     if (morningTrapTimer) {
       clearTimeout(morningTrapTimer);
     }
@@ -480,15 +490,16 @@ export async function startScheduler(): Promise<void> {
         });
       }, 24 * 60 * 60 * 1000);
     }, msUntil7am);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Morning Trap failed to initialize:", err);
+  }
 
-    // Boot-time velocity backfill — fire-and-forget, only writes items
-    // whose daily_usage is currently 0/null so any hand-entered values are
-    // preserved. Runs in the background so it doesn't block scheduler init.
+  try {
     performVelocityRefresh({ onlyZeroOrNull: true }).catch((err) => {
       console.error("[Scheduler] Boot-time velocity backfill failed:", err);
     });
 
-    // Schedule daily velocity refresh (12:05 AM MT)
     if (velocityTimer) {
       clearTimeout(velocityTimer);
     }
@@ -501,12 +512,14 @@ export async function startScheduler(): Promise<void> {
         performVelocityRefresh({ onlyZeroOrNull: false }).catch(() => {});
       }, 24 * 60 * 60 * 1000);
     }, msUntilVelocity);
-
-    console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
-  } catch (error) {
-    console.error("[Scheduler] Failed to start scheduler:", error);
-    throw error;
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Velocity refresh failed to initialize:", err);
   }
+
+  console.log(
+    `[Scheduler] Scheduler started successfully (${sectionsStarted}/${totalSections} sections initialized, ${channelSchedules.size} channels active)`,
+  );
 }
 
 /**

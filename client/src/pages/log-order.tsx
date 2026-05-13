@@ -26,7 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
-type Supplier = { id: string; name: string; leadTimeDays?: number | null };
+type Supplier = { id: string; name: string; email?: string | null; leadTimeDays?: number | null };
 type Item = { id: string; sku: string; name: string; type: string };
 
 type Line = {
@@ -112,6 +112,7 @@ function SupplierOrderTab() {
   const { data: suppliers = [] } = useQuery<Supplier[]>({ queryKey: ["/api/suppliers"] });
   const { data: items = [] } = useQuery<Item[]>({ queryKey: ["/api/items"] });
   const itemsBySku = useMemo(() => new Map(items.map((i) => [i.sku, i])), [items]);
+  const selectedSupplier = suppliers.find((s) => s.id === supplierId);
 
   const supplierLeadTime = useMemo(() => {
     const s = suppliers.find((x) => x.id === supplierId);
@@ -331,7 +332,7 @@ function SupplierOrderTab() {
           )}
 
           {previewUrl && (
-            <div className="rounded border overflow-hidden max-h-[480px]">
+            <div className="rounded border overflow-y-auto max-h-[480px]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={previewUrl} alt="invoice preview" className="w-full h-auto" />
             </div>
@@ -361,6 +362,13 @@ function SupplierOrderTab() {
                   ))}
                 </SelectContent>
               </Select>
+              {selectedSupplier && (
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {selectedSupplier.email
+                    ? `On file: ${selectedSupplier.email}`
+                    : "No email on file — vendor must be contacted by phone."}
+                </div>
+              )}
             </div>
             <div className="space-y-1">
               <Label>Invoice / Order #</Label>
@@ -394,7 +402,7 @@ function SupplierOrderTab() {
                 Add line
               </Button>
             </div>
-            <div className="rounded border">
+            <div className="rounded border max-h-[420px] overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -507,7 +515,7 @@ function SupplierOrderTab() {
               )}
             </div>
             <div className="space-y-1">
-              <Label>Sender</Label>
+              <Label>Ordered by (for accounting)</Label>
               <Select value={orderedBy} onValueChange={setOrderedBy}>
                 <SelectTrigger data-testid="select-sender">
                   <SelectValue />
@@ -531,6 +539,26 @@ function SupplierOrderTab() {
             <Label htmlFor="notify-roger" className="cursor-pointer">
               Notify Roger (rck1967@hotmail.com) when saved
             </Label>
+          </div>
+
+          <div className="rounded-md border bg-muted/50 p-3 text-xs space-y-1">
+            <div className="font-semibold text-foreground">
+              What happens when you save
+            </div>
+            <div className="text-muted-foreground">
+              This logs an order that was already placed by phone or email. It does NOT send anything to the supplier. The supplier already has your order.
+            </div>
+            <div className="text-muted-foreground">
+              {notifyRoger ? (
+                <>
+                  Roger (rck1967@hotmail.com) WILL be emailed a copy because "Notify Roger" is checked. Sender shown to Roger: {orderedBy}.
+                </>
+              ) : (
+                <>
+                  Roger will NOT be emailed (the checkbox is off).
+                </>
+              )}
+            </div>
           </div>
 
           <div className="flex gap-2 justify-end pt-2">

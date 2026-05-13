@@ -336,6 +336,9 @@ export class ExtensivInventorySyncService {
           const variance = newQty - previousQty;
 
           if (variance === 0) {
+            await storage.updateItem(item.id, {
+              extensivLastSyncAt: new Date(),
+            });
             skipped++;
             continue;
           }

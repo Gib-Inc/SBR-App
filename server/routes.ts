@@ -1,4 +1,4 @@
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
@@ -108,6 +108,22 @@ function checkLoginRateLimit(ip: string): { allowed: boolean; retryAfter?: numbe
 
 function resetLoginRateLimit(ip: string) {
   loginAttempts.delete(ip);
+}
+
+function opsTokenOrAuth(req: Request, res: Response, next: NextFunction) {
+  const envToken = process.env.OPS_ALERT_TOKEN?.trim();
+  const authHeader = req.headers.authorization;
+  const headerToken = authHeader?.replace(/^Bearer\s+/i, "").trim();
+
+  if (envToken && headerToken && envToken.length === headerToken.length) {
+    const expected = Buffer.from(envToken, "utf8");
+    const provided = Buffer.from(headerToken, "utf8");
+    if (crypto.timingSafeEqual(expected, provided)) {
+      return next();
+    }
+  }
+
+  return requireAuth(req, res, next);
 }
 
 // Single-user mode enforcement
@@ -2682,7 +2698,7 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // GET /api/system-health - Scheduler and integration liveness dashboard payload
-  app.get("/api/system-health", requireAuth, async (_req: Request, res: Response) => {
+  app.get("/api/system-health", opsTokenOrAuth, async (_req: Request, res: Response) => {
     try {
       const { getSystemHealthSummary } = await import("./services/system-health-service");
       const summary = await getSystemHealthSummary();
@@ -2694,7 +2710,7 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // POST /api/system-health/check-alerts - Force stale scheduler alert evaluation
-  app.post("/api/system-health/check-alerts", requireAuth, async (_req: Request, res: Response) => {
+  app.post("/api/system-health/check-alerts", opsTokenOrAuth, async (_req: Request, res: Response) => {
     try {
       const { checkSystemHealthAndAlert } = await import("./services/system-health-service");
       const result = await checkSystemHealthAndAlert();
@@ -2708,7 +2724,7 @@ TOTAL: $${subtotal.toFixed(2)}
   // POST /api/system-health/test-alert - Manually fire a test alert through
   // the same Slack/email pipeline that real stale-scheduler alerts use.
   // Lets the user verify the alert wiring without waiting for a real failure.
-  app.post("/api/system-health/test-alert", requireAuth, async (_req: Request, res: Response) => {
+  app.post("/api/system-health/test-alert", opsTokenOrAuth, async (_req: Request, res: Response) => {
     try {
       const { sendTestAlert } = await import("./services/system-health-service");
       const result = await sendTestAlert();

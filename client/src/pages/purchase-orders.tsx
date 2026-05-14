@@ -588,8 +588,8 @@ export default function PurchaseOrders() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
+      <div className="flex shrink-0 items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Purchase Orders</h1>
           <p className="text-sm text-muted-foreground">Manage supplier orders and receipts</p>
@@ -617,7 +617,7 @@ export default function PurchaseOrders() {
       </div>
 
       {activeTab === "live" && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid shrink-0 gap-4 md:grid-cols-4">
           <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("all")} data-testid="card-total-orders">
             <CardContent className="pt-4">
               <div className="flex items-center justify-between">
@@ -666,7 +666,7 @@ export default function PurchaseOrders() {
       )}
 
       {activeTab === "history" && (
-        <Card>
+        <Card className="shrink-0">
           <CardContent className="py-4">
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-4 flex-wrap">
@@ -722,8 +722,8 @@ export default function PurchaseOrders() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0 pb-3">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 flex-1">
               <div className="relative flex-1 max-w-sm">
@@ -766,8 +766,8 @@ export default function PurchaseOrders() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0 min-h-0">
-          <div className="overflow-auto max-h-[65vh] min-h-[320px] rounded-md border m-4 mt-0">
+        <CardContent className="min-h-0 flex-1 p-0">
+          <div className="m-4 mt-0 h-[calc(100%-1rem)] min-h-0 overflow-auto rounded-md border">
             <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">

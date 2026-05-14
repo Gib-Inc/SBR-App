@@ -766,8 +766,8 @@ export default function PurchaseOrders() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
+        <CardContent className="p-0 min-h-0">
+          <div className="overflow-auto max-h-[65vh] min-h-[320px] rounded-md border m-4 mt-0">
             <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
@@ -1072,7 +1072,7 @@ export default function PurchaseOrders() {
               <div>
                 <h4 className="font-medium mb-2">Line Items ({poDetails.lines?.length || 0})</h4>
                 {poDetails.lines && poDetails.lines.length > 0 ? (
-                  <div className="overflow-x-auto rounded-md border">
+                  <div className="overflow-auto max-h-[420px] rounded-md border">
                     <table className="w-full table-auto">
                       <thead className="bg-muted/50">
                         <tr className="border-b">

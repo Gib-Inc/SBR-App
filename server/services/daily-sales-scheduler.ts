@@ -182,7 +182,7 @@ export async function aggregateDailySales(date: Date): Promise<{
     for (const ret of returnsForDay) {
       try {
         // Get return items and sum their actual refund values
-        const returnItems = await storage.getReturnItems(ret.id);
+        const returnItems = await storage.getReturnItemsByRequestId(ret.id);
         for (const item of returnItems) {
           // Priority: qtyReceived (actual), qtyApproved (confirmed), qtyRequested (fallback for pending)
           // If refunded but not yet received, use qtyApproved or qtyRequested as estimate

@@ -2954,6 +2954,45 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/items/by-barcode?code=X — purpose-built lookup for the
+  // shop-floor scanner integration. Keep this before /api/items/:id so
+  // "by-barcode" is not treated as an item id by Express routing.
+  // Tries every identifier field on items in the same priority order a
+  // human would: barcodeValue → barcode → upc → amazonAsin → sku →
+  // shopifySku → extensivSku.
+  app.get("/api/items/by-barcode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const raw = typeof req.query.code === "string" ? req.query.code.trim() : "";
+      if (!raw) return res.status(400).json({ error: "code is required" });
+
+      const items = await storage.getAllItems();
+      const exact = (val: string | null | undefined) => !!val && val.trim() === raw;
+      const found =
+        items.find((i) => exact((i as any).barcodeValue)) ??
+        items.find((i) => exact(i.barcode)) ??
+        items.find((i) => exact((i as any).upc)) ??
+        items.find((i) => exact((i as any).amazonAsin)) ??
+        items.find((i) => exact(i.sku)) ??
+        items.find((i) => exact((i as any).shopifySku)) ??
+        items.find((i) => exact((i as any).extensivSku)) ??
+        null;
+
+      if (!found) return res.status(404).json({ error: "No item matches that code" });
+      res.json({
+        id: found.id,
+        sku: found.sku,
+        name: found.name,
+        type: found.type,
+        currentStock: found.currentStock,
+        hildaleQty: (found as any).hildaleQty ?? 0,
+        pivotQty: (found as any).pivotQty ?? 0,
+      });
+    } catch (error: any) {
+      console.error("[Items by-barcode] Error:", error);
+      res.status(500).json({ error: error.message || "Lookup failed" });
+    }
+  });
+
   app.get("/api/items/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const item = await storage.getItem(req.params.id);
@@ -3251,22 +3290,28 @@ TOTAL: $${subtotal.toFixed(2)}
           return res.status(404).json({ error: "Item not found" });
         }
         
-        let updates: any;
-        
-        // For finished products, update pivotQty (ready-to-ship warehouse)
-        // For components, update currentStock
-        if (item.type === 'finished_product') {
-          updates = {
-            pivotQty: (item.pivotQty ?? 0) + 1,
-          };
-        } else {
-          updates = {
-            currentStock: item.currentStock + 1,
-          };
+        // Route through the centralized engine. Finished goods scanned here land
+        // in the Hildale buffer (hildaleQty) — NOT pivotQty, which is read-only
+        // from Extensiv. Components adjust currentStock. Both get an audit trail.
+        const scanUserId = req.session.userId!;
+        const scanUser = await storage.getUser(scanUserId);
+        const inventoryMovement = new InventoryMovement(storage);
+        const scanResult = await inventoryMovement.apply({
+          eventType: "MANUAL_ADJUSTMENT",
+          itemId: barcode.referenceId,
+          quantity: 1,
+          location: item.type === 'finished_product' ? 'HILDALE' : 'N/A',
+          source: "USER",
+          userId: scanUserId,
+          userName: scanUser?.email,
+          notes: `Barcode scan: ${barcodeValue}`,
+        });
+        if (!scanResult.success) {
+          return res.status(400).json({ error: scanResult.error || "Failed to update inventory" });
         }
-        
-        const updatedItem = await storage.updateItem(barcode.referenceId, updates);
-        
+
+        const updatedItem = await storage.getItem(barcode.referenceId);
+
         return res.json({
           success: true,
           message: `Inventory updated for ${item.name}`,
@@ -4415,7 +4460,6 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ error: error.message || "Lookup failed" });
     }
   });
-
   app.patch("/api/barcodes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateBarcodeSchema.parse(req.body);

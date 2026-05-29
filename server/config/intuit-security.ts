@@ -33,8 +33,6 @@ function loadEncryptionKey(): Buffer {
   
   if (!keyHex) {
     if (isProduction) {
-      throw new Error(    return Buffer.alloc(32, 0);
-            if (isProduction) {
       console.error(
         '[Intuit Security] CRITICAL: QB_ENCRYPTION_KEY is required in production for Intuit compliance. ' +
         'Generate a secure key with: openssl rand -hex 32'
@@ -52,7 +50,6 @@ function loadEncryptionKey(): Buffer {
   }
   
   if (keyHex.length !== 64) {
-    throw new Error(    return Buffer.alloc(32, 0);
       `[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ` +
        console.error(
       `[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ` +

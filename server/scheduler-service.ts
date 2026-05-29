@@ -1,5 +1,5 @@
 import { storage } from "./storage";
-import { refreshAdPerformanceData, refreshSalesData } from "./channel-ingestion-service";
+import { refreshSalesData } from "./channel-ingestion-service";
 import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
@@ -30,6 +30,7 @@ let extensivSyncTimer: NodeJS.Timeout | null = null;
 let morningTrapTimer: NodeJS.Timeout | null = null;
 let velocityTimer: NodeJS.Timeout | null = null;
 let driftReportTimer: NodeJS.Timeout | null = null;
+let adSyncTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -75,7 +76,11 @@ async function performChannelRefresh(channelId: string, channelName: string, cha
     const normalizedType = channelType.toUpperCase();
     
     if (normalizedType === 'AD_PLATFORM' || normalizedType === 'ADVERTISING') {
-      await refreshAdPerformanceData(channelId, 7); // Last 7 days
+      // Ad performance is handled by the dedicated ad-performance-sync scheduler
+      // (real Google Ads + Meta clients). The old per-channel refresh was a stub
+      // that wrote no data, so skip it here rather than run an empty pipeline.
+      console.log(`[Scheduler] ${channelName}: ad performance handled by ad-performance-sync; skipping legacy stub refresh`);
+      return;
     } else if (normalizedType === 'SALES_CHANNEL' || normalizedType === 'SALES') {
       await refreshSalesData(channelId, 30); // Last 30 days
     } else {
@@ -241,6 +246,84 @@ async function performExtensivSync(): Promise<void> {
     await recordRunSafe({
       schedulerId: "extensiv-sync",
       schedulerName: "Extensiv in-process inventory sync",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
+/**
+ * Marketing ad-performance sync. Pulls REAL ad data via the connected
+ * Google Ads + Meta clients (wrapped by the demand services) for every user
+ * who has each integration configured/enabled. Meta covers Facebook AND
+ * Instagram placements (same Marketing API / ad account). Replaces the old
+ * stub per-channel refresh, which wrote no data. Runs daily.
+ */
+async function performAdPerformanceSync(): Promise<void> {
+  const schedulerStartedAt = new Date();
+  const startTime = Date.now();
+  let usersChecked = 0;
+  let googleSynced = 0;
+  let metaSynced = 0;
+  const errors: string[] = [];
+
+  try {
+    const { googleAdsDemandService } = await import("./services/google-ads-demand-service");
+    const { metaAdsDemandService } = await import("./services/meta-ads-demand-service");
+    const allUsers = await storage.getAllUsers();
+
+    for (const user of allUsers) {
+      usersChecked++;
+
+      // Google Ads — initialize() returns false (and we skip) if this user has
+      // not connected/enabled Google Ads, so unconfigured users are no-ops.
+      try {
+        if (await googleAdsDemandService.initialize(user.id)) {
+          const r = await googleAdsDemandService.syncDemandSignals();
+          if (r.success) {
+            googleSynced++;
+            console.log(`[Ad Sync] Google Ads for user ${user.id}: ${r.itemsWithData}/${r.itemsProcessed} with data`);
+          } else {
+            errors.push(`google/${user.id}: ${(r.errors ?? []).slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`google/${user.id}: ${e?.message ?? e}`);
+      }
+
+      // Meta Ads — covers Facebook + Instagram placements via the Marketing API.
+      try {
+        if (await metaAdsDemandService.initialize(user.id)) {
+          const r = await metaAdsDemandService.syncPerformanceData();
+          if (r.success) {
+            metaSynced++;
+            console.log(`[Ad Sync] Meta Ads for user ${user.id}: ${r.rowsStored} rows (${r.rowsMapped} mapped)`);
+          } else {
+            errors.push(`meta/${user.id}: ${(r.errors ?? []).slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`meta/${user.id}: ${e?.message ?? e}`);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced} (users checked ${usersChecked})`);
+    await recordRunSafe({
+      schedulerId: "ad-performance-sync",
+      schedulerName: "Marketing ad performance sync (Google + Meta)",
+      status: errors.length > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
+      details: { usersChecked, googleSynced, metaSynced, errorCount: errors.length },
+    });
+  } catch (error: any) {
+    console.error("[Ad Sync] Failed:", error);
+    await recordRunSafe({
+      schedulerId: "ad-performance-sync",
+      schedulerName: "Marketing ad performance sync (Google + Meta)",
       status: "failed",
       startedAt: schedulerStartedAt,
       errorMessage: error?.message ?? String(error),
@@ -474,7 +557,7 @@ function msUntilNext7amMST(): number {
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
   let sectionsStarted = 0;
-  const totalSections = 7;
+  const totalSections = 8;
 
   try {
     const channels = await storage.getAllChannels();
@@ -639,6 +722,31 @@ export async function startScheduler(): Promise<void> {
     console.error("[Scheduler] Drift report failed to initialize:", err);
   }
 
+  try {
+    // Marketing ad performance sync (real Google Ads + Meta). Boot run so data
+    // appears soon after deploy/connect, then daily at ~12:05 AM MT.
+    performAdPerformanceSync().catch((err) => {
+      console.error("[Ad Sync] Boot-time run failed:", err);
+    });
+    if (adSyncTimer) {
+      clearTimeout(adSyncTimer);
+      clearInterval(adSyncTimer);
+    }
+    const msUntilAdSync = msUntilNextMidnightMT();
+    console.log(
+      `[Ad Sync] Scheduled. Next run in ${(msUntilAdSync / (1000 * 60 * 60)).toFixed(1)} hours (12:05 AM MT), then daily`,
+    );
+    adSyncTimer = setTimeout(() => {
+      performAdPerformanceSync().catch(() => {});
+      adSyncTimer = setInterval(() => {
+        performAdPerformanceSync().catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilAdSync);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Ad performance sync failed to initialize:", err);
+  }
+
   console.log(
     `[Scheduler] Scheduler started successfully (${sectionsStarted}/${totalSections} sections initialized, ${channelSchedules.size} channels active)`,
   );
@@ -692,6 +800,13 @@ export function stopScheduler(): void {
     driftReportTimer = null;
   }
 
+  // Stop Ad Performance Sync timer
+  if (adSyncTimer) {
+    clearTimeout(adSyncTimer);
+    clearInterval(adSyncTimer);
+    adSyncTimer = null;
+  }
+
   console.log("[Scheduler] All schedulers stopped");
 }
 
@@ -714,6 +829,7 @@ export function getSchedulerStatus(): {
   aiSystemReviewScheduled: boolean;
   extensivSyncScheduled: boolean;
   driftReportScheduled: boolean;
+  adSyncScheduled: boolean;
 } {
   return {
     running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null || extensivSyncTimer !== null,
@@ -726,6 +842,7 @@ export function getSchedulerStatus(): {
     aiSystemReviewScheduled: aiSystemReviewTimer !== null,
     extensivSyncScheduled: extensivSyncTimer !== null,
     driftReportScheduled: driftReportTimer !== null,
+    adSyncScheduled: adSyncTimer !== null,
   };
 }
 

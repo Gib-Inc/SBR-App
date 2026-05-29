@@ -7,7 +7,7 @@
 
 SBR Inventory is the internal operations system for **Sticker Burr Roller** (SBR), a company that manufactures and sells outdoor/lawn products. This app replaces Katana MRP entirely. It manages inventory, purchase orders, sales orders, returns, production tracking, and integrates with Shopify, Extensiv (3PL warehouse), GoHighLevel (CRM), QuickBooks, and Shippo (shipping).
 
-**Deployed on:** Railway (https://sbr-app-production.up.railway.app)
+**Deployed on:** Railway (https://sbr-app-production-f1c4.up.railway.app)
 **Repo:** GitHub → Gib-Inc/SBR-App
 
 ## Tech Stack

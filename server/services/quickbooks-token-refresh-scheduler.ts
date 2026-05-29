@@ -355,14 +355,13 @@ export async function runTokenRefresh(): Promise<RefreshResult> {
   await recordSchedulerRun({
     schedulerId: "quickbooks-token-refresh",
     schedulerName: "QuickBooks token refresh",
-    status: result.success ? (result.tokensRefreshed === 0 && result.tokensSkipped === 0 ? "skipped" : "success") : "failed",
+    status: result.success ? "success" : "failed",
     startedAt,
     errorMessage: result.success ? null : result.message,
     details: {
       tokensRefreshed: result.tokensRefreshed,
       tokensFailed: result.tokensFailed,
       tokensSkipped: result.tokensSkipped,
-      message: result.message,
     },
   }).catch((error) => console.warn("[QB Token Refresh] Failed to record scheduler run:", error));
 

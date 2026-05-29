@@ -26,7 +26,7 @@ export type ResolvedCountItem = {
 };
 
 const RAW_MATERIALS: CountListEntry[] = [
-  { display: "Clevis pin with brackets", match: ["clevis pin with bracket", "clevis pin w/ bracket", "clevis bracket"] },
+  { display: "Clevis pin with brackets", match: ["clevis pin with bracket", "clevis bracket"] },
   { display: "Clevis pins",              match: ["clevis pin"] },
   { display: "Bowtie pins",              match: ["bowtie pin", "bow tie pin"] },
   { display: "Cotter pins",              match: ["cotter pin"] },

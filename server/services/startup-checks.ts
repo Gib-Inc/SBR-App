@@ -47,7 +47,7 @@ type CheckResult = {
 const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = {
   production_logs: `
     CREATE TABLE IF NOT EXISTS production_logs (
-      id            VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      id            VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       item_id       VARCHAR NOT NULL REFERENCES items(id),
       action_type   TEXT NOT NULL,
       quantity      INTEGER NOT NULL,
@@ -88,7 +88,7 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
       original_qty          INTEGER NOT NULL,
       remaining_qty         INTEGER NOT NULL,
       received_at           TIMESTAMP NOT NULL DEFAULT NOW(),
-      source_transaction_id VARCHAR,
+      source_transaction_id VARCHAR REFERENCES inventory_transactions(id),
       supplier_id           VARCHAR REFERENCES suppliers(id),
       notes                 TEXT
     );
@@ -97,7 +97,7 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
   `,
   lot_consumption_events: `
     CREATE TABLE IF NOT EXISTS lot_consumption_events (
-      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      id                 VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
       lot_id             VARCHAR NOT NULL REFERENCES inventory_lots(id),
       production_log_id  VARCHAR REFERENCES production_logs(id),
       qty_drawn          INTEGER NOT NULL,
@@ -121,91 +121,10 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
   `,
 };
 
-const REQUIRED_COLUMNS: Partial<Record<typeof REQUIRED_TABLES[number], string[]>> = {
-  production_logs: ["id", "item_id", "action_type", "quantity", "production_date", "notes", "created_by", "created_at"],
-  inventory_lots: ["id", "item_id", "lot_number", "original_qty", "remaining_qty", "received_at"],
-  lot_consumption_events: ["id", "lot_id", "production_log_id", "qty_drawn", "consumed_at"],
-};
-
-async function getColumnMap(client: pg.PoolClient, table: string): Promise<Map<string, string>> {
-  const result = await client.query<{ column_name: string; data_type: string }>(
-    `SELECT column_name, data_type
-     FROM information_schema.columns
-     WHERE table_schema = 'public' AND table_name = $1`,
-    [table],
-  );
-  return new Map(result.rows.map((row) => [row.column_name, row.data_type]));
-}
-
-async function ensureProductionLogsSchema(client: pg.PoolClient): Promise<void> {
-  const exists = await client.query<{ exists: boolean }>(
-    `SELECT to_regclass('public.production_logs') IS NOT NULL AS exists`,
-  );
-  if (!exists.rows[0]?.exists) {
-    await client.query(CREATE_TABLE_STATEMENTS.production_logs);
-    return;
-  }
-
-  // If the table already exists, do not run the CREATE_TABLE_STATEMENTS block:
-  // legacy production databases may be missing item_id/action_type, and the
-  // indexes inside that block would fail before we get a chance to add them.
-  const columns = await getColumnMap(client, "production_logs");
-
-  // Older production databases had a scanner prototype table named
-  // production_logs with id UUID + finished_good_sku/quantity_built columns.
-  // CREATE TABLE IF NOT EXISTS leaves that table untouched, so add the columns
-  // the current app needs in place and preserve any legacy rows.
-  if (columns.get("id") === "uuid") {
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN id DROP DEFAULT`);
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN id TYPE VARCHAR USING id::text`);
-  }
-  await client.query(`ALTER TABLE production_logs ALTER COLUMN id SET DEFAULT gen_random_uuid()::text`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS item_id VARCHAR REFERENCES items(id)`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS action_type TEXT`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS quantity INTEGER`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS production_date TEXT`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS notes TEXT`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS created_by TEXT`);
-  await client.query(`ALTER TABLE production_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()`);
-
-  const refreshedColumns = await getColumnMap(client, "production_logs");
-  if (refreshedColumns.has("finished_good_sku") && refreshedColumns.has("quantity_built")) {
-    // These were required in the old scanner prototype table. They are no
-    // longer written by /api/production-logs, so keep the columns for legacy
-    // history but make them nullable so current inserts succeed.
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN finished_good_sku DROP NOT NULL`);
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN quantity_built DROP NOT NULL`);
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN built_by DROP NOT NULL`);
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN built_at DROP NOT NULL`);
-    await client.query(`ALTER TABLE production_logs ALTER COLUMN built_at DROP DEFAULT`);
-
-    await client.query(`
-      UPDATE production_logs pl
-      SET
-        item_id = COALESCE(pl.item_id, i.id),
-        action_type = COALESCE(pl.action_type, 'built'),
-        quantity = COALESCE(pl.quantity, pl.quantity_built),
-        production_date = COALESCE(pl.production_date, COALESCE(pl.built_at::date::text, CURRENT_DATE::text)),
-        created_by = COALESCE(pl.created_by, pl.built_by),
-        created_at = COALESCE(pl.created_at, COALESCE(pl.built_at::timestamp, NOW()))
-      FROM items i
-      WHERE pl.finished_good_sku = i.sku
-        AND (pl.item_id IS NULL OR pl.action_type IS NULL OR pl.quantity IS NULL OR pl.production_date IS NULL)
-    `);
-  }
-
-  await client.query(`CREATE INDEX IF NOT EXISTS production_logs_item_id_idx ON production_logs(item_id)`);
-  await client.query(`CREATE INDEX IF NOT EXISTS production_logs_production_date_idx ON production_logs(production_date)`);
-}
-
 async function ensureTablesExist(client: pg.PoolClient): Promise<void> {
   for (const table of REQUIRED_TABLES) {
     try {
-      if (table === "production_logs") {
-        await ensureProductionLogsSchema(client);
-      } else {
-        await client.query(CREATE_TABLE_STATEMENTS[table]);
-      }
+      await client.query(CREATE_TABLE_STATEMENTS[table]);
     } catch (err: any) {
       console.error(`[Startup Checks] CREATE TABLE IF NOT EXISTS ${table} failed:`, err?.message ?? err);
     }
@@ -284,29 +203,6 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
       await client.query(stmt);
     } catch (err: any) {
       console.error(`[Startup Checks] ${stmt.split("\n")[0].slice(0, 80)}… failed:`, err?.message ?? err);
-    }
-  }
-}
-
-async function checkRequiredColumns(client: pg.PoolClient): Promise<void> {
-  for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
-    try {
-      const columns = await getColumnMap(client, table);
-      if (!requiredColumns) continue;
-      const missing = requiredColumns.filter((column) => !columns.has(column));
-      if (missing.length > 0) {
-        console.error(
-          `[Startup Checks] MISSING COLUMNS: ${table}.${missing.join(", ")}. ` +
-          "Affected routes may return 500 until the schema is repaired.",
-        );
-      } else {
-        console.log(`[Startup Checks] OK: table ${table} has required columns`);
-      }
-    } catch (err: any) {
-      console.error(
-        `[Startup Checks] Column check failed for ${table}:`,
-        err?.message ?? err,
-      );
     }
   }
 }
@@ -609,12 +505,6 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] Table existence check failed:", err?.message ?? err);
-    }
-
-    try {
-      await checkRequiredColumns(client);
-    } catch (err: any) {
-      console.error("[Startup Checks] Required column check failed:", err?.message ?? err);
     }
 
     // ── Lead-time data migration ────────────────────────────────────────

@@ -54,9 +54,7 @@ function loadEncryptionKey(): Buffer {
   return Buffer.from(keyHex, 'hex');
 }
 
-  
-  return Buffer.from(keyHex, 'hex');
-}
+export function isEncryptionKeyConfigured(): boolean {
   return !!process.env.QB_ENCRYPTION_KEY && process.env.QB_ENCRYPTION_KEY.length === 64;
 }
 

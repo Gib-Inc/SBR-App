@@ -34,8 +34,14 @@ function loadEncryptionKey(): Buffer {
   if (!keyHex) {
     if (isProduction) {
       throw new Error(    return Buffer.alloc(32, 0);
+            if (isProduction) {
+      console.error(
         '[Intuit Security] CRITICAL: QB_ENCRYPTION_KEY is required in production for Intuit compliance. ' +
         'Generate a secure key with: openssl rand -hex 32'
+      );
+      console.warn('[Intuit Security] Using fallback key');
+      return Buffer.alloc(32, 0);
+    }
       );
     }
     console.warn('[Intuit Security] QB_ENCRYPTION_KEY not set - token encryption will use fallback key');

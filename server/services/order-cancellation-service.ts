@@ -263,17 +263,24 @@ export class OrderCancellationService {
 
     // Update each line: set qtyAllocated = 0, backorderQty = 0
     for (const line of lines) {
+      // Only the allocated quantity was ever deducted from availableForSaleQty
+      // at order-create time (backordered units never touched stock). Capture it
+      // before we zero the line so the restore mirrors the original decrement.
+      const allocated = line.qtyAllocated ?? 0;
       await storage.updateSalesOrderLine(line.id, {
         qtyAllocated: 0,
         backorderQty: 0,
       });
+      if (!line.productId) continue;
       affectedProductIds.add(line.productId);
+
+      if (allocated <= 0) continue;
 
       // Log SALES_ORDER_CANCELLED event and restore availableForSaleQty for Pivot orders
       await inventoryMovement.apply({
         eventType: "SALES_ORDER_CANCELLED",
         itemId: line.productId,
-        quantity: line.qtyOrdered,
+        quantity: allocated,
         location: isPivotOrder ? "PIVOT" : "HILDALE",
         source: "USER",
         orderId: order.id,

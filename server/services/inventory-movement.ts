@@ -46,7 +46,8 @@ import { wsInventoryService } from "./websocket-inventory";
  *   - NEVER touches hildaleQty
  * 
  * RETURN_RECEIVED:
- *   - For resellable finished products: increments availableForSaleQty
+ *   - For finished products: increments hildaleQty (returns land at Hildale for
+ *     inspection; NOT sellable until transferred to Pivot)
  *   - For components: increments currentStock
  *   - NEVER touches pivotQty (read-only from Extensiv)
  * 
@@ -305,19 +306,17 @@ export class InventoryMovement {
 
         case "EXTENSIV_SYNC":
           // *** THE ONLY EVENT TYPE THAT MODIFIES pivotQty ***
-          // This is the ONLY place pivotQty is allowed to change - it's the canonical
-          // source of truth from Extensiv's physical inventory snapshot.
-          // The delta is applied to availableForSaleQty to keep it in sync.
+          // Extensiv is the 3PL system of record for PHYSICAL Pivot stock. We
+          // mirror its snapshot into pivotQty and do NOT touch availableForSaleQty.
+          // afs is a locally-driven working number (sales, returns, transfers,
+          // manual counts). Reconciling afs from the Extensiv delta double-counts
+          // every sale: the order already decremented afs at create time, and
+          // Extensiv then reports the lower physical count, which would decrement
+          // afs a second time. Drift between afs and pivotQty is expected and is
+          // surfaced via the variance report rather than auto-corrected here.
           if (isFinished) {
-            const oldPivotQty = beforeState.pivotQty;
-            const newPivotQty = params.quantity;
-            const delta = newPivotQty - oldPivotQty;
-            
-            // Update pivotQty to match Extensiv snapshot (the ONLY place this happens)
-            updates.pivotQty = newPivotQty;
-            // Reconcile availableForSaleQty based on the delta
-            updates.availableForSaleQty = beforeState.availableForSaleQty + delta;
-            quantityDelta = delta;
+            updates.pivotQty = params.quantity;
+            quantityDelta = params.quantity - beforeState.pivotQty;
           }
           break;
 
@@ -356,7 +355,9 @@ export class InventoryMovement {
           // would be subtracted there too. Operationally, use ONE path — not both.
           if (!isFinished) {
             quantityDelta = -params.quantity;
-            updates.currentStock = Math.max(0, beforeState.currentStock - params.quantity);
+            // Production can reveal shortages. Preserve the actual material draw
+            // instead of clamping to zero so stock and audit movement agree.
+            updates.currentStock = beforeState.currentStock - params.quantity;
           }
           break;
 

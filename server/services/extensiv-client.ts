@@ -14,7 +14,12 @@ export interface ExtensivItem {
   sku: string;
   name?: string;
   description?: string;
+  /** Physical on-hand at the 3PL. Kept as the legacy "quantity" field. */
   quantity: number;
+  /** Physical on-hand (= quantity). Explicit so callers don't rely on the overloaded name. */
+  onHand?: number;
+  /** Sellable = OnHand − Allocated − OnHold. This is what pivotQty mirrors. */
+  available?: number;
   warehouseId: string;
   warehouseName?: string;
   upc?: string;
@@ -464,6 +469,8 @@ export class ExtensivClient {
       name: itemId.Description || item.Description || '',
       description: itemId.Description || item.Description || '',
       quantity: Number(item.OnHand ?? item.onHand ?? item.Available ?? item.available ?? 0),
+      onHand: Number(item.OnHandQty ?? item.OnHand ?? item.onHand ?? 0),
+      available: Number(item.AvailableQty ?? item.Available ?? item.available ?? item.OnHand ?? item.onHand ?? 0),
       warehouseId: String(item.FacilityId || item.facilityId || fallbackWarehouseId),
       warehouseName: '',
       upc: '',

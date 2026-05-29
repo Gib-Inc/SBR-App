@@ -199,6 +199,71 @@ function EmailStatusBadge({
   );
 }
 
+/**
+ * Shows whether this PO has been pushed to QuickBooks as a Bill for the
+ * accountant. The push happens automatically when the PO is sent; this badge
+ * reads GET /api/purchase-orders/:id/bill-status so the result is visible.
+ */
+function QbBillStatusBadge({ poId, enabled }: { poId: string; enabled: boolean }) {
+  const { data, isLoading } = useQuery<{
+    hasBill: boolean;
+    billId?: string;
+    billNumber?: string | null;
+    status?: string;
+    totalAmount?: number;
+    createdAt?: string;
+  }>({
+    queryKey: ["/api/purchase-orders", poId, "bill-status"],
+    enabled: enabled && !!poId,
+    queryFn: async () => {
+      const res = await fetch(`/api/purchase-orders/${poId}/bill-status`);
+      if (!res.ok) throw new Error("Failed to load QuickBooks bill status");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <Badge className="bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 font-medium">
+        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+        Checking…
+      </Badge>
+    );
+  }
+
+  if (!data?.hasBill) {
+    return (
+      <Badge
+        className="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 font-medium"
+        title="Auto-sends to QuickBooks as a Bill when the PO is sent to the supplier"
+        data-testid="badge-qb-not-sent"
+      >
+        <Clock className="w-3 h-3 mr-1" />
+        Not sent
+      </Badge>
+    );
+  }
+
+  const billLabel = data.billNumber || data.billId;
+  const paid = (data.status || "").toUpperCase() === "PAID";
+  const when = data.createdAt ? format(new Date(data.createdAt), "MM/dd/yyyy") : "";
+  return (
+    <Badge
+      className={`${
+        paid
+          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+          : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+      } font-medium`}
+      title={`QuickBooks Bill ${billLabel}${when ? ` created ${when}` : ""}${paid ? " — marked paid" : ""}`}
+      data-testid="badge-qb-sent"
+    >
+      <CheckCircle2 className="w-3 h-3 mr-1" />
+      {paid ? "Paid in QuickBooks" : "Sent to accountant"}
+      {billLabel ? ` · Bill ${billLabel}` : ""}
+    </Badge>
+  );
+}
+
 type AckStatus = "NONE" | "PENDING" | "SUPPLIER_ACCEPTED" | "INTERNAL_CONFIRMED" | "EXPIRED";
 
 const ACK_STATUS_CONFIG: Record<AckStatus, { label: string; icon: any; colorClass: string }> = {
@@ -359,11 +424,17 @@ export default function PurchaseOrders() {
       }
       return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data, poId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
-      toast({ 
-        title: "PO Sent Successfully", 
-        description: `Email sent to ${data.emailTo || "supplier"}` 
+      // The QuickBooks Bill push runs asynchronously on the server after send,
+      // so refetch this PO's bill-status shortly after so the "Sent to
+      // accountant" badge reflects the freshly-created Bill.
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", poId, "bill-status"] });
+      }, 4000);
+      toast({
+        title: "PO Sent Successfully",
+        description: `Email sent to ${data.emailTo || "supplier"}`
       });
     },
     onError: (error: Error) => {
@@ -989,6 +1060,10 @@ export default function PurchaseOrders() {
                 <div>
                   <p className="text-sm text-muted-foreground">Total</p>
                   <p className="font-medium text-lg">{formatCurrency(poDetails.total)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Accountant (QuickBooks)</p>
+                  <QbBillStatusBadge poId={poDetails.id} enabled={isDetailOpen} />
                 </div>
               </div>
 

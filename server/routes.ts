@@ -16179,6 +16179,21 @@ Notes: ${po.notes || 'None'}
       // Increment supplier PO sent count only on actual status transition (prevent double counting)
       if (wasNotSent) {
         await storage.incrementSupplierPOSentCount(po.supplierId);
+
+        // Auto-push to QuickBooks as a Bill on the actual transition to SENT
+        // (PO finalized). Non-blocking and idempotent; never blocks the request.
+        const qbUserId = req.session.userId || 'system';
+        import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
+          syncApprovedPOToQuickBooks(id, qbUserId)
+        ).then((r) => {
+          if (r && !r.success && !r.skipped) {
+            console.error(`[PurchaseOrder] QuickBooks Bill sync for PO ${po.poNumber} failed: ${r.error}`);
+          } else if (r && r.success && !r.skipped) {
+            console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created for PO ${po.poNumber}`);
+          }
+        }).catch(err => {
+          console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${po.poNumber}:`, err.message);
+        });
       }
 
       res.json(updated);
@@ -16494,6 +16509,23 @@ Notes: ${po.notes || 'None'}
       // Sync to GHL (non-blocking, log errors but don't fail the request)
       triggerPOSync(req.session.userId!, id, "sent").catch(err => {
         console.error(`[PurchaseOrder] GHL sync error for PO ${po.poNumber}:`, err.message);
+      });
+
+      // Auto-push to QuickBooks as a Bill so the accountant can pay it.
+      // Non-blocking and idempotent (skips if this PO already has a linked Bill);
+      // a failure here must never block the supplier send. Fires on the
+      // DRAFT/APPROVED -> SENT transition, i.e. when the PO is finalized.
+      const qbUserId = req.session.userId || 'system';
+      import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
+        syncApprovedPOToQuickBooks(id, qbUserId)
+      ).then((r) => {
+        if (r && !r.success && !r.skipped) {
+          console.error(`[PurchaseOrder] QuickBooks Bill sync for PO ${po.poNumber} failed: ${r.error}`);
+        } else if (r && r.success && !r.skipped) {
+          console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created for PO ${po.poNumber}`);
+        }
+      }).catch(err => {
+        console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${po.poNumber}:`, err.message);
       });
 
       res.json({

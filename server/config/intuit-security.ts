@@ -30,40 +30,30 @@ export interface IntuitSecurityConfig {
 function loadEncryptionKey(): Buffer {
   const keyHex = process.env.QB_ENCRYPTION_KEY;
   const isProduction = process.env.NODE_ENV === 'production';
-  
+
   if (!keyHex) {
     if (isProduction) {
-      console.error(
-        '[Intuit Security] CRITICAL: QB_ENCRYPTION_KEY is required in production for Intuit compliance. ' +
-        'Generate a secure key with: openssl rand -hex 32'
-      );
-      console.warn('[Intuit Security] Using fallback key');
-      return Buffer.alloc(32, 0);
+      console.error('[Intuit Security] CRITICAL: QB_ENCRYPTION_KEY is required in production.');
     }
-      );
-    }
-    console.warn('[Intuit Security] QB_ENCRYPTION_KEY not set - token encryption will use fallback key');
-    console.warn('[Intuit Security] Generate a secure key with: openssl rand -hex 32');
-    console.warn('[Intuit Security] WARNING: This is NOT acceptable for production - set QB_ENCRYPTION_KEY before deploying');
-    const fallbackKey = Buffer.alloc(32, 0);
-    return fallbackKey;
+    console.warn('[Intuit Security] QB_ENCRYPTION_KEY not set - using fallback key');
+    return Buffer.alloc(32, 0);
   }
-  
+
   if (keyHex.length !== 64) {
-      `[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ` +
-       console.error(
-      `[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ` +
-      `Got ${keyHex.length} characters. Generate with: openssl rand -hex 32`
-    );
+    console.error(`[Intuit Security] QB_ENCRYPTION_KEY must be exactly 64 hex characters. Got ${keyHex.length}.`);
     console.warn('[Intuit Security] Using fallback key');
     return Buffer.alloc(32, 0);
   }
-  
+
   if (!/^[0-9a-fA-F]+$/.test(keyHex)) {
     console.error('[Intuit Security] QB_ENCRYPTION_KEY must contain only hexadecimal characters');
     console.warn('[Intuit Security] Using fallback key');
     return Buffer.alloc(32, 0);
   }
+
+  return Buffer.from(keyHex, 'hex');
+}
+
   
   return Buffer.from(keyHex, 'hex');
 }

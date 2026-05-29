@@ -5,6 +5,7 @@ import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 import { MorningTrapService } from "./services/morning-trap-service";
 import { recordSchedulerRun, type SchedulerRunStatus } from "./services/scheduler-run-recorder";
+import { runDriftReport } from "./services/inventory-drift-service";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -28,9 +29,14 @@ let aiSystemReviewTimer: NodeJS.Timeout | null = null;
 let extensivSyncTimer: NodeJS.Timeout | null = null;
 let morningTrapTimer: NodeJS.Timeout | null = null;
 let velocityTimer: NodeJS.Timeout | null = null;
+let driftReportTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
+
+// Inventory drift report interval: hourly, aligned to :15 past the hour so it
+// runs just after the top-of-hour Extensiv sync settles pivot_qty.
+const DRIFT_REPORT_INTERVAL_HOURS = 1;
 
 // Extensiv sync interval: hourly. The Railway cron remains the primary
 // external trigger; this in-process runner is a belt-and-suspenders fallback
@@ -323,6 +329,81 @@ async function performVelocityRefresh(opts: { onlyZeroOrNull: boolean }): Promis
 }
 
 /**
+ * Inventory Drift Report — hourly reconciliation check of every finished
+ * product's local sellable number (availableForSaleQty) against the
+ * Extensiv-mirrored available (pivotQty). READ-ONLY: it reports, never writes.
+ *
+ * A clean run records as "success"; a run with any flagged item (drift over
+ * threshold, or a stale/never-synced Extensiv pull) records as "partial" so it
+ * surfaces as a WARNING in the scheduler health + audit trail (visible in
+ * Settings) without paging anyone. Inspect flagged SKUs there or via
+ * `npm run report:drift`.
+ */
+async function performDriftReport(): Promise<void> {
+  const schedulerStartedAt = new Date();
+  const startTime = Date.now();
+  try {
+    const result = await runDriftReport();
+    const duration = Date.now() - startTime;
+
+    const top = result.flaggedItems.slice(0, 10).map((r) => ({
+      sku: r.sku,
+      afs: r.afs,
+      pivot: r.pivot,
+      drift: r.drift,
+      stale: r.stale,
+      ageHours: r.ageHours === null ? null : Math.round(r.ageHours * 10) / 10,
+    }));
+
+    if (result.flaggedCount === 0) {
+      console.log(
+        `[Drift Report] OK — ${result.analyzed} finished products within ±${result.driftThreshold} and freshly synced (${duration}ms)`,
+      );
+    } else {
+      console.warn(
+        `[Drift Report] ${result.flaggedCount} flagged of ${result.analyzed} ` +
+          `(drift>=±${result.driftThreshold}: ${result.overThresholdCount}, ` +
+          `stale>${result.staleHours}h: ${result.staleCount}) in ${duration}ms`,
+      );
+      for (const r of top) {
+        console.warn(
+          `[Drift Report]   ${r.sku ?? "(no sku)"}  afs=${r.afs} pivot=${r.pivot} ` +
+            `drift=${r.drift >= 0 ? "+" : ""}${r.drift}` +
+            (r.stale ? `  STALE(${r.ageHours === null ? "never" : r.ageHours + "h"})` : ""),
+        );
+      }
+    }
+
+    await recordRunSafe({
+      schedulerId: "inventory-drift-report",
+      schedulerName: "Inventory drift report",
+      status: result.flaggedCount > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: null,
+      details: {
+        analyzed: result.analyzed,
+        overThreshold: result.overThresholdCount,
+        stale: result.staleCount,
+        flagged: result.flaggedCount,
+        driftThreshold: result.driftThreshold,
+        staleHours: result.staleHours,
+        topFlagged: top,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Drift Report] Failed:", error);
+    await recordRunSafe({
+      schedulerId: "inventory-drift-report",
+      schedulerName: "Inventory drift report",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
+/**
  * Calculate milliseconds until the next 12:05 AM MT firing. Mirrors the
  * morning-trap MST math; +5 minutes so the daily sales scheduler settles
  * before we read totals.
@@ -336,6 +417,21 @@ function msUntilNextHourUTC(): number {
   const now = new Date();
   const target = new Date(now);
   target.setUTCHours(now.getUTCHours() + 1, 0, 0, 0);
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * ms until the next :15-past-the-hour UTC boundary. The drift report runs
+ * here so it lands just after the top-of-hour Extensiv sync refreshes
+ * pivot_qty, giving the freshest possible baseline to compare against.
+ */
+function msUntilNext15PastHourUTC(): number {
+  const now = new Date();
+  const target = new Date(now);
+  target.setUTCMinutes(15, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCHours(target.getUTCHours() + 1);
+  }
   return target.getTime() - now.getTime();
 }
 
@@ -378,7 +474,7 @@ function msUntilNext7amMST(): number {
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
   let sectionsStarted = 0;
-  const totalSections = 6;
+  const totalSections = 7;
 
   try {
     const channels = await storage.getAllChannels();
@@ -517,6 +613,32 @@ export async function startScheduler(): Promise<void> {
     console.error("[Scheduler] Velocity refresh failed to initialize:", err);
   }
 
+  try {
+    if (driftReportTimer) {
+      clearTimeout(driftReportTimer);
+      clearInterval(driftReportTimer);
+    }
+    const msUntilDrift = msUntilNext15PastHourUTC();
+    const driftTarget = new Date(Date.now() + msUntilDrift);
+    const driftHHMM = `${String(driftTarget.getUTCHours()).padStart(2, "0")}:${String(driftTarget.getUTCMinutes()).padStart(2, "0")}`;
+    console.log(
+      `[Drift Report] Scheduler initialized — next run at ${driftHHMM} UTC (in ${Math.round(msUntilDrift / 60000)} minutes), then hourly`,
+    );
+    driftReportTimer = setTimeout(() => {
+      performDriftReport().catch((err) =>
+        console.error("[Drift Report] Scheduled run failed:", err),
+      );
+      driftReportTimer = setInterval(() => {
+        performDriftReport().catch((err) =>
+          console.error("[Drift Report] Scheduled run failed:", err),
+        );
+      }, DRIFT_REPORT_INTERVAL_HOURS * 60 * 60 * 1000);
+    }, msUntilDrift);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Drift report failed to initialize:", err);
+  }
+
   console.log(
     `[Scheduler] Scheduler started successfully (${sectionsStarted}/${totalSections} sections initialized, ${channelSchedules.size} channels active)`,
   );
@@ -556,6 +678,20 @@ export function stopScheduler(): void {
     morningTrapTimer = null;
   }
 
+  // Stop Velocity timer
+  if (velocityTimer) {
+    clearTimeout(velocityTimer);
+    clearInterval(velocityTimer);
+    velocityTimer = null;
+  }
+
+  // Stop Drift Report timer
+  if (driftReportTimer) {
+    clearTimeout(driftReportTimer);
+    clearInterval(driftReportTimer);
+    driftReportTimer = null;
+  }
+
   console.log("[Scheduler] All schedulers stopped");
 }
 
@@ -577,6 +713,7 @@ export function getSchedulerStatus(): {
   schedules: Array<{ channelId: string; channelName: string; intervalHours: number }>;
   aiSystemReviewScheduled: boolean;
   extensivSyncScheduled: boolean;
+  driftReportScheduled: boolean;
 } {
   return {
     running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null || extensivSyncTimer !== null,
@@ -588,6 +725,7 @@ export function getSchedulerStatus(): {
     })),
     aiSystemReviewScheduled: aiSystemReviewTimer !== null,
     extensivSyncScheduled: extensivSyncTimer !== null,
+    driftReportScheduled: driftReportTimer !== null,
   };
 }
 

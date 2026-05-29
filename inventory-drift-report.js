@@ -42,7 +42,8 @@
  * This script is READ-ONLY. It never writes to the database.
  */
 
-const { Client } = require('pg');
+import pg from 'pg';
+const { Client } = pg;
 
 // ─── Configuration ───
 

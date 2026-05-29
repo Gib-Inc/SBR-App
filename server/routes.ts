@@ -15777,6 +15777,16 @@ Notes: ${po.notes || 'None'}
         deliveryVarianceDays,
       } as any);
 
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
       res.json({ purchaseOrder: updated, applied });
     } catch (error: any) {
       console.error("[Quick-Receive PO] Error:", error);
@@ -16179,21 +16189,6 @@ Notes: ${po.notes || 'None'}
       // Increment supplier PO sent count only on actual status transition (prevent double counting)
       if (wasNotSent) {
         await storage.incrementSupplierPOSentCount(po.supplierId);
-
-        // Auto-push to QuickBooks as a Bill on the actual transition to SENT
-        // (PO finalized). Non-blocking and idempotent; never blocks the request.
-        const qbUserId = req.session.userId || 'system';
-        import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
-          syncApprovedPOToQuickBooks(id, qbUserId)
-        ).then((r) => {
-          if (r && !r.success && !r.skipped) {
-            console.error(`[PurchaseOrder] QuickBooks Bill sync for PO ${po.poNumber} failed: ${r.error}`);
-          } else if (r && r.success && !r.skipped) {
-            console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created for PO ${po.poNumber}`);
-          }
-        }).catch(err => {
-          console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${po.poNumber}:`, err.message);
-        });
       }
 
       res.json(updated);
@@ -16232,6 +16227,16 @@ Notes: ${po.notes || 'None'}
       triggerPOSync(req.session.userId!, id, "delivered").catch(err => {
         console.error(`[PurchaseOrder] GHL sync error:`, err.message);
       });
+
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
 
       res.json(updated);
     } catch (error: any) {
@@ -16509,23 +16514,6 @@ Notes: ${po.notes || 'None'}
       // Sync to GHL (non-blocking, log errors but don't fail the request)
       triggerPOSync(req.session.userId!, id, "sent").catch(err => {
         console.error(`[PurchaseOrder] GHL sync error for PO ${po.poNumber}:`, err.message);
-      });
-
-      // Auto-push to QuickBooks as a Bill so the accountant can pay it.
-      // Non-blocking and idempotent (skips if this PO already has a linked Bill);
-      // a failure here must never block the supplier send. Fires on the
-      // DRAFT/APPROVED -> SENT transition, i.e. when the PO is finalized.
-      const qbUserId = req.session.userId || 'system';
-      import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
-        syncApprovedPOToQuickBooks(id, qbUserId)
-      ).then((r) => {
-        if (r && !r.success && !r.skipped) {
-          console.error(`[PurchaseOrder] QuickBooks Bill sync for PO ${po.poNumber} failed: ${r.error}`);
-        } else if (r && r.success && !r.skipped) {
-          console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created for PO ${po.poNumber}`);
-        }
-      }).catch(err => {
-        console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${po.poNumber}:`, err.message);
       });
 
       res.json({
@@ -17122,6 +17110,15 @@ Notes: ${po.notes || 'None'}
         triggerPOSync(req.session.userId!, id, "delivered").catch(err => {
           console.error(`[PurchaseOrder] GHL sync error:`, err.message);
         });
+
+        // Bill on receipt: push to QuickBooks as a Bill now that the PO is fully
+        // received. Non-blocking and idempotent; never blocks the response.
+        import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+          billPOOnReceipt(id, req.session.userId || 'system')
+        ).then((r) => {
+          if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+          else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+        }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
       }
 
       res.json({ ...updated, lines: updatedLines });
@@ -17231,6 +17228,16 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         receivedAt: new Date(),
       });
+
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
 
       res.json(updated);
     } catch (error: any) {
@@ -17490,7 +17497,17 @@ Notes: ${po.notes || 'None'}
         return res.status(500).json({ error: "Failed to retrieve updated PO" });
       }
 
-      res.json({ 
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
+      res.json({
         success: true,
         message: "PO marked as fully received and inventory updated",
         purchaseOrder: updated,
@@ -17545,6 +17562,17 @@ Notes: ${po.notes || 'None'}
           receivedAt: newStatus === 'RECEIVED' ? (po.receivedAt || new Date()) : po.receivedAt,
         });
         console.log(`[PurchaseOrder] Recalculated status for PO ${po.poNumber}: ${po.status} -> ${newStatus}`);
+
+        // Bill on receipt: if the recalc flipped this PO to RECEIVED, push to
+        // QuickBooks as a Bill. Non-blocking and idempotent; helper no-ops
+        // unless fully received and skips if a Bill already exists.
+        import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+          billPOOnReceipt(id, req.session.userId || 'system')
+        ).then((r) => {
+          if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+          else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+        }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
         res.json({ success: true, previousStatus: po.status, newStatus, purchaseOrder: updated });
       } else {
         res.json({ success: true, message: "Status is already correct", status: po.status, purchaseOrder: po });

@@ -69,7 +69,7 @@ vi.mock("./quickbooks-client", () => ({
   },
 }));
 
-import { syncApprovedPOToQuickBooks, markPOBillAsPaidInQuickBooks } from "./po-quickbooks-sync";
+import { syncApprovedPOToQuickBooks, markPOBillAsPaidInQuickBooks, billPOOnReceipt } from "./po-quickbooks-sync";
 
 beforeEach(() => {
   h.pos.clear();
@@ -154,6 +154,60 @@ describe("syncApprovedPOToQuickBooks (auto-push on PO send)", () => {
     const po = h.pos.get("po1");
     expect(po.externalAccountingId).toBeUndefined();
     expect(po.accountantNotifiedAt).toBeUndefined();
+  });
+});
+
+describe("billPOOnReceipt (bill-on-receipt gate)", () => {
+  it("skips when QuickBooks is not configured", async () => {
+    h.qb.configured = false;
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(res).toEqual({ success: false, skipped: true, reason: "QuickBooks not configured" });
+    expect(h.createBill).not.toHaveBeenCalled();
+  });
+
+  it("returns not-found when the PO does not exist", async () => {
+    const res = await billPOOnReceipt("missing", "u1");
+    expect(res.success).toBe(false);
+    expect(res.error).toBe("Purchase order not found");
+  });
+
+  it("does NOT bill a PO that is not fully received (SENT, no receivedAt)", async () => {
+    seedPO("po1", { status: "SENT" });
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(res).toMatchObject({ success: false, skipped: true });
+    expect(res.reason).toMatch(/not fully received/i);
+    expect(h.createBill).not.toHaveBeenCalled();
+  });
+
+  it("does NOT bill a partially received PO", async () => {
+    seedPO("po1", { status: "PARTIAL_RECEIVED" });
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(res).toMatchObject({ success: false, skipped: true });
+    expect(h.createBill).not.toHaveBeenCalled();
+  });
+
+  it("bills when status is RECEIVED", async () => {
+    seedPO("po1", { status: "RECEIVED" });
+    h.createBill.mockResolvedValue({ success: true, billId: "QB777", billNumber: "B-7" });
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(h.createBill).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ success: true, billId: "QB777" });
+    expect(h.pos.get("po1").externalAccountingId).toBe("QB777");
+  });
+
+  it("bills when receivedAt is set even if status is not literally RECEIVED", async () => {
+    seedPO("po1", { status: "CLOSED", receivedAt: new Date("2026-05-20T00:00:00Z") });
+    h.createBill.mockResolvedValue({ success: true, billId: "QB888", billNumber: "B-8" });
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(h.createBill).toHaveBeenCalledTimes(1);
+    expect(res).toMatchObject({ success: true, billId: "QB888" });
+  });
+
+  it("is idempotent: a received PO already linked to a Bill does not re-create", async () => {
+    seedPO("po1", { status: "RECEIVED", externalAccountingId: "QB-OLD" });
+    const res = await billPOOnReceipt("po1", "u1");
+    expect(res).toMatchObject({ success: true, skipped: true, billId: "QB-OLD" });
+    expect(h.createBill).not.toHaveBeenCalled();
   });
 });
 

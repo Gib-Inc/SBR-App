@@ -100,6 +100,35 @@ export async function syncApprovedPOToQuickBooks(
 }
 
 /**
+ * "Bill on receipt" gate. Pushes the PO to QuickBooks as a Bill only once the
+ * PO is fully RECEIVED. Safe to fire-and-forget from any receive route: it
+ * no-ops unless status === 'RECEIVED', and syncApprovedPOToQuickBooks is itself
+ * idempotent (won't double-create a Bill if one is already linked).
+ */
+export async function billPOOnReceipt(
+  purchaseOrderId: string,
+  userId: string
+): Promise<SyncResult> {
+  if (!isQuickBooksConfigured()) {
+    return { success: false, skipped: true, reason: 'QuickBooks not configured' };
+  }
+
+  const po = await storage.getPurchaseOrder(purchaseOrderId);
+  if (!po) {
+    return { success: false, error: 'Purchase order not found' };
+  }
+  // Fully received is signalled either by status RECEIVED or a receivedAt stamp.
+  // Both are set only on FULL receipt across the receive routes; partial
+  // receipts (PARTIAL_RECEIVED, no receivedAt) intentionally do not bill yet.
+  const fullyReceived = po.status === 'RECEIVED' || !!po.receivedAt;
+  if (!fullyReceived) {
+    return { success: false, skipped: true, reason: `PO not fully received (status: ${po.status})` };
+  }
+
+  return syncApprovedPOToQuickBooks(purchaseOrderId, userId);
+}
+
+/**
  * Mark the QuickBooks Bill linked to this PO as paid by creating a BillPayment.
  * No-ops gracefully if no QB Bill exists for the PO.
  */

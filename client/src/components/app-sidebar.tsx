@@ -75,6 +75,11 @@ const mainMenuItems = [
     icon: Megaphone,
   },
   {
+    title: "Ad Analytics",
+    url: "/marketing-analytics",
+    icon: BarChart3,
+  },
+  {
     title: "App Flow",
     url: "/app-flow",
     icon: Workflow,

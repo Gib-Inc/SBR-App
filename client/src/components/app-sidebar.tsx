@@ -15,82 +15,6 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
-const mainMenuItems = [
-  {
-    title: "Reports",
-    url: "/",
-    icon: BarChart3,
-  },
-  {
-    title: "Products",
-    url: "/products",
-    icon: Package,
-  },
-  {
-    title: "Production",
-    url: "/production",
-    icon: Factory,
-  },
-  {
-    title: "Cycle Count",
-    url: "/cycle-count",
-    icon: ClipboardCheck,
-  },
-  {
-    title: "Direct Orders",
-    url: "/direct-orders",
-    icon: PackageCheck,
-  },
-  {
-    title: "Barcodes",
-    url: "/barcodes",
-    icon: Barcode,
-  },
-  {
-    title: "Suppliers",
-    url: "/suppliers",
-    icon: Building2,
-  },
-  {
-    title: "Purchase Orders",
-    url: "/purchase-orders",
-    icon: ClipboardList,
-  },
-  {
-    title: "Sales Orders",
-    url: "/sales-orders",
-    icon: ShoppingCart,
-  },
-  {
-    title: "Returns",
-    url: "/returns",
-    icon: PackageOpen,
-  },
-  {
-    title: "AI Agent",
-    url: "/ai",
-    icon: Brain,
-  },
-  {
-    title: "Marketing",
-    url: "/marketing",
-    icon: Megaphone,
-  },
-  {
-    title: "Ad Analytics",
-    url: "/marketing-analytics",
-    icon: BarChart3,
-  },
-  {
-    title: "App Flow",
-    url: "/app-flow",
-    icon: Workflow,
-  },
-// ── Sidebar groups ──────────────────────────────────────────
-// Organized by workflow: Dashboard → Sales & Fulfillment → Supply Chain → Tools
-// Sales & Fulfillment = Sammie's daily workflow (orders in → ship → returns)
-// Supply Chain = sourcing, production, and product catalog
-
 const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Health",     url: "/health",      icon: Activity   },
@@ -123,6 +47,7 @@ const toolItems = [
   { title: "Log Order",  url: "/log-order",  icon: ClipboardEdit },
   { title: "SKU Mappings", url: "/sku-mappings", icon: Link2 },
   { title: "Marketing",  url: "/marketing",  icon: Megaphone },
+  { title: "Ad Analytics", url: "/marketing-analytics", icon: BarChart3 },
   { title: "AI Agent",   url: "/ai",         icon: Brain    },
   { title: "App Flow",   url: "/app-flow",   icon: Workflow },
 ];
@@ -130,7 +55,6 @@ const toolItems = [
 export function AppSidebar() {
   const [location] = useLocation();
 
-  // Live count of in-house orders waiting to ship (refreshes every 60s)
   const { data: inHouseData } = useQuery<{ summary: { total: number } }>({
     queryKey: ["/api/sales-orders/in-house"],
     refetchInterval: 60_000,
@@ -151,7 +75,6 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        {/* Helper that renders a group of sidebar links */}
         {[
           { label: "Dashboard",          items: dashboardItems    },
           { label: "Sales & Fulfillment", items: salesItems       },

@@ -17,7 +17,7 @@ export function SpendPacingView({ days }: { days: number }) {
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
-  if (!data || data.daily.length === 0) {
+  if (!data || !data.daily || data.daily.length === 0) {
     return (
       <Card><CardContent className="py-12 text-center text-muted-foreground">
         No ad spend data yet. Connect Google Ads or Meta Ads in Settings to start tracking.

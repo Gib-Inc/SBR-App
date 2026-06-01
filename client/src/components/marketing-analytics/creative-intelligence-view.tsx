@@ -30,7 +30,7 @@ export function CreativeIntelligenceView({ days }: { days: number }) {
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
-  if (!data || (data.byFramework.length === 0 && data.killScale.length === 0)) {
+  if (!data || (!data.byFramework?.length && !data.killScale?.length)) {
     return (
       <Card><CardContent className="py-12 text-center text-muted-foreground">
         No creative data yet. Log copy in the copy_assets table and link performance data to see intelligence.
@@ -43,7 +43,7 @@ export function CreativeIntelligenceView({ days }: { days: number }) {
 
   return (
     <div className="space-y-4">
-      {data.byFramework.length > 0 && (
+      {data.byFramework?.length > 0 && (
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">ROAS by Framework</CardTitle></CardHeader>
           <CardContent>

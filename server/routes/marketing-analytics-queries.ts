@@ -17,7 +17,7 @@ export async function querySpendPacing(db: DB, days: number) {
            SUM(clicks)::int as clicks,
            SUM(conversions)::int as conversions
     FROM ad_metrics_daily
-    WHERE date >= current_date - ${days}
+    WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY date
     ORDER BY date
   `);
@@ -35,7 +35,7 @@ export async function queryChannelMix(db: DB, days: number) {
            CASE WHEN SUM(conversions) > 0 THEN (SUM(spend) / SUM(conversions))::real ELSE NULL END as cpa,
            CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
     FROM ad_metrics_daily
-    WHERE date >= current_date - ${days}
+    WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY platform
     ORDER BY spend DESC
   `);
@@ -57,7 +57,7 @@ export async function queryProductPerformance(db: DB, days: number) {
              ELSE NULL END as days_of_stock
     FROM ad_metrics_daily amd
     LEFT JOIN items i ON i.sku = amd.sku
-    WHERE amd.date >= current_date - ${days}
+    WHERE amd.date >= current_date - make_interval(days => ${days})
     GROUP BY amd.sku, i.name, i.available_for_sale_qty, i.hildale_qty
     ORDER BY spend DESC
   `);
@@ -74,7 +74,7 @@ export async function queryCreativeIntelligence(db: DB, days: number) {
            SUM(cp.revenue::real) as total_revenue
     FROM copy_assets ca
     JOIN copy_performance cp ON cp.copy_asset_id = ca.id
-    WHERE cp.measured_at >= now() - (${days} || ' days')::interval
+    WHERE cp.measured_at >= now() - make_interval(days => ${days})
     GROUP BY ca.framework
     HAVING COUNT(*) >= 2
     ORDER BY avg_roas DESC
@@ -87,7 +87,7 @@ export async function queryCreativeIntelligence(db: DB, days: number) {
            COUNT(*)::int as sample_size
     FROM copy_assets ca
     JOIN copy_performance cp ON cp.copy_asset_id = ca.id
-    WHERE cp.measured_at >= now() - (${days} || ' days')::interval
+    WHERE cp.measured_at >= now() - make_interval(days => ${days})
       AND ca.primary_objection IS NOT NULL
     GROUP BY ca.primary_objection
     HAVING COUNT(*) >= 2
@@ -100,7 +100,7 @@ export async function queryCreativeIntelligence(db: DB, days: number) {
            cp.performance_score::real
     FROM copy_assets ca
     JOIN copy_performance cp ON cp.copy_asset_id = ca.id
-    WHERE cp.measured_at >= now() - (${days} || ' days')::interval
+    WHERE cp.measured_at >= now() - make_interval(days => ${days})
     ORDER BY cp.roas DESC
   `);
 

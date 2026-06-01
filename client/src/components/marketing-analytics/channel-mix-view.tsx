@@ -18,7 +18,7 @@ export function ChannelMixView({ days }: { days: number }) {
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
-  if (!data || data.channels.length === 0) {
+  if (!data || !data.channels || data.channels.length === 0) {
     return (
       <Card><CardContent className="py-12 text-center text-muted-foreground">
         No channel data yet. Connect ad platforms in Settings to see channel performance.

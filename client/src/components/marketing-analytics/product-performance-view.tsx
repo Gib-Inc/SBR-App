@@ -25,7 +25,7 @@ export function ProductPerformanceView({ days }: { days: number }) {
   });
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 animate-spin" /></div>;
-  if (!data || data.products.length === 0) {
+  if (!data || !data.products || data.products.length === 0) {
     return (
       <Card><CardContent className="py-12 text-center text-muted-foreground">
         No product-level ad data yet. This view populates when ad platforms report SKU-level performance.

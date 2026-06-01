@@ -15,6 +15,7 @@
 
 import { storage } from "../storage";
 import { GHLOpportunitiesService } from "./ghl-opportunities-service";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 
 const TIMEZONE = "America/Denver";
 const ROTATION_WINDOW_DAYS = 7;
@@ -306,11 +307,34 @@ export async function runRotationCheck(): Promise<{
  */
 async function runScheduledRotationCheck(): Promise<void> {
   console.log(`[Rotation Scheduler] Running scheduled rotation check`);
+  const startedAt = new Date();
   
   try {
-    await runRotationCheck();
+    const result = await runRotationCheck();
+    await recordSchedulerRun({
+      schedulerId: "credential-rotation",
+      schedulerName: "Credential rotation reminders",
+      status: result.success ? "success" : "failed",
+      startedAt,
+      errorMessage: result.success ? null : `${result.errors} rotation error(s)`,
+      details: {
+        configsChecked: result.configsChecked,
+        remindersCreated: result.remindersCreated,
+        remindersUpdated: result.remindersUpdated,
+        errors: result.errors,
+      },
+    });
   } catch (error: any) {
     console.error(`[Rotation Scheduler] Scheduled check failed:`, error.message);
+    await recordSchedulerRun({
+      schedulerId: "credential-rotation",
+      schedulerName: "Credential rotation reminders",
+      status: "failed",
+      startedAt,
+      errorMessage: error?.message ?? String(error),
+    }).catch((recordError) => {
+      console.warn("[Rotation Scheduler] Failed to record scheduler run:", recordError);
+    });
   }
   
   scheduleNextRotationCheck();

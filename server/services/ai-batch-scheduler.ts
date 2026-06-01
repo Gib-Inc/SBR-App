@@ -10,6 +10,7 @@
  */
 
 import { runInventoryRecommendationsBatch, inventoryRecommendationBatch, type BatchRunReason } from "./inventory-recommendation-batch";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 
 const TIMEZONE = "America/Denver";
 
@@ -76,17 +77,43 @@ function getBatchKey(reason: BatchRunReason, dateKey: string): string {
  */
 async function runScheduledBatch(reason: BatchRunReason): Promise<void> {
   console.log(`[AI Scheduler] Running scheduled batch: ${reason}`);
+  const startedAt = new Date();
   
   try {
     const result = await runInventoryRecommendationsBatch({ reason });
+    const finishedAt = new Date();
     
     if (result.success) {
       console.log(`[AI Scheduler] Batch completed successfully: ${result.processedSkus} SKUs, ${result.criticalItemsFound} critical, ${result.orderTodayCount} order today`);
     } else {
       console.error(`[AI Scheduler] Batch failed: ${result.error}`);
     }
+    await recordSchedulerRun({
+      schedulerId: "ai-batch",
+      schedulerName: "AI inventory batch",
+      status: result.success ? "success" : "failed",
+      startedAt,
+      finishedAt,
+      errorMessage: result.success ? null : result.error ?? "AI batch failed",
+      details: {
+        reason,
+        processedSkus: result.processedSkus,
+        criticalItemsFound: result.criticalItemsFound,
+        orderTodayCount: result.orderTodayCount,
+      },
+    });
   } catch (error: any) {
     console.error(`[AI Scheduler] Batch error:`, error);
+    await recordSchedulerRun({
+      schedulerId: "ai-batch",
+      schedulerName: "AI inventory batch",
+      status: "failed",
+      startedAt,
+      errorMessage: error?.message ?? String(error),
+      details: { reason },
+    }).catch((recordError) => {
+      console.warn("[AI Scheduler] Failed to record scheduler run:", recordError);
+    });
   }
 }
 

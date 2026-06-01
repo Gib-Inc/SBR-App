@@ -51,7 +51,7 @@ export class GoogleAdsClient {
   private refreshToken: string | null = null;
   private developerToken: string | null = null;
   private customerId: string | null = null;
-  private baseUrl = 'https://googleads.googleapis.com/v16';
+  private baseUrl = 'https://googleads.googleapis.com/v21';
 
   constructor() {
     this.loadConfig();

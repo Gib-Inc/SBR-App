@@ -18,6 +18,7 @@
 import { storage } from "../storage";
 import { GHLOpportunitiesService } from "./ghl-opportunities-service";
 import { AuditLogger } from "./audit-logger";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 
 // Configuration
 const REFRESH_INTERVAL_MS = 45 * 60 * 1000; // 45 minutes
@@ -223,7 +224,8 @@ async function createGHLAlertForFailedRefresh(
  * Run the token refresh check for all QuickBooks connections
  */
 export async function runTokenRefresh(): Promise<RefreshResult> {
-  console.log(`[QB Token Refresh] Starting token refresh check at ${new Date().toISOString()}`);
+  const startedAt = new Date();
+  console.log(`[QB Token Refresh] Starting token refresh check at ${startedAt.toISOString()}`);
   
   const result: RefreshResult = {
     success: true,
@@ -259,6 +261,13 @@ export async function runTokenRefresh(): Promise<RefreshResult> {
       console.log(`[QB Token Refresh] ${result.message}`);
       lastRefreshAt = new Date();
       lastRefreshStatus = 'SKIPPED';
+      await recordSchedulerRun({
+        schedulerId: "quickbooks-token-refresh",
+        schedulerName: "QuickBooks token refresh",
+        status: "skipped",
+        startedAt,
+        details: { message: result.message },
+      }).catch((error) => console.warn("[QB Token Refresh] Failed to record scheduler run:", error));
       return result;
     }
 
@@ -342,6 +351,19 @@ export async function runTokenRefresh(): Promise<RefreshResult> {
     lastRefreshStatus = 'FAILED';
     lastRefreshAt = new Date();
   }
+
+  await recordSchedulerRun({
+    schedulerId: "quickbooks-token-refresh",
+    schedulerName: "QuickBooks token refresh",
+    status: result.success ? "success" : "failed",
+    startedAt,
+    errorMessage: result.success ? null : result.message,
+    details: {
+      tokensRefreshed: result.tokensRefreshed,
+      tokensFailed: result.tokensFailed,
+      tokensSkipped: result.tokensSkipped,
+    },
+  }).catch((error) => console.warn("[QB Token Refresh] Failed to record scheduler run:", error));
 
   return result;
 }

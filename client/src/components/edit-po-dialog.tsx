@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { POInTransitSection } from "@/components/po-in-transit-section";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -350,16 +351,81 @@ export function EditPODialog({
             Edit Purchase Order {purchaseOrder?.poNumber || ""}
           </DialogTitle>
           <DialogDescription>
-            {canEdit 
+            {canEdit
               ? "Make changes to this draft purchase order."
               : "This purchase order cannot be edited because it has been sent or received."}
           </DialogDescription>
         </DialogHeader>
 
+        {/* Lead-time callout: derived from supplier_items.lead_time_days at PO
+            creation. If we couldn't compute one, prompt the user to update the
+            supplier profile. */}
+        {purchaseOrder && (() => {
+          const ord = purchaseOrder.orderDate ? new Date(purchaseOrder.orderDate) : null;
+          const eta = purchaseOrder.expectedDate ? new Date(purchaseOrder.expectedDate) : null;
+          if (eta) {
+            const isToday = ord && ord.toDateString() === new Date().toDateString();
+            const orderedLabel = isToday ? "Ordered today" : ord ? `Ordered ${format(ord, "MMM d")}` : "Ordered";
+            return (
+              <div
+                className="rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-700 dark:text-blue-400 flex items-center gap-2"
+                data-testid="po-eta-callout"
+              >
+                <CalendarIcon className="h-4 w-4" />
+                <span>
+                  <strong>{orderedLabel}</strong> — expected delivery {format(eta, "MMM d")}
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2"
+              data-testid="po-eta-unknown"
+            >
+              <AlertCircle className="h-4 w-4" />
+              <span>Lead time unknown — update supplier profile</span>
+            </div>
+          );
+        })()}
+
+        {/* In-Transit section — visible for every PO regardless of editability.
+            Lets Sammie/Matt update the FX build status (Ordered → Confirmed →
+            In Production → Shipped → Received) and surfaces line items, order
+            date, expected delivery, and days remaining. */}
+        {purchaseOrder && compositeData?.lines && (
+          <POInTransitSection
+            po={{
+              id: purchaseOrder.id,
+              poNumber: purchaseOrder.poNumber,
+              supplierId: purchaseOrder.supplierId ?? null,
+              orderDate: purchaseOrder.orderDate
+                ? typeof purchaseOrder.orderDate === "string"
+                  ? purchaseOrder.orderDate
+                  : (purchaseOrder.orderDate as Date).toISOString()
+                : null,
+              expectedDate: purchaseOrder.expectedDate
+                ? typeof purchaseOrder.expectedDate === "string"
+                  ? purchaseOrder.expectedDate
+                  : (purchaseOrder.expectedDate as Date).toISOString()
+                : null,
+              expectedCompletionDate: (purchaseOrder as any).expectedCompletionDate
+                ? typeof (purchaseOrder as any).expectedCompletionDate === "string"
+                  ? (purchaseOrder as any).expectedCompletionDate
+                  : ((purchaseOrder as any).expectedCompletionDate as Date).toISOString()
+                : null,
+              confirmedQty: (purchaseOrder as any).confirmedQty ?? null,
+              poStatus: (purchaseOrder as any).poStatus ?? "ordered",
+            }}
+            supplier={compositeData.supplier ?? null}
+            lines={compositeData.lines}
+          />
+        )}
+
         {!canEdit ? (
-          <div className="flex items-center justify-center py-12 text-muted-foreground">
-            <AlertCircle className="h-5 w-5 mr-2" />
-            Only draft purchase orders can be edited.
+          <div className="flex items-center justify-center py-4 text-muted-foreground text-sm">
+            <AlertCircle className="h-4 w-4 mr-2" />
+            Line edits are locked once a PO is sent. Use Build Status above to track FX progress.
           </div>
         ) : isLoadingComposite ? (
           <div className="flex items-center justify-center py-12">

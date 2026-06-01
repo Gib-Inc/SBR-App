@@ -196,8 +196,12 @@ export class ExtensivInventorySyncService {
         };
       }
 
+      // pivotQty mirrors Extensiv's SELLABLE quantity (available); the snapshot
+      // stores physical OnHand. This matches the standalone cron so both writers
+      // agree on what each field means.
       const previousQty = item.pivotQty ?? 0;
-      const newQty = extensivItem.quantity;
+      const newQty = extensivItem.available ?? extensivItem.quantity;
+      const onHandSnapshot = extensivItem.onHand ?? extensivItem.quantity;
       const variance = newQty - previousQty;
 
       if (variance === 0) {
@@ -214,9 +218,9 @@ export class ExtensivInventorySyncService {
 
       const inventoryMovement = new InventoryMovement(storage);
       const user = await storage.getUser(this.userId);
-      
+
       await storage.updateItem(item.id, {
-        extensivOnHandSnapshot: newQty,
+        extensivOnHandSnapshot: onHandSnapshot,
         extensivLastSyncAt: new Date(),
       });
       
@@ -300,14 +304,16 @@ export class ExtensivInventorySyncService {
 
       for (const extensivItem of extensivItems) {
         try {
-          let item = await storage.getItemBySku(extensivItem.sku);
-          
-          if (!item) {
-            item = await storage.findProductByExtensivSku(extensivItem.sku);
-            
-            if (item) {
-              console.log(`[ExtensivInventorySync] Matched SKU ${extensivItem.sku} to product ${item.sku} via extensivSku mapping`);
-            }
+          // Match by the explicit extensivSku mapping first, then fall back to
+          // house SKU — consistent with syncItem(), the cron script, and the
+          // documented matching rule. (Avoids an Extensiv SKU colliding with a
+          // different item's house SKU.)
+          let item = await storage.findProductByExtensivSku(extensivItem.sku);
+
+          if (item) {
+            console.log(`[ExtensivInventorySync] Matched SKU ${extensivItem.sku} to product ${item.sku} via extensivSku mapping`);
+          } else {
+            item = await storage.getItemBySku(extensivItem.sku);
           }
           
           if (!item) {
@@ -331,17 +337,23 @@ export class ExtensivInventorySyncService {
             continue;
           }
 
+          // pivotQty mirrors Extensiv's SELLABLE quantity (available); the
+          // snapshot stores physical OnHand — matching the standalone cron.
           const previousQty = item.pivotQty ?? 0;
-          const newQty = extensivItem.quantity;
+          const newQty = extensivItem.available ?? extensivItem.quantity;
+          const onHandSnapshot = extensivItem.onHand ?? extensivItem.quantity;
           const variance = newQty - previousQty;
 
           if (variance === 0) {
+            await storage.updateItem(item.id, {
+              extensivLastSyncAt: new Date(),
+            });
             skipped++;
             continue;
           }
 
           await storage.updateItem(item.id, {
-            extensivOnHandSnapshot: newQty,
+            extensivOnHandSnapshot: onHandSnapshot,
             extensivLastSyncAt: new Date(),
           });
           

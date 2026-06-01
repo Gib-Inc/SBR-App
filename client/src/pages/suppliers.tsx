@@ -26,9 +26,13 @@ import {
   Users,
   ShoppingBag,
   Upload,
+  ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import { EditSupplierDialog } from "@/components/edit-supplier-dialog";
+import { ReliabilityBadge, computeSupplierMetrics } from "@/components/supplier-performance";
 import { ImportSuppliersDialog } from "@/components/import-suppliers-dialog";
+import { getOnlineSupplier } from "@/lib/online-suppliers";
 import type { Supplier } from "@shared/schema";
 
 export default function Suppliers() {
@@ -42,6 +46,19 @@ export default function Suppliers() {
   const { data: suppliers = [], isLoading, refetch } = useQuery<Supplier[]>({
     queryKey: ['/api/suppliers'],
   });
+
+  // Pull POs + supplier_items once so the Reliability column can compute OTDR
+  // per supplier without N+1 fetches.
+  const { data: allPOs = [] } = useQuery<any[]>({ queryKey: ['/api/purchase-orders'] });
+  const { data: allSupplierItems = [] } = useQuery<any[]>({ queryKey: ['/api/supplier-items'] });
+  const reliabilityBySupplier = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const s of suppliers) {
+      const m = computeSupplierMetrics(allPOs as any, allSupplierItems as any, s.id);
+      map.set(s.id, m.otdr);
+    }
+    return map;
+  }, [suppliers, allPOs, allSupplierItems]);
 
   const filteredSuppliers = useMemo(() => {
     if (!searchQuery.trim()) return suppliers;
@@ -148,6 +165,7 @@ export default function Suppliers() {
                           <TableHead className="min-w-[250px]">Address</TableHead>
                           <TableHead className="min-w-[100px]">Payment Terms</TableHead>
                           <TableHead className="min-w-[100px]">PO Activity</TableHead>
+                          <TableHead className="w-[110px] text-center">Reliability</TableHead>
                           <TableHead className="w-[80px] text-right">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -160,19 +178,44 @@ export default function Suppliers() {
                             onClick={() => handleEditSupplier(supplier)}
                           >
                             <TableCell className="font-medium" data-testid={`text-supplier-name-${supplier.id}`}>
-                              <div className="flex items-center gap-2">
-                                {supplier.name}
-                                {(supplier as any).supplierType === "online" && (
-                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
-                                    <ShoppingBag className="h-3 w-3" /> Online
+                              {(() => {
+                                const online = getOnlineSupplier(supplier.name);
+                                const orderingMethodBadge = online ? (
+                                  <Badge
+                                    className="text-[10px] px-1.5 py-0 gap-1 font-normal bg-green-600 hover:bg-green-700 text-white border-transparent"
+                                    data-testid={`badge-method-online-${supplier.id}`}
+                                  >
+                                    <ExternalLink className="h-3 w-3" /> Online
                                   </Badge>
-                                )}
-                                {(supplier as any).supplierType === "private" && (
-                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
-                                    <Wrench className="h-3 w-3" /> Private
+                                ) : (
+                                  <Badge
+                                    className="text-[10px] px-1.5 py-0 gap-1 font-normal bg-blue-600 hover:bg-blue-700 text-white border-transparent"
+                                    data-testid={`badge-method-contact-${supplier.id}`}
+                                  >
+                                    <Mail className="h-3 w-3" /> Email/Phone
                                   </Badge>
-                                )}
-                              </div>
+                                );
+                                const incomplete = !supplier.email;
+                                return (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span>{supplier.name}</span>
+                                    {orderingMethodBadge}
+                                    {(supplier as any).supplierType === "private" && (
+                                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 font-normal">
+                                        <Wrench className="h-3 w-3" /> Private
+                                      </Badge>
+                                    )}
+                                    {incomplete && (
+                                      <Badge
+                                        className="text-[10px] px-1.5 py-0 gap-1 font-normal bg-yellow-500 hover:bg-yellow-600 text-white border-transparent"
+                                        data-testid={`badge-incomplete-${supplier.id}`}
+                                      >
+                                        <AlertTriangle className="h-3 w-3" /> Contact incomplete
+                                      </Badge>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </TableCell>
                             <TableCell data-testid={`text-contact-name-${supplier.id}`}>
                               {supplier.contactName || (
@@ -181,20 +224,28 @@ export default function Suppliers() {
                             </TableCell>
                             <TableCell data-testid={`text-email-${supplier.id}`}>
                               {supplier.email ? (
-                                <div className="flex items-center gap-1">
-                                  <Mail className="h-3 w-3 text-muted-foreground" />
+                                <a
+                                  href={`mailto:${supplier.email}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="flex items-center gap-1 hover:underline text-primary"
+                                >
+                                  <Mail className="h-3 w-3" />
                                   <span className="truncate max-w-[180px]">{supplier.email}</span>
-                                </div>
+                                </a>
                               ) : (
                                 <span className="text-muted-foreground">—</span>
                               )}
                             </TableCell>
                             <TableCell data-testid={`text-phone-${supplier.id}`}>
                               {supplier.phone ? (
-                                <div className="flex items-center gap-1">
-                                  <Phone className="h-3 w-3 text-muted-foreground" />
+                                <a
+                                  href={`tel:${supplier.phone.replace(/[^\d+]/g, "")}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="flex items-center gap-1 hover:underline text-primary"
+                                >
+                                  <Phone className="h-3 w-3" />
                                   <span>{supplier.phone}</span>
-                                </div>
+                                </a>
                               ) : (
                                 <span className="text-muted-foreground">—</span>
                               )}
@@ -228,18 +279,42 @@ export default function Suppliers() {
                                 <span className="text-muted-foreground text-xs ml-1">(sent/recv)</span>
                               </div>
                             </TableCell>
+                            <TableCell className="text-center" data-testid={`text-reliability-${supplier.id}`}>
+                              <ReliabilityBadge otdr={reliabilityBySupplier.get(supplier.id) ?? null} />
+                            </TableCell>
                             <TableCell className="text-right">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditSupplier(supplier);
-                                }}
-                                data-testid={`button-edit-supplier-${supplier.id}`}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
+                              {(() => {
+                                const online = getOnlineSupplier(supplier.name);
+                                return (
+                                  <div className="flex items-center justify-end gap-1">
+                                    {online && (
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2"
+                                        asChild
+                                        onClick={(e) => e.stopPropagation()}
+                                        data-testid={`button-shop-${supplier.id}`}
+                                      >
+                                        <a href={online.shopUrl} target="_blank" rel="noopener noreferrer">
+                                          Shop <ExternalLink className="h-3 w-3 ml-1" />
+                                        </a>
+                                      </Button>
+                                    )}
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleEditSupplier(supplier);
+                                      }}
+                                      data-testid={`button-edit-supplier-${supplier.id}`}
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                );
+                              })()}
                             </TableCell>
                           </TableRow>
                         ))}

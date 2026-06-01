@@ -1,0 +1,690 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
+import { useInventoryRealtime } from "@/hooks/use-inventory-realtime";
+import { Boxes, AlertTriangle, ShoppingCart, Check, Pencil, X, Loader2, Package, Clock, Search, FileText, Send, RefreshCw, ExternalLink } from "lucide-react";
+import { SupplierActionDialog, type SupplierActionContext } from "@/components/supplier-action-dialog";
+import { CreatePODialog } from "@/components/create-po-dialog";
+import { getOnlineSupplier } from "@/lib/online-suppliers";
+
+interface MaterialRow {
+  id: string;
+  name: string;
+  sku: string;
+  category: string;
+  unit: string;
+  onHand: number;
+  minStock: number;
+  dailyUsage: number;
+  daysOfSupply: number;
+  orderQty: number;
+  orderCost: number | null;
+  unitCost: number | null;
+  supplierId: string | null;
+  supplierName: string | null;
+  supplierSku: string | null;
+  leadTimeDays: number | null;
+  unitsBuildable: number | null;
+  constrainedByName: string | null;
+  constrainedByDailySales: number;
+  totalProductVelocity: number;
+  daysLeft: number | null;
+  usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[];
+}
+
+interface DashboardData {
+  materials: MaterialRow[];
+  summary: {
+    totalComponents: number;
+    needsOrder: number;
+    criticalLow: number;
+    totalOrderCost: number;
+  };
+}
+
+const formatCurrency = (amount: number | null | undefined): string => {
+  if (amount == null) return "–";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+};
+
+export default function RawMaterials() {
+  const { toast } = useToast();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "order" | "critical">("all");
+  const [search, setSearch] = useState("");
+  const [actionContext, setActionContext] = useState<SupplierActionContext | null>(null);
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
+  const [poInitial, setPoInitial] = useState<{
+    supplierId: string;
+    lines: { itemId: string; qtyOrdered: number; unitCost?: number }[];
+  } | null>(null);
+
+  // Refetch the dashboard when any item's stock changes server-side. Also
+  // catches /api/items invalidations so any hidden cache stays in sync.
+  useInventoryRealtime([
+    "/api/raw-materials/dashboard",
+    "/api/items",
+  ]);
+
+  const { data, isLoading, error } = useQuery<DashboardData>({
+    queryKey: ["/api/raw-materials/dashboard"],
+  });
+
+  const generateDraftsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/purchase-orders/auto-draft", {});
+      return res.json() as Promise<{
+        created: { supplierId: string; supplierName: string; poId: string; lineCount: number; totalValue: number }[];
+        skipped: { itemId: string; itemName: string; reason: string }[];
+        alreadyExists: { supplierId: string; supplierName: string; poId: string }[];
+      }>;
+    },
+    onSuccess: (data) => {
+      const parts: string[] = [];
+      if (data.created.length > 0) {
+        const names = data.created.map((c) => c.supplierName).join(", ");
+        parts.push(`${data.created.length} draft PO${data.created.length === 1 ? "" : "s"} created for ${names}.`);
+      }
+      if (data.alreadyExists.length > 0) {
+        parts.push(`${data.alreadyExists.length} draft${data.alreadyExists.length === 1 ? "" : "s"} already exist for today.`);
+      }
+      if (data.skipped.length > 0) {
+        parts.push(`${data.skipped.length} item${data.skipped.length === 1 ? "" : "s"} skipped — no supplier linked.`);
+      }
+      if (parts.length === 0) parts.push("No items currently need ordering.");
+      toast({ title: "Generate Draft POs", description: parts.join(" ") });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to generate draft POs", variant: "destructive" });
+    },
+  });
+
+  const refreshVelocityMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/inventory/refresh-velocity", {});
+      return res.json() as Promise<{
+        finishedProductsUpdated: number;
+        componentsUpdated: number;
+        itemsScanned: number;
+        durationMs: number;
+      }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-materials/dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+      toast({
+        title: "Velocity refreshed",
+        description: `Updated ${data.finishedProductsUpdated} finished + ${data.componentsUpdated} components (scanned ${data.itemsScanned}, ${data.durationMs}ms).`,
+      });
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to refresh velocity", variant: "destructive" });
+    },
+  });
+
+  const updateStockMutation = useMutation({
+    mutationFn: async ({ id, currentStock }: { id: string; currentStock: number }) => {
+      const res = await apiRequest("PATCH", `/api/items/${id}`, { currentStock });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/raw-materials/dashboard"] });
+      toast({ title: "Stock updated", description: "Raw material count has been saved." });
+      setEditingId(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Error", description: err.message || "Failed to update stock", variant: "destructive" });
+    },
+  });
+
+  const materials = data?.materials ?? [];
+  const summary = data?.summary ?? { totalComponents: 0, needsOrder: 0, criticalLow: 0, totalOrderCost: 0 };
+
+  const trimmedSearch = search.trim();
+  const searchLower = trimmedSearch.toLowerCase();
+
+  const filtered = materials.filter((m) => {
+    if (filter === "order" && !(m.orderQty > 0)) return false;
+    if (filter === "critical" && !(m.daysOfSupply < 7 && m.dailyUsage > 0)) return false;
+    if (searchLower && !m.name.toLowerCase().includes(searchLower)) return false;
+    return true;
+  });
+
+  // Reorder = current stock at or below the configured minimum, but only when
+  // a real minimum is set (min > 0). Items without a minimum get a separate
+  // suggested-min hint instead.
+  const isReorder = (m: MaterialRow) => m.minStock > 0 && m.onHand <= m.minStock;
+  const reorderCount = materials.filter(isReorder).length;
+  const suggestedMin = (m: MaterialRow) =>
+    !isReorder(m) && (!m.minStock || m.minStock <= 0) && m.dailyUsage > 0
+      ? Math.ceil(m.dailyUsage * 14)
+      : null;
+
+  const startEdit = (m: MaterialRow) => {
+    setEditingId(m.id);
+    setEditValue(String(m.onHand));
+  };
+
+  const saveEdit = (id: string) => {
+    const qty = parseInt(editValue);
+    if (isNaN(qty) || qty < 0) {
+      toast({ title: "Invalid number", description: "Please enter a valid quantity.", variant: "destructive" });
+      return;
+    }
+    updateStockMutation.mutate({ id, currentStock: qty });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValue("");
+  };
+
+  const getStatusBadge = (m: MaterialRow) => {
+    if (m.dailyUsage === 0) return <Badge variant="secondary">No demand</Badge>;
+    if (m.daysOfSupply < 7) return <Badge variant="destructive">Critical</Badge>;
+    if (m.daysOfSupply < 14) return <Badge className="bg-amber-500 text-white hover:bg-amber-600">Low</Badge>;
+    if (m.daysOfSupply < 30) return <Badge className="bg-yellow-500 text-white hover:bg-yellow-600">Watch</Badge>;
+    return <Badge variant="default">OK</Badge>;
+  };
+
+  // Lead-time-based urgency: red when we'll stock out before a reorder can
+  // arrive, amber when we're inside a 1.5× safety buffer. Uses the new
+  // daysLeft (unitsBuildable / Σ velocity) as the primary signal; falls back
+  // to a 7/14-day heuristic when there's no demand or no lead time on file.
+  const leadTimeUrgency = (m: MaterialRow): "red" | "amber" | "ok" => {
+    const days = m.daysLeft;
+    if (days == null) return "ok";
+    const lead = m.leadTimeDays ?? 0;
+    if (lead > 0) {
+      if (days < lead) return "red";
+      if (days < lead * 1.5) return "amber";
+      return "ok";
+    }
+    if (days < 7) return "red";
+    if (days < 14) return "amber";
+    return "ok";
+  };
+
+  const openNotify = (m: MaterialRow) => {
+    if (!m.supplierId || !m.supplierName) return;
+    // No floor — when there's no measured demand the recommendation is 0
+    // (the operator can still type a number into the quick-log form if they
+    // genuinely need to order something with no recorded velocity).
+    const recommendedQty =
+      m.orderQty > 0
+        ? m.orderQty
+        : m.dailyUsage > 0
+          ? Math.ceil(m.dailyUsage * 30)
+          : 0;
+    const estimatedCost = m.unitCost != null ? Math.round(recommendedQty * m.unitCost * 100) / 100 : null;
+    setActionContext({
+      itemId: m.id,
+      itemName: m.name,
+      sku: m.sku,
+      supplierId: m.supplierId,
+      supplierName: m.supplierName,
+      supplierSku: m.supplierSku,
+      currentStock: m.onHand,
+      dailyUsage: m.dailyUsage,
+      daysLeft: m.daysLeft,
+      leadTimeDays: m.leadTimeDays,
+      recommendedQty,
+      estimatedCost,
+      unitCost: m.unitCost,
+    });
+  };
+
+  // Handler invoked by the action dialog when the operator picks "Create PO".
+  // We close the action modal and open CreatePODialog with the supplier and
+  // line pre-filled from the active context.
+  const handleCreatePOFromAction = () => {
+    if (!actionContext) return;
+    setPoInitial({
+      supplierId: actionContext.supplierId,
+      lines: [
+        {
+          itemId: actionContext.itemId,
+          qtyOrdered: actionContext.recommendedQty,
+          unitCost: actionContext.unitCost ?? undefined,
+        },
+      ],
+    });
+    setPoDialogOpen(true);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="p-8 flex items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <span className="ml-2 text-muted-foreground">Loading raw materials…</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-8">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-destructive">Failed to load raw materials</CardTitle>
+            <CardDescription>{(error as Error).message}</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 md:p-8 space-y-6" data-testid="page-raw-materials">
+      {reorderCount > 0 && (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm flex items-center justify-between gap-2 text-amber-700 dark:text-amber-400"
+          data-testid="banner-reorder"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            <span>
+              <strong className="tabular-nums">{reorderCount}</strong> component{reorderCount === 1 ? "" : "s"} need reordering
+            </span>
+          </div>
+          {(() => {
+            const firstRed = materials.find((m) => leadTimeUrgency(m) === "red" && m.supplierId);
+            if (!firstRed) return null;
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7"
+                onClick={() => openNotify(firstRed)}
+                data-testid="button-banner-notify"
+              >
+                <Send className="h-3 w-3 mr-1" />
+                Order from {firstRed.supplierName}
+              </Button>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
+            <Boxes className="h-7 w-7" />
+            Raw Materials
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Current stock, daily usage, and what to order. Tap a count to update it.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => refreshVelocityMutation.mutate()}
+            disabled={refreshVelocityMutation.isPending}
+            data-testid="button-refresh-velocity"
+          >
+            {refreshVelocityMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Refresh Velocity
+          </Button>
+          <Button
+            onClick={() => generateDraftsMutation.mutate()}
+            disabled={generateDraftsMutation.isPending}
+            data-testid="button-generate-draft-pos"
+          >
+            {generateDraftsMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <FileText className="h-4 w-4 mr-2" />
+            )}
+            Generate Draft POs
+          </Button>
+        </div>
+      </div>
+
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="cursor-pointer" onClick={() => setFilter("all")}>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1">
+              <Package className="h-3.5 w-3.5" />
+              Total Materials
+            </CardDescription>
+            <CardTitle className="text-3xl">{summary.totalComponents}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card className="cursor-pointer" onClick={() => setFilter("critical")}>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1 text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Critical (&lt;7 days)
+            </CardDescription>
+            <CardTitle className="text-3xl text-destructive">{summary.criticalLow}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card className="cursor-pointer" onClick={() => setFilter("order")}>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1">
+              <ShoppingCart className="h-3.5 w-3.5" />
+              Needs Order
+            </CardDescription>
+            <CardTitle className="text-3xl">{summary.needsOrder}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Est. Order Cost</CardDescription>
+            <CardTitle className="text-2xl">{formatCurrency(summary.totalOrderCost)}</CardTitle>
+          </CardHeader>
+        </Card>
+      </div>
+
+      {/* Filter indicator */}
+      {filter !== "all" && (
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-sm">
+            Showing: {filter === "order" ? "Needs Order" : "Critical"}
+          </Badge>
+          <Button variant="ghost" size="sm" onClick={() => setFilter("all")}>
+            Show all
+          </Button>
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search materials..."
+          className="pl-9 pr-9"
+          data-testid="input-material-search"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 h-6 w-6 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            aria-label="Clear search"
+            data-testid="button-clear-search"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Materials table */}
+      <Card>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[200px]">Material</TableHead>
+                  <TableHead className="text-right min-w-[100px]">On Hand</TableHead>
+                  <TableHead className="text-right min-w-[180px]">Stock · Days</TableHead>
+                  <TableHead className="text-right">Order Qty</TableHead>
+                  <TableHead className="text-right hidden md:table-cell">Order Cost</TableHead>
+                  <TableHead className="text-right">Status</TableHead>
+                  <TableHead className="text-right">Order</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((m) => (
+                  <>
+                    <TableRow
+                      key={m.id}
+                      className="cursor-pointer"
+                      onClick={() => setExpandedId(expandedId === m.id ? null : m.id)}
+                      data-testid={`row-material-${m.id}`}
+                    >
+                      <TableCell>
+                        <div>
+                          <div className="font-medium text-sm flex items-center gap-1.5 flex-wrap">
+                            <span>{m.name}</span>
+                            {isReorder(m) && (
+                              <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5" data-testid={`badge-reorder-${m.id}`}>
+                                ⚠️ Reorder
+                              </Badge>
+                            )}
+                            {(() => {
+                              const online = getOnlineSupplier(m.supplierName);
+                              if (!online) return null;
+                              const query = (m.supplierSku?.trim() || m.name).trim();
+                              return (
+                                <a
+                                  href={online.searchUrl(query)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+                                  data-testid={`order-online-${m.id}`}
+                                >
+                                  Order <ExternalLink className="h-3 w-3" />
+                                </a>
+                              );
+                            })()}
+                          </div>
+                          <div className="text-xs text-muted-foreground font-mono">{m.sku}</div>
+                          {suggestedMin(m) !== null && (
+                            <div className="text-xs text-muted-foreground mt-0.5" data-testid={`suggested-min-${m.id}`}>
+                              Suggested min: {suggestedMin(m)}
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {editingId === m.id ? (
+                          <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                            <Input
+                              type="number"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="w-20 h-8 text-right"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveEdit(m.id);
+                                if (e.key === "Escape") cancelEdit();
+                              }}
+                            />
+                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => saveEdit(m.id)}>
+                              <Check className="h-3.5 w-3.5 text-green-600" />
+                            </Button>
+                            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={cancelEdit}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  className="inline-flex items-center gap-1 font-semibold hover:text-primary transition-colors"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    startEdit(m);
+                                  }}
+                                >
+                                  {m.onHand.toLocaleString()}
+                                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>Tap to update count</TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {(() => {
+                          const urgency = leadTimeUrgency(m);
+                          const colorClass =
+                            urgency === "red"
+                              ? "text-destructive font-bold"
+                              : urgency === "amber"
+                                ? "text-amber-600 font-semibold"
+                                : "text-green-700 dark:text-green-400 font-semibold";
+                          const buildable = m.unitsBuildable;
+                          const days = m.daysLeft;
+                          if (buildable == null || m.totalProductVelocity <= 0) {
+                            return <span className="text-muted-foreground">–</span>;
+                          }
+                          // Tooltip: per-product breakdown showing how the
+                          // component-daily-usage figure is built up. Different
+                          // from the daysLeft denominator (Σ product velocities)
+                          // — this view is "what depletes the component".
+                          const breakdown = m.usedIn
+                            .filter((u) => u.dailySales > 0)
+                            .map(
+                              (u) =>
+                                `${u.productName}: ${u.dailySales.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day × ${u.qtyPerUnit} = ${(u.dailySales * u.qtyPerUnit).toLocaleString(undefined, { maximumFractionDigits: 1 })}`,
+                            )
+                            .join("\n");
+                          const tooltipText = breakdown
+                            ? `${breakdown}\n= ${m.dailyUsage.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day total component depletion`
+                            : "No demand on this component";
+                          return (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex flex-col items-end leading-tight cursor-help">
+                                    <span className={`tabular-nums ${colorClass}`}>
+                                      {buildable.toLocaleString()} units · {days != null ? `${days}d` : "—"}
+                                    </span>
+                                    {m.constrainedByName && (
+                                      <span className="text-[11px] text-muted-foreground">
+                                        Constrained by: {m.constrainedByName} ({m.constrainedByDailySales.toLocaleString(undefined, { maximumFractionDigits: 1 })}/day)
+                                      </span>
+                                    )}
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-md whitespace-pre-line">
+                                  {tooltipText}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {m.orderQty > 0 ? m.orderQty.toLocaleString() : "–"}
+                      </TableCell>
+                      <TableCell className="text-right hidden md:table-cell">
+                        {formatCurrency(m.orderCost)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {getStatusBadge(m)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {leadTimeUrgency(m) === "red" && m.supplierId ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openNotify(m);
+                            }}
+                            data-testid={`button-order-${m.id}`}
+                          >
+                            <Send className="h-3 w-3 mr-1" />
+                            Order
+                          </Button>
+                        ) : (
+                          <span className="text-muted-foreground">–</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {/* Expanded row: shows which products use this material */}
+                    {expandedId === m.id && m.usedIn.length > 0 && (
+                      <TableRow key={`${m.id}-detail`} className="bg-muted/30">
+                        <TableCell colSpan={7} className="py-3">
+                          <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            Used in {m.usedIn.length} product{m.usedIn.length > 1 ? "s" : ""}:
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {m.usedIn.map((p) => (
+                              <div key={p.productSku} className="flex justify-between items-center bg-background rounded px-3 py-1.5 text-sm border">
+                                <span className="truncate">{p.productName}</span>
+                                <span className="text-muted-foreground ml-2 whitespace-nowrap">
+                                  {p.qtyPerUnit} per unit · {p.dailySales}/day
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </>
+                ))}
+                {filtered.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      {trimmedSearch
+                        ? `No materials found matching "${trimmedSearch}"`
+                        : filter !== "all"
+                        ? "No materials match this filter."
+                        : "No raw materials found. Add components in the Products page."}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <p className="text-xs text-muted-foreground">
+        Stock · Days reads as "{`{units buildable} units · {days left}d`}". Units Buildable is
+        the most-constrained product (floor(stock / qty-per-unit)); Days Left = Units Buildable
+        ÷ Σ daily sales across all products that use this component, sourced live from the last
+        90 days of sales_order_lines. Color turns red below the supplier's lead time, amber
+        inside a 1.5× buffer. Hover for the per-product breakdown. Tap any On Hand number to
+        update the count.
+      </p>
+
+      <SupplierActionDialog
+        isOpen={actionContext != null}
+        onClose={() => setActionContext(null)}
+        context={actionContext}
+        onCreatePO={handleCreatePOFromAction}
+      />
+
+      <CreatePODialog
+        open={poDialogOpen}
+        onOpenChange={(open) => {
+          setPoDialogOpen(open);
+          if (!open) setPoInitial(null);
+        }}
+        initial={poInitial ?? undefined}
+      />
+    </div>
+  );
+}

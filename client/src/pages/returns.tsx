@@ -34,7 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload, AlertTriangle, Truck } from "lucide-react";
+import { Package, ExternalLink, PackageCheck, Receipt, Check, Calendar, History, Zap, Archive, Download, Upload, AlertTriangle, Truck, Undo2 } from "lucide-react";
 import { useLocation } from "wouter";
 import { Switch } from "@/components/ui/switch";
 import { format, subDays } from "date-fns";
@@ -75,6 +75,7 @@ interface ReturnRequest {
   damageDeductionTotal: number | null;
   finalRefundAmount: number | null;
   ghlTaskedAt: string | null;
+  sourceUrl?: string | null;
 }
 
 interface ReturnItem {
@@ -517,6 +518,27 @@ export default function Returns() {
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>Issue Return Label</TooltipContent>
+                            </Tooltip>
+                          )}
+
+                          {/* Create Return Label in Shopify - for Shopify-channel returns with a linked order */}
+                          {returnRequest.sourceUrl && returnRequest.salesChannel === 'SHOPIFY' && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const returnUrl = returnRequest.sourceUrl!.replace(/\/?$/, '') + '/return';
+                                    window.open(returnUrl, "_blank", "noopener,noreferrer");
+                                  }}
+                                  data-testid={`button-shopify-return-label-${returnRequest.id}`}
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Create Return Label in Shopify</TooltipContent>
                             </Tooltip>
                           )}
 

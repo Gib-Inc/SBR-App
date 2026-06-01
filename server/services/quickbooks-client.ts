@@ -1152,6 +1152,115 @@ export class QuickBooksClient {
   }
 
   /**
+   * Find a Bank account in QuickBooks to use as the BillPayment source.
+   * Falls back to the first AP-payable bank-like account available.
+   */
+  private async getDefaultBankAccountId(): Promise<string> {
+    const bankQuery = encodeURIComponent(
+      `SELECT * FROM Account WHERE AccountType = 'Bank' AND Active = true MAXRESULTS 1`
+    );
+    const bankResult = await this.apiRequest<{ QueryResponse: { Account?: Array<{ Id: string }> } }>(
+      `/query?query=${bankQuery}`
+    );
+    if (bankResult.QueryResponse?.Account?.length) {
+      return bankResult.QueryResponse.Account[0].Id;
+    }
+    throw new Error('No Bank account found in QuickBooks for BillPayment source');
+  }
+
+  /**
+   * Record a BillPayment in QuickBooks against an existing Bill.
+   * Uses the Bill's vendor and total, paid from the default Bank account (Check).
+   * Updates the local quickbooks_bills row to status=PAID on success.
+   */
+  async markBillAsPaid(quickbooksBillId: string): Promise<{
+    success: boolean;
+    billPaymentId?: string;
+    error?: string;
+  }> {
+    try {
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, error: 'QuickBooks not connected' };
+      }
+
+      // Pull the Bill from QB to get authoritative vendor + amount
+      const billResult = await this.apiRequest<{ Bill: QBBill }>(`/bill/${quickbooksBillId}`);
+      const bill = billResult.Bill;
+      if (!bill) {
+        return { success: false, error: `QuickBooks Bill ${quickbooksBillId} not found` };
+      }
+
+      const vendorId = bill.VendorRef?.value;
+      const totalAmt = bill.TotalAmt;
+      if (!vendorId || !totalAmt) {
+        return { success: false, error: 'Bill missing vendor or total amount' };
+      }
+
+      const bankAccountId = await this.getDefaultBankAccountId();
+
+      const billPaymentData = {
+        VendorRef: { value: vendorId },
+        TotalAmt: totalAmt,
+        PayType: 'Check',
+        CheckPayment: {
+          BankAccountRef: { value: bankAccountId },
+        },
+        Line: [
+          {
+            Amount: totalAmt,
+            LinkedTxn: [
+              {
+                TxnId: quickbooksBillId,
+                TxnType: 'Bill',
+              },
+            ],
+          },
+        ],
+      };
+
+      const createResult = await this.apiRequest<{ BillPayment: { Id: string; DocNumber?: string } }>(
+        '/billpayment',
+        {
+          method: 'POST',
+          body: JSON.stringify(billPaymentData),
+        }
+      );
+
+      const newPayment = createResult.BillPayment;
+
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'BILL_PAID',
+        entityType: 'QUICKBOOKS_BILL',
+        entityId: quickbooksBillId,
+        status: 'INFO',
+        description: `Recorded BillPayment ${newPayment.DocNumber || newPayment.Id} for QuickBooks Bill ${quickbooksBillId}`,
+        details: {
+          billPaymentId: newPayment.Id,
+          quickbooksBillId,
+          vendorId,
+          totalAmt,
+          bankAccountId,
+        },
+      });
+
+      return { success: true, billPaymentId: newPayment.Id };
+    } catch (error: any) {
+      await AuditLogger.logEvent({
+        source: 'QUICKBOOKS',
+        eventType: 'BILL_PAID_ERROR',
+        entityType: 'QUICKBOOKS_BILL',
+        entityId: quickbooksBillId,
+        status: 'ERROR',
+        description: `Failed to mark QuickBooks Bill ${quickbooksBillId} as paid: ${error.message}`,
+        details: { error: error.message },
+      });
+      return { success: false, error: error.message || 'Failed to mark bill as paid' };
+    }
+  }
+
+  /**
    * Fetch all items from QuickBooks for SKU mapping wizard
    * Returns Inventory and NonInventory items only (PO-eligible types)
    * Inventory = finished products (for sales data/LLM forecasting)

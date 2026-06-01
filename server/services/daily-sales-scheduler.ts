@@ -6,6 +6,7 @@
  */
 
 import { storage } from "../storage";
+import { recordSchedulerRun } from "./scheduler-run-recorder";
 
 const TIMEZONE = "America/Denver";
 
@@ -181,7 +182,7 @@ export async function aggregateDailySales(date: Date): Promise<{
     for (const ret of returnsForDay) {
       try {
         // Get return items and sum their actual refund values
-        const returnItems = await storage.getReturnItems(ret.id);
+        const returnItems = await storage.getReturnItemsByRequestId(ret.id);
         for (const item of returnItems) {
           // Priority: qtyReceived (actual), qtyApproved (confirmed), qtyRequested (fallback for pending)
           // If refunded but not yet received, use qtyApproved or qtyRequested as estimate
@@ -298,6 +299,7 @@ export async function aggregateDailySales(date: Date): Promise<{
  */
 async function runNightlyAggregation(): Promise<void> {
   console.log(`[Daily Sales] Running nightly aggregation`);
+  const startedAt = new Date();
   
   // Aggregate today's sales
   const today = new Date();
@@ -308,6 +310,22 @@ async function runNightlyAggregation(): Promise<void> {
   } else {
     console.error(`[Daily Sales] Nightly aggregation failed: ${result.error}`);
   }
+  await recordSchedulerRun({
+    schedulerId: "daily-sales",
+    schedulerName: "Daily sales aggregation",
+    status: result.success ? "success" : "failed",
+    startedAt,
+    errorMessage: result.success ? null : result.error ?? "Daily sales aggregation failed",
+    details: {
+      date: result.date,
+      totalRevenue: result.totalRevenue,
+      totalOrders: result.totalOrders,
+      totalUnits: result.totalUnits,
+      totalRefunds: result.totalRefunds,
+    },
+  }).catch((error) => {
+    console.warn("[Daily Sales] Failed to record scheduler run:", error);
+  });
   
   // Schedule the next run
   scheduleNextRun();

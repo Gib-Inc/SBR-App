@@ -116,6 +116,122 @@ export class ShopifyClient {
   }
 
   /**
+   * Fetch specific orders by their Shopify IDs (comma-separated).
+   * Useful for checking fulfillment status of known orders.
+   * Returns raw Shopify order objects (not normalized).
+   *
+   * IMPORTANT: We explicitly request ALL fields needed for verification:
+   *   - fulfillments (with line_items) — who fulfilled what
+   *   - fulfillment_status — Shopify's own assessment
+   *   - financial_status — refunded/voided detection
+   *   - tags — "sent-to-wms" means Extensiv claimed it
+   *   - note — order notes often contain fulfillment confirmations
+   *   - cancelled_at — cancelled detection
+   *   - line_items — to compare fulfilled qty vs ordered qty
+   */
+  async fetchOrdersByIds(ids: string[]): Promise<any[]> {
+    const allOrders: any[] = [];
+    const batchSize = 50; // Shopify allows up to 100 ids, but 50 is safer
+
+    for (let i = 0; i < ids.length; i += batchSize) {
+      const batchIds = ids.slice(i, i + batchSize).join(",");
+      // Request every field we need for thorough verification
+      const url = `${this.getBaseUrl()}/orders.json?ids=${batchIds}&status=any&limit=250`;
+      const response = await fetch(url, { headers: this.getHeaders() });
+
+      if (response.ok) {
+        const data = await response.json();
+        allOrders.push(...(data.orders || []));
+      } else {
+        console.error(`[Shopify] Failed to fetch order batch: ${response.status} ${response.statusText}`);
+      }
+    }
+
+    return allOrders;
+  }
+
+  /**
+   * Check if a Shopify order's notes/timeline suggest it's been fulfilled.
+   *
+   * Shopify stores fulfillment events in the order timeline, and some apps
+   * (like Extensiv Integration Manager) write notes when they fulfill.
+   * The `note` field and `note_attributes` can contain these clues.
+   *
+   * Returns { fulfilled: boolean, evidence: string } describing what was found.
+   */
+  static checkNotesForFulfillment(order: any): { fulfilled: boolean; evidence: string } {
+    const note = (order.note || '').toLowerCase();
+    const noteAttrs = order.note_attributes || [];
+
+    // Keywords that indicate fulfillment happened
+    const fulfillmentKeywords = [
+      'shipped', 'fulfilled', 'tracking', 'label created',
+      'shipment', 'dispatched', 'delivered', 'out for delivery',
+      'extensiv', 'pyvott', '3pl', 'warehouse shipped',
+    ];
+
+    for (const keyword of fulfillmentKeywords) {
+      if (note.includes(keyword)) {
+        return { fulfilled: true, evidence: `Order note contains "${keyword}"` };
+      }
+    }
+
+    // Check note_attributes (key-value pairs set by apps)
+    for (const attr of noteAttrs) {
+      const val = String(attr.value || '').toLowerCase();
+      for (const keyword of fulfillmentKeywords) {
+        if (val.includes(keyword)) {
+          return { fulfilled: true, evidence: `Note attribute "${attr.name}" contains "${keyword}"` };
+        }
+      }
+    }
+
+    return { fulfilled: false, evidence: '' };
+  }
+
+  /**
+   * Fetch orders from Shopify that are NOT yet fulfilled.
+   * This is the source of truth — if Shopify says it's unfulfilled, it genuinely needs shipping.
+   * Returns raw Shopify order objects with full fulfillment details.
+   *
+   * fulfillment_status filter values:
+   *   "unfulfilled" - no items fulfilled
+   *   "partial"     - some items fulfilled
+   *   "any"         - all statuses (default in Shopify)
+   */
+  async fetchUnfulfilledOrders(maxOrders: number = 250): Promise<any[]> {
+    const allOrders: any[] = [];
+    const pageSize = Math.min(250, maxOrders);
+
+    // Fetch BOTH unfulfilled and partially fulfilled orders
+    for (const status of ['unfulfilled', 'partial']) {
+      let nextPageUrl: string | null = `${this.getBaseUrl()}/orders.json?fulfillment_status=${status}&status=open&limit=${pageSize}&fields=id,name,order_number,email,fulfillment_status,financial_status,fulfillments,line_items,created_at,total_price,currency,customer,shipping_address,source_name,cancelled_at,tags,note`;
+
+      while (nextPageUrl && allOrders.length < maxOrders) {
+        const response = await fetch(nextPageUrl, { headers: this.getHeaders() });
+
+        if (!response.ok) {
+          console.error(`[Shopify] Failed to fetch ${status} orders: ${response.status}`);
+          break;
+        }
+
+        const data = await response.json();
+        const orders = data.orders || [];
+        allOrders.push(...orders);
+
+        // Check for next page via Link header
+        const linkHeader = response.headers.get('Link');
+        nextPageUrl = this.extractNextLinkUrl(linkHeader);
+
+        if (orders.length < pageSize) break;
+      }
+    }
+
+    console.log(`[Shopify] Fetched ${allOrders.length} unfulfilled/partial orders directly from Shopify`);
+    return allOrders;
+  }
+
+  /**
    * Test the API connection by fetching shop info
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {

@@ -1194,7 +1194,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       Location ID
                     </Label>
                     <Input
-                      id="sbr-ghl-loc" autoComplete="one-time-code"
+                      id="sbr-ghl-loc"
                       placeholder="Enter your GoHighLevel Location ID"
                       value={ghlLocationId}
                       onChange={(e) => setGhlLocationId(e.target.value)}
@@ -1353,7 +1353,7 @@ export function IntegrationSettings({ integrationType, open, onClose, onOpenSkuW
                       API Key
                     </Label>
                     <Input
-                      id="sbr-pb-ak" autoComplete="one-time-code"
+                      id="sbr-pb-ak"
                       type="password"
                       autoComplete="new-password"
                       placeholder="Enter your PhantomBuster API key"

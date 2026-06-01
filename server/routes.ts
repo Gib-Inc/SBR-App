@@ -1,9 +1,17 @@
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { createServer, type Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
+import {
+  COUNT_ADJUSTMENT_TYPE,
+  adjustmentLocationFor,
+  fieldForLocation,
+  resolveCountList,
+  type CountLocation,
+} from "./services/count-inventory";
+import { wsInventoryService } from "./services/websocket-inventory";
 import { LLMService, type LLMProvider } from "./services/llm";
 import { BarcodeService } from "./services/barcode";
 import { BarcodeGenerator } from "./barcode-generator";
@@ -16,8 +24,7 @@ import { AmazonClient } from "./services/amazon-client";
 import { GoHighLevelClient } from "./services/gohighlevel-client";
 // PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
-import { requireAuth } from "./middleware/auth";
-import { requireRole } from "./middleware/requireRole";
+import { requireAuth, requireRole } from "./middleware/auth";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import multer from "multer";
@@ -67,6 +74,7 @@ import { returnsService } from "./services/returns-service";
 import { InventoryDecisionEngine } from "./services/inventory-decision-engine";
 import { InventoryMovement } from "./services/inventory-movement";
 import { logService } from "./services/log-service";
+import { checkReorderThresholds } from "./services/reorder-alert";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
@@ -101,6 +109,22 @@ function checkLoginRateLimit(ip: string): { allowed: boolean; retryAfter?: numbe
 
 function resetLoginRateLimit(ip: string) {
   loginAttempts.delete(ip);
+}
+
+function opsTokenOrAuth(req: Request, res: Response, next: NextFunction) {
+  const envToken = process.env.OPS_ALERT_TOKEN?.trim();
+  const authHeader = req.headers.authorization;
+  const headerToken = authHeader?.replace(/^Bearer\s+/i, "").trim();
+
+  if (envToken && headerToken && envToken.length === headerToken.length) {
+    const expected = Buffer.from(envToken, "utf8");
+    const provided = Buffer.from(headerToken, "utf8");
+    if (crypto.timingSafeEqual(expected, provided)) {
+      return next();
+    }
+  }
+
+  return requireAuth(req, res, next);
 }
 
 // Single-user mode enforcement
@@ -1117,7 +1141,7 @@ RULES:
         return res.status(401).json({ error: "User not found" });
       }
       
-      res.json({ id: user.id, email: user.email });
+      res.json({ id: user.id, email: user.email, role: user.role });
     } catch (error) {
       console.error("Error getting current user:", error);
       res.status(500).json({ error: "Failed to get user" });
@@ -1418,6 +1442,68 @@ RULES:
   });
 
   /**
+   * GET /api/system/stats
+   * Powers the Reports page System Overview KPI cards.
+   * Definitions:
+   *   totalItems            — every row in items
+   *   lowStockItems         — current_stock > 0 AND current_stock <= min_stock (and min_stock set)
+   *   criticalStockItems    — finished products at zero stock
+   *   activePurchaseOrders  — POs not in a terminal state (RECEIVED/CANCELLED/CLOSED)
+   *   activeSalesOrders     — SOs not in a terminal state (DELIVERED/SHIPPED/REFUNDED/CANCELLED),
+   *                           same filter the In-House Shipping view uses
+   *   pendingReturns        — SOs whose return_status is in flight (anything outside NONE/COMPLETED)
+   *   totalInventoryValue   — SUM(current_stock * default_purchase_cost) across all items
+   */
+  app.get("/api/system/stats", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [items, purchaseOrders, salesOrders] = await Promise.all([
+        storage.getAllItems(),
+        storage.getAllPurchaseOrders(),
+        storage.getAllSalesOrders(),
+      ]);
+
+      const SO_TERMINAL = new Set(['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED']);
+      const PO_TERMINAL = new Set(['RECEIVED', 'CANCELLED', 'CLOSED']);
+      const RETURN_TERMINAL = new Set(['NONE', 'COMPLETED']);
+
+      const totalItems = items.length;
+      const lowStockItems = items.filter(i =>
+        (i.currentStock ?? 0) > 0 &&
+        (i.minStock ?? 0) > 0 &&
+        (i.currentStock ?? 0) <= (i.minStock ?? 0)
+      ).length;
+      const criticalStockItems = items.filter(i =>
+        i.type === 'finished_product' && (i.currentStock ?? 0) === 0
+      ).length;
+      const activePurchaseOrders = purchaseOrders.filter(po =>
+        !PO_TERMINAL.has((po.status || '').toUpperCase())
+      ).length;
+      const activeSalesOrders = salesOrders.filter(so =>
+        !SO_TERMINAL.has((so.status || '').toUpperCase())
+      ).length;
+      const pendingReturns = salesOrders.filter(so =>
+        !RETURN_TERMINAL.has((so.returnStatus || 'NONE').toUpperCase())
+      ).length;
+      const totalInventoryValue = items.reduce((sum, i) =>
+        sum + (i.currentStock ?? 0) * (i.defaultPurchaseCost ?? 0)
+      , 0);
+
+      res.json({
+        totalItems,
+        lowStockItems,
+        criticalStockItems,
+        activePurchaseOrders,
+        activeSalesOrders,
+        pendingReturns,
+        totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
+      });
+    } catch (error: any) {
+      console.error("[System Stats] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch system stats" });
+    }
+  });
+
+  /**
    * POST /api/dashboard/stock/fix-in-ghl
    * Creates DRAFT Purchase Orders for high/critical priority items, then optionally
    * creates GHL opportunities for communication/approval workflow.
@@ -1549,13 +1635,21 @@ RULES:
           const unitCost = supplierItem?.price ?? 10;
           const moq = supplierItem?.minimumOrderQuantity ?? 1;
           
-          // Calculate recommended quantity (target 30 days coverage)
+          // Calculate recommended quantity (target 30 days coverage). When
+          // an item has no measured demand we used to floor at 1/day, which
+          // produced phantom reorder lines for components nobody actually
+          // consumes. Now: if there's no demand, recommend 0 so zero-velocity
+          // items drop out of the suggested PO entirely. The MOQ floor still
+          // applies when there IS demand.
           const targetCoverageDays = 30;
-          const avgDailyDemand = item.dailyUsage || 1;
-          const recommendedQty = Math.max(
-            Math.ceil(targetCoverageDays * avgDailyDemand - item.currentStock),
-            moq
-          );
+          const avgDailyDemand = item.dailyUsage ?? 0;
+          const recommendedQty =
+            avgDailyDemand > 0
+              ? Math.max(
+                  Math.ceil(targetCoverageDays * avgDailyDemand - item.currentStock),
+                  moq,
+                )
+              : 0;
           
           const lineTotal = recommendedQty * unitCost;
           subtotal += lineTotal;
@@ -2604,6 +2698,163 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(500).json({ error: error.message || "Failed to run stale sync check" });
     }
   });
+
+  // GET /api/system-health - Scheduler and integration liveness dashboard payload
+  app.get("/api/system-health", opsTokenOrAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getSystemHealthSummary } = await import("./services/system-health-service");
+      const summary = await getSystemHealthSummary();
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[SystemHealth] Error fetching system health:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch system health" });
+    }
+  });
+
+  // POST /api/system-health/check-alerts - Force stale scheduler alert evaluation
+  app.post("/api/system-health/check-alerts", opsTokenOrAuth, async (_req: Request, res: Response) => {
+    try {
+      const { checkSystemHealthAndAlert } = await import("./services/system-health-service");
+      const result = await checkSystemHealthAndAlert();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SystemHealth] Error checking system health alerts:", error);
+      res.status(500).json({ error: error.message || "Failed to check system health alerts" });
+    }
+  });
+
+  // POST /api/system-health/test-alert - Manually fire a test alert through
+  // the same Slack/email pipeline that real stale-scheduler alerts use.
+  // Lets the user verify the alert wiring without waiting for a real failure.
+  app.post("/api/system-health/test-alert", opsTokenOrAuth, async (_req: Request, res: Response) => {
+    try {
+      const { sendTestAlert } = await import("./services/system-health-service");
+      const result = await sendTestAlert();
+      res.json({
+        sent: result.channels.length > 0,
+        channels: result.channels,
+        recipient: result.recipient,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("[SystemHealth] Test alert failed:", error);
+      res.status(500).json({ error: error.message || "Failed to send test alert" });
+    }
+  });
+
+  app.get("/api/reorder-alerts", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [alerts, items, suppliers, purchaseOrders] = await Promise.all([
+        storage.getReorderAlerts(),
+        storage.getAllItems(),
+        storage.getAllSuppliers(),
+        storage.getAllPurchaseOrders(),
+      ]);
+      const itemById = new Map(items.map((item) => [item.id, item]));
+      const supplierById = new Map(suppliers.map((supplier) => [supplier.id, supplier]));
+      const poById = new Map(purchaseOrders.map((po) => [po.id, po]));
+
+      const recent = alerts
+        .filter((alert) => {
+          if (!["pending", "sent", "acknowledged", "received"].includes(alert.alertStatus)) return false;
+          const createdAt = new Date(alert.createdAt);
+          return !Number.isNaN(createdAt.getTime()) && Date.now() - createdAt.getTime() <= 30 * 24 * 60 * 60 * 1000;
+        })
+        .map((alert) => ({
+          ...alert,
+          item: itemById.get(alert.itemId) ?? null,
+          supplier: supplierById.get(alert.supplierId) ?? null,
+          purchaseOrder: alert.purchaseOrderId ? poById.get(alert.purchaseOrderId) ?? null : null,
+        }));
+
+      res.json(recent);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error fetching alerts:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch reorder alerts" });
+    }
+  });
+
+  app.get("/api/reorder-alerts/settings", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getReorderAutoSendPaused } = await import("./services/reorder-watcher");
+      const paused = await getReorderAutoSendPaused();
+      res.json({ paused });
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error fetching settings:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch reorder alert settings" });
+    }
+  });
+
+  app.patch("/api/reorder-alerts/settings", requireAuth, requireRole(["admin", "owner"]), async (req: Request, res: Response) => {
+    try {
+      const paused = Boolean(req.body?.paused);
+      const { setReorderAutoSendPaused } = await import("./services/reorder-watcher");
+      res.json({ paused: await setReorderAutoSendPaused(paused) });
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error updating settings:", error);
+      res.status(500).json({ error: error.message || "Failed to update reorder alert settings" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/run", requireAuth, requireRole(["admin", "owner"]), async (_req: Request, res: Response) => {
+    try {
+      const { runReorderWatcher } = await import("./services/reorder-watcher");
+      const result = await runReorderWatcher();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error running watcher:", error);
+      res.status(500).json({ error: error.message || "Failed to run reorder watcher" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/send", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { sendReorderAlertNow } = await import("./services/reorder-watcher");
+      const force = Boolean(req.body?.forceSend);
+      const result = await sendReorderAlertNow(req.params.id, { force });
+      res.json(result);
+    } catch (error: any) {
+      const isRateLimit = typeof error?.message === "string" && error.message.startsWith("Rate limit:");
+      if (isRateLimit) {
+        return res.status(429).json({ error: error.message, rateLimited: true });
+      }
+      console.error("[ReorderAlerts] Error sending alert:", error);
+      res.status(500).json({ error: error.message || "Failed to send reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/acknowledge", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { acknowledgeReorderAlert } = await import("./services/reorder-watcher");
+      const result = await acknowledgeReorderAlert(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error acknowledging alert:", error);
+      res.status(500).json({ error: error.message || "Failed to acknowledge reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/dismiss", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { dismissReorderAlert } = await import("./services/reorder-watcher");
+      const result = await dismissReorderAlert(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error dismissing alert:", error);
+      res.status(500).json({ error: error.message || "Failed to dismiss reorder alert" });
+    }
+  });
+
+  app.post("/api/reorder-alerts/:id/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { markReorderAlertReceived } = await import("./services/reorder-watcher");
+      const result = await markReorderAlertReceived(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ReorderAlerts] Error marking alert received:", error);
+      res.status(500).json({ error: error.message || "Failed to mark reorder alert received" });
+    }
+  });
   
   // GET /api/stale-sync/status - Get current stale sync status without alerting
   app.get("/api/stale-sync/status", requireAuth, async (req: Request, res: Response) => {
@@ -3056,6 +3307,165 @@ TOTAL: $${subtotal.toFixed(2)}
     } catch (error: any) {
       console.error("Error scanning barcode:", error);
       res.status(500).json({ error: error.message || "Failed to scan barcode" });
+    }
+  });
+
+  // ============================================================================
+  // SCAN LOOKUP (Mobile scan flow — confirm item before receiving)
+  // ============================================================================
+
+  app.get("/api/scan/lookup/:barcode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const barcodeValue = req.params.barcode;
+
+      // 1. Try barcodes table first (most UPCs are there)
+      const barcode = await storage.getBarcodeByValue(barcodeValue);
+      let item: any = null;
+
+      if (barcode?.referenceId) {
+        item = await storage.getItem(barcode.referenceId);
+      }
+
+      // 2. Fall back to items.upc field
+      if (!item) {
+        const items = await storage.getItems();
+        item = items.find(
+          (i: any) => i.upc === barcodeValue || i.barcodeValue === barcodeValue || i.barcode === barcodeValue
+        );
+      }
+
+      if (!item) {
+        return res.status(404).json({
+          error: "Unknown barcode",
+          barcode: barcodeValue,
+          message: "Barcode not recognized. Check the product list or enter manually.",
+        });
+      }
+
+      // Calculate effective stock for display
+      const effectiveStock =
+        item.type === "finished_product"
+          ? (item.pivotQty ?? 0) + (item.hildaleQty ?? 0)
+          : item.currentStock ?? 0;
+
+      return res.json({
+        item: {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          type: item.type,
+          currentStock: effectiveStock,
+          pivotQty: item.pivotQty ?? 0,
+          hildaleQty: item.hildaleQty ?? 0,
+          minStock: item.minStock ?? 0,
+          category: item.category,
+          upc: item.upc,
+        },
+      });
+    } catch (error: any) {
+      console.error("Scan lookup error:", error);
+      res.status(500).json({ error: "Scan lookup failed" });
+    }
+  });
+
+  // ============================================================================
+  // INVENTORY RECEIVE
+  // ============================================================================
+  // This endpoint handles receiving inventory stock at a specific location.
+
+  app.post("/api/inventory/receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, quantity, location, notes } = req.body;
+
+      // Validate required fields
+      if (!itemId || !location) {
+        return res.status(400).json({ error: "itemId and location are required" });
+      }
+
+      if (typeof quantity !== 'number' || quantity <= 0 || !Number.isInteger(quantity)) {
+        return res.status(400).json({ error: "quantity must be a positive integer" });
+      }
+
+      if (location !== 'PIVOT' && location !== 'HILDALE') {
+        return res.status(400).json({ error: "location must be 'PIVOT' or 'HILDALE'" });
+      }
+
+      // Fetch the item
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+
+      // Determine item type
+      const itemType = item.type === 'finished_product' ? 'FINISHED' : 'RAW';
+
+      // Store previous stock values
+      const previousStock = {
+        pivotQty: item.pivotQty ?? 0,
+        hildaleQty: item.hildaleQty ?? 0,
+        currentStock: item.currentStock ?? 0,
+      };
+
+      // Create inventory transaction
+      const transaction = await storage.createInventoryTransaction({
+        itemId: itemId,
+        itemType: itemType,
+        type: 'RECEIVE',
+        location: location,
+        quantity: quantity,
+        createdBy: req.session.userId || 'manual',
+        notes: notes || `Manual receive via scan: ${quantity} units`,
+      });
+
+      // Update item stock
+      const updates: any = {};
+
+      if (item.type === 'finished_product') {
+        if (location === 'PIVOT') {
+          updates.pivotQty = (item.pivotQty ?? 0) + quantity;
+        } else if (location === 'HILDALE') {
+          updates.hildaleQty = (item.hildaleQty ?? 0) + quantity;
+        }
+      } else {
+        // For components, update currentStock regardless of location
+        updates.currentStock = (item.currentStock ?? 0) + quantity;
+      }
+
+      await storage.updateItem(itemId, updates);
+
+      // Fetch updated item
+      const updatedItem = await storage.getItem(itemId);
+
+      // Calculate new stock values
+      const newStock = {
+        pivotQty: updatedItem?.pivotQty ?? 0,
+        hildaleQty: updatedItem?.hildaleQty ?? 0,
+        currentStock: updatedItem?.currentStock ?? 0,
+      };
+
+      // Check reorder thresholds after stock change
+      let reorderAlert = null;
+      try {
+        const alerts = await checkReorderThresholds(itemId);
+        if (alerts.length > 0) {
+          reorderAlert = alerts[0]; // The item we just received
+        }
+      } catch (alertErr) {
+        console.error("Reorder alert check failed (non-fatal):", alertErr);
+      }
+
+      return res.json({
+        success: true,
+        message: `Received ${quantity} units of ${item.name} at ${location}`,
+        item: updatedItem,
+        transaction: transaction,
+        previousStock: previousStock,
+        newStock: newStock,
+        reorderAlert: reorderAlert, // null if stock is above reorder point
+      });
+    } catch (error: any) {
+      console.error("Error receiving inventory:", error);
+      res.status(500).json({ error: error.message || "Failed to receive inventory" });
     }
   });
 
@@ -3937,6 +4347,77 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // GET /api/items/by-barcode?code=X — purpose-built lookup for the
+  // shop-floor scanner integration. Lookup order:
+  //   1. barcodes table (the canonical mapping for printed UPC stickers,
+  //      keyed on barcodes.value → items.id via barcodes.referenceId)
+  //   2. items.barcodeValue / items.barcode / items.upc
+  //   3. items.amazonAsin / items.sku / items.shopifySku / items.extensivSku
+  //
+  // Scanners can emit either UPC-A (12 digits) or EAN-13 (13 digits with a
+  // leading zero for North-American UPCs). We try the raw input plus a
+  // leading-zero-added and leading-zero-stripped variant so a sticker
+  // stored as 700433684258 still resolves when the wedge sends 0700433684258.
+  app.get("/api/items/by-barcode", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const raw = typeof req.query.code === "string" ? req.query.code.trim() : "";
+      if (!raw) return res.status(400).json({ error: "code is required" });
+
+      const candidates = new Set<string>([raw]);
+      if (/^\d{12}$/.test(raw)) candidates.add("0" + raw); // UPC-A → EAN-13
+      if (/^0\d{12}$/.test(raw)) candidates.add(raw.slice(1)); // EAN-13 leading-0 → UPC-A
+
+      // 1. barcodes table — the primary mapping for printed UPCs.
+      for (const code of candidates) {
+        const barcode = await storage.getBarcodeByValue(code);
+        if (barcode?.referenceId) {
+          const item = await storage.getItem(barcode.referenceId);
+          if (item) {
+            return res.json({
+              id: item.id,
+              sku: item.sku,
+              name: item.name,
+              type: item.type,
+              currentStock: item.currentStock,
+              hildaleQty: (item as any).hildaleQty ?? 0,
+              pivotQty: (item as any).pivotQty ?? 0,
+            });
+          }
+        }
+      }
+
+      // 2 + 3. Direct match on items.* fields, in priority order. Try every
+      // candidate against every identifier so leading-zero variants resolve
+      // even when the value is stored on items.upc instead of barcodes.
+      const items = await storage.getAllItems();
+      const exact = (val: string | null | undefined) =>
+        !!val && candidates.has(val.trim());
+      const found =
+        items.find((i) => exact((i as any).barcodeValue)) ??
+        items.find((i) => exact(i.barcode)) ??
+        items.find((i) => exact((i as any).upc)) ??
+        items.find((i) => exact((i as any).amazonAsin)) ??
+        items.find((i) => exact(i.sku)) ??
+        items.find((i) => exact((i as any).shopifySku)) ??
+        items.find((i) => exact((i as any).extensivSku)) ??
+        null;
+
+      if (!found) return res.status(404).json({ error: "No item matches that code" });
+      res.json({
+        id: found.id,
+        sku: found.sku,
+        name: found.name,
+        type: found.type,
+        currentStock: found.currentStock,
+        hildaleQty: (found as any).hildaleQty ?? 0,
+        pivotQty: (found as any).pivotQty ?? 0,
+      });
+    } catch (error: any) {
+      console.error("[Items by-barcode] Error:", error);
+      res.status(500).json({ error: error.message || "Lookup failed" });
+    }
+  });
+
   app.patch("/api/barcodes/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const validated = updateBarcodeSchema.parse(req.body);
@@ -3975,7 +4456,7 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
-  app.post("/api/suppliers", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/suppliers", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
     try {
       const validated = insertSupplierSchema.parse(req.body);
       const supplier = await storage.createSupplier(validated);
@@ -4156,7 +4637,45 @@ TOTAL: $${subtotal.toFixed(2)}
   app.get("/api/supplier-items", requireAuth, async (req: Request, res: Response) => {
     try {
       const supplierItems = await storage.getAllSupplierItems();
-      res.json(supplierItems);
+      const supplierIdFilter = typeof req.query.supplierId === "string" ? req.query.supplierId.trim() : "";
+
+      // Default behavior (no filter): preserve the original SupplierItem[] shape
+      // so existing callers don't break.
+      if (!supplierIdFilter) {
+        return res.json(supplierItems);
+      }
+
+      // Filtered + enriched response for the PO creation flow: include item
+      // metadata (name, sku, currentStock, minStock, dailyUsage) per row so
+      // the dialog can pre-populate without a second request.
+      const filtered = supplierItems.filter((si) => si.supplierId === supplierIdFilter);
+      const itemIds = Array.from(new Set(filtered.map((si) => si.itemId)));
+      const itemsForRows = await Promise.all(itemIds.map((id) => storage.getItem(id)));
+      const itemById = new Map<string, NonNullable<typeof itemsForRows[number]>>();
+      for (const it of itemsForRows) if (it) itemById.set(it.id, it);
+
+      const enriched = filtered
+        .map((si) => {
+          const item = itemById.get(si.itemId);
+          if (!item) return null;
+          return {
+            ...si,
+            itemName: item.name,
+            itemSku: item.sku,
+            itemType: item.type,
+            currentStock: item.currentStock ?? 0,
+            minStock: item.minStock ?? 0,
+            dailyUsage: item.dailyUsage ?? 0,
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null)
+        // Components first, then anything else; alphabetical by name within each group.
+        .sort((a, b) => {
+          if (a.itemType !== b.itemType) return a.itemType === "component" ? -1 : 1;
+          return a.itemName.localeCompare(b.itemName);
+        });
+
+      res.json(enriched);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch supplier items" });
     }
@@ -4244,6 +4763,407 @@ TOTAL: $${subtotal.toFixed(2)}
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete supplier item" });
+    }
+  });
+
+  // Vendor Communications — per-supplier message log
+  // GET /api/suppliers/:id/forecast — current standing + 30/60/90-day
+  // outlook for every item this supplier provides. Math:
+  //   effectiveVelocity   = item.daily_usage × item.seasonal_multiplier
+  //   need(N)             = max(0, effectiveVelocity × N − stock − openPoQty)
+  // openPoQty is summed across every non-terminal PO line for that item
+  // from this supplier (qtyOrdered − qtyReceived).
+  app.get("/api/suppliers/:id/forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const supplierItems = allSupplierItems.filter((si) => si.supplierId === id);
+
+      // Open PO line totals for THIS supplier, grouped by itemId.
+      const supplierPOs = await storage.getPurchaseOrdersBySupplierId(id);
+      const openByItemId = new Map<string, number>();
+      const TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      for (const po of supplierPOs) {
+        if (TERMINAL.has(po.status)) continue;
+        if (((po as any).poStatus ?? "ordered") === "received") continue;
+        const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+        for (const line of lines) {
+          const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0));
+          if (open <= 0) continue;
+          openByItemId.set(line.itemId, (openByItemId.get(line.itemId) ?? 0) + open);
+        }
+      }
+
+      const items = await Promise.all(
+        supplierItems.map(async (si) => {
+          const item = await storage.getItem(si.itemId);
+          if (!item) return null;
+          const dailyUsage = item.dailyUsage ?? 0;
+          const stock = item.currentStock ?? 0;
+          const seasonal = (item as any).seasonalMultiplier ?? 1;
+          const openPo = openByItemId.get(item.id) ?? 0;
+          const effectiveVelocity = dailyUsage * seasonal;
+          const need = (n: number) => {
+            if (effectiveVelocity <= 0) return 0;
+            const projectedDemand = effectiveVelocity * n;
+            return Math.max(0, Math.ceil(projectedDemand - stock - openPo));
+          };
+          const daysOfSupply = effectiveVelocity > 0 ? Math.round(stock / effectiveVelocity) : null;
+          return {
+            itemId: item.id,
+            sku: item.sku,
+            name: item.name,
+            type: item.type,
+            currentStock: stock,
+            dailyUsage,
+            seasonalMultiplier: seasonal,
+            effectiveVelocity: Math.round(effectiveVelocity * 100) / 100,
+            daysOfSupply,
+            openPoQty: openPo,
+            need30: need(30),
+            need60: need(60),
+            need90: need(90),
+            unitCost: si.price ?? null,
+            leadTimeDays: si.leadTimeDays ?? null,
+          };
+        }),
+      );
+
+      const filtered = items.filter((x): x is NonNullable<typeof x> => !!x);
+      // Sort highest 30-day need first; ties go to 90-day need so growing
+      // items rise above plateauing ones.
+      filtered.sort((a, b) => b.need30 - a.need30 || b.need90 - a.need90);
+
+      res.json({
+        supplier: {
+          id: supplier.id,
+          name: supplier.name,
+          contactName: supplier.contactName,
+          email: supplier.email,
+          tier: (supplier as any).tier ?? "transactional",
+          forecastBriefSchedule: (supplier as any).forecastBriefSchedule ?? "never",
+          autoSendBriefs: (supplier as any).autoSendBriefs ?? false,
+          lastForecastBriefSentAt: (supplier as any).lastForecastBriefSentAt ?? null,
+        },
+        items: filtered,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Forecast] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch forecast" });
+    }
+  });
+
+  // PATCH a single item's seasonal multiplier from the supplier Forecast tab.
+  // Bounded between 0 and 10 so a fat-fingered "100" doesn't recommend a
+  // year of orders. Logs a vendor_communications entry with action_type=
+  // 'FORECAST_BRIEF' and status='PENDING' as a draft for the operator to
+  // optionally send to the supplier — that draft is the Part 6 hand-off.
+  app.patch("/api/items/:id/seasonal-multiplier", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const value = Number(req.body?.seasonalMultiplier);
+      if (!Number.isFinite(value) || value < 0 || value > 10) {
+        return res.status(400).json({ error: "seasonalMultiplier must be between 0 and 10" });
+      }
+
+      const item = await storage.getItem(id);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      const previous = (item as any).seasonalMultiplier ?? 1;
+      if (previous === value) {
+        return res.json({ item, changed: false });
+      }
+
+      const updated = await storage.updateItem(id, { seasonalMultiplier: value } as any);
+      res.json({ item: updated, changed: true, previous });
+    } catch (error: any) {
+      console.error("[Seasonal Multiplier] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update multiplier" });
+    }
+  });
+
+  // POST /api/suppliers/:id/forecast-brief — sends the pre-written brief to
+  // the supplier (SendGrid when configured) and logs a vendor_communications
+  // entry with action_type='FORECAST_BRIEF'. Body: { sentBy, message }.
+  app.post("/api/suppliers/:id/forecast-brief", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const sentBy = typeof req.body?.sentBy === "string" ? req.body.sentBy.trim() : "";
+      const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+
+      if (!sentBy) return res.status(400).json({ error: "sentBy is required" });
+      if (!message) return res.status(400).json({ error: "message is required" });
+
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const comm = await storage.createVendorCommunication({
+        supplierId: id,
+        itemId: null,
+        actionType: "FORECAST_BRIEF",
+        sentBy,
+        status: "PENDING",
+        expectedDate: null,
+        notes: message,
+        createdBy: req.session.userId ?? null,
+      });
+
+      let emailSent = false;
+      let emailError: string | null = null;
+      const supplierEmail = supplier.email;
+
+      if (supplierEmail && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = (await import("@sendgrid/mail")).default;
+          const { emailForSender } = await import("./services/sender-emails");
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          const replyTo = emailForSender(sentBy);
+          await sgMail.send({
+            to: supplierEmail,
+            from: {
+              email: process.env.SENDGRID_FROM_EMAIL,
+              name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
+            },
+            replyTo: replyTo ?? undefined,
+            subject: `90-day demand forecast — Sticker Burr Roller`,
+            text: message,
+          });
+          emailSent = true;
+        } catch (err: any) {
+          emailError = err?.message ?? "send failed";
+          console.error("[Forecast Brief] SendGrid send failed:", emailError);
+        }
+      }
+
+      // Stamp the supplier so the auto-scheduler doesn't re-fire.
+      await storage.updateSupplier(id, { lastForecastBriefSentAt: new Date() } as any);
+
+      res.status(201).json({
+        communication: comm,
+        emailSent,
+        emailError,
+        recipientEmail: supplierEmail ?? null,
+      });
+    } catch (error: any) {
+      console.error("[Forecast Brief] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send forecast brief" });
+    }
+  });
+
+  // Communications timeline for a single supplier — last forecast brief +
+  // recent ad-hoc comms + recent POs. Aggregates client-side would mean
+  // three round trips; folding into one endpoint keeps the supplier detail
+  // page fast.
+  app.get("/api/suppliers/:id/timeline", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const [allComms, allPOs] = await Promise.all([
+        storage.getVendorCommunicationsBySupplierId(id),
+        storage.getPurchaseOrdersBySupplierId(id),
+      ]);
+
+      const lastBrief =
+        allComms.find((c) => c.actionType === "FORECAST_BRIEF") ?? null;
+      // Most recent across briefs + ad-hoc comms + POs determines "days since
+      // last contact". Using createdAt for comms and orderDate for POs.
+      const newestCommAt = allComms[0]?.createdAt ?? null;
+      const newestPoAt =
+        [...allPOs].sort((a, b) => {
+          const aT = a.orderDate ? new Date(a.orderDate).getTime() : 0;
+          const bT = b.orderDate ? new Date(b.orderDate).getTime() : 0;
+          return bT - aT;
+        })[0]?.orderDate ?? null;
+      const candidates = [newestCommAt, newestPoAt]
+        .filter(Boolean)
+        .map((d) => new Date(d as any).getTime());
+      const lastContactAt = candidates.length > 0 ? new Date(Math.max(...candidates)) : null;
+      const daysSinceContact = lastContactAt
+        ? Math.floor((Date.now() - lastContactAt.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+
+      res.json({
+        lastBrief,
+        recentCommunications: allComms.slice(0, 5),
+        recentPurchaseOrders: [...allPOs]
+          .sort((a, b) => {
+            const aT = a.orderDate ? new Date(a.orderDate).getTime() : 0;
+            const bT = b.orderDate ? new Date(b.orderDate).getTime() : 0;
+            return bT - aT;
+          })
+          .slice(0, 5)
+          .map((po) => ({
+            id: po.id,
+            poNumber: po.poNumber,
+            status: po.status,
+            orderDate: po.orderDate,
+            total: po.total,
+          })),
+        lastContactAt,
+        daysSinceContact,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Timeline] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to load timeline" });
+    }
+  });
+
+  app.get("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const supplierId = typeof req.query.supplierId === "string" ? req.query.supplierId : "";
+      if (!supplierId) {
+        return res.status(400).json({ error: "supplierId query parameter is required" });
+      }
+      const rows = await storage.getVendorCommunicationsBySupplierId(supplierId);
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Vendor Communications] List error:", error);
+      res.status(500).json({ error: error.message || "Failed to list communications" });
+    }
+  });
+
+  app.get("/api/vendor-communications/recent", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const rawLimit = Number(req.query.limit ?? 5);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(50, Math.floor(rawLimit)) : 5;
+      const rows = await storage.getRecentVendorCommunications(limit);
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Vendor Communications] Recent error:", error);
+      res.status(500).json({ error: error.message || "Failed to load recent communications" });
+    }
+  });
+
+  // Notify vendor — logs a REORDER_REQUEST communication and emails the
+  // supplier via SendGrid when configured. The email is best-effort: a
+  // failure to send still returns 201 with emailSent=false so the comm row
+  // is preserved as a paper trail.
+  app.post("/api/vendor-communications/notify", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const sentBy = typeof body.sentBy === "string" ? body.sentBy.trim() : "";
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+
+      if (!supplierId || !sentBy || !message) {
+        return res.status(400).json({ error: "supplierId, sentBy, and message are required" });
+      }
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found" });
+      }
+
+      const itemId = typeof body.itemId === "string" && body.itemId ? body.itemId : null;
+      const item = itemId ? await storage.getItem(itemId) : null;
+
+      const comm = await storage.createVendorCommunication({
+        supplierId,
+        itemId,
+        actionType: "REORDER_REQUEST",
+        sentBy,
+        status: "PENDING",
+        expectedDate: null,
+        notes: message,
+        createdBy: req.session.userId ?? null,
+      });
+
+      let emailSent = false;
+      let emailError: string | null = null;
+      const supplierEmail = supplier.email;
+
+      if (supplierEmail && process.env.SENDGRID_API_KEY && process.env.SENDGRID_FROM_EMAIL) {
+        try {
+          const sgMail = (await import("@sendgrid/mail")).default;
+          const { emailForSender } = await import("./services/sender-emails");
+          sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+          const subject = item
+            ? `Reorder request: ${item.sku} — ${item.name}`
+            : `Reorder request from Sticker Burr Roller`;
+          const replyTo = emailForSender(sentBy);
+          await sgMail.send({
+            to: supplierEmail,
+            from: {
+              email: process.env.SENDGRID_FROM_EMAIL,
+              name: process.env.SENDGRID_FROM_NAME || "Sticker Burr Roller — Purchasing",
+            },
+            replyTo: replyTo ?? undefined,
+            subject,
+            text: message,
+          });
+          emailSent = true;
+        } catch (err: any) {
+          emailError = err?.message ?? "send failed";
+          console.error("[Notify Vendor] SendGrid send failed:", emailError);
+        }
+      }
+
+      res.status(201).json({
+        communication: comm,
+        emailSent,
+        emailError,
+        recipientEmail: supplierEmail ?? null,
+      });
+    } catch (error: any) {
+      console.error("[Notify Vendor] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send notification" });
+    }
+  });
+
+  app.post("/api/vendor-communications", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const actionType = typeof body.actionType === "string" ? body.actionType.trim() : "";
+      const sentBy = typeof body.sentBy === "string" ? body.sentBy.trim() : "";
+
+      if (!supplierId || !actionType || !sentBy) {
+        return res.status(400).json({ error: "supplierId, actionType, and sentBy are required" });
+      }
+
+      const validActions = new Set([
+        "REORDER_REQUEST",
+        "PAYMENT_SENT",
+        "DELIVERY_CONFIRMED",
+        "ISSUE_FLAGGED",
+        // Take Action modal — supplemental entries written when an operator
+        // picks a non-email path. CREATE_PO is logged at PO save (notes hold
+        // the new poNumber); ONLINE_ORDER is logged on click (no completion
+        // signal back from the vendor site).
+        "CREATE_PO",
+        "ONLINE_ORDER",
+      ]);
+      if (!validActions.has(actionType)) {
+        return res.status(400).json({ error: `actionType must be one of: ${[...validActions].join(", ")}` });
+      }
+      const status = typeof body.status === "string" && ["PENDING", "IN_PROGRESS", "RESOLVED"].includes(body.status)
+        ? body.status
+        : "PENDING";
+
+      const expectedDate = body.expectedDate ? new Date(body.expectedDate) : null;
+      if (expectedDate && Number.isNaN(expectedDate.getTime())) {
+        return res.status(400).json({ error: "expectedDate is not a valid date" });
+      }
+
+      const created = await storage.createVendorCommunication({
+        supplierId,
+        itemId: typeof body.itemId === "string" && body.itemId ? body.itemId : null,
+        actionType,
+        sentBy,
+        status,
+        expectedDate,
+        notes: typeof body.notes === "string" ? body.notes : null,
+        createdBy: req.session.userId ?? null,
+      });
+
+      res.status(201).json(created);
+    } catch (error: any) {
+      console.error("[Vendor Communications] Create error:", error);
+      res.status(500).json({ error: error.message || "Failed to create communication" });
     }
   });
 
@@ -4386,6 +5306,22 @@ TOTAL: $${subtotal.toFixed(2)}
 
       const bom = await storage.getBillOfMaterialsByProductId(req.params.itemId);
 
+      // Build per-item supplier price lookup. Prefer the designated supplier
+      // (is_designated_supplier = true); fall back to any supplier with a
+      // price set so components linked to a single non-designated supplier
+      // still pick up a real cost.
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const designatedPrice = new Map<string, number>();
+      const fallbackPrice = new Map<string, number>();
+      for (const si of allSupplierItems) {
+        if (si.price == null || si.price <= 0) continue;
+        if (si.isDesignatedSupplier) {
+          designatedPrice.set(si.itemId, si.price);
+        } else if (!fallbackPrice.has(si.itemId)) {
+          fallbackPrice.set(si.itemId, si.price);
+        }
+      }
+
       const lines: Array<{
         componentId: string;
         componentName: string;
@@ -4394,6 +5330,7 @@ TOTAL: $${subtotal.toFixed(2)}
         wastagePercent: number;
         effectiveQty: number;
         unitCost: number | null;
+        unitCostSource: "designated_supplier" | "supplier" | "default_purchase_cost" | null;
         lineCost: number | null;
         missingCost: boolean;
       }> = [];
@@ -4405,7 +5342,22 @@ TOTAL: $${subtotal.toFixed(2)}
         const component = await storage.getItem(entry.componentId);
         const wastage = (entry as any).wastagePercent ?? 0;
         const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
-        const unitCost = component?.defaultPurchaseCost ?? null;
+
+        // Source resolution: designated supplier price > any supplier price >
+        // legacy items.default_purchase_cost > null. Surface the source so the
+        // UI can distinguish "real supplier quote" from "guesstimate".
+        let unitCost: number | null = null;
+        let unitCostSource: "designated_supplier" | "supplier" | "default_purchase_cost" | null = null;
+        if (designatedPrice.has(entry.componentId)) {
+          unitCost = designatedPrice.get(entry.componentId)!;
+          unitCostSource = "designated_supplier";
+        } else if (fallbackPrice.has(entry.componentId)) {
+          unitCost = fallbackPrice.get(entry.componentId)!;
+          unitCostSource = "supplier";
+        } else if (component?.defaultPurchaseCost != null && component.defaultPurchaseCost > 0) {
+          unitCost = component.defaultPurchaseCost;
+          unitCostSource = "default_purchase_cost";
+        }
         const lineCost = unitCost !== null ? effectiveQty * unitCost : null;
 
         if (lineCost === null) hasMissingCosts = true;
@@ -4419,13 +5371,19 @@ TOTAL: $${subtotal.toFixed(2)}
           wastagePercent: wastage,
           effectiveQty: Math.round(effectiveQty * 1000) / 1000,
           unitCost,
+          unitCostSource,
           lineCost: lineCost !== null ? Math.round(lineCost * 100) / 100 : null,
           missingCost: unitCost === null,
         });
       }
 
       const sellingPrice = (product as any).sellingPrice ?? null;
-      const grossMargin = sellingPrice !== null && !hasMissingCosts
+      // Only report margin when the build cost is genuinely > 0. A
+      // totalBuildCost of 0 with no missing-cost flags would otherwise
+      // produce a fake "100% margin" — false data the UI would have to
+      // re-suppress. Treat $0 as unknown here.
+      const haveRealCost = !hasMissingCosts && totalBuildCost > 0;
+      const grossMargin = sellingPrice !== null && haveRealCost
         ? sellingPrice - totalBuildCost
         : null;
       const marginPercent = grossMargin !== null && sellingPrice && sellingPrice > 0
@@ -6013,6 +6971,298 @@ TOTAL: $${subtotal.toFixed(2)}
   });
 
   // Shopify - Sync Recent Orders (with merge/replace mode support)
+  // SKU MAPPINGS — list, orphan detection, CRUD. Used by /sku-mappings page
+  // and consulted by the Shopify backfill endpoint.
+  app.get("/api/sku-mappings", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const mappings = await storage.getAllSkuMappings();
+      res.json(mappings);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message ?? "Failed to load mappings" });
+    }
+  });
+
+  // Orphan detection — SKUs that appear on sales_order_lines but have no
+  // mapping AND no exact match on items.sku. These are the rows the operator
+  // needs to triage from the SKU mappings admin page.
+  app.get("/api/sku-mappings/orphans", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const allItems = await storage.getAllItems();
+      const knownSkus = new Set(allItems.map((i) => i.sku));
+      const allMappings = await storage.getAllSkuMappings();
+      const mapped = new Set(allMappings.map((m) => `${m.source.toLowerCase()}:${m.externalSku}`));
+
+      const allOrders = await storage.getAllSalesOrders();
+      const counts = new Map<string, { sku: string; source: string; orderCount: number; totalUnits: number }>();
+      for (const order of allOrders) {
+        const lines = await storage.getSalesOrderLines(order.id);
+        const channel = (order.channel ?? "shopify").toLowerCase();
+        for (const line of lines) {
+          if (!line.sku) continue;
+          // Strip the "SKU: " prefix the same way findCanonicalSku does so
+          // we don't show a stripped/unstripped pair as two orphans.
+          const stripped = line.sku.replace(/^SKU:\s*/i, "");
+          if (knownSkus.has(stripped)) continue;
+          if (mapped.has(`${channel}:${stripped}`) || mapped.has(`${channel}:${line.sku}`)) continue;
+          const key = `${channel}::${stripped}`;
+          const existing = counts.get(key) ?? { sku: stripped, source: channel, orderCount: 0, totalUnits: 0 };
+          existing.orderCount += 1;
+          existing.totalUnits += line.qtyOrdered ?? 0;
+          counts.set(key, existing);
+        }
+      }
+      const orphans = Array.from(counts.values()).sort((a, b) => b.totalUnits - a.totalUnits);
+      res.json({ orphans });
+    } catch (error: any) {
+      console.error("[SKU Orphans] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to compute orphans" });
+    }
+  });
+
+  app.post("/api/sku-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const externalSku = typeof body.externalSku === "string" ? body.externalSku.trim() : "";
+      const canonicalSku = typeof body.canonicalSku === "string" ? body.canonicalSku.trim() : "";
+      const source = typeof body.source === "string" ? body.source.trim().toLowerCase() : "manual";
+      const notes = typeof body.notes === "string" ? body.notes : null;
+      if (!externalSku || !canonicalSku) {
+        return res.status(400).json({ error: "externalSku and canonicalSku are required" });
+      }
+      const created = await storage.createSkuMapping({ externalSku, canonicalSku, source, notes });
+      res.status(201).json(created);
+    } catch (error: any) {
+      // Unique-violation on (external_sku, source).
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A mapping already exists for that external SKU + source." });
+      }
+      res.status(500).json({ error: error.message ?? "Failed to create mapping" });
+    }
+  });
+
+  app.patch("/api/sku-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const body = req.body as Record<string, any>;
+      const patch: any = {};
+      if (typeof body.externalSku === "string") patch.externalSku = body.externalSku.trim();
+      if (typeof body.canonicalSku === "string") patch.canonicalSku = body.canonicalSku.trim();
+      if (typeof body.source === "string") patch.source = body.source.trim().toLowerCase();
+      if ("notes" in body) patch.notes = typeof body.notes === "string" ? body.notes : null;
+      const updated = await storage.updateSkuMapping(id, patch);
+      if (!updated) return res.status(404).json({ error: "Mapping not found" });
+      res.json(updated);
+    } catch (error: any) {
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "A mapping already exists for that external SKU + source." });
+      }
+      res.status(500).json({ error: error.message ?? "Failed to update mapping" });
+    }
+  });
+
+  app.delete("/api/sku-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const ok = await storage.deleteSkuMapping(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Mapping not found" });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message ?? "Failed to delete mapping" });
+    }
+  });
+
+  // SHOPIFY HISTORICAL BACKFILL — fetches orders from the Shopify Admin API
+  // for a date range and inserts them into sales_orders + sales_order_lines.
+  // Idempotent on externalOrderId (skips orders already in the DB). Resolves
+  // line-item SKUs through sku_mappings before looking up items.id, so
+  // legacy aliases like "SBR-Classic1.0" land on "SBR-PUSH-1.0".
+  //
+  // Body: { dateFrom: 'YYYY-MM-DD', dateTo: 'YYYY-MM-DD' (optional) }
+  // Response shape:
+  //   { totalFetched, inserted, skippedExisting, unmappedSkuCount, durationMs }
+  //
+  // NB: Bypasses inventory side-effects on purpose. Backfilling 2 years of
+  // sales orders should not retroactively decrement availableForSaleQty —
+  // that would corrupt the live position. Lines are inserted with
+  // qtyAllocated=0 and the rawPayload preserved on the order so the
+  // historical record is intact.
+  app.post("/api/integrations/shopify/backfill-orders", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const dateFromStr = typeof body.dateFrom === "string" ? body.dateFrom.trim() : "";
+      const dateToStr = typeof body.dateTo === "string" ? body.dateTo.trim() : "";
+      if (!dateFromStr) return res.status(400).json({ error: "dateFrom is required (YYYY-MM-DD)" });
+      const dateFrom = new Date(dateFromStr);
+      if (Number.isNaN(dateFrom.getTime())) {
+        return res.status(400).json({ error: "dateFrom is not a valid date" });
+      }
+      const dateTo = dateToStr ? new Date(dateToStr) : new Date();
+      if (Number.isNaN(dateTo.getTime())) {
+        return res.status(400).json({ error: "dateTo is not a valid date" });
+      }
+
+      const userId = req.session.userId!;
+      const config = await storage.getIntegrationConfig(userId, "SHOPIFY");
+      const apiKey = config?.apiKey || process.env.SHOPIFY_ADMIN_API_KEY || process.env.SHOPIFY_ACCESS_TOKEN;
+      const cfg = (config?.config as Record<string, any>) || {};
+      const shopDomain = cfg.shopDomain || cfg.storeUrl || process.env.SHOPIFY_STORE_DOMAIN;
+      if (!apiKey || !shopDomain) {
+        return res.status(400).json({ error: "Shopify integration not configured" });
+      }
+
+      const startedAt = Date.now();
+      const allItems = await storage.getAllItems();
+      const itemBySku = new Map(allItems.map((i) => [i.sku, i] as const));
+
+      let totalFetched = 0;
+      let inserted = 0;
+      let skippedExisting = 0;
+      let pageCount = 0;
+      const unmappedSkus = new Set<string>();
+
+      // Iterate Shopify's cursor pagination using the same Link-header pattern
+      // the existing client uses. We deliberately don't use the existing
+      // ShopifyClient.syncAllOrders helper because it has no date-range
+      // bound and we want to chunk by 100 for progress reporting.
+      const PAGE_SIZE = 100;
+      const baseUrl = shopDomain.startsWith("http") ? shopDomain : `https://${shopDomain}`;
+      const adminUrl = `${baseUrl.replace(/\/$/, "")}/admin/api/2024-01`;
+      const params = new URLSearchParams({
+        status: "any",
+        created_at_min: dateFrom.toISOString(),
+        created_at_max: dateTo.toISOString(),
+        limit: String(PAGE_SIZE),
+      });
+      let nextUrl: string | null = `${adminUrl}/orders.json?${params.toString()}`;
+      const headers = { "X-Shopify-Access-Token": apiKey, "Content-Type": "application/json" };
+
+      while (nextUrl) {
+        const response = await fetch(nextUrl, { headers });
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Shopify API ${response.status}: ${text.slice(0, 200)}`);
+        }
+        const data = await response.json();
+        const orders: any[] = data.orders ?? [];
+        pageCount++;
+        totalFetched += orders.length;
+        console.log(`[Shopify Backfill] Page ${pageCount}: ${orders.length} orders (running total ${totalFetched})`);
+
+        for (const order of orders) {
+          const externalId = String(order.id);
+          // Idempotency: skip if we already have this order on file.
+          const existing = await storage.getSalesOrdersByExternalId("SHOPIFY", externalId);
+          if (existing.length > 0) {
+            skippedExisting++;
+            continue;
+          }
+
+          const customer = order.customer ?? {};
+          const ship = order.shipping_address ?? {};
+          const customerName =
+            [customer.first_name, customer.last_name].filter(Boolean).join(" ") ||
+            order.email ||
+            "Shopify customer";
+
+          const so = await storage.createSalesOrder({
+            externalOrderId: externalId,
+            orderName: order.name ?? null,
+            channel: "SHOPIFY",
+            customerName,
+            customerEmail: customer.email ?? order.email ?? null,
+            customerPhone: customer.phone ?? order.phone ?? null,
+            // Map Shopify status loosely. Backfilled orders are usually closed.
+            status: order.cancelled_at
+              ? "CANCELLED"
+              : order.fulfillment_status === "fulfilled"
+                ? "DELIVERED"
+                : order.financial_status === "refunded"
+                  ? "REFUNDED"
+                  : "DELIVERED",
+            orderDate: order.created_at ? new Date(order.created_at) : new Date(),
+            deliveredAt: order.closed_at ? new Date(order.closed_at) : null,
+            cancelledAt: order.cancelled_at ? new Date(order.cancelled_at) : null,
+            sourceUrl: shopDomain ? `https://${shopDomain.replace(/^https?:\/\//, "")}/admin/orders/${externalId}` : null,
+            totalAmount: order.total_price ? parseFloat(order.total_price) : 0,
+            currency: order.currency ?? "USD",
+            fulfillmentSource: "PIVOT_EXTENSIV",
+            isHistorical: true,
+            archivedAt: new Date(),
+            rawPayload: order,
+            shipToStreet: ship.address1 ?? null,
+            shipToCity: ship.city ?? null,
+            shipToState: ship.province_code ?? ship.province ?? null,
+            shipToZip: ship.zip ?? null,
+            shipToCountry: ship.country_code ?? ship.country ?? null,
+          } as any);
+
+          for (const li of order.line_items ?? []) {
+            const rawSku = (li.sku ?? "").trim();
+            const stripped = rawSku.replace(/^SKU:\s*/i, "");
+            // Resolution order: items.sku exact → mapping by raw → mapping by stripped.
+            let canonical = stripped;
+            if (!itemBySku.has(canonical)) {
+              const mapped =
+                (await storage.findCanonicalSku(rawSku, "shopify")) ??
+                (await storage.findCanonicalSku(stripped, "shopify"));
+              if (mapped) canonical = mapped;
+            }
+            const item = itemBySku.get(canonical) ?? null;
+            if (!item && rawSku) unmappedSkus.add(rawSku);
+
+            await storage.createSalesOrderLine({
+              salesOrderId: so.id,
+              productId: item?.id ?? null,
+              sku: rawSku || canonical || "",
+              productName: li.name ?? li.title ?? null,
+              qtyOrdered: li.quantity ?? 0,
+              qtyAllocated: 0,
+              qtyShipped: 0,
+              qtyFulfilled: 0,
+              backorderQty: 0,
+              unitPrice: li.price ? parseFloat(li.price) : null,
+            });
+          }
+
+          inserted++;
+        }
+
+        // Cursor pagination via Link header. The existing client's
+        // extractNextLinkUrl logic is replicated inline so we don't depend
+        // on it here.
+        const linkHeader = response.headers.get("link") ?? response.headers.get("Link");
+        nextUrl = null;
+        if (linkHeader) {
+          for (const part of linkHeader.split(",")) {
+            const m = part.match(/<([^>]+)>;\s*rel="next"/);
+            if (m) {
+              nextUrl = m[1];
+              break;
+            }
+          }
+        }
+      }
+
+      const durationMs = Date.now() - startedAt;
+      console.log(
+        `[Shopify Backfill] Complete: fetched=${totalFetched}, inserted=${inserted}, skipped=${skippedExisting}, ` +
+          `unmappedSkus=${unmappedSkus.size}, pages=${pageCount}, duration=${durationMs}ms`,
+      );
+
+      res.json({
+        totalFetched,
+        inserted,
+        skippedExisting,
+        unmappedSkuCount: unmappedSkus.size,
+        unmappedSkus: Array.from(unmappedSkus).slice(0, 50),
+        pages: pageCount,
+        durationMs,
+      });
+    } catch (error: any) {
+      console.error("[Shopify Backfill] Error:", error);
+      res.status(500).json({ error: error.message ?? "Backfill failed" });
+    }
+  });
+
   app.post("/api/integrations/shopify/sync", requireAuth, async (req: Request, res: Response) => {
     try {
       const userId = req.session.userId!;
@@ -7068,19 +8318,22 @@ TOTAL: $${subtotal.toFixed(2)}
         for (const order of normalizedOrders) {
           try {
             // Check if order exists by external ID
-            const existingOrder = await storage.getSalesOrderByExternalIdOnly(order.externalId);
-            
+            // NOTE: normalizeOrder() returns externalOrderId (NOT externalId)
+            const existingOrder = await storage.getSalesOrderByExternalIdOnly(order.externalOrderId);
+
             if (existingOrder) {
               // Update existing order status (delivery status)
+              // Also backfill externalOrderId if it was previously null
               await storage.updateSalesOrder(existingOrder.id, {
                 status: order.status,
                 deliveredAt: order.deliveredAt,
+                externalOrderId: order.externalOrderId,
               });
               ordersUpdated++;
             } else {
               // Create new order
               const newOrder = await storage.createSalesOrder({
-                externalId: order.externalId,
+                externalOrderId: order.externalOrderId,
                 externalOrderNumber: order.externalOrderNumber,
                 channel: order.channel,
                 status: order.status,
@@ -7103,7 +8356,7 @@ TOTAL: $${subtotal.toFixed(2)}
               // Create line items (skip items without SKU)
               for (const line of order.lineItems) {
                 if (!line.sku) {
-                  console.log(`[Full Order Sync] Skipping line item without SKU in order ${order.externalId}`);
+                  console.log(`[Full Order Sync] Skipping line item without SKU in order ${order.externalOrderId}`);
                   continue;
                 }
                 const item = await storage.getItemBySku(line.sku);
@@ -9801,49 +11054,64 @@ Notes: ${po.notes || 'None'}
         googleAdsClient.setRefreshToken(tokenResponse.refresh_token);
       }
       
-      const customers = await googleAdsClient.listAccessibleCustomers();
-      
-      if (customers.length === 0) {
-        return res.redirect("/settings?error=no_ad_accounts");
+      // Try to list customers, but don't let it block saving tokens
+      // The developer token may not be set yet, which causes listAccessibleCustomers to fail
+      let customer: { customerId: string; descriptiveName: string } | null = null;
+      let customerListError: string | null = null;
+
+      try {
+        const customers = await googleAdsClient.listAccessibleCustomers();
+        if (customers.length > 0) {
+          customer = customers[0];
+        }
+      } catch (listError: any) {
+        console.warn("[Google Ads] Could not list customers (developer token may be missing):", listError.message);
+        customerListError = listError.message;
       }
-      
-      // Use first customer (or could show selection UI)
-      const customer = customers[0];
-      
-      // Store in database
+
+      // Always save tokens - even if we couldn't list customers
+      // This way the OAuth connection is preserved and will work once the developer token is added
+      const accountId = customer?.customerId || 'pending_setup';
+      const accountName = customer?.descriptiveName || 'Google Ads (needs developer token)';
+
       let config = await storage.getAdPlatformConfig(userId, 'GOOGLE');
-      
+
       if (config) {
         await storage.updateAdPlatformConfig(config.id, {
-          accountId: customer.customerId,
-          accountName: customer.descriptiveName,
+          accountId,
+          accountName,
           accessToken: tokenResponse.access_token,
           refreshToken: tokenResponse.refresh_token,
           accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
-          isConnected: true,
+          isConnected: customer !== null, // Only fully connected if we got customer info
         });
       } else {
         await storage.createAdPlatformConfig({
           userId,
           platform: 'GOOGLE',
-          accountId: customer.customerId,
-          accountName: customer.descriptiveName,
+          accountId,
+          accountName,
           accessToken: tokenResponse.access_token,
           refreshToken: tokenResponse.refresh_token,
           accessTokenExpiresAt: new Date(Date.now() + tokenResponse.expires_in * 1000),
-          isConnected: true,
+          isConnected: customer !== null,
         });
       }
 
       // Log connection
       await AuditLogger.logAdPlatformConnected({
         platform: 'GOOGLE',
-        accountId: customer.customerId,
-        accountName: customer.descriptiveName,
+        accountId,
+        accountName,
         userId,
       });
 
-      res.redirect("/settings?google_connected=true");
+      if (customer) {
+        res.redirect("/settings?google_connected=true");
+      } else {
+        // Tokens saved but developer token is needed to complete setup
+        res.redirect("/settings?google_connected=partial&info=tokens_saved_need_developer_token");
+      }
     } catch (error: any) {
       console.error("[Google Ads] OAuth callback error:", error);
       res.redirect(`/settings?error=${encodeURIComponent(error.message || 'oauth_failed')}`);
@@ -11049,6 +12317,245 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Hildale → Pyvott multi-line transfer. Per CLAUDE.md, uses InventoryMovement.apply
+  // with eventType=TRANSFER so hildaleQty decrements and availableForSaleQty increments
+  // without ever touching pivotQty (Extensiv remains the source of truth for that field).
+  app.post("/api/inventory/transfer-to-pyvott", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { lines, reason } = req.body as {
+        lines?: Array<{ itemId?: string; quantity?: number }>;
+        reason?: string;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item is required" });
+      }
+
+      const cleanReason = typeof reason === "string" ? reason.trim() : "";
+      const noteTag = cleanReason
+        ? `[transfer_to_pyvott] ${cleanReason}`
+        : `[transfer_to_pyvott]`;
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const inventoryMovement = new InventoryMovement(storage);
+      const results: Array<{
+        itemId: string;
+        sku: string;
+        quantity: number;
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", sku: "", quantity: 0, success: false, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, sku: "", quantity: 0, success: false, error: `Line ${i + 1}: quantity must be a positive integer` });
+          continue;
+        }
+
+        const result = await inventoryMovement.apply({
+          eventType: "TRANSFER",
+          itemId,
+          quantity: qty,
+          location: "HILDALE",
+          source: "USER",
+          userId,
+          userName,
+          notes: noteTag,
+        });
+
+        results.push({
+          itemId,
+          sku: result.sku,
+          quantity: qty,
+          success: result.success,
+          error: result.error,
+        });
+      }
+
+      const allFailed = results.every((r) => !r.success);
+      res.status(allFailed ? 400 : 201).json({ results });
+    } catch (error: any) {
+      console.error("[Transfer to Pyvott] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to process transfer" });
+    }
+  });
+
+  // Recompute items.daily_usage from sales velocity and BOM rollups.
+  // Always overwrites (the same job runs nightly via the scheduler at 12:05
+  // AM MT) — operators hit this after big sales events so the dashboard
+  // reflects today's traffic without waiting.
+  app.post("/api/inventory/refresh-velocity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { refreshAllItems } = await import("./services/velocity-service");
+      const result = await refreshAllItems({ onlyZeroOrNull: false });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Refresh Velocity] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to refresh velocity" });
+    }
+  });
+
+  // Set fxInProcessQty directly — used when logging an FX order without
+  // receiving stock yet. Body: { itemId, quantity, notes? }. Writes an
+  // inventoryTransactions row with type='FX_ADJUSTMENT' and quantity=abs(delta)
+  // so the audit trail shows the change. Operates on finished products only.
+  app.patch("/api/inventory/fx-in-process", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, quantity, notes } = req.body as {
+        itemId?: string;
+        quantity?: number;
+        notes?: string;
+      };
+
+      const id = typeof itemId === "string" ? itemId.trim() : "";
+      const qty = Number(quantity);
+
+      if (!id) {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 0) {
+        return res.status(400).json({ error: "quantity must be a non-negative integer" });
+      }
+
+      const item = await storage.getItem(id);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      if (item.type !== "finished_product") {
+        return res.status(400).json({ error: "FX in-production tracking applies only to finished products" });
+      }
+
+      const previous = item.fxInProcessQty ?? 0;
+      const delta = qty - previous;
+
+      if (delta === 0) {
+        return res.json({ item, delta: 0 });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const updated = await storage.updateItem(id, { fxInProcessQty: qty });
+
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      const noteTag = cleanNotes
+        ? `[fx_adjustment ${previous}→${qty}] ${cleanNotes}`
+        : `[fx_adjustment ${previous}→${qty}]`;
+
+      await storage.createInventoryTransaction({
+        itemId: id,
+        itemType: "FINISHED",
+        type: "FX_ADJUSTMENT",
+        location: "HILDALE", // schema requires a location; FX activity lands at Hildale
+        quantity: Math.abs(delta),
+        createdBy: userId,
+        createdByName: userName,
+        notes: noteTag,
+      });
+
+      res.json({ item: updated, delta });
+    } catch (error: any) {
+      console.error("[FX In-Process Update] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update FX in-process quantity" });
+    }
+  });
+
+  // Receive finished units from FX Industries into Hildale. Decrements
+  // fxInProcessQty and increments hildaleQty atomically per item, and writes
+  // an inventoryTransactions row with type='RECEIVED_FROM_FX' for the audit
+  // trail. Operates on finished products only.
+  app.post("/api/inventory/receive-from-fx", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { lines, reason } = req.body as {
+        lines?: Array<{ itemId?: string; quantity?: number }>;
+        reason?: string;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "At least one line item is required" });
+      }
+
+      const cleanReason = typeof reason === "string" ? reason.trim() : "";
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const results: Array<{
+        itemId: string;
+        sku: string;
+        quantity: number;
+        success: boolean;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", sku: "", quantity: 0, success: false, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, sku: "", quantity: 0, success: false, error: `Line ${i + 1}: quantity must be a positive integer` });
+          continue;
+        }
+
+        const item = await storage.getItem(itemId);
+        if (!item) {
+          results.push({ itemId, sku: "", quantity: qty, success: false, error: "Item not found" });
+          continue;
+        }
+        if (item.type !== "finished_product") {
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: "FX receipts apply only to finished products" });
+          continue;
+        }
+        const fxAvailable = item.fxInProcessQty ?? 0;
+        if (qty > fxAvailable) {
+          results.push({ itemId, sku: item.sku, quantity: qty, success: false, error: `Only ${fxAvailable} in process at FX` });
+          continue;
+        }
+
+        const newFx = fxAvailable - qty;
+        const newHildale = (item.hildaleQty ?? 0) + qty;
+        await storage.updateItem(itemId, {
+          fxInProcessQty: newFx,
+          hildaleQty: newHildale,
+        });
+
+        await storage.createInventoryTransaction({
+          itemId,
+          itemType: "FINISHED",
+          type: "RECEIVED_FROM_FX",
+          location: "HILDALE",
+          quantity: qty,
+          createdBy: userId,
+          createdByName: userName,
+          notes: cleanReason ? `[receive_from_fx] ${cleanReason}` : `[receive_from_fx]`,
+        });
+
+        results.push({ itemId, sku: item.sku, quantity: qty, success: true });
+      }
+
+      const allFailed = results.every((r) => !r.success);
+      res.status(allFailed ? 400 : 201).json({ results });
+    } catch (error: any) {
+      console.error("[Receive from FX] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to record FX receipt" });
+    }
+  });
+
   app.post("/api/transactions/transfer", requireAuth, async (req: Request, res: Response) => {
     try {
       const { itemId, fromLocation, toLocation, quantity, notes } = req.body;
@@ -11120,6 +12627,224 @@ Notes: ${po.notes || 'None'}
     } catch (error: any) {
       console.error("[Transaction] Error processing production:", error);
       res.status(500).json({ error: error.message || "Failed to process production" });
+    }
+  });
+
+  // POST /api/receive-stock — Clarence's ad-hoc receiving flow.
+  // Accepts { supplierId?, lines: [{itemId, quantity}] }. For each line:
+  // bumps items.current_stock and inserts an inventory_transactions row with
+  // type='RECEIVE'. supplierId may be null (Clarence skipped supplier picker).
+  app.post("/api/receive-stock", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { supplierId: rawSupplierId, lines } = req.body as {
+        supplierId?: string | null;
+        lines?: Array<{ itemId?: string; quantity?: number; lotNumber?: string | null }>;
+      };
+
+      if (!Array.isArray(lines) || lines.length === 0) {
+        return res.status(400).json({ error: "lines array is required" });
+      }
+
+      let supplierId: string | null = null;
+      if (typeof rawSupplierId === "string" && rawSupplierId.trim()) {
+        const supplier = await storage.getSupplier(rawSupplierId.trim());
+        if (!supplier) {
+          return res.status(400).json({ error: "supplier not found" });
+        }
+        supplierId = supplier.id;
+      }
+
+      const userId = req.session.userId!;
+      const receiveUser = await storage.getUser(userId);
+      const receiveUserName = receiveUser?.email ?? null;
+
+      const results: Array<{
+        itemId: string;
+        itemName: string;
+        success: boolean;
+        quantity: number;
+        newStock: number;
+        error?: string;
+      }> = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const itemId = typeof line?.itemId === "string" ? line.itemId.trim() : "";
+        const qty = Number(line?.quantity);
+
+        if (!itemId) {
+          results.push({ itemId: "", itemName: "", success: false, quantity: 0, newStock: 0, error: `Line ${i + 1}: itemId is required` });
+          continue;
+        }
+        if (!Number.isInteger(qty) || qty <= 0) {
+          results.push({ itemId, itemName: "", success: false, quantity: 0, newStock: 0, error: `Line ${i + 1}: quantity must be a positive whole number` });
+          continue;
+        }
+
+        try {
+          const item = await storage.getItem(itemId);
+          if (!item) {
+            results.push({ itemId, itemName: "", success: false, quantity: qty, newStock: 0, error: "Item not found" });
+            continue;
+          }
+          if (item.type !== "component") {
+            results.push({ itemId, itemName: item.name, success: false, quantity: qty, newStock: item.currentStock ?? 0, error: "Only components can be received here" });
+            continue;
+          }
+
+          const before = item.currentStock ?? 0;
+          const newStock = before + qty;
+          await storage.updateItem(item.id, { currentStock: newStock });
+          const lotNumber = typeof line?.lotNumber === "string" && line.lotNumber.trim()
+            ? line.lotNumber.trim()
+            : null;
+          const tx = await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "RAW",
+            type: "RECEIVE",
+            location: "N/A",
+            quantity: qty,
+            supplierId,
+            lotNumber,
+            createdBy: userId,
+            createdByName: receiveUserName,
+            notes: supplierId ? `Received via /receive-stock` : `Received via /receive-stock (no supplier)`,
+          });
+          // When a lot number is provided, also write to inventory_lots so
+          // BOM_CONSUMPTION can do FIFO draws against it later.
+          if (lotNumber) {
+            await storage.createInventoryLot({
+              itemId: item.id,
+              lotNumber,
+              originalQty: qty,
+              remainingQty: qty,
+              sourceTransactionId: tx.id,
+              supplierId,
+            });
+          }
+
+          results.push({ itemId: item.id, itemName: item.name, success: true, quantity: qty, newStock });
+        } catch (err: any) {
+          results.push({ itemId, itemName: "", success: false, quantity: qty, newStock: 0, error: err?.message ?? "Unknown error" });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+
+      // Realtime broadcast for every received item that actually changed
+      // stock — the Raw Materials page will re-fetch on receipt.
+      const receivedIds = results.filter((r) => r.success && r.quantity > 0).map((r) => r.itemId);
+      if (receivedIds.length > 0) {
+        wsInventoryService.broadcast({
+          itemIds: receivedIds,
+          fields: ["currentStock"],
+          reason: "RECEIVE",
+        });
+      }
+
+      res.status(successCount === 0 ? 400 : 201).json({
+        supplierId,
+        summary: { total: results.length, success: successCount, failed: results.length - successCount },
+        results,
+      });
+    } catch (error: any) {
+      console.error("[Receive Stock] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to receive stock" });
+    }
+  });
+
+  // POST /api/inventory/writeoff — write off damaged/lost/scrap stock.
+  // Decrements the appropriate field (hildale_qty for finished products at
+  // HILDALE; current_stock for components) and records a negative-quantity
+  // inventory_transactions row tagged with type='WRITEOFF', so SUM(quantity)
+  // over an item returns the net stock movement directly.
+  // Hard floor: refuses to drop the resulting balance below -10 to prevent
+  // accidental wipeouts from typos.
+  app.post("/api/inventory/writeoff", requireAuth, requireRole("manager"), async (req: Request, res: Response) => {
+    try {
+      const { itemId, location, quantity, reason, notes } = req.body as {
+        itemId?: string;
+        location?: string;
+        quantity?: number;
+        reason?: string;
+        notes?: string;
+      };
+
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (location !== "HILDALE" && location !== "COMPONENT") {
+        return res.status(400).json({ error: "location must be 'HILDALE' or 'COMPONENT'" });
+      }
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "quantity must be a positive whole number" });
+      }
+      const validReasons = ["Damaged", "Defective", "Lost", "Scrap", "Other"];
+      if (!reason || !validReasons.includes(reason)) {
+        return res.status(400).json({ error: `reason must be one of: ${validReasons.join(", ")}` });
+      }
+
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(400).json({ error: "Item not found" });
+      }
+
+      // Location must match item type. Pyvott write-offs aren't supported here
+      // — Extensiv owns that field per the inventory invariants.
+      if (location === "HILDALE" && item.type !== "finished_product") {
+        return res.status(400).json({ error: "HILDALE write-offs require a finished product" });
+      }
+      if (location === "COMPONENT" && item.type !== "component") {
+        return res.status(400).json({ error: "COMPONENT write-offs require a component" });
+      }
+
+      const field = location === "HILDALE" ? "hildaleQty" : "currentStock";
+      const before = ((item as any)[field] as number | null | undefined) ?? 0;
+      const after = before - qty;
+      const FLOOR = -10;
+      if (after < FLOOR) {
+        return res.status(400).json({
+          error: `Result would be ${after} (below floor of ${FLOOR}). Current stock is ${before}; max write-off is ${before - FLOOR}.`,
+        });
+      }
+
+      await storage.updateItem(item.id, { [field]: after } as any);
+
+      const userId = req.session.userId!;
+      const writeoffUser = await storage.getUser(userId);
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      await storage.createInventoryTransaction({
+        itemId: item.id,
+        itemType: item.type === "finished_product" ? "FINISHED" : "RAW",
+        type: "WRITEOFF",
+        location: location === "HILDALE" ? "HILDALE" : "N/A",
+        quantity: -qty, // stored negative so SUM(quantity) gives net stock change
+        reason,
+        createdBy: userId,
+        createdByName: writeoffUser?.email ?? null,
+        notes: cleanNotes || null,
+      });
+
+      // Realtime broadcast so any open Inventory / Raw Materials page sees
+      // the new balance without a manual refresh.
+      wsInventoryService.broadcast({
+        itemIds: [item.id],
+        fields: [field],
+        reason: "WRITEOFF",
+      });
+
+      res.status(201).json({
+        success: true,
+        itemId: item.id,
+        itemName: item.name,
+        before,
+        after,
+        quantity: qty,
+      });
+    } catch (error: any) {
+      console.error("[Writeoff] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to write off stock" });
     }
   });
 
@@ -11343,6 +13068,551 @@ Notes: ${po.notes || 'None'}
       res.json({ plan, targetQty });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to generate production plan" });
+    }
+  });
+
+  // GET /api/production/plan-week?startDate=YYYY-MM-DD
+  // Forward-looking weekly build plan for /production. Combines BOM × 90d
+  // velocity (the demand pull) with current component stock + inbound POs
+  // (the supply) and open backorders (the priority signal) to produce a
+  // 5-workday schedule plus an aggregate materials check.
+  app.get("/api/production/plan-week", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // Anchor the week to the requested start date or today (always Monday-aligned).
+      const baseDate = typeof req.query.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.startDate)
+        ? new Date(req.query.startDate)
+        : new Date();
+      // Snap to Monday of that week. JS getDay: Sun=0, Mon=1, ... Sat=6.
+      const dayOfWeek = baseDate.getDay();
+      const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const weekStart = new Date(baseDate);
+      weekStart.setHours(0, 0, 0, 0);
+      weekStart.setDate(weekStart.getDate() + mondayOffset);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+      const fmtKey = (d: Date) => d.toISOString().slice(0, 10);
+
+      // ── Pull every dataset we need in one round of queries ──
+      const [allItems, velocity, allPOs, allPOLines, allSOs] = await Promise.all([
+        storage.getAllItems(),
+        storage.getSkuSalesVelocity(90),
+        storage.getAllPurchaseOrders(),
+        storage.getAllPurchaseOrderLines(),
+        storage.getAllSalesOrders(),
+      ]);
+      const finishedProducts = allItems.filter((i) => i.type === "finished_product");
+      const componentById = new Map(allItems.filter((i) => i.type === "component").map((c) => [c.id, c] as const));
+      const velocityMap = new Map(velocity.map((v) => [v.sku, v.unitsSold] as const));
+
+      // ── Inbound PO arrivals per component, sorted by arrival ──
+      // Only count PO lines with qty still owed (qtyReceived < qtyOrdered)
+      // and a non-terminal PO status. expectedDate is the arrival window.
+      const PO_TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      type Inbound = { date: Date; qty: number; poNumber: string; supplierName: string | null };
+      const inboundByComponent = new Map<string, Inbound[]>();
+      const poById = new Map(allPOs.map((p) => [p.id, p] as const));
+      for (const line of allPOLines) {
+        const po = poById.get(line.purchaseOrderId);
+        if (!po) continue;
+        if (PO_TERMINAL.has(po.status)) continue;
+        if ((po as any).isHistorical) continue;
+        const owed = (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0);
+        if (owed <= 0) continue;
+        const eta = (po as any).expectedDate as Date | string | null | undefined;
+        if (!eta) continue;
+        const etaDate = new Date(eta);
+        if (Number.isNaN(etaDate.getTime())) continue;
+        const arr = inboundByComponent.get(line.itemId) ?? [];
+        arr.push({
+          date: etaDate,
+          qty: owed,
+          poNumber: po.poNumber,
+          supplierName: po.supplierName ?? null,
+        });
+        inboundByComponent.set(line.itemId, arr);
+      }
+      for (const arr of Array.from(inboundByComponent.values())) {
+        arr.sort((a, b) => a.date.getTime() - b.date.getTime());
+      }
+
+      // ── Open backorder qty per finished product SKU ──
+      const SO_TERMINAL = new Set(["FULFILLED", "CANCELLED", "DELIVERED", "REFUNDED", "PENDING_REFUND"]);
+      const backorderBySku = new Map<string, number>();
+      for (const so of allSOs) {
+        if (SO_TERMINAL.has(so.status)) continue;
+        const lines = await storage.getSalesOrderLines(so.id);
+        for (const line of lines) {
+          const open = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyShipped ?? 0));
+          if (open <= 0 || !line.sku) continue;
+          backorderBySku.set(line.sku, (backorderBySku.get(line.sku) ?? 0) + open);
+        }
+      }
+
+      // ── Aggregate weekly demand from each product → its components ──
+      // Per-product weekly target = ceil(dailySales × 7) + open backorders
+      // (so a backordered product gets prioritized capacity automatically).
+      type ProductPlan = {
+        itemId: string;
+        sku: string;
+        name: string;
+        dailySales: number;
+        weeklyTarget: number;
+        backordered: number;
+        currentStock: number;
+        currentBuildable: number;        // from on-hand components today
+        weeklyBuildable: number;         // including inbound POs arriving this week
+        earliestBuildable: string | null; // YYYY-MM-DD when the first unit can start
+        blockedBy: Array<{ componentId: string; componentName: string; shortBy: number; earliestArrival: string | null }>;
+        scheduledByDay: Record<string, number>; // YYYY-MM-DD → qty assigned that day
+      };
+      const productPlans: ProductPlan[] = [];
+
+      // Component demand totals across products (for the materials check).
+      type ComponentDemand = { id: string; name: string; required: number; onHand: number };
+      const componentDemand = new Map<string, ComponentDemand>();
+
+      for (const product of finishedProducts) {
+        const unitsSold90 = velocityMap.get(product.sku) ?? 0;
+        const dailySales = unitsSold90 / 90;
+        const backordered = backorderBySku.get(product.sku) ?? 0;
+        const baseWeekly = Math.ceil(dailySales * 7);
+        const weeklyTarget = baseWeekly + backordered;
+        if (weeklyTarget <= 0) continue;
+
+        const bom = await storage.getBillOfMaterialsByProductId(product.id);
+        if (!bom || bom.length === 0) {
+          productPlans.push({
+            itemId: product.id,
+            sku: product.sku,
+            name: product.name,
+            dailySales: Math.round(dailySales * 100) / 100,
+            weeklyTarget,
+            backordered,
+            currentStock: (product.hildaleQty ?? 0) + (product.pivotQty ?? 0),
+            currentBuildable: 0,
+            weeklyBuildable: 0,
+            earliestBuildable: null,
+            blockedBy: [{ componentId: "", componentName: "(no BOM defined)", shortBy: weeklyTarget, earliestArrival: null }],
+            scheduledByDay: {},
+          });
+          continue;
+        }
+
+        // Tally per-component demand for this product into the global map.
+        let currentBuildable = Number.POSITIVE_INFINITY;
+        let weeklyBuildable = Number.POSITIVE_INFINITY;
+        const blockedBy: ProductPlan["blockedBy"] = [];
+
+        for (const entry of bom) {
+          const comp = componentById.get(entry.componentId);
+          const compName = comp?.name ?? "(unknown)";
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const perUnit = entry.quantityRequired * (1 + wastage / 100);
+          const need = Math.ceil(perUnit * weeklyTarget);
+          const onHand = comp?.currentStock ?? 0;
+
+          // Aggregate for the materials check.
+          const agg = componentDemand.get(entry.componentId) ?? {
+            id: entry.componentId,
+            name: compName,
+            required: 0,
+            onHand,
+          };
+          agg.required += need;
+          componentDemand.set(entry.componentId, agg);
+
+          // What's reachable today vs by end-of-week (with inbound POs)?
+          const inbound = inboundByComponent.get(entry.componentId) ?? [];
+          const inboundThisWeek = inbound
+            .filter((i) => i.date <= weekEnd)
+            .reduce((s, i) => s + i.qty, 0);
+          const todayCanMake = perUnit > 0 ? Math.floor(onHand / perUnit) : Number.POSITIVE_INFINITY;
+          const weekCanMake = perUnit > 0 ? Math.floor((onHand + inboundThisWeek) / perUnit) : Number.POSITIVE_INFINITY;
+          if (todayCanMake < currentBuildable) currentBuildable = todayCanMake;
+          if (weekCanMake < weeklyBuildable) weeklyBuildable = weekCanMake;
+
+          if (todayCanMake < weeklyTarget) {
+            const earliestForOne = inbound.length > 0 ? fmtKey(inbound[0].date) : null;
+            blockedBy.push({
+              componentId: entry.componentId,
+              componentName: compName,
+              shortBy: Math.max(0, need - (onHand + inboundThisWeek)),
+              earliestArrival: earliestForOne,
+            });
+          }
+        }
+
+        const finiteCurrent = Number.isFinite(currentBuildable) ? currentBuildable : weeklyTarget;
+        const finiteWeekly = Number.isFinite(weeklyBuildable) ? weeklyBuildable : weeklyTarget;
+
+        // Earliest buildable date: today if at least one unit fits today,
+        // otherwise the earliest arrival across the blockers.
+        let earliestBuildable: string | null = null;
+        if (finiteCurrent >= 1) {
+          earliestBuildable = fmtKey(weekStart);
+        } else {
+          const arrivals = blockedBy
+            .map((b) => b.earliestArrival)
+            .filter((d): d is string => !!d)
+            .sort();
+          earliestBuildable = arrivals[0] ?? null;
+        }
+
+        productPlans.push({
+          itemId: product.id,
+          sku: product.sku,
+          name: product.name,
+          dailySales: Math.round(dailySales * 100) / 100,
+          weeklyTarget,
+          backordered,
+          currentStock: (product.hildaleQty ?? 0) + (product.pivotQty ?? 0),
+          currentBuildable: Math.max(0, finiteCurrent),
+          weeklyBuildable: Math.max(0, Math.min(finiteWeekly, weeklyTarget)),
+          earliestBuildable,
+          blockedBy,
+          scheduledByDay: {},
+        });
+      }
+
+      // ── Sort by priority: backorders first, then by daily sales velocity ──
+      productPlans.sort((a, b) => {
+        if (a.backordered !== b.backordered) return b.backordered - a.backordered;
+        return b.dailySales - a.dailySales;
+      });
+
+      // ── Spread each product's weeklyBuildable across Mon–Fri evenly ──
+      // Heuristic v1: simple equal split, rounded so the day-by-day numbers
+      // sum back to the weekly figure. Fancier optimization (one product per
+      // shift, FIFO component drawdown) can layer on top later.
+      const workdays: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(weekStart);
+        d.setDate(d.getDate() + i);
+        workdays.push(fmtKey(d));
+      }
+      for (const p of productPlans) {
+        const total = p.weeklyBuildable;
+        if (total <= 0) continue;
+        const per = Math.floor(total / 5);
+        let remainder = total - per * 5;
+        for (const day of workdays) {
+          const qty = per + (remainder > 0 ? 1 : 0);
+          if (remainder > 0) remainder--;
+          if (qty > 0) p.scheduledByDay[day] = qty;
+        }
+      }
+
+      // ── Materials check ──
+      const materialsCheck = Array.from(componentDemand.values())
+        .map((c) => {
+          const inbound = inboundByComponent.get(c.id) ?? [];
+          const inboundThisWeek = inbound
+            .filter((i) => i.date <= weekEnd)
+            .reduce((s, i) => s + i.qty, 0);
+          const gap = Math.max(0, c.required - c.onHand);
+          const gapAfterInbound = Math.max(0, c.required - c.onHand - inboundThisWeek);
+          const earliestArrival = inbound[0]?.date ? fmtKey(inbound[0].date) : null;
+          return {
+            componentId: c.id,
+            componentName: c.name,
+            required: c.required,
+            onHand: c.onHand,
+            inboundThisWeek,
+            gap,
+            gapAfterInbound,
+            earliestArrival,
+          };
+        })
+        .filter((m) => m.gap > 0)
+        .sort((a, b) => b.gap - a.gap);
+
+      res.json({
+        weekStart: fmtKey(weekStart),
+        weekEnd: fmtKey(new Date(weekEnd.getTime() - 1)),
+        workdays,
+        products: productPlans,
+        materialsCheck,
+      });
+    } catch (error: any) {
+      console.error("[Production Plan Week] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute weekly plan" });
+    }
+  });
+
+  // ============================================================================
+  // PRODUCTION LOGS — per-action shop floor entries (Clarence's mobile UI)
+  // ============================================================================
+
+  // POST /api/production-logs — log a single action (built | boxed).
+  // 'built' runs BOM_CONSUMPTION per component + PRODUCTION_COMPLETED for the
+  // finished good. 'boxed' is log-only. (Foam rollers are received from Pednar,
+  // not made in-house, so there is no rolls_made action.)
+  app.post("/api/production-logs", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, actionType, quantity, productionDate, notes } = req.body as {
+        itemId?: string;
+        actionType?: string;
+        quantity?: number;
+        productionDate?: string;
+        notes?: string;
+      };
+
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      if (actionType !== "built" && actionType !== "boxed") {
+        return res.status(400).json({ error: "actionType must be 'built' or 'boxed'" });
+      }
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "quantity must be a positive whole number" });
+      }
+      const date = typeof productionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(productionDate)
+        ? productionDate
+        : new Date().toISOString().slice(0, 10);
+
+      const item = await storage.getItem(itemId);
+      if (!item) {
+        return res.status(400).json({ error: "Item not found" });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      const auditNote = cleanNotes
+        ? `[${actionType}] ${cleanNotes}`
+        : `[${actionType}]`;
+
+      const warnings: string[] = [];
+      let inventoryUpdated = false;
+
+      // Create the production_logs row first so the BOM consumption FIFO
+      // draw can attribute lot consumption events back to this build. If
+      // any later inventory call fails, the log is preserved and the
+      // failures are surfaced via warnings — that's a more useful audit
+      // state than orphaned consumption with no parent log.
+      const log = await storage.createProductionLog({
+        itemId: item.id,
+        actionType,
+        quantity: qty,
+        productionDate: date,
+        notes: cleanNotes || null,
+        createdBy: userId,
+      });
+
+      if (actionType === "built") {
+        if (item.type !== "finished_product") {
+          warnings.push(`${item.name} is not a finished product — skipped inventory update.`);
+        } else {
+          const bom = await storage.getBillOfMaterialsByProductId(item.id);
+          if (bom.length === 0) {
+            warnings.push(`No BOM defined for ${item.name} — finished good incremented but no components consumed.`);
+          }
+
+          const inventoryMovement = new InventoryMovement(storage);
+          for (const entry of bom) {
+            const component = await storage.getItem(entry.componentId);
+            if (!component) {
+              warnings.push(`Component ${entry.componentId} not found — skipped.`);
+              continue;
+            }
+            const wastageMultiplier = 1 + (entry.wastagePercent ?? 0) / 100;
+            const consumeQty = Math.ceil(entry.quantityRequired * qty * wastageMultiplier);
+            const onHand = component.currentStock ?? 0;
+            if (consumeQty > onHand) {
+              warnings.push(`${component.name}: short by ${consumeQty - onHand} (needed ${consumeQty}, on hand ${onHand}). Built anyway.`);
+            }
+            const result = await inventoryMovement.apply({
+              eventType: "BOM_CONSUMPTION",
+              itemId: component.id,
+              quantity: consumeQty,
+              source: "USER",
+              userId,
+              userName,
+              notes: `[built] ${item.name} ×${qty}${cleanNotes ? ` — ${cleanNotes}` : ""}`,
+              // Drives FIFO lot draw + lot_consumption_events linkage so a
+              // recall can trace back from any lot to this build.
+              productionLogId: log.id,
+            });
+            if (!result.success) {
+              warnings.push(`${component.name}: ${result.error}`);
+            }
+          }
+
+          const buildResult = await inventoryMovement.apply({
+            eventType: "PRODUCTION_COMPLETED",
+            itemId: item.id,
+            quantity: qty,
+            location: "HILDALE",
+            source: "USER",
+            userId,
+            userName,
+            notes: auditNote,
+          });
+          if (!buildResult.success) {
+            return res.status(400).json({ error: buildResult.error });
+          }
+          inventoryUpdated = true;
+        }
+      }
+      // 'boxed' = log only, no inventory side-effect
+
+      res.status(201).json({ log, warnings, inventoryUpdated });
+    } catch (error: any) {
+      console.error("[Production Logs] Error creating log:", error);
+      res.status(500).json({ error: error.message || "Failed to log production" });
+    }
+  });
+
+  // GET /api/production-logs/today-totals?date=YYYY-MM-DD&itemIds=id1,id2,...
+  // Returns totals per actionType per itemId for the given date. Caller passes the
+  // date so we don't have to guess the user's local timezone.
+  app.get("/api/production-logs/today-totals", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const date = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : new Date().toISOString().slice(0, 10);
+      const itemIdsRaw = typeof req.query.itemIds === "string" ? req.query.itemIds : "";
+      const itemIds = itemIdsRaw.split(",").map(s => s.trim()).filter(Boolean);
+
+      const totals: Record<string, { built: number; boxed: number }> = {};
+      for (const id of itemIds) totals[id] = { built: 0, boxed: 0 };
+
+      // Single query covering all requested items for the date.
+      const allForDate = await storage.getProductionLogsForRange(date, date);
+      for (const log of allForDate) {
+        if (itemIds.length > 0 && !itemIds.includes(log.itemId)) continue;
+        if (!totals[log.itemId]) totals[log.itemId] = { built: 0, boxed: 0 };
+        const k = log.actionType as "built" | "boxed";
+        if (k in totals[log.itemId]) totals[log.itemId][k] += log.quantity;
+      }
+
+      res.json({ date, totals });
+    } catch (error: any) {
+      console.error("[Production Logs] Error fetching today totals:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch totals" });
+    }
+  });
+
+  // GET /api/production-logs/week?endDate=YYYY-MM-DD&days=7
+  // Returns logs across the window, joined with item name for display.
+  app.get("/api/production-logs/week", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const endDate = typeof req.query.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.endDate)
+        ? req.query.endDate
+        : new Date().toISOString().slice(0, 10);
+      const daysParam = Number(req.query.days);
+      const days = Number.isInteger(daysParam) && daysParam > 0 && daysParam <= 60 ? daysParam : 7;
+
+      const start = new Date(endDate + "T00:00:00Z");
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+      const startDate = start.toISOString().slice(0, 10);
+
+      const logs = await storage.getProductionLogsForRange(startDate, endDate);
+      const items = await storage.getAllItems();
+      const nameById = new Map(items.map(i => [i.id, i.name] as const));
+
+      const enriched = logs.map(l => ({
+        id: l.id,
+        itemId: l.itemId,
+        itemName: nameById.get(l.itemId) ?? "(unknown)",
+        actionType: l.actionType,
+        quantity: l.quantity,
+        productionDate: l.productionDate,
+        notes: l.notes,
+        createdAt: l.createdAt,
+      }));
+
+      res.json({ startDate, endDate, logs: enriched });
+    } catch (error: any) {
+      console.error("[Production Logs] Error fetching week:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch week" });
+    }
+  });
+
+  // GET /api/production-logs/buildable?itemId=xxx
+  // Returns how many units of a finished product the current component stock
+  // supports, plus the name of the limiting component. Read-only — used by the
+  // pre-build hint in the production sheet.
+  app.get("/api/production-logs/buildable", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const itemId = typeof req.query.itemId === "string" ? req.query.itemId : "";
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+
+      const bom = await storage.getBillOfMaterialsByProductId(item.id);
+      if (bom.length === 0) {
+        return res.json({ hasBOM: false, canBuild: null, limitingComponentName: null });
+      }
+
+      let canBuild = Number.POSITIVE_INFINITY;
+      let limitingComponentName: string | null = null;
+      for (const entry of bom) {
+        const component = await storage.getItem(entry.componentId);
+        if (!component) {
+          // Treat a missing component as a hard zero — can't build until catalog is fixed.
+          canBuild = 0;
+          limitingComponentName = "(missing component)";
+          continue;
+        }
+        const wastageMultiplier = 1 + (entry.wastagePercent ?? 0) / 100;
+        const perUnit = entry.quantityRequired * wastageMultiplier;
+        const onHand = component.currentStock ?? 0;
+        const max = perUnit > 0 ? Math.floor(onHand / perUnit) : Number.POSITIVE_INFINITY;
+        if (max < canBuild) {
+          canBuild = max;
+          limitingComponentName = component.name;
+        }
+      }
+
+      res.json({
+        hasBOM: true,
+        canBuild: Number.isFinite(canBuild) ? canBuild : null,
+        limitingComponentName,
+      });
+    } catch (error: any) {
+      console.error("[Production Logs] Error computing buildable:", error);
+      res.status(500).json({ error: error.message || "Failed to compute buildable" });
+    }
+  });
+
+  // POST /api/shop-issues — Clarence files an issue from the production sheet.
+  app.post("/api/shop-issues", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, issueType, notes } = req.body as {
+        itemId?: string;
+        issueType?: string;
+        notes?: string;
+      };
+      if (!itemId || typeof itemId !== "string") {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+      const validTypes = ["defective_component", "short_shipment", "equipment_problem", "other"];
+      if (!issueType || !validTypes.includes(issueType)) {
+        return res.status(400).json({ error: `issueType must be one of: ${validTypes.join(", ")}` });
+      }
+      const cleanNotes = typeof notes === "string" ? notes.trim() : "";
+      if (!cleanNotes) {
+        return res.status(400).json({ error: "notes is required" });
+      }
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(400).json({ error: "Item not found" });
+
+      const userId = req.session.userId!;
+      const issue = await storage.createShopIssue({
+        itemId,
+        issueType,
+        notes: cleanNotes,
+        reportedBy: userId,
+      });
+      res.status(201).json({ issue });
+    } catch (error: any) {
+      console.error("[Shop Issues] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to file issue" });
     }
   });
 
@@ -12336,11 +14606,24 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Auto-draft POs from the deterministic reorder calculation. Idempotent:
+  // re-running the same day stacks already-created drafts into alreadyExists[].
+  app.post("/api/purchase-orders/auto-draft", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runAutoDraftPoGeneration } = await import("./services/auto-draft-po-service");
+      const result = await runAutoDraftPoGeneration();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Auto-Draft PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to generate auto-draft POs" });
+    }
+  });
+
   app.post("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     let createdPOId: string | null = null;
     try {
       const { lines, ...poData } = req.body;
-      
+
       // Auto-generate PO number if not provided
       if (!poData.poNumber) {
         const allPOs = await storage.getAllPurchaseOrders();
@@ -12443,10 +14726,37 @@ Notes: ${po.notes || 'None'}
       }
 
       const createdLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
-      
+
       // Recalculate PO totals after creating all lines
       if (createdLines.length > 0) {
         await storage.recalculatePOTotals(purchaseOrder.id);
+      }
+
+      // Auto-compute expectedDate from supplier_items.lead_time_days when the
+      // caller didn't provide one. Take the max lead time across the PO's
+      // lines so the slowest line drives the estimate (conservative).
+      // Idempotent: only sets when expectedDate is null AND we found a real
+      // (>0) lead time on at least one line.
+      if (!purchaseOrder.expectedDate && createdLines.length > 0 && purchaseOrder.supplierId) {
+        const allSupplierItems = await storage.getAllSupplierItems();
+        const supplierLeadTimes = new Map<string, number>();
+        for (const si of allSupplierItems) {
+          if (si.supplierId !== purchaseOrder.supplierId) continue;
+          if (typeof si.leadTimeDays === "number" && si.leadTimeDays > 0) {
+            supplierLeadTimes.set(si.itemId, si.leadTimeDays);
+          }
+        }
+        let maxLead = 0;
+        for (const line of createdLines) {
+          const lt = supplierLeadTimes.get(line.itemId) ?? 0;
+          if (lt > maxLead) maxLead = lt;
+        }
+        if (maxLead > 0) {
+          const base = purchaseOrder.orderDate ? new Date(purchaseOrder.orderDate) : new Date();
+          const eta = new Date(base);
+          eta.setDate(eta.getDate() + maxLead);
+          await storage.updatePurchaseOrder(purchaseOrder.id, { expectedDate: eta });
+        }
       }
       
       // Update linked recommendations with decision tracking and accuracy
@@ -12511,6 +14821,16 @@ Notes: ${po.notes || 'None'}
       } catch (logError) {
         console.warn('[PurchaseOrder] Failed to log PO creation:', logError);
       }
+
+      // Roger notification — fire and forget. Try to honour the optional
+      // orderedBy field from the body (the Take Action / Auto-Draft flows
+      // pass it explicitly), otherwise the email signs as "Unknown" — which
+      // is still better than no notification.
+      const orderedBy = typeof req.body?.orderedBy === "string" ? req.body.orderedBy.trim() : null;
+      void (async () => {
+        const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+        notifyRogerOfNewPO({ poId: purchaseOrder.id, orderedBy, source: "manual" }).catch(() => {});
+      })();
 
       res.status(201).json({ ...purchaseOrder, lines: createdLines });
     } catch (error: any) {
@@ -12895,6 +15215,757 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // PATCH the FX build-progress status on a PO. For FX POs (supplierId='1')
+  // with finished-product line items, transitions auto-adjust
+  // fx_in_process_qty / hildale_qty as follows:
+  //
+  //   below_threshold (ordered, confirmed)  -- no FX contribution
+  //   at_threshold    (in_production, shipped)  -- contributes to fx_in_process_qty
+  //   received        (terminal)
+  //
+  // - below → at:        fx_in_process_qty += line.qtyOrdered
+  // - at    → below:     fx_in_process_qty -= line.qtyOrdered (floor 0)
+  // - any   → received:  if was at, fx -= qty (floor 0); always hildale += qty;
+  //                      log inventory_transactions type='RECEIVED_FROM_FX'
+  // - received → other:  no inventory side effect (paper-trail revert only;
+  //                      operator must manually correct via the FX modal if
+  //                      they actually need to undo a real receipt)
+  //
+  // Non-FX POs and component lines update poStatus only — no side effects.
+  // Quick-log: create a single-line PO when an operator placed an order
+  // directly on a supplier site (e.g. McMaster, Uline). Body shape:
+  //   { supplierId, itemId, qtyOrdered, unitCost? | totalCost?,
+  //     invoiceNumber?, expectedDate? }
+  // Total cost wins when both are passed; we back-derive unit cost from
+  // total/qty so the line totals are still meaningful. Status is hard-set
+  // to 'ordered' on both axes (status='ordered' and po_status='ordered')
+  // since the operator has just placed the order externally.
+  // Invoice OCR — accepts a multipart upload, hands the buffer to Claude
+  // vision, returns the parsed JSON for the /log-order Tab A form to
+  // pre-fill. The image is NOT persisted in this endpoint (S3/Supabase
+  // storage is a separate workstream); the buffer lives only in memory
+  // for the duration of the call.
+  app.post(
+    "/api/orders/parse-invoice",
+    requireAuth,
+    upload.single("file"),
+    async (req: Request, res: Response) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: "No file uploaded (field name 'file')" });
+        }
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (!apiKey) {
+          return res.status(503).json({ error: "ANTHROPIC_API_KEY not configured" });
+        }
+        const { parseInvoiceImage } = await import("./services/invoice-parser-service");
+        const result = await parseInvoiceImage(req.file.buffer, req.file.mimetype, apiKey);
+        if (!result.parsed) {
+          return res.json({ parsed: null, error: result.error ?? "Parse failed" });
+        }
+        res.json({ parsed: result.parsed });
+      } catch (error: any) {
+        console.error("[Parse Invoice] Error:", error);
+        res.status(500).json({ error: error.message ?? "Parse failed" });
+      }
+    },
+  );
+
+  // Tab A submit — supplier order (manual or post-OCR review). Creates a
+  // multi-line PO with entry_source set to 'manual' | 'invoice_upload'.
+  // Roger is notified by default unless notifyRoger=false.
+  app.post("/api/orders/log-supplier-invoice", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const lines: Array<{ itemId?: string; sku?: string; description?: string; qty: number; unitCost: number }> =
+        Array.isArray(body.lines) ? body.lines : [];
+      const orderedBy = typeof body.orderedBy === "string" && body.orderedBy.trim() ? body.orderedBy.trim() : "Clarence";
+      const entrySource =
+        body.entrySource === "invoice_upload" ? "invoice_upload" : "manual";
+      const notifyRoger = body.notifyRoger !== false;
+
+      if (!supplierId) return res.status(400).json({ error: "supplierId is required" });
+      if (lines.length === 0) return res.status(400).json({ error: "At least one line item is required" });
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const orderDateStr = typeof body.orderDate === "string" ? body.orderDate : null;
+      const expectedDeliveryStr = typeof body.expectedDelivery === "string" ? body.expectedDelivery : null;
+      const invoiceNumber = typeof body.invoiceNumber === "string" ? body.invoiceNumber.trim() : "";
+      const invoiceTotal =
+        body.invoiceTotal != null && Number.isFinite(Number(body.invoiceTotal))
+          ? Number(body.invoiceTotal)
+          : null;
+
+      // Tally and validate lines.
+      let subtotal = 0;
+      let expectedQty = 0;
+      const validatedLines: Array<{
+        itemId: string | null;
+        sku: string | null;
+        description: string | null;
+        qty: number;
+        unitCost: number;
+        lineTotal: number;
+      }> = [];
+      for (const line of lines) {
+        const qty = Number(line.qty);
+        const unitCost = Number(line.unitCost);
+        if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+          return res.status(400).json({ error: "Each line qty must be a positive integer" });
+        }
+        if (!Number.isFinite(unitCost) || unitCost < 0) {
+          return res.status(400).json({ error: "Each line unitCost must be ≥ 0" });
+        }
+        const itemId = typeof line.itemId === "string" && line.itemId ? line.itemId : null;
+        const lineTotal = Math.round(qty * unitCost * 100) / 100;
+        subtotal += lineTotal;
+        expectedQty += qty;
+        validatedLines.push({
+          itemId,
+          sku: typeof line.sku === "string" ? line.sku.trim() : null,
+          description: typeof line.description === "string" ? line.description : null,
+          qty,
+          unitCost,
+          lineTotal,
+        });
+      }
+
+      const poNumber = await storage.getNextPONumber();
+      const noteParts = [`[order-log] ${entrySource} entry by ${orderedBy}`];
+      if (invoiceNumber) noteParts.push(`invoice/order #: ${invoiceNumber}`);
+
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        supplierEmail: supplier.email ?? null,
+        currency: "USD",
+        status: "SENT",
+        poStatus: "ordered",
+        subtotal: Math.round(subtotal * 100) / 100,
+        total: Math.round(subtotal * 100) / 100,
+        totalItemsOrdered: expectedQty,
+        orderDate: orderDateStr ? new Date(orderDateStr) : new Date(),
+        expectedDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedDelivery: expectedDeliveryStr ?? null,
+        expectedQty,
+        invoiceTotal,
+        entrySource,
+        notes: noteParts.join(" — "),
+      } as any);
+
+      for (const line of validatedLines) {
+        // Resolve SKU through items + sku_mappings if no itemId was supplied.
+        let resolvedItemId = line.itemId;
+        if (!resolvedItemId && line.sku) {
+          const stripped = line.sku.replace(/^SKU:\s*/i, "");
+          const direct = await storage.getItemBySku(stripped);
+          if (direct) resolvedItemId = direct.id;
+          if (!resolvedItemId) {
+            const canonical =
+              (await storage.findCanonicalSku(line.sku, "shopify")) ??
+              (await storage.findCanonicalSku(stripped, "shopify"));
+            if (canonical) {
+              const item = await storage.getItemBySku(canonical);
+              if (item) resolvedItemId = item.id;
+            }
+          }
+        }
+        if (!resolvedItemId) {
+          // Skip the line if we can't resolve — the PO header is still
+          // worth keeping for the audit trail. Operators can clean up
+          // unmapped SKUs from /sku-mappings and edit the line later.
+          continue;
+        }
+        await storage.createPurchaseOrderLine({
+          purchaseOrderId: po.id,
+          itemId: resolvedItemId,
+          sku: line.sku ?? null,
+          itemName: line.description ?? null,
+          unitOfMeasure: "EA",
+          qtyOrdered: line.qty,
+          unitCost: line.unitCost,
+          lineTotal: line.lineTotal,
+        });
+      }
+
+      if (notifyRoger) {
+        void (async () => {
+          const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+          notifyRogerOfNewPO({ poId: po.id, orderedBy, source: "log-order" }).catch(() => {});
+        })();
+      }
+
+      res.status(201).json({ purchaseOrder: po, notifyRoger });
+    } catch (error: any) {
+      console.error("[Log Supplier Invoice] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to log order" });
+    }
+  });
+
+  // Tab B submit — FX anticipated production. Creates a single-line FX PO
+  // with entry_source='fx_anticipated' and po_status='confirmed', then
+  // increments fx_in_process_qty directly (the auto-update on po_status
+  // transitions doesn't fire for 'confirmed' so we do it inline). Does NOT
+  // notify Roger (these aren't real invoices yet).
+  app.post("/api/orders/log-fx-anticipated", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
+      const qty = Number(body.qty);
+      const expectedDeliveryStr = typeof body.expectedDelivery === "string" ? body.expectedDelivery : null;
+      const loggedBy = typeof body.loggedBy === "string" && body.loggedBy.trim() ? body.loggedBy.trim() : "Christopher";
+      const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+        return res.status(400).json({ error: "qty must be a positive integer" });
+      }
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      if (item.type !== "finished_product") {
+        return res.status(400).json({ error: "FX anticipated production only supports finished products" });
+      }
+
+      const fxSupplier = await storage.getSupplier("1");
+      if (!fxSupplier) return res.status(404).json({ error: "FX Industries supplier (id=1) not found" });
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+
+      const poNumber = await storage.getNextPONumber();
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: fxSupplier.id,
+        supplierName: fxSupplier.name,
+        supplierEmail: fxSupplier.email ?? null,
+        currency: "USD",
+        status: "DRAFT",
+        poStatus: "confirmed",
+        subtotal: 0,
+        total: 0,
+        totalItemsOrdered: qty,
+        orderDate: new Date(),
+        expectedDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedDelivery: expectedDeliveryStr ?? null,
+        expectedCompletionDate: expectedDeliveryStr ? new Date(expectedDeliveryStr) : null,
+        expectedQty: qty,
+        confirmedQty: qty,
+        entrySource: "fx_anticipated",
+        notes: notes ? `[fx-anticipated] logged by ${loggedBy}: ${notes}` : `[fx-anticipated] logged by ${loggedBy}`,
+      } as any);
+
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po.id,
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        unitOfMeasure: "EA",
+        qtyOrdered: qty,
+        unitCost: 0,
+        lineTotal: 0,
+      });
+
+      // Bump fx_in_process_qty inline since po_status='confirmed' is below
+      // the auto-update threshold by design (confirmed = not yet building).
+      // The user spec explicitly says "Increment fx_in_process_qty on the
+      // item" for FX anticipated entries, so we override the rule here.
+      const fxBefore = item.fxInProcessQty ?? 0;
+      await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+      await storage.createInventoryTransaction({
+        itemId: item.id,
+        itemType: "FINISHED",
+        type: "FX_ADJUSTMENT",
+        location: "HILDALE",
+        quantity: qty,
+        createdBy: userId,
+        createdByName: userName,
+        notes: `[fx-anticipated] +${qty} on PO ${po.poNumber} — ${loggedBy}`,
+      });
+
+      res.status(201).json({ purchaseOrder: po });
+    } catch (error: any) {
+      console.error("[Log FX Anticipated] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to log FX anticipated order" });
+    }
+  });
+
+  // Supplier reliability — last-90-days roll-up of accuracy + delivery
+  // variance computed from the receive-time fields on closed POs. Excludes
+  // POs that don't have an actual_delivery yet (still in flight).
+  app.get("/api/suppliers/:id/reliability", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const supplier = await storage.getSupplier(id);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+      const allPOs = await storage.getPurchaseOrdersBySupplierId(id);
+      const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      const eligible = allPOs.filter((po) => {
+        const ad = (po as any).actualDelivery ?? po.receivedAt ?? null;
+        if (!ad) return false;
+        const t = new Date(ad).getTime();
+        return Number.isFinite(t) && t >= ninetyDaysAgo;
+      });
+
+      let accSum = 0;
+      let accCount = 0;
+      let varSum = 0;
+      let varCount = 0;
+      for (const po of eligible) {
+        const acc = (po as any).accuracyScore;
+        if (acc != null) {
+          accSum += acc;
+          accCount += 1;
+        }
+        const dv = (po as any).deliveryVarianceDays;
+        if (dv != null) {
+          varSum += dv;
+          varCount += 1;
+        }
+      }
+      const avgAccuracy = accCount > 0 ? accSum / accCount : null;
+      const avgDeliveryVarianceDays = varCount > 0 ? varSum / varCount : null;
+
+      // Color thresholds per spec — green when great, amber when watch-list,
+      // red when chronically off. "On time" is variance ≤ 0.
+      let band: "green" | "amber" | "red" | "unknown" = "unknown";
+      if (avgAccuracy != null && avgDeliveryVarianceDays != null) {
+        if (avgAccuracy >= 0.95 && avgDeliveryVarianceDays <= 0) {
+          band = "green";
+        } else if (avgAccuracy < 0.85 || avgDeliveryVarianceDays > 3) {
+          band = "red";
+        } else {
+          band = "amber";
+        }
+      }
+
+      res.json({
+        ordersCount: eligible.length,
+        avgAccuracy,
+        avgDeliveryVarianceDays,
+        band,
+      });
+    } catch (error: any) {
+      console.error("[Supplier Reliability] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to compute reliability" });
+    }
+  });
+
+  app.post("/api/purchase-orders/quick-log", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as Record<string, any>;
+      const supplierId = typeof body.supplierId === "string" ? body.supplierId.trim() : "";
+      const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
+      const qtyOrdered = Number(body.qtyOrdered);
+      const totalCost = body.totalCost != null ? Number(body.totalCost) : null;
+      const unitCostRaw = body.unitCost != null ? Number(body.unitCost) : null;
+      const invoiceNumber = typeof body.invoiceNumber === "string" ? body.invoiceNumber.trim() : "";
+
+      if (!supplierId) return res.status(400).json({ error: "supplierId is required" });
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!Number.isFinite(qtyOrdered) || !Number.isInteger(qtyOrdered) || qtyOrdered <= 0) {
+        return res.status(400).json({ error: "qtyOrdered must be a positive integer" });
+      }
+
+      const supplier = await storage.getSupplier(supplierId);
+      if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+
+      const unitCost =
+        totalCost != null && totalCost > 0
+          ? Math.round((totalCost / qtyOrdered) * 100) / 100
+          : unitCostRaw != null && unitCostRaw > 0
+            ? unitCostRaw
+            : 0;
+      const lineTotal = Math.round(qtyOrdered * unitCost * 100) / 100;
+      const subtotal = lineTotal;
+
+      let expectedDate: Date | null = null;
+      if (body.expectedDate) {
+        const d = new Date(body.expectedDate);
+        if (!Number.isNaN(d.getTime())) expectedDate = d;
+      }
+
+      const poNumber = await storage.getNextPONumber();
+      const noteParts: string[] = [`[quick-log] external order placed by operator`];
+      if (invoiceNumber) noteParts.push(`invoice/order #: ${invoiceNumber}`);
+
+      const po = await storage.createPurchaseOrder({
+        poNumber,
+        supplierId: supplier.id,
+        supplierName: supplier.name,
+        supplierEmail: supplier.email ?? null,
+        currency: "USD",
+        status: "SENT",
+        poStatus: "ordered",
+        subtotal,
+        total: subtotal,
+        totalItemsOrdered: qtyOrdered,
+        expectedDate,
+        notes: noteParts.join(" — "),
+      } as any);
+
+      await storage.createPurchaseOrderLine({
+        purchaseOrderId: po.id,
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        unitOfMeasure: (item as any).unit ?? "EA",
+        qtyOrdered,
+        unitCost,
+        lineTotal,
+      });
+
+      // Best-effort Roger notification — fire and forget so a SendGrid
+      // hiccup never blocks a PO save. The orderedBy hint defaults to
+      // Clarence since /quick-log is wired to the post-Order-Online flow.
+      const orderedBy =
+        typeof body.orderedBy === "string" && body.orderedBy.trim() ? body.orderedBy.trim() : "Clarence";
+      void (async () => {
+        const { notifyRogerOfNewPO } = await import("./services/roger-notification-service");
+        notifyRogerOfNewPO({ poId: po.id, orderedBy, source: "quick-log" }).catch(() => {});
+      })();
+
+      res.status(201).json({ purchaseOrder: po });
+    } catch (error: any) {
+      console.error("[Quick-Log PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to log order" });
+    }
+  });
+
+  // Simplified one-screen receive flow used by Clarence's /incoming page.
+  // Closes the entire PO regardless of partial qty. Body:
+  //   { quantityReceived: number, notes?: string }
+  // For FX POs (supplierId='1') with finished_product lines, runs the
+  // RECEIVED_FROM_FX flow per line: fxInProcessQty -= line.qtyOrdered
+  // (floor 0), hildaleQty += quantityReceived (split evenly across finished
+  // lines if multiple). For component POs, currentStock += quantityReceived
+  // (split evenly across component lines).
+  //
+  // The "received qty" is treated as a single number for the whole PO since
+  // Clarence's typical case is single-line. For multi-line POs we do a
+  // proportional best-effort split — operators with multi-line discrepancies
+  // should use the existing Receive Stock workflow instead.
+  app.post("/api/purchase-orders/:id/quick-receive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const qty = Number(req.body?.quantityReceived);
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 0) {
+        return res.status(400).json({ error: "quantityReceived must be a non-negative integer" });
+      }
+
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) return res.status(404).json({ error: "Purchase order not found" });
+
+      const lines = await storage.getPurchaseOrderLinesByPOId(id);
+      if (lines.length === 0) {
+        return res.status(400).json({ error: "PO has no lines to receive" });
+      }
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const isFx = po.supplierId === "1";
+      const noteTag = notes
+        ? `[quick-receive] ${notes}`
+        : `[quick-receive] received as ordered`;
+
+      // Split the operator's single qty across lines proportionally to each
+      // line's qtyOrdered. Single-line POs get the full number; multi-line
+      // POs get a best-effort distribution that adds up to the input.
+      const totalOrdered = lines.reduce((s, l) => s + (l.qtyOrdered ?? 0), 0);
+      const allocated: number[] = [];
+      let remaining = qty;
+      for (let i = 0; i < lines.length; i++) {
+        if (i === lines.length - 1) {
+          allocated.push(remaining);
+        } else {
+          const share = totalOrdered > 0
+            ? Math.round((qty * (lines[i].qtyOrdered ?? 0)) / totalOrdered)
+            : 0;
+          allocated.push(share);
+          remaining -= share;
+        }
+      }
+
+      const applied: Array<{ sku: string; received: number; effect: string }> = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const recv = Math.max(0, allocated[i] ?? 0);
+        if (recv === 0) continue;
+        const item = await storage.getItem(line.itemId);
+        if (!item) continue;
+
+        if (isFx && item.type === "finished_product") {
+          const fxBefore = item.fxInProcessQty ?? 0;
+          const lineQty = line.qtyOrdered ?? 0;
+          const fxAfter = Math.max(0, fxBefore - lineQty);
+          const hildaleAfter = (item.hildaleQty ?? 0) + recv;
+          await storage.updateItem(item.id, {
+            fxInProcessQty: fxAfter,
+            hildaleQty: hildaleAfter,
+          });
+          await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "FINISHED",
+            type: "RECEIVED_FROM_FX",
+            location: "HILDALE",
+            quantity: recv,
+            createdBy: userId,
+            createdByName: userName,
+            notes: noteTag + ` (PO ${po.poNumber})`,
+          });
+          applied.push({ sku: item.sku, received: recv, effect: "fx→hildale" });
+        } else if (item.type === "component") {
+          const newStock = (item.currentStock ?? 0) + recv;
+          await storage.updateItem(item.id, { currentStock: newStock });
+          await storage.createInventoryTransaction({
+            itemId: item.id,
+            itemType: "RAW",
+            type: "RECEIVE",
+            location: "N/A",
+            quantity: recv,
+            supplierId: po.supplierId ?? null,
+            createdBy: userId,
+            createdByName: userName,
+            notes: noteTag + ` (PO ${po.poNumber})`,
+          });
+          applied.push({ sku: item.sku, received: recv, effect: "stock+=" });
+        }
+        // Bump qtyReceived on the line for the audit trail.
+        await storage.updatePurchaseOrderLine(line.id, {
+          qtyReceived: (line.qtyReceived ?? 0) + recv,
+        } as any);
+      }
+
+      // Compute accuracy + delivery variance for reliability scoring.
+      // expected_qty defaults to the sum of line.qtyOrdered if it wasn't
+      // recorded at PO creation (older POs from before this column shipped).
+      const expectedQty =
+        (po as any).expectedQty ?? lines.reduce((s, l) => s + (l.qtyOrdered ?? 0), 0);
+      const actualQty = qty;
+      const accuracyScore =
+        expectedQty > 0
+          ? Math.max(0, Math.min(1, actualQty / expectedQty))
+          : null;
+      const today = new Date();
+      const todayDateStr = today.toISOString().slice(0, 10);
+      const expectedDelivery: string | null =
+        (po as any).expectedDelivery ??
+        (po.expectedDate
+          ? new Date(po.expectedDate).toISOString().slice(0, 10)
+          : null);
+      const deliveryVarianceDays = expectedDelivery
+        ? Math.round(
+            (today.getTime() - new Date(expectedDelivery).getTime()) / (1000 * 60 * 60 * 24),
+          )
+        : null;
+
+      const updated = await storage.updatePurchaseOrder(id, {
+        status: "RECEIVED",
+        poStatus: "received",
+        receivedAt: today,
+        actualQty,
+        actualDelivery: todayDateStr,
+        accuracyScore,
+        deliveryVarianceDays,
+      } as any);
+
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
+      res.json({ purchaseOrder: updated, applied });
+    } catch (error: any) {
+      console.error("[Quick-Receive PO] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to receive PO" });
+    }
+  });
+
+  app.patch("/api/purchase-orders/:id/po-status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const newStatus = typeof req.body?.poStatus === "string" ? req.body.poStatus.trim() : "";
+      const valid = new Set(["ordered", "confirmed", "in_production", "shipped", "received"]);
+      if (!valid.has(newStatus)) {
+        return res.status(400).json({ error: `poStatus must be one of: ${[...valid].join(", ")}` });
+      }
+
+      const po = await storage.getPurchaseOrder(id);
+      if (!po) return res.status(404).json({ error: "Purchase order not found" });
+
+      const previousStatus = (po as any).poStatus ?? "ordered";
+      if (previousStatus === newStatus) {
+        return res.json({ purchaseOrder: po, applied: [] });
+      }
+
+      const isContributing = (s: string) => s === "in_production" || s === "shipped";
+      const wasContributing = isContributing(previousStatus);
+      const isContributingNow = isContributing(newStatus);
+      const isReceiving = newStatus === "received" && previousStatus !== "received";
+      const isRevertingFromReceived = previousStatus === "received" && newStatus !== "received";
+
+      const FX_SUPPLIER_ID = "1";
+      const inventoryEligible = po.supplierId === FX_SUPPLIER_ID && !isRevertingFromReceived;
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const userName = user?.email ?? "unknown";
+      const applied: Array<{ itemId: string; sku: string; effect: string; qty: number }> = [];
+
+      if (inventoryEligible) {
+        const lines = await storage.getPurchaseOrderLinesByPOId(id);
+        // If FX confirmedQty is set and the PO is single-line, use the
+        // confirmed amount instead of the originally-ordered qty so the
+        // fx_in_process_qty delta reflects what FX actually agreed to
+        // build. Multi-line POs fall back to qtyOrdered — no clean way
+        // to apportion a single confirmedQty across lines without extra
+        // metadata; the operator can adjust via the inventory FX modal.
+        const useConfirmed =
+          lines.length === 1 && (po as any).confirmedQty != null && (po as any).confirmedQty >= 0;
+        for (const line of lines) {
+          const item = await storage.getItem(line.itemId);
+          if (!item || item.type !== "finished_product") continue;
+          const qty = useConfirmed ? ((po as any).confirmedQty as number) : (line.qtyOrdered ?? 0);
+          if (qty <= 0) continue;
+          const fxBefore = item.fxInProcessQty ?? 0;
+          const hildaleBefore = item.hildaleQty ?? 0;
+
+          if (isReceiving) {
+            const fxAfter = wasContributing ? Math.max(0, fxBefore - qty) : fxBefore;
+            const hildaleAfter = hildaleBefore + qty;
+            await storage.updateItem(item.id, {
+              fxInProcessQty: fxAfter,
+              hildaleQty: hildaleAfter,
+            });
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              itemType: "FINISHED",
+              type: "RECEIVED_FROM_FX",
+              location: "HILDALE",
+              quantity: qty,
+              createdBy: userId,
+              createdByName: userName,
+              notes: `[po_status received] PO ${po.poNumber}`,
+            });
+            applied.push({ itemId: item.id, sku: item.sku, effect: "received", qty });
+          } else if (!wasContributing && isContributingNow) {
+            await storage.updateItem(item.id, { fxInProcessQty: fxBefore + qty });
+            await storage.createInventoryTransaction({
+              itemId: item.id,
+              itemType: "FINISHED",
+              type: "FX_ADJUSTMENT",
+              location: "HILDALE",
+              quantity: qty,
+              createdBy: userId,
+              createdByName: userName,
+              notes: `[po_status ${previousStatus}→${newStatus}] +${qty} on PO ${po.poNumber}`,
+            });
+            applied.push({ itemId: item.id, sku: item.sku, effect: "fx+=", qty });
+          } else if (wasContributing && !isContributingNow) {
+            const fxAfter = Math.max(0, fxBefore - qty);
+            const actualDelta = fxBefore - fxAfter;
+            await storage.updateItem(item.id, { fxInProcessQty: fxAfter });
+            if (actualDelta > 0) {
+              await storage.createInventoryTransaction({
+                itemId: item.id,
+                itemType: "FINISHED",
+                type: "FX_ADJUSTMENT",
+                location: "HILDALE",
+                quantity: actualDelta,
+                createdBy: userId,
+                createdByName: userName,
+                notes: `[po_status ${previousStatus}→${newStatus}] -${actualDelta} on PO ${po.poNumber}`,
+              });
+            }
+            applied.push({ itemId: item.id, sku: item.sku, effect: "fx-=", qty: actualDelta });
+          }
+        }
+      }
+
+      const updated = await storage.updatePurchaseOrder(id, { poStatus: newStatus } as any);
+      res.json({ purchaseOrder: updated, applied });
+    } catch (error: any) {
+      console.error("[PO Status Update] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to update PO status" });
+    }
+  });
+
+  // Per-finished-product summary of incoming FX units that are NOT yet in
+  // fx_in_process_qty. Used by the Production Priority page's Incoming
+  // column. Returns the open-but-not-yet-contributing PO line totals
+  // (po_status in ordered, confirmed) plus the earliest expected delivery
+  // date among any open FX PO touching that item. The page adds this to
+  // the item's fx_in_process_qty to get the total inbound figure without
+  // double-counting in_production/shipped lines (which are already inside
+  // fx_in_process_qty thanks to the auto-update above).
+  // Money Maker Health — per-build capacity snapshot for the four core
+  // finished products. Backed by the v_money_maker_health view; sorted
+  // server-side by status priority so urgent rows appear first.
+  app.get("/api/money-maker-health", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const rows = await storage.getMoneyMakerHealth();
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Money Maker Health] Error:", error);
+      res.status(500).json({ error: error.message ?? "Failed to load money maker health" });
+    }
+  });
+
+  app.get("/api/purchase-orders/fx-incoming", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const FX_SUPPLIER_ID = "1";
+      const allPOs = await storage.getPurchaseOrdersBySupplierId(FX_SUPPLIER_ID);
+      const open = allPOs.filter((po) => {
+        const ps = (po as any).poStatus ?? "ordered";
+        return ps !== "received" && po.status !== "CANCELLED";
+      });
+
+      const summary: Record<
+        string,
+        { sku: string; pendingQty: number; earliestExpected: string | null }
+      > = {};
+
+      for (const po of open) {
+        const lines = await storage.getPurchaseOrderLinesByPOId(po.id);
+        const ps = (po as any).poStatus ?? "ordered";
+        const pendingContribution = ps === "ordered" || ps === "confirmed"; // not yet in fx_in_process_qty
+        const expected = po.expectedDate ? new Date(po.expectedDate).toISOString() : null;
+
+        for (const line of lines) {
+          const item = await storage.getItem(line.itemId);
+          if (!item || item.type !== "finished_product") continue;
+          const entry =
+            summary[item.id] ?? { sku: item.sku, pendingQty: 0, earliestExpected: null };
+          if (pendingContribution) entry.pendingQty += line.qtyOrdered ?? 0;
+          if (expected && (!entry.earliestExpected || expected < entry.earliestExpected)) {
+            entry.earliestExpected = expected;
+          }
+          summary[item.id] = entry;
+        }
+      }
+
+      res.json({ items: summary });
+    } catch (error: any) {
+      console.error("[FX Incoming] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch FX incoming" });
+    }
+  });
+
   app.patch("/api/purchase-orders/:id", requireAuth, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
@@ -13159,6 +16230,16 @@ Notes: ${po.notes || 'None'}
         console.error(`[PurchaseOrder] GHL sync error:`, err.message);
       });
 
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
       res.json(updated);
     } catch (error: any) {
       console.error("[PurchaseOrder] Error marking purchase order as received:", error);
@@ -13172,7 +16253,7 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         paidAt: new Date(),
       });
-      
+
       if (!updated) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
@@ -13181,6 +16262,14 @@ Notes: ${po.notes || 'None'}
       const { triggerPOSync } = await import("./services/ghl-sync-triggers");
       triggerPOSync(req.session.userId!, id, "paid").catch(err => {
         console.error(`[PurchaseOrder] GHL sync error:`, err.message);
+      });
+
+      // Mark linked QuickBooks Bill as paid (non-blocking)
+      const userId = req.session.userId || 'system';
+      import("./services/po-quickbooks-sync").then(({ markPOBillAsPaidInQuickBooks }) =>
+        markPOBillAsPaidInQuickBooks(id, userId)
+      ).catch(err => {
+        console.error(`[PurchaseOrder] QuickBooks Bill paid sync error for PO ${id}:`, err.message);
       });
 
       res.json(updated);
@@ -13297,11 +16386,11 @@ Notes: ${po.notes || 'None'}
   // ============================================================================
 
   // Approve PO
-  app.post("/api/purchase-orders/:id/approve", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/purchase-orders/:id/approve", requireAuth, requireRole("owner"), async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const po = await storage.getPurchaseOrder(id);
-      
+
       if (!po) {
         return res.status(404).json({ error: "Purchase order not found" });
       }
@@ -13313,6 +16402,14 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         status: 'APPROVED',
         approvedAt: new Date(),
+      });
+
+      // Fire-and-forget: create QuickBooks Bill. Failures must NOT block PO approval.
+      const userId = req.session.userId || 'system';
+      import("./services/po-quickbooks-sync").then(({ syncApprovedPOToQuickBooks }) =>
+        syncApprovedPOToQuickBooks(id, userId)
+      ).catch(err => {
+        console.error(`[PurchaseOrder] QuickBooks Bill sync error for PO ${id}:`, err.message);
       });
 
       res.json(updated);
@@ -13992,12 +17089,38 @@ Notes: ${po.notes || 'None'}
         await backorderService.checkAndFulfillBackorders(itemId, 0);
       }
 
+      // Backorder unblock comms — generate (and optionally send) the
+      // "your backorder is shipping soon" notices. Safe-by-default: just
+      // logs the would-be-sent payload to audit unless BACKORDER_AUTO_EMAIL
+      // is true AND SendGrid is configured. Idempotent via a unique index
+      // on (sales_order_id, item_id), so re-receiving a PO won't double-send.
+      try {
+        const { notifyBackorderUnblock } = await import("./services/backorder-comms");
+        const result = await notifyBackorderUnblock(receivedItemIds, id, po.poNumber);
+        if (result.built > 0) {
+          console.log(
+            `[Backorder Comms] PO ${po.poNumber}: considered ${result.considered}, built ${result.built}, sent ${result.sent}, logged ${result.logged}, failed ${result.failed}, dup ${result.alreadyNotified}`,
+          );
+        }
+      } catch (commsErr: any) {
+        console.error(`[PurchaseOrder] Backorder comms error (non-fatal):`, commsErr?.message ?? commsErr);
+      }
+
       // Sync to GHL if fully received (non-blocking)
       if (allFullyReceived) {
         const { triggerPOSync } = await import("./services/ghl-sync-triggers");
         triggerPOSync(req.session.userId!, id, "delivered").catch(err => {
           console.error(`[PurchaseOrder] GHL sync error:`, err.message);
         });
+
+        // Bill on receipt: push to QuickBooks as a Bill now that the PO is fully
+        // received. Non-blocking and idempotent; never blocks the response.
+        import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+          billPOOnReceipt(id, req.session.userId || 'system')
+        ).then((r) => {
+          if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+          else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+        }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
       }
 
       res.json({ ...updated, lines: updatedLines });
@@ -14107,6 +17230,16 @@ Notes: ${po.notes || 'None'}
       const updated = await storage.updatePurchaseOrder(id, {
         receivedAt: new Date(),
       });
+
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
 
       res.json(updated);
     } catch (error: any) {
@@ -14366,7 +17499,17 @@ Notes: ${po.notes || 'None'}
         return res.status(500).json({ error: "Failed to retrieve updated PO" });
       }
 
-      res.json({ 
+      // Bill on receipt: push to QuickBooks as a Bill now that goods are in.
+      // Non-blocking and idempotent (no-ops unless fully received; skips if a
+      // Bill already exists). Never blocks the response.
+      import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+        billPOOnReceipt(id, req.session.userId || 'system')
+      ).then((r) => {
+        if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+        else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+      }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
+      res.json({
         success: true,
         message: "PO marked as fully received and inventory updated",
         purchaseOrder: updated,
@@ -14421,6 +17564,17 @@ Notes: ${po.notes || 'None'}
           receivedAt: newStatus === 'RECEIVED' ? (po.receivedAt || new Date()) : po.receivedAt,
         });
         console.log(`[PurchaseOrder] Recalculated status for PO ${po.poNumber}: ${po.status} -> ${newStatus}`);
+
+        // Bill on receipt: if the recalc flipped this PO to RECEIVED, push to
+        // QuickBooks as a Bill. Non-blocking and idempotent; helper no-ops
+        // unless fully received and skips if a Bill already exists.
+        import("./services/po-quickbooks-sync").then(({ billPOOnReceipt }) =>
+          billPOOnReceipt(id, req.session.userId || 'system')
+        ).then((r) => {
+          if (r && r.success && !r.skipped) console.log(`[PurchaseOrder] QuickBooks Bill ${r.billNumber || r.billId} created on receipt for PO ${id}`);
+          else if (r && !r.success && !r.skipped) console.error(`[PurchaseOrder] QuickBooks on-receipt sync for PO ${id} failed: ${r.error}`);
+        }).catch(err => console.error(`[PurchaseOrder] QuickBooks on-receipt sync error for PO ${id}:`, err.message));
+
         res.json({ success: true, previousStatus: po.status, newStatus, purchaseOrder: updated });
       } else {
         res.json({ success: true, message: "Status is already correct", status: po.status, purchaseOrder: po });
@@ -15502,12 +18656,22 @@ Generate only the email body text, no subject line.`;
           // Sum of damage amounts
           const computedDamageTotal = items.reduce((sum: number, item: any) => sum + (item.damageAmount || 0), 0);
           
-          return { 
-            ...ret, 
+          // Look up linked sales order for sourceUrl (used for Shopify return label link)
+          let sourceUrl: string | null = null;
+          if (ret.salesOrderId) {
+            const salesOrder = await storage.getSalesOrder(ret.salesOrderId);
+            if (salesOrder) {
+              sourceUrl = salesOrder.sourceUrl ?? null;
+            }
+          }
+
+          return {
+            ...ret,
             totalUnitsRequested,
             totalQtyReceived,
             // Use computed damage total if damageDeductionTotal not already set
             damageDeductionTotal: ret.damageDeductionTotal ?? computedDamageTotal,
+            sourceUrl,
           };
         })
       );
@@ -17030,14 +20194,16 @@ Generate only the email body text, no subject line.`;
   app.get("/api/sales-orders", requireAuth, async (req: Request, res: Response) => {
     try {
       // Support filtering by live/historical via query params
-      const { view, startDate, endDate, status, channel } = req.query as {
+      const { view, startDate, endDate, status, channel, withLines } = req.query as {
         view?: 'live' | 'historical' | 'all';
         startDate?: string;
         endDate?: string;
         status?: string;
         channel?: string;
+        withLines?: string;
       };
-      
+      const includeLines = withLines === 'true' || withLines === '1';
+
       let orders: SalesOrder[];
       
       if (view === 'historical') {
@@ -17110,12 +20276,25 @@ Generate only the email body text, no subject line.`;
             totalUnits,
             totalBackorderQty,
             productionSource,
+            // Per-line detail for widgets that need product-level breakdown.
+            // Opt-in via ?withLines=true to keep the default response compact.
+            ...(includeLines
+              ? {
+                  lines: lines.map((l: SalesOrderLine) => ({
+                    sku: l.sku,
+                    qtyOrdered: l.qtyOrdered,
+                    qtyShipped: l.qtyShipped,
+                    backorderQty: l.backorderQty ?? 0,
+                    unitPrice: l.unitPrice,
+                  })),
+                }
+              : {}),
           };
         })
       );
 
       // Sort by orderDate DESC
-      ordersWithSummary.sort((a, b) => 
+      ordersWithSummary.sort((a, b) =>
         new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()
       );
 
@@ -17123,6 +20302,1030 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[Sales Orders] Error fetching sales orders:", error);
       res.status(500).json({ error: error.message || "Failed to fetch sales orders" });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // In-house shipping queue — TRIPLE-VERIFIED against Shopify + Extensiv + Notes
+  //
+  // VERIFICATION LAYERS (in order):
+  //   1. SHOPIFY — Fetch each order's actual fulfillment data
+  //      - fulfillment_status === 'fulfilled' → DROP
+  //      - cancelled_at present → DROP
+  //      - financial_status === 'refunded' → DROP
+  //      - fulfillments[].line_items qty >= ordered qty → DROP
+  //      - tag 'sent-to-wms' + any fulfillment → DROP
+  //      - note/note_attributes contain fulfillment keywords → DROP
+  //      - order not found in Shopify → DROP (deleted/archived)
+  //
+  //   2. EXTENSIV/3PL CENTRAL — Query /orders endpoint by reference number
+  //      - order status is Shipped/Complete/Closed → DROP
+  //      - Falls back to /activity feed if /orders fails
+  //
+  //   3. LOCAL QTY CHECK — Compare ordered vs shipped in our DB
+  //      - totalUnshipped <= 0 → DROP
+  //
+  // Each surviving order gets a `verifiedBy` tag so the UI can show
+  // Sammie exactly what was checked and WHY the order is still here.
+  //
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  // ══════════════════════════════════════════════════════════════
+  app.get("/api/sales-orders/in-house", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const verifyStart = Date.now();
+
+      // ── Step 1: Get Shopify + Extensiv clients ─────────────────
+      let shopDomain: string | null = null;
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        if (domain && accessToken) {
+          shopDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-01";
+        if (domain && accessToken) {
+          shopDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+        }
+      }
+
+      let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+          }
+          if (extensivClient) break;
+        }
+      } catch (err: any) {
+        console.error("[In-House] Extensiv client init failed:", err.message);
+      }
+
+      // ── Step 2: Get candidate orders from our DB ───────────────
+      const allOrders = await storage.getAllSalesOrders();
+      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
+      const candidates = allOrders.filter(o =>
+        o.fulfillmentSource === 'HILDALE' && !excludeStatuses.includes(o.status)
+      );
+
+      // ── Step 3: Fetch EACH candidate directly from Shopify ─────
+      let shopifyVerified = false;
+      const shopifyMap = new Map<string, any>();
+
+      if (shopifyClient) {
+        const idsToCheck = candidates
+          .map(o => o.externalOrderId)
+          .filter((id): id is string => !!id);
+
+        if (idsToCheck.length > 0) {
+          try {
+            const shopifyOrders = await shopifyClient.fetchOrdersByIds(idsToCheck);
+            for (const so of shopifyOrders) {
+              shopifyMap.set(String(so.id), so);
+            }
+            shopifyVerified = true;
+            console.log(`[In-House] Shopify: fetched ${shopifyOrders.length}/${idsToCheck.length} orders`);
+          } catch (err: any) {
+            console.error("[In-House] Shopify fetch error:", err.message);
+          }
+        }
+      }
+
+      // ── Step 4: Check Extensiv — TWO methods for thoroughness ──
+      //
+      // Method A: Query /orders endpoint by reference number (most reliable)
+      //   This tells us the actual order status inside 3PL Central.
+      //
+      // Method B: Query /activity feed for shipment records (fallback)
+      //   This catches shipments even if Method A fails or returns nothing.
+      //
+      // An order is "Extensiv-shipped" if EITHER method says so.
+
+      let extensivVerified = false;
+      const extensivShippedIds = new Set<string>(); // externalOrderIds that Extensiv says are shipped
+      const extensivOrderDetails = new Map<string, { status: string; trackingNumber?: string }>();
+
+      if (extensivClient) {
+        const candidateExtIds = candidates
+          .map(o => o.externalOrderId)
+          .filter((id): id is string => !!id);
+
+        // Method A: Direct order lookup by reference number
+        if (candidateExtIds.length > 0) {
+          try {
+            const orderResults = await extensivClient.findOrdersByReferenceNumbers(candidateExtIds);
+            for (const [refNum, info] of orderResults) {
+              if (info.shipped) {
+                extensivShippedIds.add(refNum);
+                extensivOrderDetails.set(refNum, info);
+              }
+            }
+            extensivVerified = true;
+            console.log(`[In-House] Extensiv /orders: ${extensivShippedIds.size} shipped of ${orderResults.size} found`);
+          } catch (err: any) {
+            console.error("[In-House] Extensiv /orders check failed:", err.message);
+          }
+        }
+
+        // Method B: Activity feed (catches things /orders might miss)
+        try {
+          const sixtyDaysAgo = new Date();
+          sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+          const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 1000);
+          let activityHits = 0;
+          for (const act of activity) {
+            if (act.type === 'SHIPMENT' && act.externalOrderId) {
+              if (!extensivShippedIds.has(act.externalOrderId)) {
+                extensivShippedIds.add(act.externalOrderId);
+                activityHits++;
+              }
+            }
+          }
+          extensivVerified = true;
+          console.log(`[In-House] Extensiv /activity: ${activity.length} records, ${activityHits} new shipments not in /orders`);
+        } catch (err: any) {
+          console.error("[In-House] Extensiv /activity check failed:", err.message);
+        }
+      }
+
+      // ── Step 5: Verify each order through ALL layers ───────────
+      const verified: any[] = [];
+      let droppedByShopify = 0;
+      let droppedByExtensiv = 0;
+      let droppedByNotes = 0;
+      let droppedByQty = 0;
+
+      for (const order of candidates) {
+        let dropReason: string | null = null;
+        let dropSource: string | null = null;
+
+        // ─── Layer 1: Shopify fulfillment data ────────────────
+        if (shopifyVerified && order.externalOrderId) {
+          const shopifyOrder = shopifyMap.get(order.externalOrderId);
+
+          if (shopifyOrder) {
+            const fulfillmentStatus = shopifyOrder.fulfillment_status;
+            const financialStatus = shopifyOrder.financial_status || '';
+            const fulfillments = shopifyOrder.fulfillments || [];
+            const tags = (shopifyOrder.tags || '').toLowerCase();
+            const isCancelled = !!shopifyOrder.cancelled_at;
+            const hasFulfillments = fulfillments.length > 0;
+            const isRefunded = financialStatus === 'refunded';
+            const isSentToWms = tags.includes('sent-to-wms');
+
+            // Check 1a: Shopify says fully fulfilled / cancelled / refunded
+            if (fulfillmentStatus === 'fulfilled') {
+              dropReason = 'Shopify: fulfillment_status=fulfilled';
+              dropSource = 'shopify';
+            } else if (isCancelled) {
+              dropReason = 'Shopify: order cancelled';
+              dropSource = 'shopify';
+            } else if (isRefunded) {
+              dropReason = 'Shopify: order refunded';
+              dropSource = 'shopify';
+            }
+
+            // Check 1b: Count fulfilled qty vs ordered qty
+            if (!dropReason && hasFulfillments) {
+              let fulfilledQty = 0;
+              for (const f of fulfillments) {
+                for (const li of (f.line_items || [])) {
+                  fulfilledQty += li.quantity || 0;
+                }
+              }
+              let orderedQty = 0;
+              for (const li of (shopifyOrder.line_items || [])) {
+                orderedQty += li.quantity || 0;
+              }
+              if (fulfilledQty >= orderedQty) {
+                dropReason = `Shopify: ${fulfilledQty}/${orderedQty} items fulfilled`;
+                dropSource = 'shopify';
+              }
+            }
+
+            // Check 1c: Tagged sent-to-wms AND has fulfillments → Pyvott handled it
+            if (!dropReason && isSentToWms && hasFulfillments) {
+              dropReason = 'Shopify: sent-to-wms tag + fulfillment records';
+              dropSource = 'shopify';
+            }
+
+            // Check 1d: Order notes contain fulfillment keywords
+            if (!dropReason) {
+              const noteCheck = ShopifyClient.checkNotesForFulfillment(shopifyOrder);
+              if (noteCheck.fulfilled) {
+                dropReason = `Shopify notes: ${noteCheck.evidence}`;
+                dropSource = 'notes';
+              }
+            }
+          } else {
+            // Order not found in Shopify at all — deleted or archived
+            dropReason = 'Shopify: order not found (deleted/archived)';
+            dropSource = 'shopify';
+          }
+        }
+
+        // ─── Layer 2: Extensiv / 3PL Central ─────────────────
+        if (!dropReason && order.externalOrderId && extensivShippedIds.has(order.externalOrderId)) {
+          const detail = extensivOrderDetails.get(order.externalOrderId);
+          dropReason = detail
+            ? `Extensiv: order status="${detail.status}"${detail.trackingNumber ? `, tracking=${detail.trackingNumber}` : ''}`
+            : 'Extensiv: found in shipment activity';
+          dropSource = 'extensiv';
+        }
+
+        // ─── Apply drop decision ─────────────────────────────
+        if (dropReason) {
+          if (dropSource === 'shopify' || dropSource === 'notes') droppedByShopify++;
+          else if (dropSource === 'extensiv') droppedByExtensiv++;
+
+          const newStatus = dropReason.includes('cancelled') ? 'CANCELLED'
+            : dropReason.includes('refunded') ? 'REFUNDED'
+            : 'SHIPPED';
+          try { await storage.updateSalesOrder(order.id, { status: newStatus }); } catch {}
+          continue;
+        }
+
+        // ─── Layer 3: Local qty check ────────────────────────
+        const lines = await storage.getSalesOrderLines(order.id);
+        const totalOrdered = lines.reduce((sum: number, l: any) => sum + (l.qtyOrdered || 0), 0);
+        const totalShipped = lines.reduce((sum: number, l: any) => sum + (l.qtyShipped || 0), 0);
+        const totalUnshipped = totalOrdered - totalShipped;
+
+        if (totalUnshipped <= 0) {
+          droppedByQty++;
+          continue;
+        }
+
+        // ─── Build confidence context for the UI ─────────────
+        // This tells Sammie exactly what was checked and what we know.
+        const checks: string[] = [];
+        if (shopifyVerified && order.externalOrderId && shopifyMap.has(order.externalOrderId)) {
+          const so = shopifyMap.get(order.externalOrderId);
+          checks.push(`Shopify: ${so.fulfillment_status || 'unfulfilled'}, ${so.financial_status || 'unknown'}`);
+          if ((so.tags || '').toLowerCase().includes('sent-to-wms')) {
+            checks.push('Tagged: sent-to-wms (sent to Pyvott but not yet fulfilled)');
+          }
+        } else if (shopifyVerified && order.externalOrderId) {
+          checks.push('Shopify: order not found');
+        }
+        if (extensivVerified && order.externalOrderId) {
+          checks.push(extensivShippedIds.has(order.externalOrderId) ? 'Extensiv: SHIPPED' : 'Extensiv: not shipped');
+        }
+        checks.push(`Local: ${totalUnshipped} of ${totalOrdered} units remaining`);
+
+        verified.push({
+          ...order,
+          lines,
+          totalOrdered,
+          totalShipped,
+          totalUnshipped,
+          checks, // Array of human-readable verification results
+        });
+      }
+
+      // Sort by order date (oldest first — stale orders surface to the top)
+      verified.sort((a, b) => new Date(a.orderDate).getTime() - new Date(b.orderDate).getTime());
+
+      const verifyMs = Date.now() - verifyStart;
+      console.log(`[In-House] ✓ ${verified.length} need action | dropped: ${droppedByShopify} Shopify, ${droppedByExtensiv} Extensiv, ${droppedByQty} qty | checked ${candidates.length} candidates in ${verifyMs}ms`);
+
+      res.json({
+        orders: verified,
+        summary: {
+          total: verified.length,
+          totalUnitsToShip: verified.reduce((s: number, o: any) => s + o.totalUnshipped, 0),
+          verified: shopifyVerified,
+          extensivVerified,
+          droppedByShopify,
+          droppedByExtensiv,
+          droppedByNotes,
+          droppedByQty,
+          candidatesChecked: candidates.length,
+          verifiedAt: new Date().toISOString(),
+          verifyMs,
+        },
+        shopDomain,
+      });
+    } catch (error: any) {
+      console.error("[In-House] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch in-house orders" });
+    }
+  });
+
+  // ── DIAGNOSTIC endpoint — shows exactly what Shopify + Extensiv return ──
+  // GET /api/sales-orders/in-house/diagnose
+  // Hit this to see WHY orders aren't getting purged
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.get("/api/sales-orders/in-house/diagnose", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const diag: any = {
+        timestamp: new Date().toISOString(),
+        shopify: { connected: false, error: null as string | null, sampleOrders: [] as any[] },
+        extensiv: { connected: false, ordersEndpoint: null as any, activityEndpoint: null as any, error: null as string | null },
+        database: { totalOrders: 0, hildaleOrders: 0, candidates: 0, sampleCandidates: [] as any[] },
+        idFormatCheck: { dbFormat: '', shopifyFormat: '', match: false },
+      };
+
+      // 1. Check database
+      const allOrders = await storage.getAllSalesOrders();
+      const excludeStatuses = ['DELIVERED', 'SHIPPED', 'REFUNDED', 'CANCELLED'];
+      const hildaleOrders = allOrders.filter(o => o.fulfillmentSource === 'HILDALE');
+      const candidates = hildaleOrders.filter(o => !excludeStatuses.includes(o.status));
+
+      diag.database.totalOrders = allOrders.length;
+      diag.database.hildaleOrders = hildaleOrders.length;
+      diag.database.candidates = candidates.length;
+      diag.database.sampleCandidates = candidates.slice(0, 5).map(o => ({
+        id: o.id,
+        externalOrderId: o.externalOrderId,
+        status: o.status,
+        fulfillmentSource: o.fulfillmentSource,
+        customerName: o.customerName,
+        orderDate: o.orderDate,
+      }));
+
+      // 2. Check Shopify connection + fetch a sample order
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      diag.shopify.configCount = shopifyConfigs.length;
+
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        diag.shopify.domain = domain;
+        diag.shopify.hasAccessToken = !!accessToken;
+        diag.shopify.apiVersion = apiVersion;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          diag.shopify.connected = true;
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        diag.shopify.envDomain = domain || '(not set)';
+        diag.shopify.envHasToken = !!accessToken;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken);
+          diag.shopify.connected = true;
+          diag.shopify.source = 'env';
+        }
+      }
+
+      // Fetch a few sample orders from Shopify to verify IDs match
+      if (shopifyClient && candidates.length > 0) {
+        const sampleIds = candidates.slice(0, 3).map(o => o.externalOrderId).filter(Boolean) as string[];
+        diag.idFormatCheck.dbFormat = sampleIds[0] || '(none)';
+
+        try {
+          const shopifyOrders = await shopifyClient.fetchOrdersByIds(sampleIds);
+          diag.shopify.fetchedCount = shopifyOrders.length;
+          diag.shopify.requestedIds = sampleIds;
+
+          if (shopifyOrders.length > 0) {
+            diag.idFormatCheck.shopifyFormat = String(shopifyOrders[0].id);
+            diag.idFormatCheck.match = sampleIds.includes(String(shopifyOrders[0].id));
+          }
+
+          // Show raw Shopify data for first 3 orders so we can see fulfillment status
+          diag.shopify.sampleOrders = shopifyOrders.slice(0, 3).map((so: any) => ({
+            id: so.id,
+            name: so.name,
+            fulfillment_status: so.fulfillment_status,
+            financial_status: so.financial_status,
+            cancelled_at: so.cancelled_at,
+            tags: so.tags,
+            note: (so.note || '').substring(0, 200),
+            fulfillments_count: (so.fulfillments || []).length,
+            fulfillments: (so.fulfillments || []).map((f: any) => ({
+              id: f.id,
+              status: f.status,
+              tracking_number: f.tracking_number,
+              line_items_count: (f.line_items || []).length,
+              total_fulfilled_qty: (f.line_items || []).reduce((s: number, li: any) => s + (li.quantity || 0), 0),
+            })),
+            line_items_count: (so.line_items || []).length,
+            total_ordered_qty: (so.line_items || []).reduce((s: number, li: any) => s + (li.quantity || 0), 0),
+            created_at: so.created_at,
+          }));
+        } catch (err: any) {
+          diag.shopify.error = err.message;
+        }
+      }
+
+      // 3. Check Extensiv
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        diag.extensiv.configCount = extensivConfigs.length;
+
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          diag.extensiv.baseUrl = baseUrl;
+          diag.extensiv.hasClientId = !!clientId;
+          diag.extensiv.hasClientSecret = !!clientSecret;
+          diag.extensiv.hasOrgKey = !!orgKey;
+
+          let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+          }
+
+          if (extensivClient) {
+            diag.extensiv.connected = true;
+
+            // Try /orders endpoint
+            try {
+              const recentOrders = await extensivClient.fetchRecentOrders(5);
+              diag.extensiv.ordersEndpoint = {
+                success: true,
+                count: recentOrders.length,
+                sampleKeys: recentOrders.length > 0 ? Object.keys(recentOrders[0]) : [],
+                sample: recentOrders.slice(0, 2).map((o: any) => ({
+                  ReferenceNum: o.ReferenceNum || o.referenceNum,
+                  OrderStatus: o.OrderStatus || o.orderStatus || o.status,
+                  ReadOnly: o.ReadOnly ? { OrderId: o.ReadOnly.OrderId, CreationDate: o.ReadOnly.CreationDate } : null,
+                  rawKeys: Object.keys(o),
+                })),
+              };
+            } catch (err: any) {
+              diag.extensiv.ordersEndpoint = { success: false, error: err.message };
+            }
+
+            // Try /activity endpoint
+            try {
+              const sixtyDaysAgo = new Date();
+              sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+              const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 10);
+              diag.extensiv.activityEndpoint = {
+                success: true,
+                count: activity.length,
+                sample: activity.slice(0, 3),
+              };
+            } catch (err: any) {
+              diag.extensiv.activityEndpoint = { success: false, error: err.message };
+            }
+
+            break;
+          }
+        }
+      } catch (err: any) {
+        diag.extensiv.error = err.message;
+      }
+
+      res.json(diag);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ── BACKFILL endpoint — populates missing externalOrderId from Shopify ──
+  // POST /api/sales-orders/in-house/backfill
+  // One-time fix: Fetches recent Shopify orders and matches them to our DB
+  // orders by customer name + order date to populate the missing Shopify ID.
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/backfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // 1. Get Shopify client
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      for (const config of shopifyConfigs) {
+        const domain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken, apiVersion);
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const domain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        if (domain && accessToken) {
+          shopifyClient = new ShopifyClient(domain, accessToken);
+        }
+      }
+      if (!shopifyClient) {
+        return res.status(400).json({ error: "Shopify not configured" });
+      }
+
+      // 2. Get all orders with null externalOrderId
+      const allOrders = await storage.getAllSalesOrders();
+      const needsBackfill = allOrders.filter(o => !o.externalOrderId);
+      console.log(`[Backfill] ${needsBackfill.length} orders need externalOrderId`);
+
+      if (needsBackfill.length === 0) {
+        return res.json({ message: "All orders already have externalOrderId", matched: 0, total: 0 });
+      }
+
+      // 3. Fetch ALL recent orders from Shopify (up to 1000)
+      //    We use the "any" status to get fulfilled + unfulfilled
+      const shopifyOrders: any[] = [];
+      let nextPageUrl: string | null = null;
+      const baseUrl = (shopifyClient as any).getBaseUrl();
+      const headers = (shopifyClient as any).getHeaders();
+
+      // Fetch up to 4 pages of 250 = 1000 orders
+      let url = `${baseUrl}/orders.json?status=any&limit=250&created_at_min=${new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()}`;
+      for (let page = 0; page < 4; page++) {
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+          console.error(`[Backfill] Shopify fetch failed: ${response.status}`);
+          break;
+        }
+        const data = await response.json();
+        shopifyOrders.push(...(data.orders || []));
+
+        // Check for next page
+        const linkHeader = response.headers.get('Link');
+        if (linkHeader && linkHeader.includes('rel="next"')) {
+          const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+          if (match) {
+            url = match[1];
+          } else break;
+        } else break;
+
+        if ((data.orders || []).length < 250) break;
+      }
+
+      console.log(`[Backfill] Fetched ${shopifyOrders.length} orders from Shopify`);
+
+      // 4. Build a lookup by customer email and by customer name + approx date
+      const shopifyByEmail = new Map<string, any[]>();
+      const shopifyByName = new Map<string, any[]>();
+
+      for (const so of shopifyOrders) {
+        const email = (so.email || '').toLowerCase().trim();
+        if (email) {
+          if (!shopifyByEmail.has(email)) shopifyByEmail.set(email, []);
+          shopifyByEmail.get(email)!.push(so);
+        }
+
+        const name = ((so.customer?.first_name || '') + ' ' + (so.customer?.last_name || '')).toLowerCase().trim();
+        if (name && name !== ' ') {
+          if (!shopifyByName.has(name)) shopifyByName.set(name, []);
+          shopifyByName.get(name)!.push(so);
+        }
+      }
+
+      // 5. Match our orders to Shopify orders
+      let matched = 0;
+      const matchDetails: any[] = [];
+
+      for (const order of needsBackfill) {
+        // Try matching by email first (most reliable)
+        let candidates: any[] = [];
+        const email = (order.customerEmail || '').toLowerCase().trim();
+        if (email && shopifyByEmail.has(email)) {
+          candidates = shopifyByEmail.get(email)!;
+        }
+
+        // Fallback: match by customer name
+        if (candidates.length === 0) {
+          const name = (order.customerName || '').toLowerCase().trim();
+          if (name && shopifyByName.has(name)) {
+            candidates = shopifyByName.get(name)!;
+          }
+        }
+
+        if (candidates.length === 0) continue;
+
+        // Find the closest order by date
+        const orderDate = new Date(order.orderDate).getTime();
+        let bestMatch: any = null;
+        let bestDiff = Infinity;
+
+        for (const c of candidates) {
+          const shopDate = new Date(c.created_at).getTime();
+          const diff = Math.abs(orderDate - shopDate);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestMatch = c;
+          }
+        }
+
+        // Only match if within 24 hours
+        if (bestMatch && bestDiff < 24 * 60 * 60 * 1000) {
+          const shopifyId = String(bestMatch.id);
+          try {
+            await storage.updateSalesOrder(order.id, { externalOrderId: shopifyId });
+            matched++;
+            matchDetails.push({
+              orderId: order.id,
+              customer: order.customerName,
+              shopifyId,
+              shopifyName: bestMatch.name,
+              timeDiff: Math.round(bestDiff / 60000) + 'min',
+            });
+          } catch (err: any) {
+            console.error(`[Backfill] Failed to update order ${order.id}:`, err.message);
+          }
+        }
+      }
+
+      console.log(`[Backfill] Matched ${matched}/${needsBackfill.length} orders to Shopify IDs`);
+
+      res.json({
+        message: `Backfilled ${matched} of ${needsBackfill.length} orders with Shopify IDs`,
+        matched,
+        total: needsBackfill.length,
+        shopifyFetched: shopifyOrders.length,
+        details: matchDetails.slice(0, 20),
+      });
+    } catch (error: any) {
+      console.error("[Backfill] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Sync in-house orders with Shopify AND Extensiv to auto-close orders already shipped/fulfilled
+  // POST /api/sales-orders/in-house/sync
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      // 1. Get all pending in-house orders
+      const allOrders = await storage.getAllSalesOrders();
+      const pendingStatuses = ['DRAFT', 'ORDERED', 'PENDING', 'PURCHASED', 'PARTIALLY_FULFILLED'];
+      const inHouseOrders = allOrders.filter(o =>
+        o.fulfillmentSource === 'HILDALE' && pendingStatuses.includes(o.status) && o.externalOrderId
+      );
+
+      if (inHouseOrders.length === 0) {
+        return res.json({ synced: 0, closed: 0, extensivChecked: 0, errors: [], message: "No pending in-house orders to sync" });
+      }
+
+      // ── SHOPIFY SYNC ──────────────────────────────────────────
+      // 2. Get Shopify client from integration config
+      const shopifyConfigs = await storage.getEnabledIntegrationConfigsByProvider("SHOPIFY");
+      let shopifyClient: InstanceType<typeof ShopifyClient> | null = null;
+
+      for (const config of shopifyConfigs) {
+        const shopDomain = (config.config as any)?.shopDomain;
+        const accessToken = config.apiKey;
+        const apiVersion = (config.config as any)?.apiVersion || "2024-01";
+        if (shopDomain && accessToken) {
+          shopifyClient = new ShopifyClient(shopDomain, accessToken, apiVersion);
+          break;
+        }
+      }
+      if (!shopifyClient) {
+        const shopDomain = process.env.SHOPIFY_SHOP_DOMAIN;
+        const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+        const apiVersion = process.env.SHOPIFY_API_VERSION || "2024-01";
+        if (shopDomain && accessToken) {
+          shopifyClient = new ShopifyClient(shopDomain, accessToken, apiVersion);
+        }
+      }
+
+      // 3. Fetch orders from Shopify
+      let shopifyMap = new Map<string, any>();
+      if (shopifyClient) {
+        try {
+          const externalIds = inHouseOrders.map(o => o.externalOrderId!);
+          const shopifyOrders = await shopifyClient.fetchOrdersByIds(externalIds);
+          for (const so of shopifyOrders) {
+            shopifyMap.set(String(so.id), so);
+          }
+          console.log(`[In-House Sync] Fetched ${shopifyOrders.length} orders from Shopify`);
+        } catch (err: any) {
+          console.error("[In-House Sync] Shopify fetch error (continuing with Extensiv):", err.message);
+        }
+      }
+
+      // ── EXTENSIV SYNC ─────────────────────────────────────────
+      // 4. Get Extensiv client and check recent shipment activity
+      let extensivShipments = new Map<string, any>();
+      let extensivChecked = 0;
+      try {
+        const extensivConfigs = await storage.getEnabledIntegrationConfigsByProvider("EXTENSIV");
+        let extensivClient: InstanceType<typeof ExtensivClient> | null = null;
+
+        for (const config of extensivConfigs) {
+          const configData = config.config as Record<string, any> || {};
+          const baseUrl = configData.baseUrl || 'https://secure-wms.com';
+          const clientId = configData.clientId;
+          const clientSecret = config.apiKey;
+          const orgKey = configData.orgKey;
+
+          if (clientId && clientSecret) {
+            extensivClient = new ExtensivClient({ clientId, clientSecret, orgKey }, baseUrl);
+            break;
+          } else if (clientSecret) {
+            extensivClient = new ExtensivClient(clientSecret, baseUrl);
+            break;
+          }
+        }
+
+        if (extensivClient) {
+          // Fetch recent shipment activity (last 60 days to catch stale orders)
+          const sixtyDaysAgo = new Date();
+          sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+          const activity = await extensivClient.getActivity(undefined, sixtyDaysAgo, 500);
+
+          // Build lookup by externalOrderId for cross-reference
+          for (const act of activity) {
+            if (act.type === 'SHIPMENT' && act.externalOrderId) {
+              extensivShipments.set(act.externalOrderId, act);
+            }
+          }
+          extensivChecked = activity.length;
+          console.log(`[In-House Sync] Fetched ${activity.length} activities from Extensiv, found ${extensivShipments.size} shipments`);
+        } else {
+          console.log("[In-House Sync] No Extensiv config found, skipping Extensiv cross-reference");
+        }
+      } catch (err: any) {
+        console.error("[In-House Sync] Extensiv fetch error (continuing with Shopify data):", err.message);
+      }
+
+      // ── RECONCILE ─────────────────────────────────────────────
+      // 5. Check each order against both Shopify and Extensiv
+      let closed = 0;
+      let synced = 0;
+      let closedByShopify = 0;
+      let closedByExtensiv = 0;
+      const errors: string[] = [];
+      const syncDetails: Array<{ orderId: string; externalId: string; oldStatus: string; newStatus: string; source: string }> = [];
+
+      for (const order of inHouseOrders) {
+        let newStatus = order.status;
+        let source = '';
+
+        // Check Shopify first (most reliable)
+        const shopifyOrder = shopifyMap.get(order.externalOrderId!);
+        if (shopifyOrder) {
+          synced++;
+
+          const financialStatus = shopifyOrder.financial_status || '';
+          const fulfillmentStatus = shopifyOrder.fulfillment_status || '';
+          const fulfillments = shopifyOrder.fulfillments || [];
+
+          // Extract best shipment_status
+          let bestShipmentStatus: string | null = null;
+          const statusPriority: Record<string, number> = {
+            'delivered': 5, 'out_for_delivery': 4, 'in_transit': 3,
+            'confirmed': 2, 'label_printed': 1, 'label_purchased': 1
+          };
+          for (const f of fulfillments) {
+            const ss = f.shipment_status;
+            if (ss && (!bestShipmentStatus || (statusPriority[ss] || 0) > (statusPriority[bestShipmentStatus] || 0))) {
+              bestShipmentStatus = ss;
+            }
+          }
+
+          if (financialStatus === 'refunded') {
+            newStatus = 'REFUNDED'; source = 'Shopify';
+          } else if (financialStatus === 'voided' || shopifyOrder.cancelled_at) {
+            newStatus = 'CANCELLED'; source = 'Shopify';
+          } else if (bestShipmentStatus === 'delivered') {
+            newStatus = 'DELIVERED'; source = 'Shopify';
+          } else if (bestShipmentStatus) {
+            newStatus = 'SHIPPED'; source = 'Shopify';
+          } else if (fulfillmentStatus === 'fulfilled') {
+            newStatus = 'SHIPPED'; source = 'Shopify';
+          }
+        }
+
+        // If Shopify didn't resolve it, check Extensiv
+        if (newStatus === order.status && order.externalOrderId) {
+          const extensivShipment = extensivShipments.get(order.externalOrderId);
+          if (extensivShipment) {
+            newStatus = 'SHIPPED';
+            source = 'Extensiv';
+          }
+        }
+
+        // Update if status changed
+        if (newStatus !== order.status) {
+          try {
+            let deliveredAt: Date | undefined;
+            if (newStatus === 'DELIVERED' && shopifyOrder?.fulfillments?.length > 0) {
+              const lastFulfillment = shopifyOrder.fulfillments[shopifyOrder.fulfillments.length - 1];
+              if (lastFulfillment.updated_at) deliveredAt = new Date(lastFulfillment.updated_at);
+            }
+
+            await storage.updateSalesOrder(order.id, {
+              status: newStatus,
+              ...(deliveredAt ? { deliveredAt } : {}),
+            });
+            closed++;
+            if (source === 'Shopify') closedByShopify++;
+            if (source === 'Extensiv') closedByExtensiv++;
+            syncDetails.push({
+              orderId: order.id,
+              externalId: order.externalOrderId!,
+              oldStatus: order.status,
+              newStatus,
+              source,
+            });
+          } catch (err: any) {
+            errors.push(`Order ${order.externalOrderId}: ${err.message}`);
+          }
+        }
+      }
+
+      console.log(`[In-House Sync] Done: ${synced} checked, ${closed} closed (Shopify: ${closedByShopify}, Extensiv: ${closedByExtensiv}), ${errors.length} errors`);
+
+      // Build readable message
+      const parts: string[] = [];
+      if (closed > 0) {
+        parts.push(`Updated ${closed} order${closed !== 1 ? 's' : ''}`);
+        const sources: string[] = [];
+        if (closedByShopify > 0) sources.push(`${closedByShopify} via Shopify`);
+        if (closedByExtensiv > 0) sources.push(`${closedByExtensiv} via Extensiv`);
+        if (sources.length > 0) parts.push(`(${sources.join(', ')})`);
+      } else {
+        parts.push(`Checked ${synced} orders against Shopify`);
+        if (extensivChecked > 0) parts.push(`and ${extensivShipments.size} Extensiv shipments`);
+        parts.push('— none have been shipped yet');
+      }
+
+      res.json({
+        synced,
+        closed,
+        closedByShopify,
+        closedByExtensiv,
+        extensivChecked: extensivShipments.size,
+        total: inHouseOrders.length,
+        errors,
+        details: syncDetails,
+        message: parts.join(' '),
+      });
+    } catch (error: any) {
+      console.error("[In-House Sync] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to sync with Shopify & Extensiv" });
+    }
+  });
+
+  // Dismiss / mark in-house orders as already shipped (does NOT subtract inventory)
+  // POST /api/sales-orders/in-house/dismiss
+  // Body: { orderIds: string[], reason?: string }
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/dismiss", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { orderIds, reason } = req.body as { orderIds: string[]; reason?: string };
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ error: "orderIds array is required" });
+      }
+
+      let dismissed = 0;
+      const errors: string[] = [];
+
+      for (const orderId of orderIds) {
+        try {
+          const order = await storage.getSalesOrder(orderId);
+          if (!order) {
+            errors.push(`Order ${orderId} not found`);
+            continue;
+          }
+          // Update status to SHIPPED without touching inventory
+          await storage.updateSalesOrder(orderId, {
+            status: 'SHIPPED',
+          });
+          dismissed++;
+          console.log(`[In-House Dismiss] Order ${orderId} marked as shipped (reason: ${reason || 'manual dismiss'})`);
+        } catch (err: any) {
+          errors.push(`Order ${orderId}: ${err.message}`);
+        }
+      }
+
+      res.json({
+        dismissed,
+        total: orderIds.length,
+        errors,
+        message: `${dismissed} order${dismissed !== 1 ? 's' : ''} marked as already shipped.`,
+      });
+    } catch (error: any) {
+      console.error("[In-House Dismiss] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to dismiss orders" });
+    }
+  });
+
+  // POST /api/sales-orders/in-house/notify-delay
+  // Body: { orderIds: string[] }
+  // Sends a Stacy-voice delay notification email to each order's customer_email,
+  // skipping orders without an email. Bumps delay_notification_sent_at + count on success.
+  // IMPORTANT: This route MUST be registered BEFORE /api/sales-orders/:id
+  app.post("/api/sales-orders/in-house/notify-delay", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { orderIds } = req.body as { orderIds: string[] };
+
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.status(400).json({ error: "orderIds array is required" });
+      }
+
+      if (!process.env.SENDGRID_API_KEY || !process.env.SENDGRID_FROM_EMAIL) {
+        return res.status(503).json({
+          error: "Email service not configured (SENDGRID_API_KEY and SENDGRID_FROM_EMAIL required).",
+        });
+      }
+
+      const sgMail = await import("@sendgrid/mail");
+      sgMail.default.setApiKey(process.env.SENDGRID_API_KEY);
+
+      const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+      const fromName = process.env.SENDGRID_FROM_NAME || "Stacy at Sticker Burr Roller";
+      const replyTo = "customersupport@stickerburrroller.com";
+
+      let sent = 0;
+      const skipped: { orderId: string; reason: string }[] = [];
+      const errors: { orderId: string; message: string }[] = [];
+
+      for (const orderId of orderIds) {
+        try {
+          const order = await storage.getSalesOrder(orderId);
+          if (!order) {
+            errors.push({ orderId, message: "Order not found" });
+            continue;
+          }
+          if (!order.customerEmail) {
+            skipped.push({ orderId, reason: "no_email" });
+            continue;
+          }
+
+          const lines = await storage.getSalesOrderLines(orderId);
+          const itemSummary = lines
+            .filter((l: any) => (l.qtyOrdered || 0) - (l.qtyShipped || 0) > 0)
+            .map((l: any) => `${l.productName || l.sku} ×${(l.qtyOrdered || 0) - (l.qtyShipped || 0)}`)
+            .join(", ") || "your order";
+
+          const orderNumber = order.externalOrderId || order.id.slice(0, 8);
+          const orderDateFmt = new Date(order.orderDate).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+          const customerFirstName = (order.customerName || "").split(" ")[0] || "there";
+
+          const subject = `Quick update on your Sticker Burr order #${orderNumber}`;
+          const text = `Hi ${customerFirstName},\n\nI'm Stacy from Sticker Burr Roller. I wanted to reach out personally about your order #${orderNumber} placed on ${orderDateFmt} for ${itemSummary}.\n\nYour order is in production at our Hildale shop right now and hasn't shipped yet. We know you're waiting, and we're moving as fast as we can to get it out the door. You should see tracking within the next 7 business days.\n\nIf you need anything in the meantime, just hit reply and I'll personally make sure it gets handled.\n\nThanks for your patience with us.\n\nGo win your ground war,\nStacy\n\nSticker Burr Roller\ncustomersupport@stickerburrroller.com`;
+          const html = `<div style="font-family:system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.55;color:#1a1a1a;max-width:560px;">
+<p>Hi ${customerFirstName},</p>
+<p>I'm Stacy from Sticker Burr Roller. I wanted to reach out personally about your order <strong>#${orderNumber}</strong> placed on ${orderDateFmt} for ${itemSummary}.</p>
+<p>Your order is in production at our Hildale shop right now and hasn't shipped yet. We know you're waiting, and we're moving as fast as we can to get it out the door. You should see tracking within the next 7 business days.</p>
+<p>If you need anything in the meantime, just hit reply and I'll personally make sure it gets handled.</p>
+<p>Thanks for your patience with us.</p>
+<p>Go win your ground war,<br/>Stacy</p>
+<p style="color:#666;font-size:13px;margin-top:24px;">Sticker Burr Roller<br/><a href="mailto:customersupport@stickerburrroller.com" style="color:#666;">customersupport@stickerburrroller.com</a></p>
+</div>`;
+
+          await sgMail.default.send({
+            to: order.customerEmail,
+            from: { email: fromEmail, name: fromName },
+            replyTo,
+            subject,
+            text,
+            html,
+            categories: ["delay-notification", "in-house-shipping"],
+            customArgs: { orderId, orderNumber: String(orderNumber) },
+          });
+
+          await storage.updateSalesOrder(orderId, {
+            delayNotificationSentAt: new Date(),
+            delayNotificationCount: (order.delayNotificationCount || 0) + 1,
+          });
+
+          sent++;
+          console.log(`[Delay Notify] Sent to ${order.customerEmail} for order ${orderNumber}`);
+        } catch (err: any) {
+          console.error(`[Delay Notify] Failed for ${orderId}:`, err.message);
+          errors.push({ orderId, message: err.message || "Send failed" });
+        }
+      }
+
+      res.json({
+        sent,
+        skipped,
+        errors,
+        total: orderIds.length,
+        message: `Sent ${sent}, skipped ${skipped.length}${errors.length > 0 ? `, ${errors.length} failed` : ""}.`,
+      });
+    } catch (error: any) {
+      console.error("[Delay Notify] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to send delay notifications" });
     }
   });
 
@@ -17376,9 +21579,14 @@ Generate only the email body text, no subject line.`;
       const allLines = await storage.getSalesOrderLines(id);
 
       // Determine which lines to ship
+      // For in-house shipping: lines may not be "allocated" — use remaining qty instead
       const linesToShip = lineIds && Array.isArray(lineIds)
         ? allLines.filter((line: SalesOrderLine) => lineIds.includes(line.id))
-        : allLines.filter((line: SalesOrderLine) => line.qtyAllocated > 0);
+        : allLines.filter((line: SalesOrderLine) => {
+            // Ship if allocated, OR if there are remaining unshipped items
+            const remaining = (line.qtyOrdered || 0) - (line.qtyShipped || 0);
+            return line.qtyAllocated > 0 || remaining > 0;
+          });
 
       if (linesToShip.length === 0) {
         return res.status(400).json({ error: "No lines available to ship" });
@@ -17391,7 +21599,9 @@ Generate only the email body text, no subject line.`;
 
       // Process each line being shipped
       for (const line of linesToShip) {
-        const shipQty = line.qtyAllocated;
+        // Use allocated qty if set, otherwise use remaining unshipped qty
+        const remaining = (line.qtyOrdered || 0) - (line.qtyShipped || 0);
+        const shipQty = line.qtyAllocated > 0 ? line.qtyAllocated : remaining;
         if (shipQty <= 0) continue;
 
         // Get current product data
@@ -17402,20 +21612,35 @@ Generate only the email body text, no subject line.`;
           });
         }
 
-        // Determine which warehouse to ship from (prioritize Pivot, then Hildale)
+        // Determine which warehouse to ship from. In-house orders
+        // (fulfillmentSource='HILDALE') physically leave from Hildale, so we must
+        // pin the location to HILDALE — the previous prioritize-Pivot logic would
+        // pick PIVOT whenever pivotQty was sufficient, leaving hildaleQty
+        // un-decremented even though Hildale actually shipped the order.
+        // Pivot/3PL orders keep the original prioritize-Pivot fallback.
+        const isInHouse = order.fulfillmentSource === 'HILDALE';
         let location: 'PIVOT' | 'HILDALE';
-        if ((product.pivotQty ?? 0) >= shipQty) {
+        if (isInHouse) {
+          if ((product.hildaleQty ?? 0) >= shipQty) {
+            location = 'HILDALE';
+          } else {
+            return res.status(400).json({
+              error: `Insufficient Hildale stock to ship line ${line.sku}`,
+            });
+          }
+        } else if ((product.pivotQty ?? 0) >= shipQty) {
           location = 'PIVOT';
         } else if ((product.hildaleQty ?? 0) >= shipQty) {
           location = 'HILDALE';
         } else {
           // Not enough stock in either location
-          return res.status(400).json({ 
-            error: `Insufficient stock to ship line ${line.sku}` 
+          return res.status(400).json({
+            error: `Insufficient stock to ship line ${line.sku}`,
           });
         }
 
-        // Use InventoryMovement helper to update stock and log the movement
+        // Use InventoryMovement helper to update stock and log the movement.
+        // SALES_ORDER_SHIPPED with location='HILDALE' decrements hildaleQty.
         const result = await inventoryMovement.apply({
           eventType: "SALES_ORDER_SHIPPED",
           itemId: product.id,
@@ -17434,15 +21659,21 @@ Generate only the email body text, no subject line.`;
           return res.status(400).json({ error: result.error });
         }
 
-        // Create SHIP transaction for legacy compatibility
+        // Legacy inventory_transactions entry. For Hildale ships we tag the row
+        // type='SHIPPED_HILDALE' with a negative quantity so SUM(quantity) per
+        // item gives net stock change directly. Pivot ships keep the historical
+        // type='SHIP' / positive-qty shape — Extensiv owns pivotQty, so those
+        // rows are informational anyway.
+        const isHildaleShip = location === 'HILDALE';
         await storage.createInventoryTransaction({
           itemId: product.id,
           itemType: 'FINISHED',
-          type: 'SHIP',
-          quantity: shipQty,
+          type: isHildaleShip ? 'SHIPPED_HILDALE' : 'SHIP',
+          quantity: isHildaleShip ? -shipQty : shipQty,
           location,
           notes: `Ship order ${order.externalOrderId || order.id} line ${line.sku}`,
           createdBy: userId.toString(),
+          createdByName: user?.email ?? null,
         });
 
         // Update line: qtyShipped += shipQty, qtyFulfilled = qtyShipped, qtyAllocated = 0, recalculate backorderQty
@@ -18503,15 +22734,15 @@ Generate only the email body text, no subject line.`;
 
   // OAuth callback route - handle QuickBooks OAuth redirect
   // INTUIT COMPLIANCE: Uses pure 302 redirect with no HTML body to prevent Referer header token leakage
-  app.get("/api/quickbooks/callback", async (req: Request, res: Response) => {
+  app.get("/api/integrations/quickbooks/callback", async (req: Request, res: Response) => {
     // Set Intuit-compliant security headers immediately
     res.setHeader('Cache-Control', 'no-cache, no-store');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    
+
     try {
       const { code, realmId, state } = req.query;
-      
+
       if (!code || !realmId) {
         // Pure 302 redirect with no HTML body
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=missing_params');
@@ -18519,7 +22750,7 @@ Generate only the email body text, no subject line.`;
 
       const clientId = process.env.QUICKBOOKS_CLIENT_ID;
       const clientSecret = process.env.QUICKBOOKS_CLIENT_SECRET;
-      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/integrations/quickbooks/callback`;
 
       if (!clientId || !clientSecret) {
         return res.redirect(302, '/ai?tab=data-sources&quickbooks=error&reason=config');
@@ -18839,8 +23070,8 @@ Generate only the email body text, no subject line.`;
         return res.status(401).json({ error: 'User not authenticated' });
       }
 
-      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI || 
-        `${req.protocol}://${req.get('host')}/api/quickbooks/callback`;
+      const redirectUri = process.env.QUICKBOOKS_REDIRECT_URI ||
+        `${req.protocol}://${req.get('host')}/api/integrations/quickbooks/callback`;
       
       const scope = 'com.intuit.quickbooks.accounting';
       // URL-encode the state to handle any special characters
@@ -20340,6 +24571,217 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ── Marketing: ROAS Guardian ──
+  app.get("/api/marketing/roas", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, channel } = req.query as { startDate?: string; endDate?: string; channel?: string };
+      const rows = await storage.getRoasGuardian({ startDate, endDate, channel });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing ROAS] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch ROAS data" });
+    }
+  });
+
+  // Per-ad-platform rollup. Distinct from /api/marketing/roas (which groups by
+  // sales channel) — this surfaces Meta as its own line so the catastrophic
+  // 1.44x doesn't hide inside the "shopify" total. Each platform's
+  // pixel_revenue uses the platform's own attribution window.
+  app.get("/api/marketing/by-platform", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { from, to } = req.query as { from?: string; to?: string };
+      const rows = await storage.getRoasByPlatform({ from, to });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing By Platform] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch platform ROAS" });
+    }
+  });
+
+  // Sales velocity — total units sold per SKU over last N days (default 90)
+  // Used by the Inventory page to sort by best sellers
+  app.get("/api/inventory/sales-velocity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = parseInt(req.query.days as string) || 90;
+      const velocity = await storage.getSkuSalesVelocity(days);
+      res.json(velocity);
+    } catch (error: any) {
+      console.error("[Inventory] Error fetching sales velocity:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch sales velocity" });
+    }
+  });
+
+  // Raw Materials dashboard — Clarence's view of what to order
+  // Combines: item stock, BOM usage across products, and 90-day sales velocity
+  app.get("/api/raw-materials/dashboard", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const allItems = await storage.getItemsWithBOMCounts();
+      const components = allItems.filter(i => i.type === "component");
+      const finishedProducts = allItems.filter(i => i.type === "finished_product");
+
+      // Get sales velocity for finished products (last 90 days)
+      const velocity = await storage.getSkuSalesVelocity(90);
+      const velocityMap = new Map(velocity.map(v => [v.sku, v.unitsSold]));
+
+      // Designated-supplier lookup for each component, including lead time.
+      // Tiebreak when there's no designated row: lowest non-zero price, else
+      // first row. Mirrors auto-draft-po-service so the two views agree on
+      // which supplier is "the" supplier for a given item.
+      const allSupplierItems = await storage.getAllSupplierItems();
+      const allSuppliers = await storage.getAllSuppliers();
+      const supplierById = new Map(allSuppliers.map(s => [s.id, s]));
+      const supplierItemsByItemId = new Map<string, typeof allSupplierItems>();
+      for (const si of allSupplierItems) {
+        const arr = supplierItemsByItemId.get(si.itemId) ?? [];
+        arr.push(si);
+        supplierItemsByItemId.set(si.itemId, arr);
+      }
+      const pickSupplierItem = (itemId: string) => {
+        const list = supplierItemsByItemId.get(itemId) ?? [];
+        if (list.length === 0) return null;
+        const designated = list.find(s => s.isDesignatedSupplier);
+        if (designated) return designated;
+        const priced = list.filter(s => s.price != null && s.price > 0)
+          .sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+        return priced[0] ?? list[0];
+      };
+
+      // Build a map: componentId → { totalDailyUsage, usedIn[] }
+      const componentUsage = new Map<string, { totalDailyUsage: number; usedIn: { productName: string; productSku: string; qtyPerUnit: number; dailySales: number }[] }>();
+
+      for (const product of finishedProducts) {
+        const bom = await storage.getBillOfMaterialsByProductId(product.id);
+        if (!bom || bom.length === 0) continue;
+
+        const unitsSold90d = velocityMap.get(product.sku) || 0;
+        const dailySales = unitsSold90d / 90;
+
+        for (const entry of bom) {
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+          const dailyComponentUsage = effectiveQty * dailySales;
+
+          const existing = componentUsage.get(entry.componentId) ?? { totalDailyUsage: 0, usedIn: [] };
+          existing.totalDailyUsage += dailyComponentUsage;
+          existing.usedIn.push({
+            productName: product.name,
+            productSku: product.sku,
+            qtyPerUnit: entry.quantityRequired,
+            dailySales: Math.round(dailySales * 100) / 100,
+          });
+          componentUsage.set(entry.componentId, existing);
+        }
+      }
+
+      // Build dashboard rows
+      const dashboard = components.map(comp => {
+        const usage = componentUsage.get(comp.id) ?? { totalDailyUsage: 0, usedIn: [] };
+        const onHand = comp.currentStock ?? 0;
+        const dailyUsage = Math.round(usage.totalDailyUsage * 100) / 100;
+        const daysOfSupply = dailyUsage > 0 ? Math.round(onHand / dailyUsage) : 999;
+        const minStock = comp.minStock ?? 0;
+
+        // Recommend ordering enough for 30 days of supply, minus current stock
+        const targetDays = 30;
+        const orderQty = dailyUsage > 0 ? Math.max(0, Math.ceil(dailyUsage * targetDays) - onHand) : 0;
+        const orderCost = orderQty > 0 && comp.defaultPurchaseCost ? Math.round(orderQty * comp.defaultPurchaseCost * 100) / 100 : null;
+
+        const si = pickSupplierItem(comp.id);
+        const supplier = si ? supplierById.get(si.supplierId) ?? null : null;
+
+        // Units Buildable = MIN over products of floor(currentStock / qtyPerUnit).
+        // Tells the operator: "if I devoted this entire pile to the one product
+        // that needs the most components per build, how many could I build?"
+        let unitsBuildable: number | null = null;
+        for (const entry of usage.usedIn) {
+          if (entry.qtyPerUnit <= 0) continue;
+          const buildable = Math.floor(onHand / entry.qtyPerUnit);
+          if (unitsBuildable == null || buildable < unitsBuildable) {
+            unitsBuildable = buildable;
+          }
+        }
+        // Constrained-by hint surfaces the single highest-velocity product
+        // using this component. Per spec — the product moving the fastest is
+        // the one most likely to drain the component first; not necessarily
+        // the same product that produces the lowest buildable count.
+        let constrainedByName: string | null = null;
+        let constrainedByDailySales = 0;
+        for (const entry of usage.usedIn) {
+          if ((entry.dailySales || 0) > constrainedByDailySales) {
+            constrainedByDailySales = entry.dailySales || 0;
+            constrainedByName = entry.productName;
+          }
+        }
+
+        // daysLeft = unitsBuildable / Σ(dailySales). Operator-facing
+        // "how long until I can no longer build the most-constrained product
+        // if all sales pull through". Distinct from daysOfSupply (which is
+        // component-on-hand / component-daily-usage).
+        const totalProductVelocity = usage.usedIn.reduce((s, e) => s + (e.dailySales || 0), 0);
+        const daysLeft =
+          unitsBuildable != null && totalProductVelocity > 0
+            ? Math.round((unitsBuildable / totalProductVelocity) * 10) / 10
+            : null;
+
+        return {
+          id: comp.id,
+          name: comp.name,
+          sku: comp.sku,
+          category: comp.category ?? "Other",
+          unit: comp.unit ?? "units",
+          onHand,
+          minStock,
+          dailyUsage,
+          daysOfSupply,
+          orderQty,
+          orderCost,
+          unitCost: comp.defaultPurchaseCost ?? null,
+          supplierId: supplier?.id ?? null,
+          supplierName: supplier?.name ?? null,
+          supplierSku: si?.supplierSku ?? null,
+          leadTimeDays: si?.leadTimeDays ?? null,
+          unitsBuildable,
+          constrainedByName,
+          constrainedByDailySales: Math.round(constrainedByDailySales * 10) / 10,
+          totalProductVelocity: Math.round(totalProductVelocity * 10) / 10,
+          daysLeft,
+          usedIn: usage.usedIn,
+        };
+      });
+
+      // Sort: items needing orders first (lowest days of supply), then alphabetical
+      dashboard.sort((a, b) => a.daysOfSupply - b.daysOfSupply || a.name.localeCompare(b.name));
+
+      const totalOrderCost = dashboard.reduce((sum, d) => sum + (d.orderCost ?? 0), 0);
+
+      res.json({
+        materials: dashboard,
+        summary: {
+          totalComponents: dashboard.length,
+          needsOrder: dashboard.filter(d => d.orderQty > 0).length,
+          criticalLow: dashboard.filter(d => d.daysOfSupply < 7 && d.dailyUsage > 0).length,
+          totalOrderCost: Math.round(totalOrderCost * 100) / 100,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Raw Materials] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch raw materials dashboard" });
+    }
+  });
+
+  // Inventory snapshots — PDF-backed Pyvott / Hildale view
+  // Returns the most recent snapshot by default, or a specific date via ?date=YYYY-MM-DD
+  app.get("/api/inventory/snapshot", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { date } = req.query as { date?: string };
+      const rows = await storage.getInventorySnapshot({ date });
+      res.json(rows);
+    } catch (error: any) {
+      console.error("[Marketing Inventory] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch inventory snapshot" });
+    }
+  });
+
   const httpServer = createServer(app);
   
   // Initialize WebSocket for real-time logs
@@ -20348,8 +24790,23 @@ Generate only the email body text, no subject line.`;
   }).catch((error) => {
     console.error("[Server] Failed to initialize WebSocket logs service:", error);
   });
+
+  // Initialize WebSocket for real-time inventory updates (separate channel
+  // from logs so each consumer can subscribe to only what it needs).
+  import("./services/websocket-inventory").then(({ wsInventoryService }) => {
+    wsInventoryService.initialize(httpServer);
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize WebSocket inventory service:", error);
+  });
   
   // Initialize AI Batch Scheduler for scheduled runs at 10:00 AM and 3:00 PM Mountain time
+  import("./services/briefing-scheduler").then(({ initializeBriefingScheduler }) => {
+    initializeBriefingScheduler();
+    console.log("[Server] Daily Briefing Scheduler initialized");
+  }).catch((err) => {
+    console.error("[Server] Failed to initialize Daily Briefing Scheduler:", err);
+  });
+
   import("./services/ai-batch-scheduler").then(({ initializeScheduler }) => {
     initializeScheduler();
     console.log("[Server] AI Batch Scheduler initialized");
@@ -20387,6 +24844,21 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Daily Sales Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Daily Sales Scheduler:", error);
+  });
+
+  import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {
+    initializeReorderWatcher();
+    console.log("[Server] Reorder Watcher initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Reorder Watcher:", error);
+  });
+
+  // Initialize System Health Monitor for stale scheduler alerting
+  import("./services/system-health-service").then(({ initializeSystemHealthMonitor }) => {
+    initializeSystemHealthMonitor();
+    console.log("[Server] System Health Monitor initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize System Health Monitor:", error);
   });
   
   // Startup webhook auto-registration for Shopify (non-blocking)
@@ -20612,6 +25084,723 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error("[InventoryAdjustment] Error fetching:", error);
       res.status(500).json({ error: error.message || "Failed to fetch adjustments" });
+    }
+  });
+
+  // GET /api/briefing/daily — returns today's daily briefing payload. If a
+  // briefing already exists for today's Mountain-time date it's returned from
+  // daily_briefings; otherwise we compute fresh, persist, and return.
+  // ?date=YYYY-MM-DD lets you fetch a historical briefing if one was stored.
+  app.get("/api/briefing/daily", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { generateAndPersistBriefing } = await import("./services/briefing-service");
+      const dateParam = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : undefined;
+
+      if (dateParam) {
+        const stored = await storage.getDailyBriefingByDate(dateParam);
+        if (stored) return res.json(stored.contentJson);
+      } else {
+        // Today: serve cached when present, generate if not.
+        const todayKey = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "America/Denver",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date());
+        const stored = await storage.getDailyBriefingByDate(todayKey);
+        if (stored) return res.json(stored.contentJson);
+      }
+
+      const payload = await generateAndPersistBriefing(dateParam);
+      res.json(payload);
+    } catch (error: any) {
+      console.error("[Briefing] Error fetching daily briefing:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch briefing" });
+    }
+  });
+
+  // GET /api/otdr/summary — current 30d OTDR vs previous 30d, plus the late
+  // orders behind the current-period number (for the dashboard drill-down).
+  // OTDR = orders delivered on/before requiredByDate / orders with both dates
+  // present. Same math as briefing-service.computeOTDR but windowed at 30d
+  // and surfacing the per-order detail so the user can answer "why are we at
+  // 84% this week" without leaving the dashboard.
+  app.get("/api/otdr/summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const allOrders = await storage.getAllSalesOrders();
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      const currentStart = now - 30 * day;
+      const previousStart = now - 60 * day;
+      const previousEnd = currentStart;
+
+      type LateOrder = {
+        orderId: string;
+        orderName: string | null;
+        externalOrderId: string | null;
+        customerName: string;
+        customerEmail: string | null;
+        channel: string;
+        requiredByDate: string;
+        deliveredAt: string;
+        daysLate: number;
+      };
+
+      const computeWindow = (windowStart: number, windowEnd: number) => {
+        let total = 0;
+        let onTime = 0;
+        const lateOrders: LateOrder[] = [];
+        for (const o of allOrders) {
+          const deliveredRaw = (o as any).deliveredAt;
+          const requiredRaw = (o as any).requiredByDate;
+          if (!deliveredRaw || !requiredRaw) continue;
+          const deliveredAt = new Date(deliveredRaw).getTime();
+          const requiredBy = new Date(requiredRaw).getTime();
+          if (Number.isNaN(deliveredAt) || Number.isNaN(requiredBy)) continue;
+          if (deliveredAt < windowStart || deliveredAt >= windowEnd) continue;
+          total++;
+          if (deliveredAt <= requiredBy) {
+            onTime++;
+          } else {
+            lateOrders.push({
+              orderId: o.id,
+              orderName: (o as any).orderName ?? null,
+              externalOrderId: (o as any).externalOrderId ?? null,
+              customerName: (o as any).customerName ?? "(unknown)",
+              customerEmail: (o as any).customerEmail ?? null,
+              channel: o.channel ?? "OTHER",
+              requiredByDate: new Date(requiredBy).toISOString(),
+              deliveredAt: new Date(deliveredAt).toISOString(),
+              daysLate: Math.ceil((deliveredAt - requiredBy) / day),
+            });
+          }
+        }
+        const pct = total > 0 ? Math.round((onTime / total) * 1000) / 10 : null;
+        return { pct, total, onTime, lateOrders };
+      };
+
+      const current = computeWindow(currentStart, now);
+      const previous = computeWindow(previousStart, previousEnd);
+      const delta = current.pct != null && previous.pct != null
+        ? Math.round((current.pct - previous.pct) * 10) / 10
+        : null;
+
+      // Sort late orders by most-late first so the drill-down opens with
+      // the worst breaches at the top.
+      current.lateOrders.sort((a, b) => b.daysLate - a.daysLate);
+
+      res.json({
+        target: 90,
+        current: { pct: current.pct, total: current.total, onTime: current.onTime },
+        previous: { pct: previous.pct, total: previous.total, onTime: previous.onTime },
+        delta, // current.pct - previous.pct, in percentage points
+        lateOrders: current.lateOrders,
+      });
+    } catch (error: any) {
+      console.error("[OTDR] Summary error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute OTDR" });
+    }
+  });
+
+  // GET /api/products/:id/margin-history?months=12 — per-product monthly
+  // margin% over the last N months. Build cost is recomputed each month from
+  // PO history (avg unitCost across POs received that month, weighted by
+  // qtyReceived). For months with no PO data for a component we carry forward
+  // the most recent known cost so the line stays continuous.
+  //
+  // Caveat: sellingPrice has no historical record on items, so margin uses
+  // today's sellingPrice across the whole window. The chart's value is
+  // showing what's eroded on the COST side — the "Push 1.0 was 60%, now 52%"
+  // story comes from component cost increases, which this captures honestly.
+  app.get("/api/products/:id/margin-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const monthsParam = Number(req.query.months);
+      const months = Number.isInteger(monthsParam) && monthsParam > 0 && monthsParam <= 36
+        ? monthsParam
+        : 12;
+
+      const product = await storage.getItem(req.params.id);
+      if (!product) return res.status(404).json({ error: "Product not found" });
+      const sellingPrice = (product as any).sellingPrice ?? null;
+      const bom = await storage.getBillOfMaterialsByProductId(product.id);
+      if (!bom || bom.length === 0) {
+        return res.json({
+          productId: product.id,
+          sellingPrice,
+          months: [],
+          note: "No BOM defined for this product.",
+        });
+      }
+
+      // Build the rolling 12-month bucket list (oldest → newest), keyed YYYY-MM.
+      const now = new Date();
+      const monthKeys: string[] = [];
+      for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+      }
+
+      // Pull every line for this BOM's components to keep it to one query.
+      const componentIds = bom.map((b) => b.componentId);
+      const allLines = await storage.getAllPurchaseOrderLines();
+      const allPOs = await storage.getAllPurchaseOrders();
+      const poById = new Map(allPOs.map((p) => [p.id, p] as const));
+
+      // For each component, build a per-month avg unit cost from PO lines whose
+      // parent PO has a receivedAt in that month. Lines with qtyReceived = 0
+      // are skipped (the cost wasn't realized).
+      type MonthCost = Map<string, number>; // monthKey → avg unit cost
+      const componentMonthCost = new Map<string, MonthCost>();
+      for (const cid of componentIds) componentMonthCost.set(cid, new Map());
+      for (const line of allLines) {
+        if (!componentIds.includes(line.itemId)) continue;
+        if ((line.qtyReceived ?? 0) <= 0) continue;
+        const po = poById.get(line.purchaseOrderId);
+        if (!po) continue;
+        const recv = (po as any).receivedAt as Date | string | null | undefined;
+        if (!recv) continue;
+        const dt = new Date(recv);
+        if (Number.isNaN(dt.getTime())) continue;
+        const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+        // Weighted accumulator stored as { sumCostQty, sumQty } and reduced at the end.
+        const inner = componentMonthCost.get(line.itemId)!;
+        const prev = inner.get(key);
+        const qty = line.qtyReceived ?? 0;
+        // Encode running totals in two parallel keys so we don't have to swap
+        // structures: store the weighted sum here and divide later.
+        const accCost = (prev ?? 0) + (line.unitCost ?? 0) * qty;
+        inner.set(key, accCost);
+        // Mirror the qty in a parallel map keyed `__qty__:<key>` (single Map keeps types simple).
+        const qtyKey = `__qty__:${key}`;
+        const prevQty = inner.get(qtyKey) ?? 0;
+        inner.set(qtyKey, prevQty + qty);
+      }
+
+      // Build the per-month results, carrying forward the last known unit
+      // cost for any component that didn't receive a shipment that month.
+      const lastKnownCost = new Map<string, number>();
+      const monthsOut: Array<{
+        month: string;
+        buildCost: number;
+        marginPct: number | null;
+        hadAnyPO: boolean;
+        missingComponents: string[];
+      }> = [];
+
+      for (const monthKey of monthKeys) {
+        let buildCost = 0;
+        let hadAnyPO = false;
+        const missing: string[] = [];
+
+        for (const entry of bom) {
+          const inner = componentMonthCost.get(entry.componentId)!;
+          const sumCost = inner.get(monthKey);
+          const sumQty = inner.get(`__qty__:${monthKey}`);
+          let unitCost: number | null = null;
+          if (sumCost != null && sumQty != null && sumQty > 0) {
+            unitCost = sumCost / sumQty;
+            lastKnownCost.set(entry.componentId, unitCost);
+            hadAnyPO = true;
+          } else if (lastKnownCost.has(entry.componentId)) {
+            unitCost = lastKnownCost.get(entry.componentId)!;
+          }
+          if (unitCost == null) {
+            // No PO history for this component yet — fall back to current
+            // supplier_items / defaultPurchaseCost for at least a baseline.
+            const component = await storage.getItem(entry.componentId);
+            const fallback = component?.defaultPurchaseCost ?? 0;
+            if (fallback > 0) {
+              unitCost = fallback;
+              lastKnownCost.set(entry.componentId, unitCost);
+            }
+          }
+          if (unitCost == null || unitCost <= 0) {
+            missing.push(entry.componentId);
+            continue;
+          }
+          const wastage = (entry as any).wastagePercent ?? 0;
+          const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
+          buildCost += effectiveQty * unitCost;
+        }
+
+        const marginPct = sellingPrice != null && sellingPrice > 0 && buildCost > 0
+          ? ((sellingPrice - buildCost) / sellingPrice) * 100
+          : null;
+
+        monthsOut.push({
+          month: monthKey,
+          buildCost: Math.round(buildCost * 100) / 100,
+          marginPct: marginPct != null ? Math.round(marginPct * 10) / 10 : null,
+          hadAnyPO,
+          missingComponents: missing,
+        });
+      }
+
+      res.json({
+        productId: product.id,
+        productName: product.name,
+        sellingPrice,
+        sellingPriceNote: "Margin uses today's sellingPrice across the window. Cost erosion shown is real; price changes are not.",
+        months: monthsOut,
+      });
+    } catch (error: any) {
+      console.error("[Margin History] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute margin history" });
+    }
+  });
+
+  // GET /api/lots/trace?itemId=X&from=YYYY-MM-DD&to=YYYY-MM-DD
+  // Recall-style traceability: given a component + a receive-date window,
+  // returns each lot received in that window, the production runs that drew
+  // from each lot, the finished products those runs built, and the sales
+  // orders that shipped those products on/after the build date —
+  // i.e. the customers who could have received an affected unit.
+  //
+  // This is "potentially affected" not "definitely affected" because we
+  // don't track which specific built unit shipped on which order (no
+  // per-unit serial). For a small manufacturer this is the level of
+  // traceability the user asked for and it's far better than nothing.
+  app.get("/api/lots/trace", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const itemId = typeof req.query.itemId === "string" ? req.query.itemId : "";
+      const fromStr = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : "";
+      const toStr = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : "";
+      if (!itemId) return res.status(400).json({ error: "itemId is required" });
+      if (!fromStr || !toStr) return res.status(400).json({ error: "from and to dates (YYYY-MM-DD) are required" });
+
+      const item = await storage.getItem(itemId);
+      if (!item) return res.status(404).json({ error: "Item not found" });
+      const from = new Date(`${fromStr}T00:00:00.000Z`);
+      const to = new Date(`${toStr}T23:59:59.999Z`);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+        return res.status(400).json({ error: "Invalid date range" });
+      }
+
+      const lots = await storage.getLotsForItemReceivedBetween(itemId, from, to);
+      const allItemsCache = await storage.getAllItems();
+      const itemById = new Map(allItemsCache.map((i) => [i.id, i] as const));
+      const allSOs = await storage.getAllSalesOrders();
+
+      // Walk each lot → consumption events → production_log → finished
+      // product → potentially-affected sales orders.
+      const out = await Promise.all(lots.map(async (lot) => {
+        const events = await storage.getConsumptionEventsForLot(lot.id);
+        const enrichedEvents = await Promise.all(events.map(async (ev) => {
+          const log = ev.productionLogId ? await storage.getProductionLog(ev.productionLogId) : null;
+          if (!log) {
+            return {
+              consumedAt: ev.consumedAt,
+              qtyDrawn: ev.qtyDrawn,
+              productionLogId: ev.productionLogId,
+              productionDate: null,
+              finishedProductId: null,
+              finishedProductName: null,
+              builtQty: null,
+              potentiallyAffectedOrders: [] as Array<any>,
+            };
+          }
+          const finished = itemById.get(log.itemId) ?? null;
+
+          // Sales orders that shipped this finished product on or after the
+          // build date — these are the recall candidates.
+          type AffectedOrder = {
+            orderId: string;
+            orderName: string | null;
+            customerName: string;
+            customerEmail: string | null;
+            channel: string;
+            shippedQty: number;
+            shippedAt: string | null;
+          };
+          const affected: AffectedOrder[] = [];
+          if (finished) {
+            const buildDate = new Date(`${log.productionDate}T00:00:00.000Z`);
+            for (const so of allSOs) {
+              const shipTs = (so as any).deliveredAt ?? null;
+              const shipAt = shipTs ? new Date(shipTs) : null;
+              // Use deliveredAt when present, else fall back to orderDate.
+              // We need _some_ date; if neither is present we still include
+              // the order if its lines match (worst case the user double-checks).
+              const referenceDate = shipAt ?? new Date(so.orderDate);
+              if (referenceDate < buildDate) continue;
+              const lines = await storage.getSalesOrderLines(so.id);
+              const matchedQty = lines
+                .filter((l) => l.sku === finished.sku && (l.qtyShipped ?? 0) > 0)
+                .reduce((s, l) => s + (l.qtyShipped ?? 0), 0);
+              if (matchedQty <= 0) continue;
+              affected.push({
+                orderId: so.id,
+                orderName: (so as any).orderName ?? so.orderNumber ?? null,
+                customerName: so.customerName ?? "(unknown)",
+                customerEmail: so.customerEmail ?? null,
+                channel: so.channel ?? "OTHER",
+                shippedQty: matchedQty,
+                shippedAt: shipAt ? shipAt.toISOString() : null,
+              });
+            }
+          }
+
+          return {
+            consumedAt: ev.consumedAt,
+            qtyDrawn: ev.qtyDrawn,
+            productionLogId: ev.productionLogId,
+            productionDate: log.productionDate,
+            finishedProductId: log.itemId,
+            finishedProductName: finished?.name ?? null,
+            builtQty: log.quantity,
+            potentiallyAffectedOrders: affected,
+          };
+        }));
+
+        return {
+          lotId: lot.id,
+          lotNumber: lot.lotNumber,
+          originalQty: lot.originalQty,
+          remainingQty: lot.remainingQty,
+          receivedAt: lot.receivedAt,
+          supplierId: lot.supplierId,
+          consumption: enrichedEvents,
+        };
+      }));
+
+      res.json({
+        itemId: item.id,
+        itemName: item.name,
+        from: fromStr,
+        to: toStr,
+        lots: out,
+        note: "Affected orders are 'potentially' affected — we infer from product SKU + ship date, not per-unit serials.",
+      });
+    } catch (error: any) {
+      console.error("[Lot Trace] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute lot trace" });
+    }
+  });
+
+  // GET /api/data-quality/summary — five integrity checks reported as
+  // {count, samples[], fixUrl} per check. Powers the Settings → Data Quality
+  // tab. Read-only; everything is derived from existing tables.
+  app.get("/api/data-quality/summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [items, suppliers, supplierItems, salesOrders, purchaseOrders] = await Promise.all([
+        storage.getAllItems(),
+        storage.getAllSuppliers(),
+        storage.getAllSupplierItems(),
+        storage.getAllSalesOrders(),
+        storage.getAllPurchaseOrders(),
+      ]);
+
+      // ── 1. Components missing a supplier price ───────────────────────
+      // Anything we'd want to put on a PO needs a price tied to it.
+      // We look at item type='component' and check whether at least one
+      // supplier_items row has a positive price.
+      const itemHasPrice = new Map<string, boolean>();
+      for (const si of supplierItems) {
+        if (si.itemId && (si.price ?? 0) > 0) itemHasPrice.set(si.itemId, true);
+      }
+      const itemsMissingPrice = items
+        .filter((i) => i.type === "component")
+        .filter((i) => !itemHasPrice.get(i.id));
+
+      // ── 2. Suppliers without lead time on any of their items ─────────
+      const supplierHasLeadTime = new Map<string, boolean>();
+      for (const si of supplierItems) {
+        if (si.supplierId && (si.leadTimeDays ?? 0) > 0) {
+          supplierHasLeadTime.set(si.supplierId, true);
+        }
+      }
+      const suppliersMissingLeadTime = suppliers.filter(
+        (s) => !supplierHasLeadTime.get(s.id),
+      );
+
+      // ── 3. Sales orders with no customer email (blocks notifications) ──
+      const ordersWithoutEmail = salesOrders.filter(
+        (o) => !o.customerEmail || o.customerEmail.trim().length === 0,
+      );
+
+      // ── 4. SOs in unknown status (blocks reconciliation) ─────────────
+      // Known set captures both the current state machine values and
+      // documented legacy values (per shared/schema.ts comments).
+      const KNOWN_SO_STATUSES = new Set([
+        "DRAFT",
+        "ORDERED",
+        "SHIPPED",
+        "DELIVERED",
+        "PENDING_REFUND",
+        "REFUNDED",
+        "CANCELLED",
+        // legacy values still present in historical rows
+        "PURCHASED",
+        "PENDING",
+        "FULFILLED",
+        "PARTIALLY_FULFILLED",
+        "PARTIAL",
+      ]);
+      const ordersUnknownStatus = salesOrders.filter(
+        (o) => !o.status || !KNOWN_SO_STATUSES.has(o.status),
+      );
+
+      // ── 5. POs without expected date (blocks OTDR) ───────────────────
+      // Skip terminal-state POs since their lateness is already measurable.
+      const PO_TERMINAL = new Set(["RECEIVED", "CLOSED", "CANCELLED"]);
+      const posMissingExpected = purchaseOrders.filter(
+        (p) => !p.expectedDate && !PO_TERMINAL.has(p.status) && !(p as any).isHistorical,
+      );
+
+      res.json({
+        checks: [
+          {
+            id: "items_without_supplier_price",
+            label: "Components without supplier prices",
+            description: "Blocks BOM rollup margin and PO auto-pricing.",
+            count: itemsMissingPrice.length,
+            samples: itemsMissingPrice.slice(0, 10).map((i) => ({
+              id: i.id,
+              label: i.name,
+              hint: i.sku,
+            })),
+            fixUrl: "/products?type=component",
+          },
+          {
+            id: "suppliers_without_lead_time",
+            label: "Suppliers without lead time",
+            description: "Blocks delivery prediction and PO expected-date calc.",
+            count: suppliersMissingLeadTime.length,
+            samples: suppliersMissingLeadTime.slice(0, 10).map((s) => ({
+              id: s.id,
+              label: s.name,
+              hint: s.email ?? "no email on file",
+            })),
+            fixUrl: "/suppliers",
+          },
+          {
+            id: "customers_without_email",
+            label: "Sales orders without customer email",
+            description: "Blocks delay notifications and OTDR drilldown.",
+            count: ordersWithoutEmail.length,
+            samples: ordersWithoutEmail.slice(0, 10).map((o) => ({
+              id: o.id,
+              label: (o as any).orderName ?? o.orderNumber ?? o.id.slice(0, 8),
+              hint: o.customerName ?? "(no customer name)",
+            })),
+            fixUrl: "/sales-orders",
+          },
+          {
+            id: "sos_unknown_status",
+            label: "Sales orders in unknown status",
+            description: "Blocks reconciliation and rollup math.",
+            count: ordersUnknownStatus.length,
+            samples: ordersUnknownStatus.slice(0, 10).map((o) => ({
+              id: o.id,
+              label: (o as any).orderName ?? o.orderNumber ?? o.id.slice(0, 8),
+              hint: `status: ${o.status ?? "(null)"}`,
+            })),
+            fixUrl: "/sales-orders",
+          },
+          {
+            id: "pos_without_expected_date",
+            label: "Open POs without an expected delivery date",
+            description: "Blocks OTDR and delays-vs-quote analytics.",
+            count: posMissingExpected.length,
+            samples: posMissingExpected.slice(0, 10).map((p) => ({
+              id: p.id,
+              label: p.poNumber,
+              hint: p.supplierName ?? p.supplierId,
+            })),
+            fixUrl: "/purchase-orders",
+          },
+        ],
+      });
+    } catch (error: any) {
+      console.error("[Data Quality] Error:", error);
+      res.status(500).json({ error: error.message || "Failed to compute data quality" });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // COUNT INVENTORY — Sammie's mobile counting flow (/count-inventory)
+  // ════════════════════════════════════════════════════════════════════════
+
+  // GET /api/count-inventory/locations — last count timestamp per location
+  // (used by the picker screen).
+  app.get("/api/count-inventory/locations", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const adjustments = await storage.getInventoryAdjustments({ limit: 500 });
+      const lastByLocation: Record<string, string | null> = {
+        "raw-materials": null,
+        hildale: null,
+        pyvott: null,
+      };
+      for (const adj of adjustments) {
+        const loc = adj.location ?? "N/A";
+        const key = loc === "HILDALE" ? "hildale" : loc === "PIVOT" ? "pyvott" : "raw-materials";
+        if (!lastByLocation[key]) {
+          lastByLocation[key] = adj.createdAt instanceof Date
+            ? adj.createdAt.toISOString()
+            : (adj.createdAt as unknown as string);
+        }
+      }
+      res.json({ lastCountAt: lastByLocation });
+    } catch (error: any) {
+      console.error("[CountInventory] locations error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch locations" });
+    }
+  });
+
+  // GET /api/count-inventory/items?location=raw-materials|hildale|pyvott
+  // Resolves the location's static list to current items and last counted value.
+  app.get("/api/count-inventory/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const locationParam = String(req.query.location ?? "");
+      if (locationParam !== "raw-materials" && locationParam !== "hildale" && locationParam !== "pyvott") {
+        return res.status(400).json({ error: "location must be raw-materials, hildale, or pyvott" });
+      }
+      const location = locationParam as CountLocation;
+
+      const items = await storage.getAllItems();
+      const resolved = resolveCountList(items, location);
+      const field = fieldForLocation(location);
+
+      // Bucket recent adjustments by itemId so we can show "Last counted X".
+      const adjustments = await storage.getInventoryAdjustments({ limit: 500 });
+      const lastAdjByItem = new Map<string, string>();
+      for (const adj of adjustments) {
+        if (lastAdjByItem.has(adj.itemId)) continue;
+        const ts = adj.createdAt instanceof Date
+          ? adj.createdAt.toISOString()
+          : (adj.createdAt as unknown as string);
+        lastAdjByItem.set(adj.itemId, ts);
+      }
+
+      const responseItems = resolved.map(({ display, item }) => ({
+        display,
+        itemId: item?.id ?? null,
+        itemName: item?.name ?? null,
+        lastValue: item ? (item[field] as number | null | undefined) ?? 0 : null,
+        lastCountedAt: item ? lastAdjByItem.get(item.id) ?? null : null,
+      }));
+
+      res.json({ location, items: responseItems });
+    } catch (error: any) {
+      console.error("[CountInventory] items error:", error);
+      res.status(500).json({ error: error.message || "Failed to fetch count items" });
+    }
+  });
+
+  // POST /api/count-inventory/submit — write all changed counts in one go.
+  // Per the user spec: Pyvott writes to extensiv_on_hand_snapshot directly
+  // (overriding the usual Extensiv-as-source-of-truth), Hildale writes to
+  // hildale_qty, Raw Materials writes to current_stock.
+  app.post("/api/count-inventory/submit", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { location: locationParam, submittedBy: submittedByRaw, counts } = req.body as {
+        location?: string;
+        submittedBy?: string;
+        counts?: Array<{ itemId?: string; actualQty?: number }>;
+      };
+      if (locationParam !== "raw-materials" && locationParam !== "hildale" && locationParam !== "pyvott") {
+        return res.status(400).json({ error: "location must be raw-materials, hildale, or pyvott" });
+      }
+      if (!Array.isArray(counts) || counts.length === 0) {
+        return res.status(400).json({ error: "counts array is required" });
+      }
+      const location = locationParam as CountLocation;
+      const field = fieldForLocation(location);
+      const adjLocation = adjustmentLocationFor(location);
+
+      const userId = req.session.userId!;
+      const user = await storage.getUser(userId);
+      const submittedBy = (submittedByRaw && String(submittedByRaw).trim()) || user?.email || "unknown";
+
+      const results: Array<{
+        itemId: string;
+        success: boolean;
+        before: number;
+        after: number;
+        difference: number;
+        error?: string;
+      }> = [];
+
+      for (const entry of counts) {
+        const itemId = typeof entry?.itemId === "string" ? entry.itemId : "";
+        const actualQty = Number(entry?.actualQty);
+        if (!itemId || !Number.isInteger(actualQty) || actualQty < 0) {
+          results.push({
+            itemId,
+            success: false,
+            before: 0,
+            after: 0,
+            difference: 0,
+            error: "itemId and non-negative integer actualQty are required",
+          });
+          continue;
+        }
+
+        try {
+          const item = await storage.getItem(itemId);
+          if (!item) {
+            results.push({ itemId, success: false, before: 0, after: 0, difference: 0, error: "Item not found" });
+            continue;
+          }
+          const before = ((item as any)[field] as number | null | undefined) ?? 0;
+          const difference = actualQty - before;
+
+          if (difference !== 0) {
+            await storage.updateItem(item.id, { [field]: actualQty } as any);
+          }
+
+          await storage.createInventoryAdjustment({
+            itemId: item.id,
+            sku: item.sku,
+            expectedQty: before,
+            actualQty,
+            difference,
+            adjustmentType: COUNT_ADJUSTMENT_TYPE,
+            location: adjLocation,
+            submittedBy,
+            notes: null,
+            applied: true,
+          });
+
+          results.push({ itemId: item.id, success: true, before, after: actualQty, difference });
+        } catch (err: any) {
+          results.push({
+            itemId,
+            success: false,
+            before: 0,
+            after: 0,
+            difference: 0,
+            error: err?.message ?? "Unknown error",
+          });
+        }
+      }
+
+      const changed = results.filter((r) => r.success && r.difference !== 0).length;
+      const unchanged = results.filter((r) => r.success && r.difference === 0).length;
+      const failed = results.filter((r) => !r.success).length;
+
+      // Realtime: notify subscribers about every item that actually moved so
+      // the Inventory and Raw Materials pages re-fetch without a manual refresh.
+      const changedItemIds = results.filter((r) => r.success && r.difference !== 0).map((r) => r.itemId);
+      if (changedItemIds.length > 0) {
+        wsInventoryService.broadcast({
+          itemIds: changedItemIds,
+          fields: [field],
+          reason: "COUNT",
+        });
+      }
+
+      res.status(failed === results.length ? 400 : 201).json({
+        location,
+        submittedBy,
+        summary: { total: results.length, changed, unchanged, failed },
+        results,
+      });
+    } catch (error: any) {
+      console.error("[CountInventory] submit error:", error);
+      res.status(500).json({ error: error.message || "Failed to submit count" });
     }
   });
 

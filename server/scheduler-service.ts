@@ -1,9 +1,11 @@
 import { storage } from "./storage";
-import { refreshAdPerformanceData, refreshSalesData } from "./channel-ingestion-service";
+import { refreshSalesData } from "./channel-ingestion-service";
 import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 import { MorningTrapService } from "./services/morning-trap-service";
+import { recordSchedulerRun, type SchedulerRunStatus } from "./services/scheduler-run-recorder";
+import { runDriftReport } from "./services/inventory-drift-service";
 
 /**
  * Scheduler Service for periodic data refresh
@@ -26,12 +28,37 @@ let forecastContextTimer: NodeJS.Timeout | null = null;
 let aiSystemReviewTimer: NodeJS.Timeout | null = null;
 let extensivSyncTimer: NodeJS.Timeout | null = null;
 let morningTrapTimer: NodeJS.Timeout | null = null;
+let velocityTimer: NodeJS.Timeout | null = null;
+let driftReportTimer: NodeJS.Timeout | null = null;
+let adSyncTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
 
-// Extensiv sync interval: every 4 hours (aligns with 3PL inventory updates)
-const EXTENSIV_SYNC_INTERVAL_HOURS = 4;
+// Inventory drift report interval: hourly, aligned to :15 past the hour so it
+// runs just after the top-of-hour Extensiv sync settles pivot_qty.
+const DRIFT_REPORT_INTERVAL_HOURS = 1;
+
+// Extensiv sync interval: hourly. The Railway cron remains the primary
+// external trigger; this in-process runner is a belt-and-suspenders fallback
+// and now uses the same working credential path as the sync service.
+const EXTENSIV_SYNC_INTERVAL_HOURS = 1;
+
+async function recordRunSafe(input: {
+  schedulerId: string;
+  schedulerName: string;
+  status: SchedulerRunStatus;
+  startedAt: Date;
+  durationMs?: number;
+  errorMessage?: string | null;
+  details?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await recordSchedulerRun(input);
+  } catch (error) {
+    console.warn(`[Scheduler] Failed to record run for ${input.schedulerId}:`, error);
+  }
+}
 
 /**
  * Performs a data refresh for a specific channel
@@ -49,7 +76,11 @@ async function performChannelRefresh(channelId: string, channelName: string, cha
     const normalizedType = channelType.toUpperCase();
     
     if (normalizedType === 'AD_PLATFORM' || normalizedType === 'ADVERTISING') {
-      await refreshAdPerformanceData(channelId, 7); // Last 7 days
+      // Ad performance is handled by the dedicated ad-performance-sync scheduler
+      // (real Google Ads + Meta clients). The old per-channel refresh was a stub
+      // that wrote no data, so skip it here rather than run an empty pipeline.
+      console.log(`[Scheduler] ${channelName}: ad performance handled by ad-performance-sync; skipping legacy stub refresh`);
+      return;
     } else if (normalizedType === 'SALES_CHANNEL' || normalizedType === 'SALES') {
       await refreshSalesData(channelId, 30); // Last 30 days
     } else {
@@ -134,42 +165,169 @@ async function performForecastContextRefresh(): Promise<void> {
  * Updates pivotQty from Extensiv on-hand quantities
  */
 async function performExtensivSync(): Promise<void> {
-  console.log("[Scheduler] Starting Extensiv inventory sync...");
+  const schedulerStartedAt = new Date();
+  // Footgun guard: dev environments hammering the live Extensiv API or
+  // writing fake pivot_qty into prod data is a real risk. Refuse unless
+  // we're production-tier, with an explicit override env var for the rare
+  // case where we genuinely want to test against real Extensiv from dev.
+  if (process.env.NODE_ENV !== "production" && process.env.FORCE_EXTENSIV_SYNC !== "true") {
+    console.warn(
+      "[Extensiv Sync] Skipped — non-production environment. Set FORCE_EXTENSIV_SYNC=true to override.",
+    );
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: "skipped",
+      startedAt: schedulerStartedAt,
+      details: { reason: "non-production guard" },
+    });
+    return;
+  }
+
+  console.log("[Extensiv Sync] Starting inventory sync...");
   const startTime = Date.now();
+  let synced = 0;
+  let skippedUsers = 0;
+  let failed = 0;
+  const errors: string[] = [];
 
   try {
     // Get all users and check their AI Agent Settings for extensivTwoWaySync
     const allUsers = await storage.getAllUsers();
     
     for (const user of allUsers) {
-      const settings = await storage.getAIAgentSettings(user.id);
+      const settings = await storage.getAiAgentSettingsByUserId(user.id);
       if (!settings?.extensivTwoWaySync) {
+        skippedUsers++;
         continue; // Skip users without Extensiv sync enabled
       }
 
-      const extensivSettings = await storage.getIntegrationSettings(user.id, 'extensiv');
-      if (!extensivSettings?.apiKey || !extensivSettings?.warehouseId) {
-        console.warn(`[Scheduler] User ${user.id} has Extensiv sync enabled but missing credentials`);
+      const syncService = new ExtensivInventorySyncService();
+      const initialized = await syncService.initialize(user.id);
+      if (!initialized) {
+        skippedUsers++;
+        console.warn(`[Scheduler] User ${user.id} has Extensiv sync enabled but Extensiv service did not initialize`);
         continue;
       }
 
       try {
-        const syncService = new ExtensivInventorySyncService(
-          extensivSettings.apiKey,
-          extensivSettings.warehouseId,
-          user.id
-        );
-        const result = await syncService.syncInventory();
-        console.log(`[Scheduler] Extensiv sync for user ${user.id}: ${result.synced} items synced, ${result.errors} errors`);
-      } catch (error) {
+        const result = await syncService.bulkSync();
+        synced += result.synced;
+        failed += result.failed;
+        if (result.failed > 0) {
+          errors.push(`user ${user.id}: ${result.failed} item failure(s)`);
+        }
+        console.log(`[Scheduler] Extensiv sync for user ${user.id}: ${result.synced} synced, ${result.failed} failed`);
+      } catch (error: any) {
+        failed++;
+        errors.push(`user ${user.id}: ${error?.message ?? error}`);
         console.error(`[Scheduler] Extensiv sync failed for user ${user.id}:`, error);
       }
     }
 
     const duration = Date.now() - startTime;
     console.log(`[Scheduler] Extensiv inventory sync completed in ${duration}ms`);
-  } catch (error) {
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: failed > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
+      details: {
+        usersChecked: allUsers.length,
+        usersSkipped: skippedUsers,
+        synced,
+        failed,
+      },
+    });
+  } catch (error: any) {
     console.error("[Scheduler] Error during Extensiv sync:", error);
+    await recordRunSafe({
+      schedulerId: "extensiv-sync",
+      schedulerName: "Extensiv in-process inventory sync",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
+/**
+ * Marketing ad-performance sync. Pulls REAL ad data via the connected
+ * Google Ads + Meta clients (wrapped by the demand services) for every user
+ * who has each integration configured/enabled. Meta covers Facebook AND
+ * Instagram placements (same Marketing API / ad account). Replaces the old
+ * stub per-channel refresh, which wrote no data. Runs daily.
+ */
+async function performAdPerformanceSync(): Promise<void> {
+  const schedulerStartedAt = new Date();
+  const startTime = Date.now();
+  let usersChecked = 0;
+  let googleSynced = 0;
+  let metaSynced = 0;
+  const errors: string[] = [];
+
+  try {
+    const { googleAdsDemandService } = await import("./services/google-ads-demand-service");
+    const { metaAdsDemandService } = await import("./services/meta-ads-demand-service");
+    const allUsers = await storage.getAllUsers();
+
+    for (const user of allUsers) {
+      usersChecked++;
+
+      // Google Ads — initialize() returns false (and we skip) if this user has
+      // not connected/enabled Google Ads, so unconfigured users are no-ops.
+      try {
+        if (await googleAdsDemandService.initialize(user.id)) {
+          const r = await googleAdsDemandService.syncDemandSignals();
+          if (r.success) {
+            googleSynced++;
+            console.log(`[Ad Sync] Google Ads for user ${user.id}: ${r.itemsWithData}/${r.itemsProcessed} with data`);
+          } else {
+            errors.push(`google/${user.id}: ${(r.errors ?? []).slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`google/${user.id}: ${e?.message ?? e}`);
+      }
+
+      // Meta Ads — covers Facebook + Instagram placements via the Marketing API.
+      try {
+        if (await metaAdsDemandService.initialize(user.id)) {
+          const r = await metaAdsDemandService.syncPerformanceData();
+          if (r.success) {
+            metaSynced++;
+            console.log(`[Ad Sync] Meta Ads for user ${user.id}: ${r.rowsStored} rows (${r.rowsMapped} mapped)`);
+          } else {
+            errors.push(`meta/${user.id}: ${(r.errors ?? []).slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`meta/${user.id}: ${e?.message ?? e}`);
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced} (users checked ${usersChecked})`);
+    await recordRunSafe({
+      schedulerId: "ad-performance-sync",
+      schedulerName: "Marketing ad performance sync (Google + Meta)",
+      status: errors.length > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
+      details: { usersChecked, googleSynced, metaSynced, errorCount: errors.length },
+    });
+  } catch (error: any) {
+    console.error("[Ad Sync] Failed:", error);
+    await recordRunSafe({
+      schedulerId: "ad-performance-sync",
+      schedulerName: "Marketing ad performance sync (Google + Meta)",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
   }
 }
 
@@ -230,6 +388,148 @@ async function performMorningTrapCheck(): Promise<void> {
 }
 
 /**
+ * Refresh items.daily_usage from sales velocity. Runs nightly at 12:05
+ * AM MT (just after the morning's sales sync would settle a UTC day) so
+ * the day's order activity is reflected in the next day's reorder
+ * calculations.
+ */
+async function performVelocityRefresh(opts: { onlyZeroOrNull: boolean }): Promise<void> {
+  console.log(`[Scheduler] Refreshing item daily_usage (onlyZeroOrNull=${opts.onlyZeroOrNull})...`);
+  const startTime = Date.now();
+  try {
+    const { refreshAllItems } = await import("./services/velocity-service");
+    const result = await refreshAllItems(opts);
+    const duration = Date.now() - startTime;
+    console.log(
+      `[Scheduler] Velocity refresh: scanned=${result.itemsScanned}, ` +
+      `finished updated=${result.finishedProductsUpdated}, ` +
+      `components updated=${result.componentsUpdated}, ` +
+      `duration=${duration}ms`,
+    );
+  } catch (error) {
+    console.error("[Scheduler] Velocity refresh failed:", error);
+  }
+}
+
+/**
+ * Inventory Drift Report — hourly reconciliation check of every finished
+ * product's local sellable number (availableForSaleQty) against the
+ * Extensiv-mirrored available (pivotQty). READ-ONLY: it reports, never writes.
+ *
+ * A clean run records as "success"; a run with any flagged item (drift over
+ * threshold, or a stale/never-synced Extensiv pull) records as "partial" so it
+ * surfaces as a WARNING in the scheduler health + audit trail (visible in
+ * Settings) without paging anyone. Inspect flagged SKUs there or via
+ * `npm run report:drift`.
+ */
+async function performDriftReport(): Promise<void> {
+  const schedulerStartedAt = new Date();
+  const startTime = Date.now();
+  try {
+    const result = await runDriftReport();
+    const duration = Date.now() - startTime;
+
+    const top = result.flaggedItems.slice(0, 10).map((r) => ({
+      sku: r.sku,
+      afs: r.afs,
+      pivot: r.pivot,
+      drift: r.drift,
+      stale: r.stale,
+      ageHours: r.ageHours === null ? null : Math.round(r.ageHours * 10) / 10,
+    }));
+
+    if (result.flaggedCount === 0) {
+      console.log(
+        `[Drift Report] OK — ${result.analyzed} finished products within ±${result.driftThreshold} and freshly synced (${duration}ms)`,
+      );
+    } else {
+      console.warn(
+        `[Drift Report] ${result.flaggedCount} flagged of ${result.analyzed} ` +
+          `(drift>=±${result.driftThreshold}: ${result.overThresholdCount}, ` +
+          `stale>${result.staleHours}h: ${result.staleCount}) in ${duration}ms`,
+      );
+      for (const r of top) {
+        console.warn(
+          `[Drift Report]   ${r.sku ?? "(no sku)"}  afs=${r.afs} pivot=${r.pivot} ` +
+            `drift=${r.drift >= 0 ? "+" : ""}${r.drift}` +
+            (r.stale ? `  STALE(${r.ageHours === null ? "never" : r.ageHours + "h"})` : ""),
+        );
+      }
+    }
+
+    await recordRunSafe({
+      schedulerId: "inventory-drift-report",
+      schedulerName: "Inventory drift report",
+      status: result.flaggedCount > 0 ? "partial" : "success",
+      startedAt: schedulerStartedAt,
+      durationMs: duration,
+      errorMessage: null,
+      details: {
+        analyzed: result.analyzed,
+        overThreshold: result.overThresholdCount,
+        stale: result.staleCount,
+        flagged: result.flaggedCount,
+        driftThreshold: result.driftThreshold,
+        staleHours: result.staleHours,
+        topFlagged: top,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Drift Report] Failed:", error);
+    await recordRunSafe({
+      schedulerId: "inventory-drift-report",
+      schedulerName: "Inventory drift report",
+      status: "failed",
+      startedAt: schedulerStartedAt,
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
+/**
+ * Calculate milliseconds until the next 12:05 AM MT firing. Mirrors the
+ * morning-trap MST math; +5 minutes so the daily sales scheduler settles
+ * before we read totals.
+ */
+/**
+ * ms until the next top-of-hour UTC boundary. Used by the in-process
+ * Extensiv fallback so ticks align to wall clock and do not drift from
+ * server restart time.
+ */
+function msUntilNextHourUTC(): number {
+  const now = new Date();
+  const target = new Date(now);
+  target.setUTCHours(now.getUTCHours() + 1, 0, 0, 0);
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * ms until the next :15-past-the-hour UTC boundary. The drift report runs
+ * here so it lands just after the top-of-hour Extensiv sync refreshes
+ * pivot_qty, giving the freshest possible baseline to compare against.
+ */
+function msUntilNext15PastHourUTC(): number {
+  const now = new Date();
+  const target = new Date(now);
+  target.setUTCMinutes(15, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setUTCHours(target.getUTCHours() + 1);
+  }
+  return target.getTime() - now.getTime();
+}
+
+function msUntilNextMidnightMT(): number {
+  const now = new Date();
+  const mstOffset = -7 * 60; // minutes — MST is UTC-7
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const mstMinutes = utcMinutes + mstOffset;
+  const targetMstMinutes = 5; // 00:05 MT
+  let minutesUntil = targetMstMinutes - mstMinutes;
+  if (minutesUntil <= 0) minutesUntil += 24 * 60;
+  return minutesUntil * 60 * 1000;
+}
+
+/**
  * Calculate milliseconds until next 7 AM MST (UTC-7)
  */
 function msUntilNext7amMST(): number {
@@ -256,15 +556,13 @@ function msUntilNext7amMST(): number {
  */
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
+  let sectionsStarted = 0;
+  const totalSections = 8;
 
   try {
-    // Fetch all channels
     const channels = await storage.getAllChannels();
-    
-    // Schedule each enabled channel
     for (const channel of channels) {
       if (channel.isActive) {
-        // Default to 24 hours if syncIntervalHours is missing
         const intervalHours = channel.syncIntervalHours || 24;
         scheduleChannel(
           channel.id,
@@ -276,13 +574,16 @@ export async function startScheduler(): Promise<void> {
         console.log(`[Scheduler] Skipping disabled channel: ${channel.name}`);
       }
     }
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Channels failed to initialize:", err);
+  }
 
-    // Schedule forecast context refresh (every 6 hours)
+  try {
     if (forecastContextTimer) {
       clearInterval(forecastContextTimer);
     }
 
-    // Run immediately, then every 6 hours
     performForecastContextRefresh().catch(err => {
       console.error("[Scheduler] Initial forecast refresh failed:", err);
     });
@@ -292,8 +593,12 @@ export async function startScheduler(): Promise<void> {
         console.error("[Scheduler] Scheduled forecast refresh failed:", err);
       });
     }, 6 * 60 * 60 * 1000); // 6 hours
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Forecast context refresh failed to initialize:", err);
+  }
 
-    // Schedule AI System Review (weekly)
+  try {
     if (aiSystemReviewTimer) {
       clearInterval(aiSystemReviewTimer);
     }
@@ -307,22 +612,42 @@ export async function startScheduler(): Promise<void> {
         console.error("[Scheduler] Scheduled AI System Review failed:", err);
       });
     }, AI_SYSTEM_REVIEW_INTERVAL_HOURS * 60 * 60 * 1000); // Weekly
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] AI System Review failed to initialize:", err);
+  }
 
-    // Schedule Extensiv/Pivot inventory sync (every 4 hours)
+  try {
     if (extensivSyncTimer) {
-      clearInterval(extensivSyncTimer);
+      clearTimeout(extensivSyncTimer);
     }
+    const msUntilNextTick = msUntilNextHourUTC();
+    const target = new Date(Date.now() + msUntilNextTick);
+    const targetHHMM = `${String(target.getUTCHours()).padStart(2, "0")}:${String(target.getUTCMinutes()).padStart(2, "0")}`;
+    const minutesUntil = Math.round(msUntilNextTick / 60000);
+    console.log(
+      `[Extensiv Sync] Scheduler initialized — next run at ${targetHHMM} UTC (in ${minutesUntil} minutes)`,
+    );
 
-    // Note: Don't run immediately on startup to avoid hitting APIs on every restart
-    console.log(`[Scheduler] Extensiv sync scheduled to run every ${EXTENSIV_SYNC_INTERVAL_HOURS} hours`);
+    extensivSyncTimer = setTimeout(() => {
+      performExtensivSync().catch((err) =>
+        console.error("[Extensiv Sync] Scheduled run failed:", err),
+      );
+      // After the first aligned tick, fall back to a plain hourly
+      // interval. Each subsequent tick lands on the same wall-clock
+      // boundary because the first one did.
+      extensivSyncTimer = setInterval(() => {
+        performExtensivSync().catch((err) =>
+          console.error("[Extensiv Sync] Scheduled run failed:", err),
+        );
+      }, EXTENSIV_SYNC_INTERVAL_HOURS * 60 * 60 * 1000);
+    }, msUntilNextTick);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Extensiv sync failed to initialize:", err);
+  }
 
-    extensivSyncTimer = setInterval(() => {
-      performExtensivSync().catch(err => {
-        console.error("[Scheduler] Scheduled Extensiv sync failed:", err);
-      });
-    }, EXTENSIV_SYNC_INTERVAL_HOURS * 60 * 60 * 1000);
-
-    // Schedule Morning Trap Check (daily at 7 AM MST)
+  try {
     if (morningTrapTimer) {
       clearTimeout(morningTrapTimer);
     }
@@ -344,12 +669,87 @@ export async function startScheduler(): Promise<void> {
         });
       }, 24 * 60 * 60 * 1000);
     }, msUntil7am);
-
-    console.log(`[Scheduler] Scheduler started successfully (${channelSchedules.size} channels active)`);
-  } catch (error) {
-    console.error("[Scheduler] Failed to start scheduler:", error);
-    throw error;
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Morning Trap failed to initialize:", err);
   }
+
+  try {
+    performVelocityRefresh({ onlyZeroOrNull: true }).catch((err) => {
+      console.error("[Scheduler] Boot-time velocity backfill failed:", err);
+    });
+
+    if (velocityTimer) {
+      clearTimeout(velocityTimer);
+    }
+    const msUntilVelocity = msUntilNextMidnightMT();
+    const hoursUntilVelocity = (msUntilVelocity / (1000 * 60 * 60)).toFixed(1);
+    console.log(`[Scheduler] Velocity refresh scheduled. Next run in ${hoursUntilVelocity} hours (12:05 AM MT)`);
+    velocityTimer = setTimeout(() => {
+      performVelocityRefresh({ onlyZeroOrNull: false }).catch(() => {});
+      velocityTimer = setInterval(() => {
+        performVelocityRefresh({ onlyZeroOrNull: false }).catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilVelocity);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Velocity refresh failed to initialize:", err);
+  }
+
+  try {
+    if (driftReportTimer) {
+      clearTimeout(driftReportTimer);
+      clearInterval(driftReportTimer);
+    }
+    const msUntilDrift = msUntilNext15PastHourUTC();
+    const driftTarget = new Date(Date.now() + msUntilDrift);
+    const driftHHMM = `${String(driftTarget.getUTCHours()).padStart(2, "0")}:${String(driftTarget.getUTCMinutes()).padStart(2, "0")}`;
+    console.log(
+      `[Drift Report] Scheduler initialized — next run at ${driftHHMM} UTC (in ${Math.round(msUntilDrift / 60000)} minutes), then hourly`,
+    );
+    driftReportTimer = setTimeout(() => {
+      performDriftReport().catch((err) =>
+        console.error("[Drift Report] Scheduled run failed:", err),
+      );
+      driftReportTimer = setInterval(() => {
+        performDriftReport().catch((err) =>
+          console.error("[Drift Report] Scheduled run failed:", err),
+        );
+      }, DRIFT_REPORT_INTERVAL_HOURS * 60 * 60 * 1000);
+    }, msUntilDrift);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Drift report failed to initialize:", err);
+  }
+
+  try {
+    // Marketing ad performance sync (real Google Ads + Meta). Boot run so data
+    // appears soon after deploy/connect, then daily at ~12:05 AM MT.
+    performAdPerformanceSync().catch((err) => {
+      console.error("[Ad Sync] Boot-time run failed:", err);
+    });
+    if (adSyncTimer) {
+      clearTimeout(adSyncTimer);
+      clearInterval(adSyncTimer);
+    }
+    const msUntilAdSync = msUntilNextMidnightMT();
+    console.log(
+      `[Ad Sync] Scheduled. Next run in ${(msUntilAdSync / (1000 * 60 * 60)).toFixed(1)} hours (12:05 AM MT), then daily`,
+    );
+    adSyncTimer = setTimeout(() => {
+      performAdPerformanceSync().catch(() => {});
+      adSyncTimer = setInterval(() => {
+        performAdPerformanceSync().catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilAdSync);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Ad performance sync failed to initialize:", err);
+  }
+
+  console.log(
+    `[Scheduler] Scheduler started successfully (${sectionsStarted}/${totalSections} sections initialized, ${channelSchedules.size} channels active)`,
+  );
 }
 
 /**
@@ -357,7 +757,7 @@ export async function startScheduler(): Promise<void> {
  */
 export function stopScheduler(): void {
   // Stop all channel schedules
-  for (const [channelId] of channelSchedules) {
+  for (const [channelId] of Array.from(channelSchedules)) {
     unscheduleChannel(channelId);
   }
 
@@ -386,6 +786,27 @@ export function stopScheduler(): void {
     morningTrapTimer = null;
   }
 
+  // Stop Velocity timer
+  if (velocityTimer) {
+    clearTimeout(velocityTimer);
+    clearInterval(velocityTimer);
+    velocityTimer = null;
+  }
+
+  // Stop Drift Report timer
+  if (driftReportTimer) {
+    clearTimeout(driftReportTimer);
+    clearInterval(driftReportTimer);
+    driftReportTimer = null;
+  }
+
+  // Stop Ad Performance Sync timer
+  if (adSyncTimer) {
+    clearTimeout(adSyncTimer);
+    clearInterval(adSyncTimer);
+    adSyncTimer = null;
+  }
+
   console.log("[Scheduler] All schedulers stopped");
 }
 
@@ -407,6 +828,8 @@ export function getSchedulerStatus(): {
   schedules: Array<{ channelId: string; channelName: string; intervalHours: number }>;
   aiSystemReviewScheduled: boolean;
   extensivSyncScheduled: boolean;
+  driftReportScheduled: boolean;
+  adSyncScheduled: boolean;
 } {
   return {
     running: channelSchedules.size > 0 || forecastContextTimer !== null || aiSystemReviewTimer !== null || extensivSyncTimer !== null,
@@ -418,6 +841,8 @@ export function getSchedulerStatus(): {
     })),
     aiSystemReviewScheduled: aiSystemReviewTimer !== null,
     extensivSyncScheduled: extensivSyncTimer !== null,
+    driftReportScheduled: driftReportTimer !== null,
+    adSyncScheduled: adSyncTimer !== null,
   };
 }
 

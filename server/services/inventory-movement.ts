@@ -1,6 +1,7 @@
 import type { IStorage } from "../storage";
 import type { Item } from "@shared/schema";
 import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBase } from "./audit-logger";
+import { wsInventoryService } from "./websocket-inventory";
 
 /**
  * INVENTORY MOVEMENT PATTERN DOCUMENTATION
@@ -45,7 +46,8 @@ import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBas
  *   - NEVER touches hildaleQty
  * 
  * RETURN_RECEIVED:
- *   - For resellable finished products: increments availableForSaleQty
+ *   - For finished products: increments hildaleQty (returns land at Hildale for
+ *     inspection; NOT sellable until transferred to Pivot)
  *   - For components: increments currentStock
  *   - NEVER touches pivotQty (read-only from Extensiv)
  * 
@@ -113,6 +115,11 @@ export interface InventoryMovementParams {
   userId?: string | number;
   userName?: string;
   notes?: string;
+  // For BOM_CONSUMPTION: when present, the apply() call will FIFO-draw from
+  // open inventory_lots and record per-lot draws in lot_consumption_events
+  // linked to this production_logs row. Optional so legacy callers still
+  // work — without it, lot tracking is silently skipped.
+  productionLogId?: string;
 }
 
 export interface InventoryMovementResult {
@@ -222,10 +229,28 @@ export class InventoryMovement {
           break;
 
         case "SALES_ORDER_SHIPPED":
-          // No-op for finished products - stock already decremented at SALES_ORDER_CREATED
-          // NEVER touches hildaleQty - this is an absolute rule
-          if (!isFinished) {
-            // For components (rare direct sales), decrement currentStock
+          // Finished products: Pivot ships are a no-op because pivotQty is read-only
+          // from Extensiv (EXTENSIV_SYNC will catch up). Hildale ships decrement
+          // hildaleQty because nothing else will.
+          if (isFinished) {
+            if (location === "HILDALE") {
+              if (beforeState.hildaleQty < params.quantity) {
+                return {
+                  success: false,
+                  itemId: params.itemId,
+                  sku: item.sku,
+                  beforeQty: beforeState.hildaleQty,
+                  afterQty: beforeState.hildaleQty,
+                  quantityChanged: 0,
+                  error: `Insufficient Hildale stock for ${item.sku}. Available: ${beforeState.hildaleQty}, Requested: ${params.quantity}`,
+                };
+              }
+              quantityDelta = -params.quantity;
+              updates.hildaleQty = beforeState.hildaleQty - params.quantity;
+            }
+            // PIVOT: no-op — Extensiv sync is source of truth for pivotQty
+          } else {
+            // Components: decrement currentStock
             quantityDelta = -params.quantity;
             if (beforeState.currentStock >= params.quantity) {
               updates.currentStock = beforeState.currentStock - params.quantity;
@@ -241,7 +266,6 @@ export class InventoryMovement {
               };
             }
           }
-          // For finished products: quantityDelta stays 0, no updates to any qty fields
           break;
 
         case "SALES_ORDER_CANCELLED":
@@ -282,19 +306,17 @@ export class InventoryMovement {
 
         case "EXTENSIV_SYNC":
           // *** THE ONLY EVENT TYPE THAT MODIFIES pivotQty ***
-          // This is the ONLY place pivotQty is allowed to change - it's the canonical
-          // source of truth from Extensiv's physical inventory snapshot.
-          // The delta is applied to availableForSaleQty to keep it in sync.
+          // Extensiv is the 3PL system of record for PHYSICAL Pivot stock. We
+          // mirror its snapshot into pivotQty and do NOT touch availableForSaleQty.
+          // afs is a locally-driven working number (sales, returns, transfers,
+          // manual counts). Reconciling afs from the Extensiv delta double-counts
+          // every sale: the order already decremented afs at create time, and
+          // Extensiv then reports the lower physical count, which would decrement
+          // afs a second time. Drift between afs and pivotQty is expected and is
+          // surfaced via the variance report rather than auto-corrected here.
           if (isFinished) {
-            const oldPivotQty = beforeState.pivotQty;
-            const newPivotQty = params.quantity;
-            const delta = newPivotQty - oldPivotQty;
-            
-            // Update pivotQty to match Extensiv snapshot (the ONLY place this happens)
-            updates.pivotQty = newPivotQty;
-            // Reconcile availableForSaleQty based on the delta
-            updates.availableForSaleQty = beforeState.availableForSaleQty + delta;
-            quantityDelta = delta;
+            updates.pivotQty = params.quantity;
+            quantityDelta = params.quantity - beforeState.pivotQty;
           }
           break;
 
@@ -333,7 +355,9 @@ export class InventoryMovement {
           // would be subtracted there too. Operationally, use ONE path — not both.
           if (!isFinished) {
             quantityDelta = -params.quantity;
-            updates.currentStock = Math.max(0, beforeState.currentStock - params.quantity);
+            // Production can reveal shortages. Preserve the actual material draw
+            // instead of clamping to zero so stock and audit movement agree.
+            updates.currentStock = beforeState.currentStock - params.quantity;
           }
           break;
 
@@ -356,6 +380,52 @@ export class InventoryMovement {
       if (Object.keys(updates).length > 0) {
         updates.forecastDirty = true;
         await this.storage.updateItem(params.itemId, updates);
+        // Realtime broadcast: only the fields we actually mutated. forecastDirty
+        // is a bookkeeping flag and not relevant to the UI, so we strip it.
+        const changedFields = Object.keys(updates).filter((f) => f !== "forecastDirty");
+        if (changedFields.length > 0) {
+          wsInventoryService.broadcast({
+            itemIds: [params.itemId],
+            fields: changedFields,
+            reason: params.eventType === "TRANSFER" ? "TRANSFER"
+              : params.eventType === "SALES_ORDER_SHIPPED" ? "SHIP"
+              : "MOVEMENT",
+          });
+        }
+      }
+
+      // Lot traceability: when a build consumes components, draw FIFO from
+      // open inventory_lots so a recall can later trace from a specific lot
+      // back to the production runs (and ultimately customers) it touched.
+      // Only fires when the caller passes productionLogId, so legacy paths
+      // (Shopify webhook BOM consumption etc.) keep working unchanged.
+      if (
+        params.eventType === "BOM_CONSUMPTION" &&
+        params.productionLogId &&
+        params.quantity > 0
+      ) {
+        try {
+          let remaining = params.quantity;
+          const lots = await this.storage.getOpenLotsForItemFIFO(params.itemId);
+          for (const lot of lots) {
+            if (remaining <= 0) break;
+            const draw = Math.min(remaining, lot.remainingQty ?? 0);
+            if (draw <= 0) continue;
+            await this.storage.decrementLotRemaining(lot.id, draw);
+            await this.storage.createLotConsumptionEvent({
+              lotId: lot.id,
+              productionLogId: params.productionLogId,
+              qtyDrawn: draw,
+            });
+            remaining -= draw;
+          }
+          // remaining > 0 here means we consumed more than the lots have on
+          // record (possible when older receives weren't lot-tracked). The
+          // currentStock decrement above already accounted for it; we just
+          // can't attribute the surplus to any lot.
+        } catch (err) {
+          console.warn("[InventoryMovement] FIFO lot draw failed (non-fatal):", err);
+        }
       }
 
       const afterItem = await this.storage.getItem(params.itemId);

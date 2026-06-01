@@ -25,6 +25,30 @@ const PgSession = connectPgSimple(session);
 
 initializeSecureLogging();
 
+// Process-level safety net for any scheduler tick whose try/catch was
+// missed. We log to system_logs (best-effort, do not crash the process)
+// so the /health page can show that something went off the rails. This
+// is BELOW recordSchedulerRun's per-scheduler crash tracking — that
+// path covers normal failures; this is the last line of defense.
+process.on("unhandledRejection", (reason: any) => {
+  const message = reason?.message ?? String(reason);
+  console.error("[Process] unhandledRejection:", message, reason?.stack ?? "");
+  void (async () => {
+    try {
+      const { storage } = await import("./storage");
+      await storage.createSystemLog({
+        type: "SCHEDULER",
+        severity: "ERROR",
+        code: "SCHEDULER_CRASH",
+        message: `unhandledRejection: ${message}`,
+        details: { stack: reason?.stack ?? null },
+      });
+    } catch {
+      // logging failure is itself non-fatal — never crash here
+    }
+  })();
+});
+
 const securityValidation = validateSecurityConfig();
 if (securityValidation.warnings.length > 0) {
   securityValidation.warnings.forEach(w => console.warn(`[Intuit Security] Warning: ${w}`));
@@ -145,6 +169,32 @@ export default async function runApp(
 ) {
   const server = await registerRoutes(app);
 
+  // Boot-time schema + data migration checks. Fails loud (with clear log
+  // lines) but doesn't block startup so other routes still come up if
+  // anything is off. Awaited here so the output appears before the
+  // "serving on ..." line — easy to spot in the deploy log tail.
+  try {
+    const { runStartupChecks } = await import("./services/startup-checks");
+    await runStartupChecks();
+  } catch (err: any) {
+    console.error("[Startup Checks] Failed to run:", err?.message ?? err);
+  }
+
+  // Arm the recurring schedulers (Extensiv sync, AI System Review,
+  // Morning Trap, channel sync timers). These were previously declared
+  // in scheduler-service.ts but startScheduler() was never called from
+  // boot — only from a runtime route — so the timers never armed and
+  // every recurring job ghosted. Fire-and-forget so a slow channel
+  // config fetch doesn't block the listen() below.
+  void (async () => {
+    try {
+      const { startScheduler } = await import("./scheduler-service");
+      await startScheduler();
+    } catch (err: any) {
+      console.error("[Scheduler] Failed to start:", err?.message ?? err);
+    }
+  })();
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -162,11 +212,16 @@ export default async function runApp(
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
+  const host = process.env.HOST || '0.0.0.0';
+  // reusePort is required on Railway/Linux for zero-downtime deploys, but macOS
+  // throws ENOTSUP when combined with 0.0.0.0 on Node 24+. Disable it for local
+  // dev where a 127.0.0.1 host is fine.
+  const reusePort = host === '0.0.0.0';
   server.listen({
     port,
-    host: "0.0.0.0",
-    reusePort: true,
+    host,
+    reusePort,
   }, () => {
-    log(`serving on port ${port}`);
+    log(`serving on ${host}:${port}`);
   });
 }

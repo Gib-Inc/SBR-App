@@ -199,6 +199,71 @@ function EmailStatusBadge({
   );
 }
 
+/**
+ * Shows whether this PO has been pushed to QuickBooks as a Bill for the
+ * accountant. The push happens automatically when the PO is sent; this badge
+ * reads GET /api/purchase-orders/:id/bill-status so the result is visible.
+ */
+function QbBillStatusBadge({ poId, enabled }: { poId: string; enabled: boolean }) {
+  const { data, isLoading } = useQuery<{
+    hasBill: boolean;
+    billId?: string;
+    billNumber?: string | null;
+    status?: string;
+    totalAmount?: number;
+    createdAt?: string;
+  }>({
+    queryKey: ["/api/purchase-orders", poId, "bill-status"],
+    enabled: enabled && !!poId,
+    queryFn: async () => {
+      const res = await fetch(`/api/purchase-orders/${poId}/bill-status`);
+      if (!res.ok) throw new Error("Failed to load QuickBooks bill status");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <Badge className="bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400 font-medium">
+        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+        Checking…
+      </Badge>
+    );
+  }
+
+  if (!data?.hasBill) {
+    return (
+      <Badge
+        className="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 font-medium"
+        title="Auto-sends to QuickBooks as a Bill when the PO is sent to the supplier"
+        data-testid="badge-qb-not-sent"
+      >
+        <Clock className="w-3 h-3 mr-1" />
+        Not sent
+      </Badge>
+    );
+  }
+
+  const billLabel = data.billNumber || data.billId;
+  const paid = (data.status || "").toUpperCase() === "PAID";
+  const when = data.createdAt ? format(new Date(data.createdAt), "MM/dd/yyyy") : "";
+  return (
+    <Badge
+      className={`${
+        paid
+          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+          : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+      } font-medium`}
+      title={`QuickBooks Bill ${billLabel}${when ? ` created ${when}` : ""}${paid ? " — marked paid" : ""}`}
+      data-testid="badge-qb-sent"
+    >
+      <CheckCircle2 className="w-3 h-3 mr-1" />
+      {paid ? "Paid in QuickBooks" : "Sent to accountant"}
+      {billLabel ? ` · Bill ${billLabel}` : ""}
+    </Badge>
+  );
+}
+
 type AckStatus = "NONE" | "PENDING" | "SUPPLIER_ACCEPTED" | "INTERNAL_CONFIRMED" | "EXPIRED";
 
 const ACK_STATUS_CONFIG: Record<AckStatus, { label: string; icon: any; colorClass: string }> = {
@@ -359,11 +424,17 @@ export default function PurchaseOrders() {
       }
       return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data, poId) => {
       queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
-      toast({ 
-        title: "PO Sent Successfully", 
-        description: `Email sent to ${data.emailTo || "supplier"}` 
+      // The QuickBooks Bill push runs asynchronously on the server after send,
+      // so refetch this PO's bill-status shortly after so the "Sent to
+      // accountant" badge reflects the freshly-created Bill.
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", poId, "bill-status"] });
+      }, 4000);
+      toast({
+        title: "PO Sent Successfully",
+        description: `Email sent to ${data.emailTo || "supplier"}`
       });
     },
     onError: (error: Error) => {
@@ -588,8 +659,8 @@ export default function PurchaseOrders() {
   }
 
   return (
-    <div className="flex flex-col gap-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
+      <div className="flex shrink-0 items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Purchase Orders</h1>
           <p className="text-sm text-muted-foreground">Manage supplier orders and receipts</p>
@@ -617,7 +688,7 @@ export default function PurchaseOrders() {
       </div>
 
       {activeTab === "live" && (
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid shrink-0 gap-4 md:grid-cols-4">
           <Card className="hover-elevate cursor-pointer" onClick={() => setStatusFilter("all")} data-testid="card-total-orders">
             <CardContent className="pt-4">
               <div className="flex items-center justify-between">
@@ -666,7 +737,7 @@ export default function PurchaseOrders() {
       )}
 
       {activeTab === "history" && (
-        <Card>
+        <Card className="shrink-0">
           <CardContent className="py-4">
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-4 flex-wrap">
@@ -722,8 +793,8 @@ export default function PurchaseOrders() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <CardHeader className="shrink-0 pb-3">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 flex-1">
               <div className="relative flex-1 max-w-sm">
@@ -766,8 +837,8 @@ export default function PurchaseOrders() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-auto max-h-[calc(100vh-400px)] rounded-md border m-4 mt-0">
+        <CardContent className="min-h-0 flex-1 p-0">
+          <div className="m-4 mt-0 h-[calc(100%-1rem)] min-h-0 overflow-auto rounded-md border">
             <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
@@ -836,7 +907,15 @@ export default function PurchaseOrders() {
                         </div>
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.orderDate)}</td>
-                      <td className="p-3 align-middle whitespace-nowrap">{formatDate(po.expectedDate)}</td>
+                      <td className="p-3 align-middle whitespace-nowrap" data-testid={`text-expected-${po.id}`}>
+                        {po.expectedDate ? (
+                          formatDate(po.expectedDate)
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">
+                            Lead time unknown
+                          </span>
+                        )}
+                      </td>
                       <td className="p-3 align-middle whitespace-nowrap text-center text-muted-foreground" data-testid={`text-lead-time-${po.id}`}>
                         {calculateLeadTime(po.sentAt, po.receivedAt)}
                       </td>
@@ -982,6 +1061,10 @@ export default function PurchaseOrders() {
                   <p className="text-sm text-muted-foreground">Total</p>
                   <p className="font-medium text-lg">{formatCurrency(poDetails.total)}</p>
                 </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Accountant (QuickBooks)</p>
+                  <QbBillStatusBadge poId={poDetails.id} enabled={isDetailOpen} />
+                </div>
               </div>
 
               <div className="flex items-center justify-between p-4 bg-muted/30 rounded-lg border">
@@ -1064,7 +1147,7 @@ export default function PurchaseOrders() {
               <div>
                 <h4 className="font-medium mb-2">Line Items ({poDetails.lines?.length || 0})</h4>
                 {poDetails.lines && poDetails.lines.length > 0 ? (
-                  <div className="overflow-x-auto rounded-md border">
+                  <div className="overflow-auto max-h-[420px] rounded-md border">
                     <table className="w-full table-auto">
                       <thead className="bg-muted/50">
                         <tr className="border-b">

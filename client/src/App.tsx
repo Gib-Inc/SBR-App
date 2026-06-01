@@ -36,6 +36,8 @@ import Returns from "@/pages/returns";
 import Login from "@/pages/login";
 import POAcknowledge from "@/pages/po-acknowledge";
 import Reports from "@/pages/reports";
+import Health from "@/pages/health";
+import ReorderAlerts from "@/pages/reorder-alerts";
 import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
 import LegalPrivacy from "@/pages/legal-privacy";
@@ -43,6 +45,18 @@ import AcceptInvite from "@/pages/accept-invite";
 import ResetPassword from "@/pages/reset-password";
 import Marketing from "@/pages/marketing";
 import MarketingAnalytics from "@/pages/marketing-analytics";
+import Inventory from "@/pages/inventory";
+import RawMaterials from "@/pages/raw-materials";
+import CountInventory from "@/pages/count-inventory";
+import ReceiveStock from "@/pages/receive-stock";
+import Incoming from "@/pages/incoming";
+import SkuMappings from "@/pages/sku-mappings";
+import LogOrder from "@/pages/log-order";
+import Backorders from "@/pages/backorders";
+import ProductionPriority from "@/pages/production-priority";
+import InHouseShipping from "@/pages/in-house-shipping";
+import Scan from "@/pages/scan";
+import SupplierIntel from "@/pages/supplier-intel";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -95,6 +109,7 @@ function AuthenticatedApp() {
       <Route path="/login">
         <Redirect to="/" />
       </Route>
+      <Route path="/scan" component={Scan} />
       <Route>
         {() => (
           <SidebarProvider
@@ -120,18 +135,31 @@ function AuthenticatedApp() {
                 <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
                   <Switch>
                     <Route path="/" component={Reports} />
+                    <Route path="/health" component={Health} />
+                    <Route path="/reorder-alerts" component={ReorderAlerts} />
                     <Route path="/products" component={Products} />
                     <Route path="/production" component={Production} />
                     <Route path="/cycle-count" component={CycleCount} />
                     <Route path="/direct-orders" component={DirectOrders} />
                     <Route path="/barcodes" component={Barcodes} />
                     <Route path="/suppliers" component={Suppliers} />
+                    <Route path="/supplier-intel" component={SupplierIntel} />
                     <Route path="/purchase-orders" component={PurchaseOrders} />
                     <Route path="/sales-orders" component={SalesOrders} />
+                    <Route path="/backorders" component={Backorders} />
+                    <Route path="/production-priority" component={ProductionPriority} />
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
                     <Route path="/marketing" component={Marketing} />
                     <Route path="/marketing-analytics" component={MarketingAnalytics} />
+                    <Route path="/inventory" component={Inventory} />
+                    <Route path="/raw-materials" component={RawMaterials} />
+                    <Route path="/count-inventory" component={CountInventory} />
+                    <Route path="/receive-stock" component={ReceiveStock} />
+                    <Route path="/incoming" component={Incoming} />
+                    <Route path="/sku-mappings" component={SkuMappings} />
+                    <Route path="/log-order" component={LogOrder} />
+                    <Route path="/in-house-shipping" component={InHouseShipping} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

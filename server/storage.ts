@@ -17,6 +17,12 @@ import {
   type InsertSupplier,
   type SupplierItem,
   type InsertSupplierItem,
+  type ReorderAlert,
+  type InsertReorderAlert,
+  type VendorCommunication,
+  type InsertVendorCommunication,
+  type SkuMapping,
+  type InsertSkuMapping,
   type PurchaseOrder,
   type InsertPurchaseOrder,
   type PurchaseOrderLine,
@@ -126,6 +132,18 @@ import {
   type InsertProductionRun,
   type ProductionRunLine,
   type InsertProductionRunLine,
+  type ProductionLog,
+  type InsertProductionLog,
+  type ShopIssue,
+  type InsertShopIssue,
+  type DailyBriefing,
+  type InsertDailyBriefing,
+  type InventoryLot,
+  type InsertInventoryLot,
+  type LotConsumptionEvent,
+  type InsertLotConsumptionEvent,
+  type BackorderNotice,
+  type InsertBackorderNotice,
   type CycleCountSession,
   type InsertCycleCountSession,
   type CycleCountEntry,
@@ -148,6 +166,26 @@ import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
 import * as schema from "@shared/schema";
+
+// Row shape returned by the v_money_maker_health view (per-build capacity
+// snapshot for the four core finished products). Keys mirror the SQL
+// column aliases — the view is the source of truth, this type is just a
+// compile-time mirror for the route + UI.
+export interface MoneyMakerHealthRow {
+  buildSku: string;
+  buildName: string;
+  buildsPerDay: number;
+  finishedStock: number;
+  finishedDaysLeft: number | null;
+  bindingComponent: string | null;
+  bindingStock: number | null;
+  maxBuildsUntilConstraint: number | null;
+  bindingDaysLeft: number | null;
+  bindingSupplier: string | null;
+  bindingLeadTime: number | null;
+  uncountedComponents: number;
+  status: string;
+}
 
 export interface IStorage {
   // Users
@@ -174,6 +212,15 @@ export interface IStorage {
   getAppSetting(key: string): Promise<string | null>;
   setAppSetting(key: string, value: string): Promise<void>;
   getAllAppSettings(): Promise<AppSetting[]>;
+
+  // Reorder alerts
+  getReorderAlerts(): Promise<ReorderAlert[]>;
+  getReorderAlert(id: string): Promise<ReorderAlert | undefined>;
+  createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert>;
+  updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined>;
+  getVendorCommunications(): Promise<VendorCommunication[]>;
+  createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication>;
+  updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined>;
 
   // Items
   getAllItems(): Promise<Item[]>;
@@ -216,6 +263,33 @@ export interface IStorage {
   getProductionRunLines(runId: string): Promise<ProductionRunLine[]>;
   getNextProductionRunNumber(): Promise<string>;
 
+  // Production logs (per-action shop floor entries)
+  createProductionLog(log: InsertProductionLog): Promise<ProductionLog>;
+  getProductionLog(id: string): Promise<ProductionLog | undefined>;
+  getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]>;
+  getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]>;
+
+  // Shop floor issue reports
+  createShopIssue(issue: InsertShopIssue): Promise<ShopIssue>;
+  getShopIssuesSince(since: Date): Promise<ShopIssue[]>;
+
+  // Daily briefings (7 AM MT cron output)
+  upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing>;
+  getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined>;
+
+  // Backorder unblock comms (Move 4)
+  getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined>;
+  createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice>;
+
+  // Lot / batch traceability
+  createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot>;
+  // FIFO: oldest open lots (remaining_qty > 0) for an item, ordered receivedAt ASC.
+  getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]>;
+  decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined>;
+  createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent>;
+  getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]>;
+  getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]>;
+
   // Cycle counts
   createCycleCountSession(session: InsertCycleCountSession): Promise<CycleCountSession>;
   getCycleCountSessions(limit?: number): Promise<CycleCountSession[]>;
@@ -241,6 +315,18 @@ export interface IStorage {
   createSupplierItem(supplierItem: InsertSupplierItem): Promise<SupplierItem>;
   updateSupplierItem(id: string, supplierItem: Partial<InsertSupplierItem>): Promise<SupplierItem | undefined>;
   deleteSupplierItem(id: string): Promise<boolean>;
+
+  // Vendor Communications
+  getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]>;
+  getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]>;
+
+  // SKU Mappings (External → Canonical)
+  getAllSkuMappings(): Promise<SkuMapping[]>;
+  getSkuMapping(id: string): Promise<SkuMapping | undefined>;
+  findCanonicalSku(externalSku: string, source: string): Promise<string | null>;
+  createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping>;
+  updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined>;
+  deleteSkuMapping(id: string): Promise<boolean>;
 
   // Sales History
   getAllSalesHistory(): Promise<SalesHistory[]>;
@@ -466,6 +552,9 @@ export interface IStorage {
   updateSalesOrder(id: string, order: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined>;
   deleteSalesOrder(id: string): Promise<boolean>;
 
+  // Sales velocity — total units sold per SKU (for best-seller sorting)
+  getSkuSalesVelocity(sinceDaysAgo?: number): Promise<{ sku: string; unitsSold: number }[]>;
+
   // Sales Order Lines
   getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]>;
   getSalesOrderLine(id: string): Promise<SalesOrderLine | undefined>;
@@ -686,6 +775,12 @@ export interface IStorage {
   createMorningTrapRun(run: InsertMorningTrapRun): Promise<MorningTrapRun>;
   getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]>;
   getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined>;
+
+  // Marketing — ROAS Guardian view
+  getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]>;
+  getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]>;
+  getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]>;
+  getInventorySnapshot(params?: { date?: string }): Promise<any[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -696,6 +791,8 @@ export class MemStorage implements IStorage {
   private billOfMaterials: Map<string, BillOfMaterials>;
   private suppliers: Map<string, Supplier>;
   private supplierItems: Map<string, SupplierItem>;
+  private reorderAlerts: Map<string, ReorderAlert>;
+  private vendorCommunications: Map<string, VendorCommunication>;
   private salesHistory: Map<string, SalesHistory>;
   private finishedInventorySnapshots: Map<string, FinishedInventorySnapshot>;
   private integrationHealth: Map<string, IntegrationHealth>;
@@ -732,6 +829,8 @@ export class MemStorage implements IStorage {
     this.billOfMaterials = new Map();
     this.suppliers = new Map();
     this.supplierItems = new Map();
+    this.reorderAlerts = new Map();
+    this.vendorCommunications = new Map();
     this.salesHistory = new Map();
     this.finishedInventorySnapshots = new Map();
     this.integrationHealth = new Map();
@@ -1105,6 +1204,104 @@ export class MemStorage implements IStorage {
     return Array.from(this.appSettingsMap.entries()).map(([key, value]) => ({ key, value, updatedAt: new Date() }));
   }
 
+  async getReorderAlerts(): Promise<ReorderAlert[]> {
+    return Array.from(this.reorderAlerts.values());
+  }
+
+  async getReorderAlert(id: string): Promise<ReorderAlert | undefined> {
+    return this.reorderAlerts.get(id);
+  }
+
+  async createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert> {
+    const id = randomUUID();
+    const record: ReorderAlert = {
+      ...alert,
+      id,
+      currentStock: alert.currentStock ?? 0,
+      reorderPoint: alert.reorderPoint ?? 0,
+      suggestedOrderQty: alert.suggestedOrderQty ?? null,
+      supplierName: alert.supplierName ?? null,
+      status: alert.status ?? "open",
+      triggeredAt: alert.triggeredAt ?? new Date(),
+      acknowledgedAt: alert.acknowledgedAt ?? null,
+      purchaseOrderId: alert.purchaseOrderId ?? null,
+      alertStatus: alert.alertStatus ?? "pending",
+      emailSentAt: alert.emailSentAt ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.reorderAlerts.set(id, record);
+    return record;
+  }
+
+  async updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined> {
+    const existing = this.reorderAlerts.get(id);
+    if (!existing) return undefined;
+    const updated: ReorderAlert = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.reorderAlerts.set(id, updated);
+    return updated;
+  }
+
+  async getVendorCommunications(): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values());
+  }
+
+  async getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values()).filter((comm) => comm.supplierId === supplierId);
+  }
+
+  async getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]> {
+    return Array.from(this.vendorCommunications.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit);
+  }
+
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    const id = randomUUID();
+    const record: VendorCommunication = {
+      ...comm,
+      id,
+      itemId: comm.itemId ?? null,
+      reorderAlertId: comm.reorderAlertId ?? null,
+      purchaseOrderId: comm.purchaseOrderId ?? null,
+      communicationType: comm.communicationType ?? "REORDER_REQUEST",
+      actionType: comm.actionType ?? comm.communicationType ?? "REORDER_REQUEST",
+      channel: comm.channel ?? "EMAIL",
+      direction: comm.direction ?? "OUTBOUND",
+      recipientEmail: comm.recipientEmail ?? null,
+      subject: comm.subject ?? null,
+      bodyText: comm.bodyText ?? null,
+      sentBy: comm.sentBy ?? "system",
+      status: comm.status ?? "pending",
+      expectedDate: comm.expectedDate ?? null,
+      notes: comm.notes ?? null,
+      providerMessageId: comm.providerMessageId ?? null,
+      metadata: comm.metadata ?? null,
+      sentAt: comm.sentAt ?? null,
+      createdBy: comm.createdBy ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.vendorCommunications.set(id, record);
+    return record;
+  }
+
+  async updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined> {
+    const existing = this.vendorCommunications.get(id);
+    if (!existing) return undefined;
+    const updated: VendorCommunication = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date(),
+    };
+    this.vendorCommunications.set(id, updated);
+    return updated;
+  }
+
   // Items
 
   async getAllItems(): Promise<Item[]> {
@@ -1420,6 +1617,118 @@ export class MemStorage implements IStorage {
   async getProductionRuns(): Promise<ProductionRun[]> { return []; }
   async getProductionRunLines(): Promise<ProductionRunLine[]> { return []; }
 
+  private productionLogs: ProductionLog[] = [];
+  async createProductionLog(log: InsertProductionLog): Promise<ProductionLog> {
+    const row: ProductionLog = {
+      id: randomUUID(),
+      createdAt: new Date(),
+      notes: log.notes ?? null,
+      createdBy: log.createdBy ?? null,
+      ...log,
+    } as ProductionLog;
+    this.productionLogs.push(row);
+    return row;
+  }
+  async getProductionLog(id: string): Promise<ProductionLog | undefined> {
+    return this.productionLogs.find((l) => l.id === id);
+  }
+  async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
+    return this.productionLogs.filter(l => l.productionDate >= startDate && l.productionDate <= endDate);
+  }
+  async getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]> {
+    return this.productionLogs.filter(l => l.productionDate === productionDate && l.itemId === itemId);
+  }
+
+  private shopIssues: ShopIssue[] = [];
+  async createShopIssue(issue: InsertShopIssue): Promise<ShopIssue> {
+    const row: ShopIssue = {
+      id: randomUUID(),
+      createdAt: new Date(),
+      reportedBy: issue.reportedBy ?? null,
+      ...issue,
+    } as ShopIssue;
+    this.shopIssues.push(row);
+    return row;
+  }
+  async getShopIssuesSince(since: Date): Promise<ShopIssue[]> {
+    return this.shopIssues.filter((i) => i.createdAt >= since);
+  }
+
+  private dailyBriefings = new Map<string, DailyBriefing>();
+  async upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing> {
+    const existing = this.dailyBriefings.get(briefing.date);
+    const row: DailyBriefing = {
+      id: existing?.id ?? randomUUID(),
+      createdAt: existing?.createdAt ?? new Date(),
+      ...briefing,
+    } as DailyBriefing;
+    this.dailyBriefings.set(briefing.date, row);
+    return row;
+  }
+  async getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined> {
+    return this.dailyBriefings.get(date);
+  }
+
+  private inventoryLots: InventoryLot[] = [];
+  private lotConsumptionEvents: LotConsumptionEvent[] = [];
+  async createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot> {
+    const row: InventoryLot = {
+      id: randomUUID(),
+      receivedAt: new Date(),
+      sourceTransactionId: lot.sourceTransactionId ?? null,
+      supplierId: lot.supplierId ?? null,
+      notes: lot.notes ?? null,
+      ...lot,
+    } as InventoryLot;
+    this.inventoryLots.push(row);
+    return row;
+  }
+  async getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]> {
+    return this.inventoryLots
+      .filter((l) => l.itemId === itemId && (l.remainingQty ?? 0) > 0)
+      .sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+  }
+  async decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined> {
+    const row = this.inventoryLots.find((l) => l.id === lotId);
+    if (!row) return undefined;
+    row.remainingQty = Math.max(0, (row.remainingQty ?? 0) - qty);
+    return row;
+  }
+  async createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent> {
+    const row: LotConsumptionEvent = {
+      id: randomUUID(),
+      consumedAt: new Date(),
+      productionLogId: event.productionLogId ?? null,
+      ...event,
+    } as LotConsumptionEvent;
+    this.lotConsumptionEvents.push(row);
+    return row;
+  }
+  async getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]> {
+    return this.inventoryLots.filter(
+      (l) => l.itemId === itemId && l.receivedAt >= from && l.receivedAt <= to,
+    );
+  }
+  async getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]> {
+    return this.lotConsumptionEvents.filter((e) => e.lotId === lotId);
+  }
+
+  private backorderNotices: BackorderNotice[] = [];
+  async getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined> {
+    return this.backorderNotices.find((n) => n.salesOrderId === salesOrderId && n.itemId === itemId);
+  }
+  async createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice> {
+    const row: BackorderNotice = {
+      id: randomUUID(),
+      sentAt: new Date(),
+      poId: notice.poId ?? null,
+      payloadJson: notice.payloadJson ?? null,
+      ...notice,
+    } as BackorderNotice;
+    this.backorderNotices.push(row);
+    return row;
+  }
+
   // Cycle Count stubs
   async getNextCycleCountSessionNumber(): Promise<string> { return `CC-${new Date().getFullYear()}-0001`; }
   async createCycleCountSession(s: InsertCycleCountSession): Promise<CycleCountSession> { return { id: randomUUID(), createdAt: new Date(), committedAt: null, ...s } as CycleCountSession; }
@@ -1518,6 +1827,24 @@ export class MemStorage implements IStorage {
   async deleteSupplierItem(id: string): Promise<boolean> {
     return this.supplierItems.delete(id);
   }
+
+  // SKU Mappings (MemStorage stub — Postgres is the real backend)
+  async getAllSkuMappings(): Promise<SkuMapping[]> { return []; }
+  async getSkuMapping(_id: string): Promise<SkuMapping | undefined> { return undefined; }
+  async findCanonicalSku(_externalSku: string, _source: string): Promise<string | null> { return null; }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    return {
+      id: crypto.randomUUID(),
+      externalSku: mapping.externalSku,
+      canonicalSku: mapping.canonicalSku,
+      source: mapping.source,
+      notes: mapping.notes ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+  async updateSkuMapping(_id: string, _updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> { return undefined; }
+  async deleteSkuMapping(_id: string): Promise<boolean> { return false; }
 
   // Sales History
   async getAllSalesHistory(): Promise<SalesHistory[]> {
@@ -2978,6 +3305,18 @@ export class MemStorage implements IStorage {
     return this.salesOrders.delete(id);
   }
 
+  async getSkuSalesVelocity(sinceDaysAgo: number = 90): Promise<{ sku: string; unitsSold: number }[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - sinceDaysAgo);
+    const skuMap = new Map<string, number>();
+    for (const line of this.salesOrderLines.values()) {
+      skuMap.set(line.sku, (skuMap.get(line.sku) || 0) + (line.qtyOrdered || 0));
+    }
+    return Array.from(skuMap.entries())
+      .map(([sku, unitsSold]) => ({ sku, unitsSold }))
+      .sort((a, b) => b.unitsSold - a.unitsSold);
+  }
+
   // Sales Order Lines
   async getSalesOrderLines(salesOrderId: string): Promise<SalesOrderLine[]> {
     return Array.from(this.salesOrderLines.values())
@@ -3990,6 +4329,20 @@ export class MemStorage implements IStorage {
   }
   async getMorningTrapRuns(userId: string, limit?: number): Promise<MorningTrapRun[]> { return []; }
   async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> { return undefined; }
+
+  async getRoasGuardian(_params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    return [];
+  }
+  async getRoasByPlatform(_params?: { from?: string; to?: string }): Promise<any[]> {
+    return [];
+  }
+  async getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]> {
+    return [];
+  }
+
+  async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
+    return [];
+  }
 }
 
 export class PostgresStorage implements IStorage {
@@ -4076,6 +4429,63 @@ export class PostgresStorage implements IStorage {
     return await this.db.select().from(schema.appSettings);
   }
 
+  async getReorderAlerts(): Promise<ReorderAlert[]> {
+    return await this.db.select().from(schema.reorderAlerts).orderBy(desc(schema.reorderAlerts.createdAt));
+  }
+
+  async getReorderAlert(id: string): Promise<ReorderAlert | undefined> {
+    const results = await this.db.select().from(schema.reorderAlerts).where(eq(schema.reorderAlerts.id, id));
+    return results[0];
+  }
+
+  async createReorderAlert(alert: InsertReorderAlert): Promise<ReorderAlert> {
+    const results = await this.db.insert(schema.reorderAlerts).values(alert).returning();
+    return results[0];
+  }
+
+  async updateReorderAlert(id: string, updates: Partial<InsertReorderAlert>): Promise<ReorderAlert | undefined> {
+    const results = await this.db
+      .update(schema.reorderAlerts)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.reorderAlerts.id, id))
+      .returning();
+    return results[0];
+  }
+
+  async getVendorCommunications(): Promise<VendorCommunication[]> {
+    return await this.db.select().from(schema.vendorCommunications).orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async getVendorCommunicationsBySupplierId(supplierId: string): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .where(eq(schema.vendorCommunications.supplierId, supplierId))
+      .orderBy(desc(schema.vendorCommunications.createdAt));
+  }
+
+  async getRecentVendorCommunications(limit: number): Promise<VendorCommunication[]> {
+    return await this.db
+      .select()
+      .from(schema.vendorCommunications)
+      .orderBy(desc(schema.vendorCommunications.createdAt))
+      .limit(limit);
+  }
+
+  async createVendorCommunication(comm: InsertVendorCommunication): Promise<VendorCommunication> {
+    const results = await this.db.insert(schema.vendorCommunications).values(comm).returning();
+    return results[0];
+  }
+
+  async updateVendorCommunication(id: string, updates: Partial<InsertVendorCommunication>): Promise<VendorCommunication | undefined> {
+    const results = await this.db
+      .update(schema.vendorCommunications)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.vendorCommunications.id, id))
+      .returning();
+    return results[0];
+  }
+
   // Items
   async getAllItems(): Promise<Item[]> {
     return await this.db.select().from(schema.items);
@@ -4153,7 +4563,25 @@ export class PostgresStorage implements IStorage {
         eq(schema.supplierItems.supplierId, schema.suppliers.id)
       )
       .groupBy(schema.items.id, schema.supplierItems.id, schema.suppliers.id);
-    
+
+    // Component unit-cost lookup map shared across all rows. Resolution
+    // order matches /api/bom/:itemId/cost-rollup so the Products table
+    // margin and the cost-rollup modal agree:
+    //   designated supplier_items.price  →  any supplier_items.price  →  null
+    // (items.default_purchase_cost is a per-item legacy field already on the
+    // row — used as a final fallback below.)
+    const allSupplierItems = await this.db.select().from(schema.supplierItems);
+    const designatedComponentPrice = new Map<string, number>();
+    const fallbackComponentPrice = new Map<string, number>();
+    for (const si of allSupplierItems) {
+      if (si.price == null || si.price <= 0) continue;
+      if (si.isDesignatedSupplier) {
+        designatedComponentPrice.set(si.itemId, si.price);
+      } else if (!fallbackComponentPrice.has(si.itemId)) {
+        fallbackComponentPrice.set(si.itemId, si.price);
+      }
+    }
+
     // Calculate forecast and totalOwned for each finished product
     const itemsWithForecast = await Promise.all(
       results.map(async (row) => {
@@ -4164,19 +4592,27 @@ export class PostgresStorage implements IStorage {
           minimumOrderQuantity: row.supplierItem.minimumOrderQuantity,
           leadTimeDays: row.supplierItem.leadTimeDays,
         } : null;
-        
+
         if (row.items.type === "finished_product") {
           const forecast = await this.calculateProductionForecast(row.items.id);
           const totalOwned = (row.items.pivotQty ?? 0) + (row.items.hildaleQty ?? 0);
 
-          // Calculate BOM build cost: sum of (effectiveQty × component cost) per BOM line
+          // Calculate BOM build cost: sum of (effectiveQty × component cost)
+          // per BOM line. Component cost falls through three sources before
+          // we mark the product as "no price set".
           let bomBuildCost: number | null = 0;
           const bomEntries = await this.getBillOfMaterialsByProductId(row.items.id);
           for (const entry of bomEntries) {
             const component = await this.getItem(entry.componentId);
             const wastage = (entry as any).wastagePercent ?? 0;
             const effectiveQty = entry.quantityRequired * (1 + wastage / 100);
-            const unitCost = component?.defaultPurchaseCost ?? null;
+            const designated = designatedComponentPrice.get(entry.componentId);
+            const fallback = fallbackComponentPrice.get(entry.componentId);
+            const legacy = component?.defaultPurchaseCost ?? null;
+            const unitCost =
+              (designated != null && designated > 0) ? designated :
+              (fallback != null && fallback > 0) ? fallback :
+              (legacy != null && legacy > 0) ? legacy : null;
             if (unitCost === null) { bomBuildCost = null; break; }
             bomBuildCost! += effectiveQty * unitCost;
           }
@@ -4275,13 +4711,9 @@ export class PostgresStorage implements IStorage {
   }
 
   async updateItem(id: string, updateData: Partial<InsertItem>): Promise<Item | undefined> {
-    // Storage-level guard: Force currentStock to 0 for finished products
-    // Finished products MUST use only pivotQty and hildaleQty as sources of truth
-    // Get the existing item to check its type
     const existingItem = await this.getItem(id);
     if (!existingItem) return undefined;
-    
-    // Normalize type/productKind in update data to keep them in sync
+
     let normalizedUpdateData = { ...updateData };
     if (updateData.type === 'finished_product' && !updateData.productKind) {
       normalizedUpdateData.productKind = 'FINISHED';
@@ -4292,40 +4724,37 @@ export class PostgresStorage implements IStorage {
     } else if (updateData.productKind === 'RAW' && !updateData.type) {
       normalizedUpdateData.type = 'component';
     }
-    
-    // Merge to get preliminary final state
-    let mergedItem = { ...existingItem, ...normalizedUpdateData };
-    
-    // Normalize FINAL merged state by ALWAYS favoring finished_product classification
-    // This fixes pre-existing inconsistencies and ensures NO bypass
+
+    const mergedItem = { ...existingItem, ...normalizedUpdateData };
     if (mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED') {
-      // ALWAYS favor finished_product: force both fields to finished state
       mergedItem.type = 'finished_product';
       mergedItem.productKind = 'FINISHED';
     } else if (mergedItem.type === 'component' || mergedItem.productKind === 'RAW') {
-      // Both indicate component: normalize to component/RAW
       mergedItem.type = 'component';
       mergedItem.productKind = 'RAW';
     }
-    
-    // Determine if final state is finished product
-    const willBeFinished = mergedItem.type === 'finished_product' || mergedItem.productKind === 'FINISHED';
-    
-    if (willBeFinished) {
-      // Force currentStock to 0 and ensure type/productKind are fully synced
-      mergedItem.currentStock = 0;
-      mergedItem.type = 'finished_product';
-      mergedItem.productKind = 'FINISHED';
-    }
-    
-    // Prepare final update data with all normalized fields
-    const finalUpdateData = {
+
+    const willBeFinished = mergedItem.type === 'finished_product';
+    const wasFinished = existingItem.type === 'finished_product' || existingItem.productKind === 'FINISHED';
+    const typeChangedToFinished = willBeFinished && !wasFinished;
+
+    const finalUpdateData: Partial<InsertItem> = {
       ...normalizedUpdateData,
       type: mergedItem.type,
       productKind: mergedItem.productKind,
-      currentStock: mergedItem.currentStock,
     };
-    
+
+    // currentStock rules for finished products:
+    //   - Caller explicitly set it → clamp to 0 (architectural invariant)
+    //   - Type just transitioned from component → finished → reset to 0
+    //   - Otherwise leave currentStock untouched. Unrelated updates (e.g. Extensiv
+    //     sync writing only extensiv_on_hand_snapshot) must not silently zero it.
+    if (willBeFinished) {
+      if ('currentStock' in normalizedUpdateData || typeChangedToFinished) {
+        finalUpdateData.currentStock = 0;
+      }
+    }
+
     const results = await this.db.update(schema.items).set(finalUpdateData).where(eq(schema.items.id, id)).returning();
     return results[0];
   }
@@ -4448,6 +4877,152 @@ export class PostgresStorage implements IStorage {
       .where(eq(schema.productionRunLines.runId, runId));
   }
 
+  async createProductionLog(log: InsertProductionLog): Promise<ProductionLog> {
+    const results = await this.db.insert(schema.productionLogs).values(log).returning();
+    return results[0];
+  }
+
+  async getProductionLog(id: string): Promise<ProductionLog | undefined> {
+    const rows = await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(eq(schema.productionLogs.id, id))
+      .limit(1);
+    return rows[0];
+  }
+
+  async getProductionLogsForRange(startDate: string, endDate: string): Promise<ProductionLog[]> {
+    return await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(and(
+        gte(schema.productionLogs.productionDate, startDate),
+        lte(schema.productionLogs.productionDate, endDate),
+      ))
+      .orderBy(desc(schema.productionLogs.productionDate), desc(schema.productionLogs.createdAt));
+  }
+
+  async getProductionLogsForDateAndItem(productionDate: string, itemId: string): Promise<ProductionLog[]> {
+    return await this.db
+      .select()
+      .from(schema.productionLogs)
+      .where(and(
+        eq(schema.productionLogs.productionDate, productionDate),
+        eq(schema.productionLogs.itemId, itemId),
+      ));
+  }
+
+  async createShopIssue(issue: InsertShopIssue): Promise<ShopIssue> {
+    const results = await this.db.insert(schema.shopIssues).values(issue).returning();
+    return results[0];
+  }
+
+  async getShopIssuesSince(since: Date): Promise<ShopIssue[]> {
+    return await this.db
+      .select()
+      .from(schema.shopIssues)
+      .where(gte(schema.shopIssues.createdAt, since))
+      .orderBy(desc(schema.shopIssues.createdAt));
+  }
+
+  async upsertDailyBriefing(briefing: InsertDailyBriefing): Promise<DailyBriefing> {
+    const existing = await this.db
+      .select()
+      .from(schema.dailyBriefings)
+      .where(eq(schema.dailyBriefings.date, briefing.date))
+      .limit(1);
+    if (existing.length > 0) {
+      const updated = await this.db
+        .update(schema.dailyBriefings)
+        .set({ contentJson: briefing.contentJson })
+        .where(eq(schema.dailyBriefings.date, briefing.date))
+        .returning();
+      return updated[0];
+    }
+    const inserted = await this.db.insert(schema.dailyBriefings).values(briefing).returning();
+    return inserted[0];
+  }
+
+  async getDailyBriefingByDate(date: string): Promise<DailyBriefing | undefined> {
+    const results = await this.db
+      .select()
+      .from(schema.dailyBriefings)
+      .where(eq(schema.dailyBriefings.date, date))
+      .limit(1);
+    return results[0];
+  }
+
+  // ── Lot / batch traceability ──────────────────────────────────────────
+
+  async createInventoryLot(lot: InsertInventoryLot): Promise<InventoryLot> {
+    const results = await this.db.insert(schema.inventoryLots).values(lot).returning();
+    return results[0];
+  }
+
+  async getOpenLotsForItemFIFO(itemId: string): Promise<InventoryLot[]> {
+    return await this.db
+      .select()
+      .from(schema.inventoryLots)
+      .where(and(
+        eq(schema.inventoryLots.itemId, itemId),
+        gt(schema.inventoryLots.remainingQty, 0),
+      ))
+      .orderBy(schema.inventoryLots.receivedAt);
+  }
+
+  async decrementLotRemaining(lotId: string, qty: number): Promise<InventoryLot | undefined> {
+    // Single-statement decrement floored at 0 so two concurrent draws don't
+    // race the value below zero. RETURNING gives the updated row.
+    const results = await this.db
+      .update(schema.inventoryLots)
+      .set({ remainingQty: drizzleSql`GREATEST(0, ${schema.inventoryLots.remainingQty} - ${qty})` })
+      .where(eq(schema.inventoryLots.id, lotId))
+      .returning();
+    return results[0];
+  }
+
+  async createLotConsumptionEvent(event: InsertLotConsumptionEvent): Promise<LotConsumptionEvent> {
+    const results = await this.db.insert(schema.lotConsumptionEvents).values(event).returning();
+    return results[0];
+  }
+
+  async getLotsForItemReceivedBetween(itemId: string, from: Date, to: Date): Promise<InventoryLot[]> {
+    return await this.db
+      .select()
+      .from(schema.inventoryLots)
+      .where(and(
+        eq(schema.inventoryLots.itemId, itemId),
+        gte(schema.inventoryLots.receivedAt, from),
+        lte(schema.inventoryLots.receivedAt, to),
+      ))
+      .orderBy(schema.inventoryLots.receivedAt);
+  }
+
+  async getConsumptionEventsForLot(lotId: string): Promise<LotConsumptionEvent[]> {
+    return await this.db
+      .select()
+      .from(schema.lotConsumptionEvents)
+      .where(eq(schema.lotConsumptionEvents.lotId, lotId))
+      .orderBy(schema.lotConsumptionEvents.consumedAt);
+  }
+
+  async getBackorderNotice(salesOrderId: string, itemId: string): Promise<BackorderNotice | undefined> {
+    const rows = await this.db
+      .select()
+      .from(schema.backorderNotices)
+      .where(and(
+        eq(schema.backorderNotices.salesOrderId, salesOrderId),
+        eq(schema.backorderNotices.itemId, itemId),
+      ))
+      .limit(1);
+    return rows[0];
+  }
+
+  async createBackorderNotice(notice: InsertBackorderNotice): Promise<BackorderNotice> {
+    const results = await this.db.insert(schema.backorderNotices).values(notice).returning();
+    return results[0];
+  }
+
   // Cycle Count Sessions
   async getNextCycleCountSessionNumber(): Promise<string> {
     const year = new Date().getFullYear();
@@ -4562,6 +5137,54 @@ export class PostgresStorage implements IStorage {
 
   async deleteSupplierItem(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.supplierItems).where(eq(schema.supplierItems.id, id)).returning();
+    return results.length > 0;
+  }
+
+  // Vendor Communications
+  // SKU Mappings
+  async getAllSkuMappings(): Promise<SkuMapping[]> {
+    return await this.db.select().from(schema.skuMappings).orderBy(desc(schema.skuMappings.createdAt));
+  }
+  async getSkuMapping(id: string): Promise<SkuMapping | undefined> {
+    const results = await this.db.select().from(schema.skuMappings).where(eq(schema.skuMappings.id, id));
+    return results[0];
+  }
+  async findCanonicalSku(externalSku: string, source: string): Promise<string | null> {
+    // Strip the legacy "SKU: " prefix that some imports leave on values, and
+    // try BOTH the raw and stripped form so a row stored either way still
+    // resolves. Also try lowercased source for compat with seed values.
+    const stripped = externalSku.replace(/^SKU:\s*/i, "");
+    const sourceLower = source.toLowerCase();
+    const candidates = [externalSku, stripped];
+    for (const cand of candidates) {
+      const rows = await this.db
+        .select()
+        .from(schema.skuMappings)
+        .where(
+          and(
+            eq(schema.skuMappings.externalSku, cand),
+            eq(schema.skuMappings.source, sourceLower),
+          ),
+        )
+        .limit(1);
+      if (rows[0]) return rows[0].canonicalSku;
+    }
+    return null;
+  }
+  async createSkuMapping(mapping: InsertSkuMapping): Promise<SkuMapping> {
+    const results = await this.db.insert(schema.skuMappings).values(mapping).returning();
+    return results[0];
+  }
+  async updateSkuMapping(id: string, updates: Partial<InsertSkuMapping>): Promise<SkuMapping | undefined> {
+    const results = await this.db
+      .update(schema.skuMappings)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.skuMappings.id, id))
+      .returning();
+    return results[0];
+  }
+  async deleteSkuMapping(id: string): Promise<boolean> {
+    const results = await this.db.delete(schema.skuMappings).where(eq(schema.skuMappings.id, id)).returning();
     return results.length > 0;
   }
 
@@ -6092,6 +6715,24 @@ export class PostgresStorage implements IStorage {
   async deleteSalesOrder(id: string): Promise<boolean> {
     const results = await this.db.delete(schema.salesOrders).where(eq(schema.salesOrders.id, id)).returning();
     return results.length > 0;
+  }
+
+  async getSkuSalesVelocity(sinceDaysAgo: number = 90): Promise<{ sku: string; unitsSold: number }[]> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - sinceDaysAgo);
+
+    const results = await this.db
+      .select({
+        sku: schema.salesOrderLines.sku,
+        unitsSold: drizzleSql<number>`COALESCE(SUM(${schema.salesOrderLines.qtyOrdered}), 0)`.as('units_sold'),
+      })
+      .from(schema.salesOrderLines)
+      .innerJoin(schema.salesOrders, eq(schema.salesOrderLines.salesOrderId, schema.salesOrders.id))
+      .where(gte(schema.salesOrders.orderDate, cutoff))
+      .groupBy(schema.salesOrderLines.sku)
+      .orderBy(drizzleSql`units_sold DESC`);
+
+    return results.map(r => ({ sku: r.sku, unitsSold: Number(r.unitsSold) }));
   }
 
   // Sales Order Lines
@@ -7640,6 +8281,119 @@ export class PostgresStorage implements IStorage {
       .orderBy(desc(schema.morningTrapRuns.runDate))
       .limit(1);
     return result[0];
+  }
+
+  async getRoasGuardian(params?: { startDate?: string; endDate?: string; channel?: string }): Promise<any[]> {
+    const start = params?.startDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const end   = params?.endDate   ?? new Date().toISOString().slice(0, 10);
+    const channel = params?.channel;
+    const rows = channel
+      ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
+      : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
+    return (rows as any).rows ?? (rows as any);
+  }
+
+  // Per-ad-platform rollup. Hits the v_roas_guardian_by_platform view that
+  // already aggregates spend + pixel-attributed revenue across the platform's
+  // own attribution window (Meta = 7-day click, Google = its default, etc.).
+  // We return whatever shape the view exports — typed loosely on purpose so
+  // adding a column there doesn't require a code change here.
+  async getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]> {
+    const from = params?.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const to   = params?.to   ?? new Date().toISOString().slice(0, 10);
+    const rows = await this.db.execute(drizzleSql`
+      SELECT
+        platform,
+        SUM(total_spend)::float    AS total_spend,
+        SUM(pixel_revenue)::float  AS pixel_revenue,
+        CASE
+          WHEN SUM(total_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(total_spend)::float
+          ELSE 0
+        END AS pixel_roas
+      FROM v_roas_guardian_by_platform
+      WHERE date >= ${from}::date AND date <= ${to}::date
+      GROUP BY platform
+      ORDER BY total_spend DESC
+    `);
+    return (rows as any).rows ?? (rows as any);
+  }
+
+  // Backed by the v_money_maker_health view — per-build capacity snapshot
+  // for the four core finished products (binding component, days to
+  // stockout, supplier, etc). The view does the heavy joins; we just
+  // surface it with camelCase keys for the UI. Sorted server-side by
+  // status priority so the urgent rows always appear first.
+  async getMoneyMakerHealth(): Promise<MoneyMakerHealthRow[]> {
+    const result = await this.db.execute(drizzleSql`
+      SELECT
+        build_sku                     AS "buildSku",
+        build_name                    AS "buildName",
+        builds_per_day                AS "buildsPerDay",
+        finished_stock                AS "finishedStock",
+        finished_days_left            AS "finishedDaysLeft",
+        binding_component             AS "bindingComponent",
+        binding_stock                 AS "bindingStock",
+        max_builds_until_constraint   AS "maxBuildsUntilConstraint",
+        binding_days_left             AS "bindingDaysLeft",
+        binding_supplier              AS "bindingSupplier",
+        binding_lead_time             AS "bindingLeadTime",
+        uncounted_components          AS "uncountedComponents",
+        status
+      FROM v_money_maker_health
+      ORDER BY
+        CASE status
+          WHEN '🔴 ORDER NOW' THEN 1
+          WHEN '🟡 ORDER THIS WEEK' THEN 2
+          WHEN '🟢 OK' THEN 3
+          WHEN '✅ HEALTHY' THEN 4
+          ELSE 5
+        END,
+        binding_days_left ASC NULLS LAST
+    `);
+    return ((result as any).rows ?? (result as any)) as MoneyMakerHealthRow[];
+  }
+
+  async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
+    // Both warehouses are sourced live from the items table:
+    //   - Pyvott qty  = items.extensiv_on_hand_snapshot (written by Extensiv sync)
+    //   - Hildale qty = items.hildale_qty (written by manual count sheet uploads)
+    // SKU normalization: Extensiv auto-created items have sku like "SKU: #101-PSH-M1";
+    // we strip the "SKU: " prefix so the UI's group-by-SKU merges rows across warehouses.
+    const result: any = await this.db.execute(drizzleSql`
+      SELECT
+        COALESCE(extensiv_last_sync_at::date::text, CURRENT_DATE::text) AS snapshot_date,
+        'Pyvott' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(extensiv_on_hand_snapshot, 0) AS qty,
+        GREATEST(COALESCE(extensiv_on_hand_snapshot, 0) - COALESCE(available_for_sale_qty, 0), 0) AS promised,
+        'extensiv_live' AS source
+      FROM items
+      WHERE extensiv_sku IS NOT NULL
+      UNION ALL
+      SELECT
+        CURRENT_DATE::text AS snapshot_date,
+        'Hildale' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(hildale_qty, 0) AS qty,
+        0 AS promised,
+        'hildale_qty' AS source
+      FROM items
+      WHERE extensiv_sku IS NOT NULL
+      UNION ALL
+      SELECT
+        CURRENT_DATE::text AS snapshot_date,
+        'FX' AS location,
+        REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
+        name,
+        COALESCE(fx_in_process_qty, 0) AS qty,
+        0 AS promised,
+        'fx_in_process_qty' AS source
+      FROM items
+      WHERE type = 'finished_product'
+    `);
+    return result.rows ?? result ?? [];
   }
 }
 

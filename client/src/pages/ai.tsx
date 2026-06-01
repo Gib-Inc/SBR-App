@@ -4725,12 +4725,19 @@ export default function AIAgent() {
 
   // Google Ads OAuth handlers
   const handleGoogleAdsConnect = async () => {
+    // Open window immediately during click event to avoid popup blocker
+    const authWindow = window.open("about:blank", "_blank", "width=600,height=700");
     try {
       const response = await apiRequest("GET", "/api/ads/google/auth-url");
-      if (response.authUrl) {
-        window.open(response.authUrl, "_blank", "width=600,height=700");
+      const data = await response.json();
+      if (data.authUrl && authWindow) {
+        authWindow.location.href = data.authUrl;
+      } else if (data.authUrl) {
+        // Fallback: if popup was still blocked, navigate in current tab
+        window.location.href = data.authUrl;
       }
     } catch (error: any) {
+      if (authWindow) authWindow.close();
       toast({
         title: "Connection Error",
         description: error.message || "Failed to initiate Google Ads connection",
@@ -5243,7 +5250,11 @@ export default function AIAgent() {
       description: "Google ad performance & shopping",
       icon: TrendingUp,
       configured: googleAdsConfig?.isConnected ?? false,
-      status: googleAdsConfig?.isConnected ? "connected" : "not_configured",
+      status: googleAdsConfig?.isConnected
+        ? "connected"
+        : googleAdsConfig?.accessToken
+          ? "partially_configured"
+          : "not_configured",
       hasConfigDialog: false,
       isOAuth: true,
       accountName: googleAdsConfig?.accountName,
@@ -5324,6 +5335,8 @@ export default function AIAgent() {
                               variant={
                                 (source as any).isV2Placeholder
                                   ? "secondary"
+                                  : source.status === "partially_configured"
+                                  ? "secondary"
                                   : !source.configured
                                   ? "outline"
                                   : source.status === "success" || source.status === "connected"
@@ -5336,6 +5349,8 @@ export default function AIAgent() {
                             >
                               {(source as any).isV2Placeholder
                                 ? "V2 Planned"
+                                : source.status === "partially_configured"
+                                ? "OAuth Saved - Needs Dev Token"
                                 : !source.configured
                                 ? "Not Configured"
                                 : source.status === "success" || source.status === "connected"

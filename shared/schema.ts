@@ -12,7 +12,11 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   name: text("name"),
-  role: text("role").notNull().default("member"), // 'admin' or 'member'
+  // Role taxonomy: 'owner' | 'manager' | 'floor' | 'office'.
+  // Legacy values 'admin' and 'member' are still present in older rows;
+  // the requireRole middleware treats both as 'owner' so existing users
+  // keep full access until an operator reassigns them.
+  role: text("role").notNull().default("member"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 });
 
@@ -74,6 +78,19 @@ export const items = pgTable("items", {
   // Finished product location quantities
   hildaleQty: integer("hildale_qty").notNull().default(0), // Quantity at Hildale warehouse
   pivotQty: integer("pivot_qty").notNull().default(0), // Quantity at Pivot/Extensiv warehouse (authoritative mirror from Extensiv)
+  fxInProcessQty: integer("fx_in_process_qty").notNull().default(0), // Finished-goods units being built at FX Industries — moves to hildaleQty on receipt
+  // Seasonal demand modifier applied on top of measured daily_usage when
+  // computing forward-looking forecasts. 1.0 = no adjustment; 1.5 = peak;
+  // 0.5 = trough. Manual for now — operators set this from the supplier
+  // Forecast tab. We don't try to infer seasonality from data we don't
+  // have a year of yet.
+  seasonalMultiplier: real("seasonal_multiplier").notNull().default(1.0),
+  // Group used by the Products page priority sort. Values:
+  // 'core_build' | 'combo' | 'refurbished' | 'replacement' | 'accessory'.
+  // Stored as text rather than a Postgres enum so operators can edit
+  // groupings from the UI without a schema migration. Default is
+  // 'accessory' — the bottom bucket on the page.
+  reorderPriority: text("reorder_priority").notNull().default('accessory'),
   availableForSaleQty: integer("available_for_sale_qty").notNull().default(0), // Live projected 3PL stock available for sale (pivotQty baseline + local deltas from orders/returns)
   // V1: Extensiv read-only snapshot for reconciliation/variance display
   extensivOnHandSnapshot: integer("extensiv_on_hand_snapshot").notNull().default(0), // Last synced Extensiv quantity (read-only, for variance comparison)
@@ -228,7 +245,62 @@ export const insertProductionRunLineSchema = createInsertSchema(productionRunLin
 export type InsertProductionRunLine = z.infer<typeof insertProductionRunLineSchema>;
 export type ProductionRunLine = typeof productionRunLines.$inferSelect;
 
+// Lightweight per-action production log for the mobile shop-floor UI. One row per
+// rolls/built/boxed action that Clarence taps in. action_type is a free-form text
+// constrained at the application layer to: 'rolls_made' | 'built' | 'boxed'.
+export const productionLogs = pgTable("production_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  actionType: text("action_type").notNull(),
+  quantity: integer("quantity").notNull(),
+  productionDate: text("production_date").notNull(), // ISO YYYY-MM-DD
+  notes: text("notes"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: index("production_logs_item_id_idx").on(table.itemId),
+  productionDateIdx: index("production_logs_production_date_idx").on(table.productionDate),
+}));
 
+export const insertProductionLogSchema = createInsertSchema(productionLogs).omit({ id: true, createdAt: true });
+export type InsertProductionLog = z.infer<typeof insertProductionLogSchema>;
+export type ProductionLog = typeof productionLogs.$inferSelect;
+
+// Free-form shop floor issue reports filed from the production sheet.
+// issue_type is constrained at the application layer to:
+// 'defective_component' | 'short_shipment' | 'equipment_problem' | 'other'.
+export const shopIssues = pgTable("shop_issues", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  issueType: text("issue_type").notNull(),
+  notes: text("notes").notNull(),
+  reportedBy: text("reported_by"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdIdx: index("shop_issues_item_id_idx").on(table.itemId),
+  createdAtIdx: index("shop_issues_created_at_idx").on(table.createdAt),
+}));
+
+export const insertShopIssueSchema = createInsertSchema(shopIssues).omit({ id: true, createdAt: true });
+export type InsertShopIssue = z.infer<typeof insertShopIssueSchema>;
+export type ShopIssue = typeof shopIssues.$inferSelect;
+
+// One row per generated daily briefing. `date` is the briefing target date in
+// the user's timezone (YYYY-MM-DD); `contentJson` carries the rendered
+// payload (OTDR, critical components, draft POs, etc.). Unique by date so
+// re-runs the same day update in place.
+export const dailyBriefings = pgTable("daily_briefings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: text("date").notNull().unique(),
+  contentJson: jsonb("content_json").notNull(),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  dateIdx: index("daily_briefings_date_idx").on(table.date),
+}));
+
+export const insertDailyBriefingSchema = createInsertSchema(dailyBriefings).omit({ id: true, createdAt: true });
+export type InsertDailyBriefing = z.infer<typeof insertDailyBriefingSchema>;
+export type DailyBriefing = typeof dailyBriefings.$inferSelect;
 
 export const suppliers = pgTable("suppliers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -251,6 +323,20 @@ export const suppliers = pgTable("suppliers", {
   poSentCount: integer("po_sent_count").default(0).notNull(),
   poReceivedCount: integer("po_received_count").default(0).notNull(),
   lastPoSentAt: timestamp("last_po_sent_at"),
+
+  // Strategic vs Transactional. Strategic suppliers (FX, Silver Fox, Pednar
+  // etc.) have ongoing-relationship workflows: Forecast tab, scheduled
+  // briefs, communication digest. Transactional suppliers (McMaster, Uline)
+  // are one-and-done — those features stay hidden for them.
+  tier: text("tier").notNull().default('transactional'),
+  // Cadence for the auto-scheduled forecast brief. 'never' disables; the
+  // daily scheduler at 8am MT picks up rows whose
+  // last_forecast_brief_sent_at is older than the cadence.
+  forecastBriefSchedule: text("forecast_brief_schedule").notNull().default('never'),
+  // When true the scheduler fires the email automatically; when false it
+  // creates a draft for Matt to review on the dashboard.
+  autoSendBriefs: boolean("auto_send_briefs").notNull().default(false),
+  lastForecastBriefSentAt: timestamp("last_forecast_brief_sent_at"),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });
@@ -276,6 +362,50 @@ export const supplierItems = pgTable("supplier_items", {
 export const insertSupplierItemSchema = createInsertSchema(supplierItems).omit({ id: true });
 export type InsertSupplierItem = z.infer<typeof insertSupplierItemSchema>;
 export type SupplierItem = typeof supplierItems.$inferSelect;
+
+// ============================================================================
+// VENDOR COMMUNICATIONS
+// ============================================================================
+
+export const vendorCommunications = pgTable("vendor_communications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id, { onDelete: "cascade" }),
+  itemId: varchar("item_id").references(() => items.id, { onDelete: "set null" }),
+  reorderAlertId: varchar("reorder_alert_id").references(() => reorderAlerts.id, { onDelete: "set null" }),
+  purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+  communicationType: text("communication_type").notNull().default("REORDER_REQUEST"),
+  actionType: text("action_type").notNull().default("REORDER_REQUEST"),
+  channel: text("channel").notNull().default("EMAIL"),
+  direction: text("direction").notNull().default("OUTBOUND"),
+  recipientEmail: text("recipient_email"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  sentBy: text("sent_by").notNull().default("system"),
+  status: text("status").notNull().default("pending"),
+  expectedDate: timestamp("expected_date"),
+  notes: text("notes"),
+  providerMessageId: text("provider_message_id"),
+  metadata: jsonb("metadata"),
+  sentAt: timestamp("sent_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+  createdBy: varchar("created_by"),
+}, (table) => ({
+  supplierIdx: index("vendor_communications_supplier_id_idx").on(table.supplierId),
+  itemIdx: index("vendor_communications_item_id_idx").on(table.itemId),
+  reorderAlertIdx: index("vendor_communications_reorder_alert_id_idx").on(table.reorderAlertId),
+  statusIdx: index("vendor_communications_status_idx").on(table.status),
+  sentAtIdx: index("vendor_communications_sent_at_idx").on(table.sentAt),
+  createdAtIdx: index("vendor_communications_created_at_idx").on(table.createdAt),
+}));
+
+export const insertVendorCommunicationSchema = createInsertSchema(vendorCommunications).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertVendorCommunication = z.infer<typeof insertVendorCommunicationSchema>;
+export type VendorCommunication = typeof vendorCommunications.$inferSelect;
 
 // ============================================================================
 // PURCHASE ORDERS (Full PO System - This App is System of Record)
@@ -388,6 +518,37 @@ export const purchaseOrders = pgTable("purchase_orders", {
   
   // AI Auto-Draft flag
   isAutoDraft: boolean("is_auto_draft").notNull().default(false), // true = created by AI system
+
+  // In-Transit / build-progress state for FX POs (parallel to `status`,
+  // which tracks the procurement lifecycle DRAFT→SENT→RECEIVED). Values:
+  // 'ordered' | 'confirmed' | 'in_production' | 'shipped' | 'received'.
+  // Transitions on FX POs (supplierId='1') auto-update the linked finished
+  // products' fx_in_process_qty — see PATCH /api/purchase-orders/:id/po-status.
+  poStatus: text("po_status").notNull().default('ordered'),
+
+  // FX confirmation fields. confirmed_qty is what FX agreed to build (often
+  // less than ordered if they're capacity-constrained). expected_completion_
+  // date is the FX build completion date (distinct from expected_date which
+  // is the delivery ETA).
+  confirmedQty: integer("confirmed_qty"),
+  expectedCompletionDate: timestamp("expected_completion_date"),
+
+  // ── Order-logging + receive-accuracy fields ─────────────────────────
+  // expected_qty / expected_delivery are recorded on PO creation; the
+  // actual_* counterparts are written on quick-receive. accuracy_score
+  // and delivery_variance_days are derived on receive so reliability
+  // queries don't have to recompute. entry_source carries provenance
+  // for the Incoming page badges; invoice_total is the operator-typed
+  // invoice grand total which we trust over line-sum for accounting.
+  expectedQty: integer("expected_qty"),
+  actualQty: integer("actual_qty"),
+  expectedDelivery: date("expected_delivery"),
+  actualDelivery: date("actual_delivery"),
+  accuracyScore: real("accuracy_score"),
+  deliveryVarianceDays: integer("delivery_variance_days"),
+  entrySource: text("entry_source").notNull().default('manual'),
+  invoiceImageUrl: text("invoice_image_url"),
+  invoiceTotal: real("invoice_total"),
 }, (table) => ({
   statusIdx: index("purchase_orders_status_idx").on(table.status),
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),
@@ -747,6 +908,43 @@ export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSche
 export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
 
 // ============================================================================
+// SKU MAPPINGS (External SKU → Canonical SKU)
+// ============================================================================
+// Shopify, Amazon, etc. sometimes ship orders under a different SKU than what
+// our items table calls them. Examples:
+//   • Shopify "SBR-Classic1.0"  → our "SBR-PUSH-1.0"
+//   • "SKU: 700433684258" prefix has to be stripped before matching
+// We store the alias here so webhook handlers + the backfill endpoint can
+// resolve external SKUs to a canonical SKU before looking up the item.
+
+export const skuMappings = pgTable("sku_mappings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  externalSku: text("external_sku").notNull(),
+  canonicalSku: text("canonical_sku").notNull(),
+  source: text("source").notNull(), // 'shopify' | 'amazon' | 'windsor' | 'manual'
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  // Each (external_sku, source) pair must be unique so we don't end up with
+  // ambiguous mappings (one external SKU resolving to two different canonical
+  // SKUs from the same source).
+  externalSkuSourceIdx: uniqueIndex("sku_mappings_external_source_idx").on(
+    table.externalSku,
+    table.source,
+  ),
+  canonicalSkuIdx: index("sku_mappings_canonical_sku_idx").on(table.canonicalSku),
+}));
+
+export const insertSkuMappingSchema = createInsertSchema(skuMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertSkuMapping = z.infer<typeof insertSkuMappingSchema>;
+export type SkuMapping = typeof skuMappings.$inferSelect;
+
+// ============================================================================
 // BARCODES
 // ============================================================================
 
@@ -828,8 +1026,22 @@ export const inventoryTransactions = pgTable("inventory_transactions", {
   type: text("type").notNull(), // 'RECEIVE', 'SHIP', 'TRANSFER_IN', 'TRANSFER_OUT', 'PRODUCE', 'ADJUST'
   location: text("location").notNull(), // 'HILDALE', 'PIVOT', or 'N/A' for raw items
   quantity: integer("quantity").notNull(), // Positive number (direction determined by type)
+  // Optional supplier link — populated by /receive-stock when Clarence picks
+  // a supplier; null when the source isn't tracked (skipped or non-supplier event).
+  supplierId: varchar("supplier_id").references(() => suppliers.id),
+  // Optional reason code for write-offs etc. ('Damaged' | 'Defective' | 'Lost' |
+  // 'Scrap' | 'Other' for type='WRITEOFF'). Null for other transaction types.
+  reason: text("reason"),
+  // Optional supplier-provided lot/batch number captured at receive time.
+  // Propagated from inventory_lots so consumption rows can show provenance
+  // without joining back to the lots table.
+  lotNumber: text("lot_number"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   createdBy: text("created_by"), // User ID or system identifier
+  // Snapshot of the user's display name (typically email) at write time so
+  // the audit trail still reads cleanly if the underlying user is later
+  // renamed or deleted. Nullable for legacy rows + system-driven events.
+  createdByName: text("created_by_name"),
   notes: text("notes"), // Optional reason/description
 }, (table) => ({
   itemIdIdx: index("inventory_transactions_item_id_idx").on(table.itemId),
@@ -842,6 +1054,74 @@ export const insertInventoryTransactionSchema = createInsertSchema(inventoryTran
 });
 export type InsertInventoryTransaction = z.infer<typeof insertInventoryTransactionSchema>;
 export type InventoryTransaction = typeof inventoryTransactions.$inferSelect;
+
+// ============================================================================
+// LOT / BATCH TRACEABILITY
+// ============================================================================
+// One row per receive event that carries a supplier-provided lot number.
+// remaining_qty drains FIFO as BOM_CONSUMPTION events draw from the lot;
+// the per-draw history lives in lot_consumption_events so a recall query
+// can walk lot → consumption events → production_logs → finished products.
+
+export const inventoryLots = pgTable("inventory_lots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  lotNumber: text("lot_number").notNull(),
+  originalQty: integer("original_qty").notNull(),
+  remainingQty: integer("remaining_qty").notNull(),
+  receivedAt: timestamp("received_at").notNull().default(sql`now()`),
+  // Optional pointer back to the receive transaction that created this lot.
+  sourceTransactionId: varchar("source_transaction_id").references(() => inventoryTransactions.id),
+  supplierId: varchar("supplier_id").references(() => suppliers.id),
+  notes: text("notes"),
+}, (table) => ({
+  itemIdIdx: index("inventory_lots_item_id_idx").on(table.itemId),
+  receivedAtIdx: index("inventory_lots_received_at_idx").on(table.receivedAt),
+}));
+
+export const insertInventoryLotSchema = createInsertSchema(inventoryLots).omit({ id: true, receivedAt: true });
+export type InsertInventoryLot = z.infer<typeof insertInventoryLotSchema>;
+export type InventoryLot = typeof inventoryLots.$inferSelect;
+
+// One row per (lot drawn from, build event that consumed). A single
+// production_logs row can produce multiple events when the FIFO draw
+// spans more than one open lot.
+export const lotConsumptionEvents = pgTable("lot_consumption_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  lotId: varchar("lot_id").notNull().references(() => inventoryLots.id),
+  productionLogId: varchar("production_log_id").references(() => productionLogs.id),
+  qtyDrawn: integer("qty_drawn").notNull(),
+  consumedAt: timestamp("consumed_at").notNull().default(sql`now()`),
+}, (table) => ({
+  lotIdIdx: index("lot_consumption_events_lot_id_idx").on(table.lotId),
+  productionLogIdIdx: index("lot_consumption_events_production_log_id_idx").on(table.productionLogId),
+}));
+
+export const insertLotConsumptionEventSchema = createInsertSchema(lotConsumptionEvents).omit({ id: true, consumedAt: true });
+export type InsertLotConsumptionEvent = z.infer<typeof insertLotConsumptionEventSchema>;
+export type LotConsumptionEvent = typeof lotConsumptionEvents.$inferSelect;
+
+// One row per "your backorder is unblocked" notice we built for a customer.
+// Idempotency key is (salesOrderId, itemId) — once we've told them their
+// product is back in stock once, we don't spam them again. channel records
+// whether SendGrid actually sent ('EMAIL_SENT'), failed ('EMAIL_FAILED'),
+// or we only logged the payload because send wasn't enabled ('EMAIL_LOG').
+export const backorderNotices = pgTable("backorder_notices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  salesOrderId: varchar("sales_order_id").notNull(),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  poId: varchar("po_id"),
+  channel: text("channel").notNull(), // EMAIL_SENT | EMAIL_FAILED | EMAIL_LOG
+  payloadJson: jsonb("payload_json"),
+  sentAt: timestamp("sent_at").notNull().default(sql`now()`),
+}, (table) => ({
+  salesOrderIdIdx: index("backorder_notices_sales_order_id_idx").on(table.salesOrderId),
+  uniqOrderItem: uniqueIndex("backorder_notices_order_item_unique_idx").on(table.salesOrderId, table.itemId),
+}));
+
+export const insertBackorderNoticeSchema = createInsertSchema(backorderNotices).omit({ id: true, sentAt: true });
+export type InsertBackorderNotice = z.infer<typeof insertBackorderNoticeSchema>;
+export type BackorderNotice = typeof backorderNotices.$inferSelect;
 
 // ============================================================================
 // AI RECOMMENDATIONS (Decision Engine Inventory Recommendations)
@@ -1579,6 +1859,7 @@ export type FulfillmentSource = typeof FulfillmentSource[keyof typeof Fulfillmen
 export const salesOrders = pgTable("sales_orders", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   externalOrderId: text("external_order_id"), // Shopify/Amazon/etc order ID
+  orderName: text("order_name"), // Customer-facing order name (e.g., "#15020"). From Shopify payload.name. Not indexed — lookup is by externalOrderId.
   externalCustomerId: text("external_customer_id"), // Customer ID from external system
   channel: text("channel").notNull(), // 'SHOPIFY' | 'AMAZON' | 'GHL' | 'DIRECT' | 'OTHER'
   customerName: text("customer_name").notNull(),
@@ -1622,7 +1903,11 @@ export const salesOrders = pgTable("sales_orders", {
   // Live vs History tracking
   isHistorical: boolean("is_historical").notNull().default(false), // true = in History tab
   archivedAt: timestamp("archived_at"), // When record moved to History
-  
+
+  // Customer delay notifications (B-003): set when Sammie sends a delay notice from In-House Shipping
+  delayNotificationSentAt: timestamp("delay_notification_sent_at"),
+  delayNotificationCount: integer("delay_notification_count").notNull().default(0),
+
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -2855,3 +3140,41 @@ export const copyRoots = pgTable("copy_roots", {
 export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: true });
 export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
+
+// ============================================================================
+// REORDER ALERTS
+// ============================================================================
+
+export const reorderAlerts = pgTable("reorder_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sku: text("sku").notNull(),
+  itemId: varchar("item_id").notNull().references(() => items.id),
+  currentStock: integer("current_stock").notNull().default(0),
+  reorderPoint: integer("reorder_point").notNull().default(0),
+  suggestedOrderQty: integer("suggested_order_qty"),
+  supplierName: text("supplier_name"),
+  status: text("status").notNull().default("open"), // legacy field retained for migration safety
+  triggeredAt: timestamp("triggered_at").notNull().default(sql`now()`),
+  acknowledgedAt: timestamp("acknowledged_at"),
+  supplierId: varchar("supplier_id").notNull().references(() => suppliers.id),
+  purchaseOrderId: varchar("purchase_order_id").references(() => purchaseOrders.id, { onDelete: "set null" }),
+  daysLeftAtAlert: numeric("days_left_at_alert", { precision: 10, scale: 2 }).notNull(),
+  recommendedQty: integer("recommended_qty").notNull(),
+  alertStatus: text("alert_status").notNull().default("pending"), // pending | sent | acknowledged | dismissed | received | failed
+  emailSentAt: timestamp("email_sent_at"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
+}, (table) => ({
+  itemIdx: index("reorder_alerts_item_id_idx").on(table.itemId),
+  supplierIdx: index("reorder_alerts_supplier_id_idx").on(table.supplierId),
+  statusIdx: index("reorder_alerts_status_idx").on(table.alertStatus),
+  createdAtIdx: index("reorder_alerts_created_at_idx").on(table.createdAt),
+}));
+
+export const insertReorderAlertSchema = createInsertSchema(reorderAlerts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertReorderAlert = z.infer<typeof insertReorderAlertSchema>;
+export type ReorderAlert = typeof reorderAlerts.$inferSelect;

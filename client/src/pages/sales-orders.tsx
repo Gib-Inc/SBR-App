@@ -63,6 +63,7 @@ import {
   Zap,
   Archive,
   RefreshCcw,
+  Undo2,
 } from "lucide-react";
 
 function GhlConversationIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -950,7 +951,18 @@ export default function SalesOrders() {
                       data-testid={`row-order-${order.id}`}
                     >
                       <td className="px-2 align-middle font-mono text-sm whitespace-nowrap" data-testid={`text-order-id-${order.id}`}>
-                        {order.externalOrderId || order.id.slice(0, 8)}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>{order.orderName || order.externalOrderId || order.id.slice(0, 8)}</span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="text-xs space-y-0.5">
+                              {order.orderName && <div>Name: {order.orderName}</div>}
+                              {order.externalOrderId && <div>GID: {order.externalOrderId}</div>}
+                              <div>ID: {order.id.slice(0, 8)}</div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
                       </td>
                       <td className="px-2 align-middle whitespace-nowrap">
                         <Badge 
@@ -1013,6 +1025,28 @@ export default function SalesOrders() {
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>Open in Shopify</TooltipContent>
+                            </Tooltip>
+                          )}
+
+                          {/* Create Return Label in Shopify */}
+                          {order.sourceUrl && order.channel === 'SHOPIFY' && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // Append /return to the Shopify admin order URL
+                                    const returnUrl = order.sourceUrl!.replace(/\/?$/, '') + '/return';
+                                    window.open(returnUrl, "_blank", "noopener,noreferrer");
+                                  }}
+                                  data-testid={`button-return-label-${order.id}`}
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Create Return Label in Shopify</TooltipContent>
                             </Tooltip>
                           )}
 
@@ -1130,10 +1164,13 @@ export default function SalesOrders() {
                 {/* Order Metadata */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label className="text-xs text-muted-foreground">Order ID</Label>
+                    <Label className="text-xs text-muted-foreground">Order</Label>
                     <p className="font-mono text-sm" data-testid="text-detail-order-id">
-                      {selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
+                      {selectedOrder.orderName || selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
                     </p>
+                    {selectedOrder.orderName && selectedOrder.externalOrderId && (
+                      <p className="font-mono text-xs text-muted-foreground mt-0.5">GID: {selectedOrder.externalOrderId}</p>
+                    )}
                   </div>
                   <div>
                     <Label className="text-xs text-muted-foreground">Channel</Label>
@@ -1314,6 +1351,19 @@ export default function SalesOrders() {
                     )}
                   </Tooltip>
                 ))}
+                {selectedOrder.sourceUrl && selectedOrder.channel === 'SHOPIFY' && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const returnUrl = selectedOrder.sourceUrl!.replace(/\/?$/, '') + '/return';
+                      window.open(returnUrl, "_blank", "noopener,noreferrer");
+                    }}
+                    data-testid="button-shopify-return-label"
+                  >
+                    <Undo2 className="h-4 w-4 mr-2" />
+                    Return Label
+                  </Button>
+                )}
                 {canFulfill && (
                   <Button
                     variant="default"
@@ -1674,7 +1724,7 @@ export default function SalesOrders() {
                 <DialogHeader>
                   <DialogTitle>Create Return Request</DialogTitle>
                   <DialogDescription>
-                    Create a return request for order {selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
+                    Create a return request for order {selectedOrder.orderName || selectedOrder.externalOrderId || selectedOrder.id.slice(0, 8)}
                   </DialogDescription>
                 </DialogHeader>
 

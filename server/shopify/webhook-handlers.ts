@@ -114,7 +114,21 @@ export async function handleOrderCreated(
       if (payload.line_items) {
         for (const lineItem of payload.line_items) {
           const sku = lineItem.sku || `SHOPIFY-${lineItem.id}`;
-          const item = await storage.getItemBySku(sku);
+          // Try the raw SKU first (most orders match directly), then fall
+          // through to the sku_mappings table for legacy aliases like
+          // "SBR-Classic1.0" → "SBR-PUSH-1.0". Strip the "SKU: " prefix as
+          // a final fallback to match historical imports.
+          let item = await storage.getItemBySku(sku);
+          if (!item) {
+            const stripped = sku.replace(/^SKU:\s*/i, "");
+            if (stripped !== sku) item = await storage.getItemBySku(stripped);
+          }
+          if (!item) {
+            const canonical =
+              (await storage.findCanonicalSku(sku, "shopify")) ??
+              (await storage.findCanonicalSku(sku.replace(/^SKU:\s*/i, ""), "shopify"));
+            if (canonical) item = await storage.getItemBySku(canonical);
+          }
           const productName = lineItem.title || lineItem.name || sku;
           
           lineItemsWithProducts.push({
@@ -172,6 +186,7 @@ export async function handleOrderCreated(
       try {
         return await storage.createSalesOrder({
           externalOrderId: String(orderId),
+          orderName: payload.name || null,
           channel: 'SHOPIFY',
           customerName,
           customerEmail: payload.customer?.email || payload.email || null,
@@ -421,6 +436,7 @@ export async function handleOrderUpdated(
         await storage.updateSalesOrder(existingOrder.id, {
           status: newStatus,
           ...(deliveredAt && { deliveredAt }),
+          ...(payload.name && { orderName: payload.name }),
           rawPayload: payload,
         });
 
@@ -459,15 +475,43 @@ export async function handleOrderCancelled(
     const existingOrder = existingOrders[0];
     
     if (existingOrder) {
+      // Idempotency: if already in a terminal state we've already released stock.
+      // Re-running the restore would inflate availableForSaleQty.
+      const alreadyTerminal = existingOrder.status === 'CANCELLED' || existingOrder.status === 'REFUNDED';
+
+      if (!alreadyTerminal) {
+        // Release the stock that order-create allocated. Only qtyAllocated was
+        // ever decremented from availableForSaleQty (backordered units never were).
+        const inventoryMovement = new InventoryMovement(storage);
+        const lines = await storage.getSalesOrderLines(existingOrder.id);
+        for (const line of lines) {
+          const allocated = line.qtyAllocated ?? 0;
+          await storage.updateSalesOrderLine(line.id, { qtyAllocated: 0, backorderQty: 0 });
+          if (!line.productId || allocated <= 0) continue;
+          await inventoryMovement.apply({
+            eventType: 'SALES_ORDER_CANCELLED',
+            itemId: line.productId,
+            quantity: allocated,
+            location: 'PIVOT',
+            source: 'SHOPIFY',
+            orderId: existingOrder.id,
+            salesOrderLineId: line.id,
+            channel: 'SHOPIFY',
+            userId,
+            notes: `Shopify order ${orderName} cancelled: released ${allocated} allocated`,
+          });
+        }
+      }
+
       await storage.updateSalesOrder(existingOrder.id, {
         status: 'CANCELLED',
         rawPayload: payload,
       });
-      
-      console.log(`[Shopify Webhook] Marked order ${existingOrder.id} as CANCELLED`);
+
+      console.log(`[Shopify Webhook] Marked order ${existingOrder.id} as CANCELLED${alreadyTerminal ? ' (stock already released)' : ' and released allocated stock'}`);
       return { success: true, message: `Order ${orderName} cancelled` };
     }
-    
+
     return { success: true, message: `Order ${orderId} not found locally (already deleted or never imported)` };
   } catch (error: any) {
     console.error(`[Shopify Webhook] Error cancelling order ${orderName}:`, error);

@@ -16,7 +16,6 @@
  *  you add a "waste factor"), you fix it here once.
  */
 
-import { InventoryMovement } from "./inventory-movement";
 import type { IStorage } from "../storage";
 
 export interface BomLineItem {
@@ -43,74 +42,21 @@ export interface BomConsumptionResult {
  * @param userId      - Who triggered this (webhook system user or staff id)
  */
 export async function consumeBomForFulfilledOrder(
-  lineItems: BomLineItem[],
-  orderId: string,
-  channel: string,
-  storage: IStorage,
-  userId?: string
+  _lineItems: BomLineItem[],
+  _orderId: string,
+  _channel: string,
+  _storage: IStorage,
+  _userId?: string
 ): Promise<BomConsumptionResult> {
-  const inventoryMovement = new InventoryMovement(storage);
-  const result: BomConsumptionResult = {
-    componentsSubtracted: 0,
-    warnings: [],
-    errors: [],
-  };
-
-  for (const lineItem of lineItems) {
-    const { sku, qtyFulfilled } = lineItem;
-
-    if (!sku) {
-      result.warnings.push(`Line item has no SKU — skipped BOM subtraction`);
-      continue;
-    }
-
-    if (qtyFulfilled <= 0) continue;
-
-    // Resolve product — try channel-specific SKU first, fall back to house SKU
-    let product = await storage.findProductByShopifySku(sku).catch(() => null);
-    if (!product) {
-      product = await storage.getItemBySku(sku).catch(() => null);
-    }
-
-    if (!product) {
-      result.warnings.push(`SKU "${sku}" not found in database — skipped BOM subtraction`);
-      continue;
-    }
-
-    // Only finished products have BOMs — skip components/accessories
-    if (product.type !== "finished_product") continue;
-
-    const bom = await storage.getBillOfMaterialsByProductId(product.id);
-    if (!bom || bom.length === 0) {
-      result.warnings.push(`No BOM defined for "${sku}" (${product.name}) — raw materials NOT subtracted`);
-      continue;
-    }
-
-    // Subtract each BOM component × qty fulfilled
-    for (const bomEntry of bom) {
-      const requiredQty = bomEntry.quantityRequired * qtyFulfilled;
-
-      const movementResult = await inventoryMovement.apply({
-        eventType: "BOM_CONSUMPTION",
-        itemId: bomEntry.componentId,
-        quantity: requiredQty,
-        location: "N/A",
-        source: channel.toUpperCase() as any,
-        orderId,
-        channel: channel.toLowerCase(),
-        userId,
-        notes: `BOM consumption: ${requiredQty} units consumed for ${qtyFulfilled}× ${sku} (Order ${orderId}) [${channel}]`,
-      });
-
-      if (movementResult.success) {
-        result.componentsSubtracted++;
-      } else {
-        result.errors.push(
-          `Failed to subtract component ${movementResult.sku || bomEntry.componentId} for ${sku}: ${movementResult.error}`
-        );
-      }
-    }
-  }
-
-  return result;
+  // C3 FIX — BOM is consumed at PRODUCTION time only (Production screen → "built"),
+  // NOT at fulfillment. SBR builds-to-stock: raw materials are drawn when the
+  // finished good is built; shipping that good later must NOT draw materials a
+  // second time. Doing both double-counts every component.
+  //
+  // This function is intentionally retained as a no-op so the existing call sites
+  // (Shopify orders/fulfilled, Amazon sync, manual fulfill) stay wired and keep
+  // their result-shape contract, while fulfillment-time consumption is disabled.
+  // If the operating model ever changes to build-to-order, re-enable a draw here
+  // behind an explicit guard rather than reverting wholesale.
+  return { componentsSubtracted: 0, warnings: [], errors: [] };
 }

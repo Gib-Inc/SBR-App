@@ -79,6 +79,7 @@ import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
 import { registerMarketingAnalyticsRoutes } from "./routes/marketing-analytics-api";
+import { registerMarketingAnalyticsCmoRoutes } from "./routes/marketing-analytics-cmo-api";
 import { runD1Pipeline, runSingleAgent } from "./services/zobot-pipeline";
 import { insertMarketingCampaignSchema, insertContentPipelineItemSchema } from "@shared/schema";
 import { MorningTrapService } from "./services/morning-trap-service";
@@ -453,6 +454,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   registerGhlAgentApiRoutes(app);
   registerMarketingAnalyticsRoutes(app);
+  registerMarketingAnalyticsCmoRoutes(app);
 
   // ============================================================================
   // AUTHENTICATION

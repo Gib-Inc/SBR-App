@@ -3141,6 +3141,21 @@ export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: tru
 export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
 
+// ── marketing_recommendations — Claude-generated CMO next-best-actions ──
+
+export const marketingRecommendations = pgTable("marketing_recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  generatedAt: timestamp("generated_at").notNull().default(sql`now()`),
+  recommendations: jsonb("recommendations"), // ranked array: [{rank, title, rationale, expectedImpact, action, owner}]
+  inputSnapshot: jsonb("input_snapshot"),    // data fed to Claude, for audit
+  model: text("model"),
+  createdBy: text("created_by"),
+});
+
+export const insertMarketingRecommendationSchema = createInsertSchema(marketingRecommendations).omit({ id: true, generatedAt: true });
+export type InsertMarketingRecommendation = z.infer<typeof insertMarketingRecommendationSchema>;
+export type MarketingRecommendation = typeof marketingRecommendations.$inferSelect;
+
 // ============================================================================
 // REORDER ALERTS
 // ============================================================================

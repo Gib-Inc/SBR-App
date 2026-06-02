@@ -1,42 +1,33 @@
 /**
- * Seed historical monthly sales from the Gross Sales spreadsheet.
- * Data: Jan 2022 through May 2026.
- * Run once via: POST /api/marketing-analytics/cmo/seed-historical
+ * Seed historical P&L data from QuickBooks export.
+ * Full monthly financials: Jan 2022 through May 2026.
  */
 
 import { sql } from 'drizzle-orm';
+import { HISTORICAL_PL_DATA } from './historical-pl-data';
 
 type DB = any;
-
-const HISTORICAL_DATA = [
-  // [year, jan, feb, mar, apr, may, jun, jul, aug, sep, oct, nov, dec]
-  [2022, 7127.28, 5168.31, 4498.06, 193882.93, 77271.09, 66324.94, 34523.27, 64207.37, 65373.90, 116400.64, 58154.06, 46211.04],
-  [2023, 69558.27, 63918.30, 144980.36, 110487.43, 109015.84, 83565.85, 85641.28, 92961.16, 107541.26, 122233.03, 118954.85, 71213.24],
-  [2024, 58556.54, 130005.47, 168159.87, 158778.33, 124794.87, 133868.85, 203886.44, 212893.98, 213974.05, 371959.84, 205646.43, 169983.32],
-  [2025, 101576.56, 172120.64, 366406.42, 229073.16, 181794.55, 158175.62, 232394.40, 351526.14, 314993.43, 529529.50, 419746.54, 198756.21],
-  [2026, 154770.13, 283151.00, 441269.00, 280979.00, 163474.64, null, null, null, null, null, null, null],
-];
+const rows = (r: any) => r.rows || r;
 
 export async function seedHistoricalSales(db: DB): Promise<{ inserted: number; skipped: number }> {
   let inserted = 0;
   let skipped = 0;
 
-  for (const row of HISTORICAL_DATA) {
-    const year = row[0] as number;
-    for (let m = 1; m <= 12; m++) {
-      const revenue = row[m] as number | null;
-      if (revenue == null) continue;
-
-      try {
-        await db.execute(sql`
-          INSERT INTO historical_monthly_sales (year, month, revenue, source)
-          VALUES (${year}, ${m}, ${revenue}, 'spreadsheet')
-          ON CONFLICT (year, month) DO UPDATE SET revenue = ${revenue}, source = 'spreadsheet'
-        `);
-        inserted++;
-      } catch (e) {
-        skipped++;
-      }
+  for (const row of HISTORICAL_PL_DATA) {
+    try {
+      const grossMarginPct = row.grossSales > 0 ? (row.grossProfit / row.grossSales) * 100 : 0;
+      await db.execute(sql`
+        INSERT INTO historical_monthly_sales (year, month, revenue, returns, total_income, cogs, gross_profit, ad_spend, total_expenses, net_income, gross_margin_pct, source)
+        VALUES (${row.year}, ${row.month}, ${row.grossSales}, ${row.returns}, ${row.totalIncome}, ${row.cogs}, ${row.grossProfit}, ${row.adSpend}, ${row.totalExpenses}, ${row.netIncome}, ${grossMarginPct}, 'quickbooks')
+        ON CONFLICT (year, month) DO UPDATE SET
+          revenue = ${row.grossSales}, returns = ${row.returns}, total_income = ${row.totalIncome},
+          cogs = ${row.cogs}, gross_profit = ${row.grossProfit}, ad_spend = ${row.adSpend},
+          total_expenses = ${row.totalExpenses}, net_income = ${row.netIncome},
+          gross_margin_pct = ${grossMarginPct}, source = 'quickbooks'
+      `);
+      inserted++;
+    } catch (e) {
+      skipped++;
     }
   }
 
@@ -44,22 +35,17 @@ export async function seedHistoricalSales(db: DB): Promise<{ inserted: number; s
 }
 
 /**
- * Query that merges historical spreadsheet data with live Shopify data.
- * Historical takes precedence for completed months.
- * Current month uses live Shopify if available.
+ * Merged query: historical P&L + live Shopify + ad_metrics_daily
  */
 export async function queryFullYearComparison(db: DB) {
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth() + 1;
-
-  // Get historical data
   const historical = await db.execute(sql`
-    SELECT year, month, revenue::real as revenue, source
+    SELECT year, month, revenue::real, returns::real, total_income::real,
+           cogs::real, gross_profit::real, ad_spend::real,
+           total_expenses::real, net_income::real, gross_margin_pct::real, source
     FROM historical_monthly_sales
     ORDER BY year, month
   `);
 
-  // Get live Shopify data for current year (overrides historical for current month)
   const live = await db.execute(sql`
     SELECT EXTRACT(YEAR FROM order_date)::int as year,
            EXTRACT(MONTH FROM order_date)::int as month,
@@ -67,55 +53,47 @@ export async function queryFullYearComparison(db: DB) {
            COUNT(*)::int as orders,
            COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as customers
     FROM sales_orders
-    WHERE EXTRACT(YEAR FROM order_date) >= ${currentYear - 2}
-      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    WHERE status NOT IN ('CANCELLED', 'REFUNDED')
     GROUP BY EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date)
-    ORDER BY year, month
   `);
 
-  const rows = (r: any) => r.rows || r;
-  const histRows = rows(historical) as any[];
-  const liveRows = rows(live) as any[];
-
-  // Build merged dataset: historical base, live overlay for recent data
+  const histRows = rows(historical);
+  const liveRows = rows(live);
   const merged = new Map<string, any>();
 
   for (const h of histRows) {
-    const key = `${h.year}-${h.month}`;
-    merged.set(key, { year: h.year, month: h.month, revenue: h.revenue, source: h.source, orders: null, customers: null });
+    merged.set(`${h.year}-${h.month}`, { ...h, orders: 0, customers: 0 });
   }
-
   for (const l of liveRows) {
     const key = `${l.year}-${l.month}`;
     const existing = merged.get(key);
-    if (!existing || l.year === currentYear) {
-      // Live data overrides for current year, supplements for past years
-      merged.set(key, {
-        year: l.year, month: l.month,
-        revenue: l.year === currentYear ? l.revenue : (existing?.revenue || l.revenue),
-        source: l.year === currentYear ? 'shopify' : (existing?.source || 'shopify'),
-        orders: l.orders,
-        customers: l.customers,
-      });
+    if (existing) {
+      existing.orders = l.orders;
+      existing.customers = l.customers;
+    } else {
+      merged.set(key, { year: l.year, month: l.month, revenue: l.revenue, orders: l.orders, customers: l.customers, source: 'shopify' });
     }
   }
 
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const allData = Array.from(merged.values()).sort((a, b) => a.year * 100 + a.month - b.year * 100 - b.month);
   const years = [...new Set(allData.map(d => d.year))].sort();
 
-  // Annual totals
   const annual = years.map(y => {
-    const yearData = allData.filter(d => d.year === y);
+    const yData = allData.filter(d => d.year === y);
     return {
       year: y,
-      revenue: yearData.reduce((s, d) => s + (d.revenue || 0), 0),
-      orders: yearData.reduce((s, d) => s + (d.orders || 0), 0),
-      customers: yearData.reduce((s, d) => s + (d.customers || 0), 0),
-      monthsReported: yearData.length,
+      revenue: yData.reduce((s, d) => s + (d.revenue || 0), 0),
+      cogs: yData.reduce((s, d) => s + (d.cogs || 0), 0),
+      grossProfit: yData.reduce((s, d) => s + (d.gross_profit || 0), 0),
+      adSpend: yData.reduce((s, d) => s + (d.ad_spend || 0), 0),
+      totalExpenses: yData.reduce((s, d) => s + (d.total_expenses || 0), 0),
+      netIncome: yData.reduce((s, d) => s + (d.net_income || 0), 0),
+      orders: yData.reduce((s, d) => s + (d.orders || 0), 0),
+      customers: yData.reduce((s, d) => s + (d.customers || 0), 0),
+      monthsReported: yData.length,
     };
   });
-
-  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   return {
     years,
@@ -125,149 +103,27 @@ export async function queryFullYearComparison(db: DB) {
 }
 
 /**
- * Query that combines historical revenue with ad spend data
- * to produce a full CMO performance history.
- * Revenue: historical_monthly_sales (spreadsheet) merged with sales_orders (live)
- * Ad spend: ad_metrics_daily (auto-populates once platforms connected)
+ * Full CMO history: revenue + COGS + ad spend + ROAS + CAC + margin
+ * All from historical P&L data (no ad platform API needed)
  */
 export async function queryFullCMOHistory(db: DB) {
-  const rows = (r: any) => r.rows || r;
+  const data = await queryFullYearComparison(db);
 
-  // Historical + live revenue (same merge logic as queryFullYearComparison)
-  const historical = await db.execute(sql`
-    SELECT year, month, revenue::real as revenue FROM historical_monthly_sales ORDER BY year, month
-  `);
-  const liveRevenue = await db.execute(sql`
-    SELECT EXTRACT(YEAR FROM order_date)::int as year,
-           EXTRACT(MONTH FROM order_date)::int as month,
-           COALESCE(SUM(total_amount), 0)::real as revenue,
-           COUNT(*)::int as orders,
-           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as customers,
-           COALESCE(AVG(total_amount), 0)::real as aov
-    FROM sales_orders
-    WHERE status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date)
-  `);
+  const monthly = data.monthly.map((m: any) => ({
+    ...m,
+    grossMarginPct: m.revenue > 0 ? ((m.gross_profit || 0) / m.revenue * 100) : null,
+    adSpendPct: m.revenue > 0 ? ((m.ad_spend || 0) / m.revenue * 100) : null,
+    roas: m.ad_spend > 0 ? m.revenue / m.ad_spend : null,
+    cac: m.customers > 0 && m.ad_spend > 0 ? m.ad_spend / m.customers : null,
+  }));
 
-  // Ad spend by platform by month (backfills as platforms connect)
-  const adSpend = await db.execute(sql`
-    SELECT EXTRACT(YEAR FROM date)::int as year,
-           EXTRACT(MONTH FROM date)::int as month,
-           platform,
-           SUM(spend)::real as spend,
-           SUM(revenue)::real as ad_revenue,
-           SUM(conversions)::int as conversions,
-           SUM(clicks)::int as clicks,
-           SUM(impressions)::int as impressions
-    FROM ad_metrics_daily
-    GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date), platform
-    ORDER BY year, month, platform
-  `);
+  const annual = data.annual.map((a: any) => ({
+    ...a,
+    grossMarginPct: a.revenue > 0 ? (a.grossProfit / a.revenue * 100) : null,
+    adSpendPct: a.revenue > 0 ? (a.adSpend / a.revenue * 100) : null,
+    roas: a.adSpend > 0 ? a.revenue / a.adSpend : null,
+    cac: a.customers > 0 && a.adSpend > 0 ? a.adSpend / a.customers : null,
+  }));
 
-  // Build merged monthly dataset
-  const revenueMap = new Map<string, any>();
-  for (const h of rows(historical)) {
-    revenueMap.set(`${h.year}-${h.month}`, { year: h.year, month: h.month, revenue: h.revenue, orders: 0, customers: 0, aov: 0 });
-  }
-  for (const l of rows(liveRevenue)) {
-    const key = `${l.year}-${l.month}`;
-    const existing = revenueMap.get(key);
-    revenueMap.set(key, {
-      year: l.year, month: l.month,
-      revenue: existing ? Math.max(existing.revenue, l.revenue) : l.revenue,
-      orders: l.orders, customers: l.customers, aov: l.aov,
-    });
-  }
-
-  // Group ad spend by month (all platforms combined) and by platform
-  const adByMonth = new Map<string, { totalSpend: number; totalAdRevenue: number; totalConversions: number; platforms: any[] }>();
-  for (const a of rows(adSpend)) {
-    const key = `${a.year}-${a.month}`;
-    if (!adByMonth.has(key)) {
-      adByMonth.set(key, { totalSpend: 0, totalAdRevenue: 0, totalConversions: 0, platforms: [] });
-    }
-    const entry = adByMonth.get(key)!;
-    entry.totalSpend += a.spend;
-    entry.totalAdRevenue += a.ad_revenue;
-    entry.totalConversions += a.conversions;
-    entry.platforms.push({
-      platform: a.platform,
-      spend: a.spend,
-      adRevenue: a.ad_revenue,
-      conversions: a.conversions,
-      clicks: a.clicks,
-      impressions: a.impressions,
-      roas: a.spend > 0 ? a.ad_revenue / a.spend : null,
-      cpa: a.conversions > 0 ? a.spend / a.conversions : null,
-    });
-  }
-
-  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-  const allMonths = Array.from(revenueMap.values()).sort((a, b) => a.year * 100 + a.month - b.year * 100 - b.month);
-
-  const monthly = allMonths.map(m => {
-    const key = `${m.year}-${m.month}`;
-    const ad = adByMonth.get(key);
-    return {
-      year: m.year,
-      month: m.month,
-      monthName: MONTH_NAMES[m.month],
-      revenue: m.revenue,
-      orders: m.orders,
-      customers: m.customers,
-      aov: m.aov,
-      adSpend: ad?.totalSpend || 0,
-      adRevenue: ad?.totalAdRevenue || 0,
-      conversions: ad?.totalConversions || 0,
-      blendedRoas: ad && ad.totalSpend > 0 ? m.revenue / ad.totalSpend : null,
-      adRoas: ad && ad.totalSpend > 0 ? ad.totalAdRevenue / ad.totalSpend : null,
-      cac: m.customers > 0 && ad ? ad.totalSpend / m.customers : null,
-      spendPercent: m.revenue > 0 && ad ? (ad.totalSpend / m.revenue) * 100 : null,
-      platforms: ad?.platforms || [],
-    };
-  });
-
-  // Annual rollups
-  const years = [...new Set(monthly.map(m => m.year))].sort();
-  const annual = years.map(y => {
-    const yData = monthly.filter(m => m.year === y);
-    const totalRevenue = yData.reduce((s, m) => s + m.revenue, 0);
-    const totalSpend = yData.reduce((s, m) => s + m.adSpend, 0);
-    const totalCustomers = yData.reduce((s, m) => s + m.customers, 0);
-    const totalOrders = yData.reduce((s, m) => s + m.orders, 0);
-
-    // Platform annual breakdown
-    const platformMap = new Map<string, { spend: number; adRevenue: number; conversions: number }>();
-    for (const m of yData) {
-      for (const p of m.platforms) {
-        const existing = platformMap.get(p.platform) || { spend: 0, adRevenue: 0, conversions: 0 };
-        existing.spend += p.spend;
-        existing.adRevenue += p.adRevenue;
-        existing.conversions += p.conversions;
-        platformMap.set(p.platform, existing);
-      }
-    }
-
-    return {
-      year: y,
-      revenue: totalRevenue,
-      adSpend: totalSpend,
-      orders: totalOrders,
-      customers: totalCustomers,
-      blendedRoas: totalSpend > 0 ? totalRevenue / totalSpend : null,
-      cac: totalCustomers > 0 ? totalSpend / totalCustomers : null,
-      spendPercent: totalRevenue > 0 ? (totalSpend / totalRevenue) * 100 : null,
-      monthsReported: yData.length,
-      platforms: Array.from(platformMap.entries()).map(([platform, data]) => ({
-        platform,
-        spend: data.spend,
-        adRevenue: data.adRevenue,
-        conversions: data.conversions,
-        roas: data.spend > 0 ? data.adRevenue / data.spend : null,
-      })),
-    };
-  });
-
-  return { years, monthly, annual };
+  return { years: data.years, monthly, annual };
 }

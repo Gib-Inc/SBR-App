@@ -3148,7 +3148,15 @@ export const historicalMonthlySales = pgTable("historical_monthly_sales", {
   year: integer("year").notNull(),
   month: integer("month").notNull(), // 1-12
   revenue: real("revenue").notNull().default(0),
-  source: text("source").notNull().default("spreadsheet"), // 'spreadsheet' | 'shopify' | 'manual'
+  returns: real("returns").default(0),
+  totalIncome: real("total_income").default(0),
+  cogs: real("cogs").default(0),
+  grossProfit: real("gross_profit").default(0),
+  adSpend: real("ad_spend").default(0),
+  totalExpenses: real("total_expenses").default(0),
+  netIncome: real("net_income").default(0),
+  grossMarginPct: real("gross_margin_pct").default(0),
+  source: text("source").notNull().default("spreadsheet"),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 }, (table) => ({
   yearMonthIdx: uniqueIndex("historical_monthly_sales_year_month_idx").on(table.year, table.month),

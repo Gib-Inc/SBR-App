@@ -3141,6 +3141,19 @@ export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: tru
 export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
 
+// ── historical_monthly_sales — pre-app revenue data (imported from spreadsheet) ──
+
+export const historicalMonthlySales = pgTable("historical_monthly_sales", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  year: integer("year").notNull(),
+  month: integer("month").notNull(), // 1-12
+  revenue: real("revenue").notNull().default(0),
+  source: text("source").notNull().default("spreadsheet"), // 'spreadsheet' | 'shopify' | 'manual'
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  yearMonthIdx: uniqueIndex("historical_monthly_sales_year_month_idx").on(table.year, table.month),
+}));
+
 // ── marketing_recommendations — Claude-generated CMO next-best-actions ──
 
 export const marketingRecommendations = pgTable("marketing_recommendations", {

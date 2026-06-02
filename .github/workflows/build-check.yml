@@ -1,0 +1,39 @@
+name: Build Check
+
+# Runs the production build + tests on every push and PR to main, so a bad
+# commit shows a red X within ~1-2 minutes instead of silently failing the
+# Railway deploy. The three prod build breaks this week (lockfile drift, the
+# intuit-security syntax error, the app-sidebar "Unexpected const") would ALL
+# have been caught here: `npm ci` catches lockfile drift, `npm run build`
+# catches syntax/build errors.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node 20 (matches Railway's node:20 / npm 10)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # Clean install — fails if package-lock.json is out of sync with package.json
+      - name: Install
+        run: npm ci
+
+      # vite + esbuild build — this is the step that catches syntax/type breakage.
+      # The drizzle-kit push at the end is self-guarded (skips without DATABASE_URL).
+      - name: Build
+        run: npm run build
+
+      - name: Tests
+        run: npm test

@@ -363,3 +363,83 @@ export async function queryTopMetrics(db: DB) {
     mtdRevenue: m.revenue, mtdOrders: m.orders, aov: m.aov,
   };
 }
+
+// ── Monthly rollup queries ──
+
+export async function queryMonthlySales(db: DB, months: number = 12) {
+  const result = await db.execute(sql`
+    SELECT date_trunc('month', order_date)::date::text as month,
+           COALESCE(SUM(total_amount), 0)::real as revenue,
+           COUNT(*)::int as orders,
+           COALESCE(AVG(total_amount), 0)::real as aov,
+           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as unique_customers
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(months => ${months})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY date_trunc('month', order_date)
+    ORDER BY month
+  `);
+  return rows(result);
+}
+
+export async function queryMonthlyAdSpend(db: DB, months: number = 12) {
+  const result = await db.execute(sql`
+    SELECT date_trunc('month', date)::date::text as month,
+           platform,
+           SUM(spend)::real as spend,
+           SUM(revenue)::real as revenue,
+           SUM(conversions)::int as conversions,
+           SUM(clicks)::int as clicks,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
+           CASE WHEN SUM(conversions) > 0 THEN (SUM(spend) / SUM(conversions))::real ELSE NULL END as cpa
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(months => ${months})
+    GROUP BY date_trunc('month', date), platform
+    ORDER BY month, spend DESC
+  `);
+  return rows(result);
+}
+
+export async function queryMonthlyBlended(db: DB, months: number = 12) {
+  const sales = await db.execute(sql`
+    SELECT date_trunc('month', order_date)::date::text as month,
+           COALESCE(SUM(total_amount), 0)::real as total_revenue,
+           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as new_customers
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(months => ${months})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY date_trunc('month', order_date)
+    ORDER BY month
+  `);
+  const ads = await db.execute(sql`
+    SELECT date_trunc('month', date)::date::text as month,
+           SUM(spend)::real as total_spend,
+           SUM(revenue)::real as ad_revenue,
+           SUM(conversions)::int as total_conversions
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(months => ${months})
+    GROUP BY date_trunc('month', date)
+    ORDER BY month
+  `);
+
+  const salesMap = new Map((rows(sales) as any[]).map(r => [r.month, r]));
+  const adsMap = new Map((rows(ads) as any[]).map(r => [r.month, r]));
+  const allMonths = new Set([...salesMap.keys(), ...adsMap.keys()]);
+
+  return Array.from(allMonths).sort().map(month => {
+    const s = salesMap.get(month) || { total_revenue: 0, new_customers: 0 };
+    const a = adsMap.get(month) || { total_spend: 0, ad_revenue: 0, total_conversions: 0 };
+    return {
+      month,
+      totalRevenue: s.total_revenue,
+      adSpend: a.total_spend,
+      adRevenue: a.ad_revenue,
+      blendedRoas: a.total_spend > 0 ? s.total_revenue / a.total_spend : null,
+      adRoas: a.total_spend > 0 ? a.ad_revenue / a.total_spend : null,
+      cac: s.new_customers > 0 ? a.total_spend / s.new_customers : null,
+      newCustomers: s.new_customers,
+      conversions: a.total_conversions,
+      spendToRevenueRatio: s.total_revenue > 0 ? (a.total_spend / s.total_revenue * 100) : null,
+    };
+  });
+}

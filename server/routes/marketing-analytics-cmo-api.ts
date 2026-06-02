@@ -16,6 +16,7 @@ import {
   queryRevenueTarget, queryBreakevenRoas, queryChannelMatrix,
   queryCustomerSplit, queryGeographic, queryCreativeFatigue, queryWastedSpend,
   queryDailyRevenueSpark, queryProductMixTrend, queryRepeatPurchase, queryTopMetrics,
+  queryMonthlySales, queryMonthlyAdSpend, queryMonthlyBlended,
 } from './marketing-analytics-queries-v2';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
@@ -56,6 +57,9 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/product-mix', requireAuth, handle((req) => queryProductMixTrend(getDb(), parseDays(req)).then(products => ({ products }))));
   app.get('/api/marketing-analytics/cmo/repeat-purchase', requireAuth, handle((req) => queryRepeatPurchase(getDb(), parseDays(req)).then(cohorts => ({ cohorts }))));
   app.get('/api/marketing-analytics/cmo/top-metrics', requireAuth, handle(() => queryTopMetrics(getDb())));
+  app.get('/api/marketing-analytics/cmo/monthly-sales', requireAuth, handle(() => queryMonthlySales(getDb())));
+  app.get('/api/marketing-analytics/cmo/monthly-ad-spend', requireAuth, handle(() => queryMonthlyAdSpend(getDb())));
+  app.get('/api/marketing-analytics/cmo/monthly-blended', requireAuth, handle(() => queryMonthlyBlended(getDb())));
 
   // Next Best Action — cached latest recommendation
   app.get('/api/marketing-analytics/cmo/next-best-action', requireAuth, async (_req: Request, res: Response) => {

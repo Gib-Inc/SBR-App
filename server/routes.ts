@@ -78,6 +78,7 @@ import { checkReorderThresholds } from "./services/reorder-alert";
 import { ghlOpportunitiesService } from "./services/ghl-opportunities-service";
 import { shippoReturnsService } from "./services/shippo-returns-service";
 import { registerGhlAgentApiRoutes } from "./routes/ghl-agent-api";
+import { registerMarketingAnalyticsRoutes } from "./routes/marketing-analytics-api";
 import { runD1Pipeline, runSingleAgent } from "./services/zobot-pipeline";
 import { insertMarketingCampaignSchema, insertContentPipelineItemSchema } from "@shared/schema";
 import { MorningTrapService } from "./services/morning-trap-service";
@@ -451,6 +452,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // GHL AGENT API (External API for GoHighLevel Agent access)
   // ============================================================================
   registerGhlAgentApiRoutes(app);
+  registerMarketingAnalyticsRoutes(app);
 
   // ============================================================================
   // AUTHENTICATION

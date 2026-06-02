@@ -44,6 +44,7 @@ import LegalPrivacy from "@/pages/legal-privacy";
 import AcceptInvite from "@/pages/accept-invite";
 import ResetPassword from "@/pages/reset-password";
 import Marketing from "@/pages/marketing";
+import MarketingAnalytics from "@/pages/marketing-analytics";
 import Inventory from "@/pages/inventory";
 import RawMaterials from "@/pages/raw-materials";
 import CountInventory from "@/pages/count-inventory";
@@ -150,6 +151,7 @@ function AuthenticatedApp() {
                     <Route path="/returns" component={Returns} />
                     <Route path="/ai" component={AIAgent} />
                     <Route path="/marketing" component={Marketing} />
+                    <Route path="/marketing-analytics" component={MarketingAnalytics} />
                     <Route path="/inventory" component={Inventory} />
                     <Route path="/raw-materials" component={RawMaterials} />
                     <Route path="/count-inventory" component={CountInventory} />
@@ -196,5 +198,3 @@ export default function App() {
     </QueryClientProvider>
   );
 }
-// force rebuild Thu Apr  2 19:23:04 MDT 2026
-// force rebuild Thu Apr  2 19:23:40 MDT 2026

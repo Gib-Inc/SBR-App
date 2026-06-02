@@ -1,13 +1,5 @@
 /**
  * Intuit Compliance Security Configuration
- * 
- * This configuration file follows Intuit's strict security requirements:
- * - Encryption key loaded from separate config (not hardcoded)
- * - AES-256 encryption for OAuth tokens and realmID
- * - Strict caching and cookie policies
- * 
- * IMPORTANT: The QB_ENCRYPTION_KEY must be a 32-byte (256-bit) key
- * encoded as a 64-character hex string.
  */
 
 export interface IntuitSecurityConfig {
@@ -99,19 +91,19 @@ export function reloadEncryptionKey(): void {
 export function validateSecurityConfig(): { valid: boolean; warnings: string[]; errors: string[] } {
   const warnings: string[] = [];
   const errors: string[] = [];
-  
+
   if (!process.env.QB_ENCRYPTION_KEY) {
     warnings.push('QB_ENCRYPTION_KEY not set - using insecure fallback key');
   }
-  
+
   if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
     warnings.push('SESSION_SECRET should be at least 32 characters for production');
   }
-  
+
   if (intuitSecurityConfig.encryptionKey.equals(Buffer.alloc(32, 0))) {
     errors.push('Encryption key is using insecure fallback - set QB_ENCRYPTION_KEY in production');
   }
-  
+
   return {
     valid: errors.length === 0,
     warnings,

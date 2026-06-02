@@ -15,11 +15,6 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
-// ── Sidebar groups ──────────────────────────────────────────
-// Organized by workflow: Dashboard → Sales & Fulfillment → Supply Chain → Tools
-// Sales & Fulfillment = Sammie's daily workflow (orders in → ship → returns)
-// Supply Chain = sourcing, production, and product catalog
-
 const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Health",     url: "/health",      icon: Activity   },
@@ -52,6 +47,7 @@ const toolItems = [
   { title: "Log Order",  url: "/log-order",  icon: ClipboardEdit },
   { title: "SKU Mappings", url: "/sku-mappings", icon: Link2 },
   { title: "Marketing",  url: "/marketing",  icon: Megaphone },
+  { title: "Ad Analytics", url: "/marketing-analytics", icon: BarChart3 },
   { title: "AI Agent",   url: "/ai",         icon: Brain    },
   { title: "App Flow",   url: "/app-flow",   icon: Workflow },
 ];
@@ -59,7 +55,6 @@ const toolItems = [
 export function AppSidebar() {
   const [location] = useLocation();
 
-  // Live count of in-house orders waiting to ship (refreshes every 60s)
   const { data: inHouseData } = useQuery<{ summary: { total: number } }>({
     queryKey: ["/api/sales-orders/in-house"],
     refetchInterval: 60_000,
@@ -80,7 +75,6 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
       <SidebarContent>
-        {/* Helper that renders a group of sidebar links */}
         {[
           { label: "Dashboard",          items: dashboardItems    },
           { label: "Sales & Fulfillment", items: salesItems       },

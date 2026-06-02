@@ -5724,6 +5724,62 @@ TOTAL: $${subtotal.toFixed(2)}
     }
   });
 
+  // Aggregated, LIVE integration status for the App Flow page. Computes one
+  // live/partial/planned per service from the real configs + QuickBooks
+  // connection, so the App Flow badges reflect reality instead of hardcoded
+  // labels. (No secrets are returned — only a status string + short detail.)
+  app.get("/api/integrations/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const configs = await storage.getAllIntegrationConfigs(userId);
+      const byProvider: Record<string, any> = {};
+      for (const c of configs) byProvider[String(c.provider || "").toUpperCase()] = c;
+
+      // Generic config-based status: no config / not enabled -> planned;
+      // enabled + last sync SUCCESS -> live; enabled but failed/pending/never -> partial.
+      const fromConfig = (provider: string): { status: string; detail: string } => {
+        const c = byProvider[provider];
+        if (!c || !c.isEnabled) return { status: "planned", detail: "Not connected" };
+        if (c.lastSyncStatus === "SUCCESS") return { status: "live", detail: c.lastSyncMessage || "Connected and syncing" };
+        if (!c.lastSyncStatus) return { status: "partial", detail: "Configured, no sync yet" };
+        return { status: "partial", detail: c.lastSyncMessage || `Last sync: ${c.lastSyncStatus}` };
+      };
+
+      // QuickBooks uses its own credentials + OAuth connection check.
+      let quickbooks = { status: "planned", detail: "Not configured" };
+      try {
+        const { QuickBooksClient, isQuickBooksConfigured } = await import("./services/quickbooks-client");
+        if (isQuickBooksConfigured()) {
+          const qb = await new QuickBooksClient(storage, userId).getConnectionStatus();
+          quickbooks = qb?.isConnected
+            ? { status: "live", detail: "Connected to QuickBooks" }
+            : { status: "partial", detail: "Credentials set, not connected" };
+        }
+      } catch (e: any) {
+        quickbooks = { status: "partial", detail: "Credentials set, status check failed" };
+      }
+
+      // GoHighLevel additionally requires an API key + Location ID to be usable.
+      let gohighlevel = fromConfig("GOHIGHLEVEL");
+      const ghlCfg = byProvider["GOHIGHLEVEL"];
+      if (ghlCfg && (!ghlCfg.apiKey || !(ghlCfg.config as any)?.locationId)) {
+        gohighlevel = { status: "planned", detail: "Missing API key or Location ID" };
+      }
+
+      res.json({
+        shopify: fromConfig("SHOPIFY"),
+        extensiv: fromConfig("EXTENSIV"),
+        gohighlevel,
+        quickbooks,
+        shippo: fromConfig("SHIPPO"),
+        railway: { status: "live", detail: "Database reachable" },
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get integration status" });
+    }
+  });
+
   // Get specific integration config
   app.get("/api/integration-configs/:provider", requireAuth, async (req: Request, res: Response) => {
     try {

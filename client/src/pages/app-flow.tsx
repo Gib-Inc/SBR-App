@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useQuery } from "@tanstack/react-query";
 import {
   ShoppingCart, ArrowRight, Package, Users, Bell, Truck, FileText,
   ClipboardCheck, BarChart3, AlertTriangle, Mail, CheckCircle2,
@@ -112,13 +113,25 @@ const COLORS = {
 };
 
 export default function AppFlow() {
+  // Live integration status (overrides the corrected static fallbacks below).
+  const { data: liveStatus } = useQuery<Record<string, { status: "live" | "partial" | "planned"; detail?: string }>>({
+    queryKey: ["/api/integrations/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/integrations/status", { credentials: "include" });
+      if (!res.ok) throw new Error("status fetch failed");
+      return res.json();
+    },
+  });
+  const st = (key: string, fallback: "live" | "partial" | "planned"): "live" | "partial" | "planned" =>
+    (liveStatus?.[key]?.status as "live" | "partial" | "planned") ?? fallback;
+
   return (
     <div className="flex flex-col gap-6 p-6 max-w-5xl">
       {/* Page Header */}
       <div>
         <h1 className="text-2xl font-semibold">App Flow</h1>
         <p className="text-sm text-muted-foreground">
-          How the SBR inventory system actually works — updated March 2026
+          How the SBR inventory system actually works. The badges below reflect live connection status.
         </p>
         <p className="text-xs text-muted-foreground mt-1">
           Green = fully live · Yellow = partially working · Gray = planned / not yet connected
@@ -131,27 +144,27 @@ export default function AppFlow() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="Shopify" color={COLORS.shopify} />
-              <StatusDot status="live" />
+              <StatusDot status={st("shopify", "live")} />
             </div>
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="Extensiv 3PL" color={COLORS.extensiv} />
-              <StatusDot status="partial" />
+              <StatusDot status={st("extensiv", "partial")} />
             </div>
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="GoHighLevel" color={COLORS.ghl} />
-              <StatusDot status="planned" />
+              <StatusDot status={st("gohighlevel", "planned")} />
             </div>
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="QuickBooks" color={COLORS.qb} />
-              <StatusDot status="planned" />
+              <StatusDot status={st("quickbooks", "live")} />
             </div>
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="Shippo" color={COLORS.shippo} />
-              <StatusDot status="planned" />
+              <StatusDot status={st("shippo", "planned")} />
             </div>
             <div className="flex flex-col items-center gap-1">
               <ServiceBadge name="Railway DB" color={COLORS.railway} />
-              <StatusDot status="live" />
+              <StatusDot status={st("railway", "live")} />
             </div>
           </div>
         </CardContent>

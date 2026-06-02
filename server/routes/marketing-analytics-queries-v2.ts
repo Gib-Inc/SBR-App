@@ -264,3 +264,102 @@ export async function queryWastedSpend(db: DB, days: number) {
     })),
   };
 }
+
+// ── Shopify-only queries (no ad credentials needed) ──
+
+export async function queryDailyRevenueSpark(db: DB, days: number) {
+  const result = await db.execute(sql`
+    SELECT order_date::date::text as date,
+           COALESCE(SUM(total_amount), 0)::real as revenue,
+           COUNT(*)::int as orders
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(days => ${days})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY order_date::date
+    ORDER BY date
+  `);
+  return rows(result);
+}
+
+export async function queryProductMixTrend(db: DB, days: number) {
+  const result = await db.execute(sql`
+    WITH current_period AS (
+      SELECT sol.sku, COALESCE(SUM(sol.qty_ordered * sol.unit_price), 0)::real as revenue,
+             SUM(sol.qty_ordered)::int as units
+      FROM sales_order_lines sol
+      JOIN sales_orders so ON so.id = sol.sales_order_id
+      WHERE so.order_date >= current_date - make_interval(days => ${days})
+        AND so.status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY sol.sku
+    ),
+    prior_period AS (
+      SELECT sol.sku, COALESCE(SUM(sol.qty_ordered * sol.unit_price), 0)::real as revenue
+      FROM sales_order_lines sol
+      JOIN sales_orders so ON so.id = sol.sales_order_id
+      WHERE so.order_date >= current_date - make_interval(days => ${days * 2})
+        AND so.order_date < current_date - make_interval(days => ${days})
+        AND so.status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY sol.sku
+    )
+    SELECT c.sku, i.name,
+           c.revenue, c.units,
+           CASE WHEN p.revenue > 0 THEN ((c.revenue - p.revenue) / p.revenue * 100)::real ELSE NULL END as growth_pct
+    FROM current_period c
+    LEFT JOIN prior_period p ON p.sku = c.sku
+    LEFT JOIN items i ON i.sku = c.sku
+    ORDER BY c.revenue DESC
+    LIMIT 15
+  `);
+  return rows(result);
+}
+
+export async function queryRepeatPurchase(db: DB, days: number) {
+  const result = await db.execute(sql`
+    WITH customer_orders AS (
+      SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+             MIN(order_date) as first_order,
+             MAX(order_date) as last_order,
+             COUNT(*)::int as order_count,
+             SUM(total_amount)::real as lifetime_value
+      FROM sales_orders
+      WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+        AND order_date >= current_date - make_interval(days => ${days})
+      GROUP BY cust_id
+    )
+    SELECT order_count,
+           COUNT(*)::int as customers,
+           AVG(lifetime_value)::real as avg_ltv,
+           AVG(EXTRACT(EPOCH FROM (last_order - first_order)) / 86400)::real as avg_days_between
+    FROM customer_orders
+    GROUP BY order_count
+    ORDER BY order_count
+  `);
+  return rows(result);
+}
+
+export async function queryTopMetrics(db: DB) {
+  const today = await db.execute(sql`
+    SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders
+    FROM sales_orders
+    WHERE order_date::date = current_date AND status NOT IN ('CANCELLED', 'REFUNDED')
+  `);
+  const yesterday = await db.execute(sql`
+    SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders
+    FROM sales_orders
+    WHERE order_date::date = current_date - 1 AND status NOT IN ('CANCELLED', 'REFUNDED')
+  `);
+  const mtd = await db.execute(sql`
+    SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders,
+           COALESCE(AVG(total_amount), 0)::real as aov
+    FROM sales_orders
+    WHERE order_date >= date_trunc('month', current_date) AND status NOT IN ('CANCELLED', 'REFUNDED')
+  `);
+  const t = rows(today)[0] || { revenue: 0, orders: 0 };
+  const y = rows(yesterday)[0] || { revenue: 0, orders: 0 };
+  const m = rows(mtd)[0] || { revenue: 0, orders: 0, aov: 0 };
+  return {
+    todayRevenue: t.revenue, todayOrders: t.orders,
+    yesterdayRevenue: y.revenue, yesterdayOrders: y.orders,
+    mtdRevenue: m.revenue, mtdOrders: m.orders, aov: m.aov,
+  };
+}

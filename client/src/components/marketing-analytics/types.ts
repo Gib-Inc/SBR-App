@@ -70,3 +70,77 @@ export interface ConversionTrend {
   ctr: number | null;
   spend: number;
 }
+
+// ── CMO types ──
+
+export interface RevenueTarget {
+  monthlyTarget: number;
+  mtdRevenue: number;
+  mtdOrders: number;
+  projectedMonthEnd: number;
+  pacePercent: number;
+  targetProgressPercent: number;
+  last7: number;
+  prior7: number;
+  trend: 'up' | 'down' | 'flat';
+  trendPercent: number | null;
+}
+
+export interface BreakevenProduct {
+  sku: string;
+  name: string | null;
+  price: number;
+  cogs: number;
+  costSource: 'bom' | 'estimated';
+  breakevenRoas: number | null;
+  actualRoas: number | null;
+  spend: number;
+  revenue: number;
+  belowBreakeven: boolean;
+}
+
+export interface ChannelMatrixItem {
+  platform: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  quadrant: 'scale' | 'maintain' | 'fix' | 'cut';
+}
+
+export interface CustomerSplit {
+  split: Array<{ customer_type: string; orders: number; revenue: number; aov: number }>;
+  byChannel: Array<{ channel: string; orders: number; revenue: number; aov: number }>;
+}
+
+export interface GeoState {
+  state: string;
+  revenue: number;
+  orders: number;
+  mom_growth: number | null;
+}
+
+export interface FatigueCreative {
+  id: string;
+  headline: string | null;
+  channel: string | null;
+  currentCtr?: number;
+  peakCtr?: number;
+  slope?: number;
+  daysToKill?: number | null;
+  status: 'fatiguing' | 'declining' | 'stable' | 'insufficient_data';
+}
+
+export interface WastedSpend {
+  totalWasted: number;
+  count: number;
+  items: Array<{ sku: string; name: string | null; spend: number; actualRoas: number | null; breakevenRoas: number | null }>;
+}
+
+export interface Recommendation {
+  rank: number;
+  title: string;
+  rationale: string;
+  expectedImpact: string;
+  action: string;
+  owner: string;
+}

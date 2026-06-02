@@ -1,0 +1,184 @@
+import { useQuery } from '@tanstack/react-query';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, TrendingUp, TrendingDown, Minus, DollarSign, ShoppingCart, Users, MapPin, Package } from 'lucide-react';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { RevenueTargetGauge } from './revenue-target-gauge';
+import { NextBestActionView } from './next-best-action-view';
+import { WastedSpendView } from './wasted-spend-view';
+import type { GeoState, RevenueTarget } from './types';
+
+const fmt = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
+
+function TopMetrics() {
+  const { data } = useQuery<{ todayRevenue: number; todayOrders: number; yesterdayRevenue: number; yesterdayOrders: number; mtdRevenue: number; mtdOrders: number; aov: number }>({
+    queryKey: ['/api/marketing-analytics/cmo/top-metrics'],
+  });
+  if (!data) return null;
+  const todayVsYesterday = data.yesterdayRevenue > 0 ? ((data.todayRevenue - data.yesterdayRevenue) / data.yesterdayRevenue * 100) : null;
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground flex items-center gap-1"><DollarSign className="h-3 w-3" /> Today</div>
+        <div className="text-xl font-bold">{fmt(data.todayRevenue)}</div>
+        <div className="text-xs text-muted-foreground">{data.todayOrders} orders
+          {todayVsYesterday != null && <span className={todayVsYesterday >= 0 ? 'text-green-600' : 'text-red-600'}> ({todayVsYesterday >= 0 ? '+' : ''}{todayVsYesterday.toFixed(0)}% vs yesterday)</span>}
+        </div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground flex items-center gap-1"><ShoppingCart className="h-3 w-3" /> MTD Orders</div>
+        <div className="text-xl font-bold">{data.mtdOrders.toLocaleString()}</div>
+        <div className="text-xs text-muted-foreground">{fmt(data.mtdRevenue)} revenue</div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground flex items-center gap-1"><Users className="h-3 w-3" /> Avg Order</div>
+        <div className="text-xl font-bold">{fmt(data.aov)}</div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground flex items-center gap-1"><DollarSign className="h-3 w-3" /> Yesterday</div>
+        <div className="text-xl font-bold">{fmt(data.yesterdayRevenue)}</div>
+        <div className="text-xs text-muted-foreground">{data.yesterdayOrders} orders</div>
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function RevenueSpark({ days }: { days: number }) {
+  const { data } = useQuery<{ days: Array<{ date: string; revenue: number; orders: number }> }>({
+    queryKey: ['/api/marketing-analytics/cmo/daily-revenue', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/daily-revenue?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  if (!data?.days?.length) return null;
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm">Daily Revenue ({days}d)</CardTitle></CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={120}>
+          <AreaChart data={data.days}>
+            <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={(d) => d.slice(5)} />
+            <YAxis hide />
+            <Tooltip formatter={(v: number) => fmt(v)} labelFormatter={(d) => d} />
+            <Area type="monotone" dataKey="revenue" fill="#10b981" fillOpacity={0.2} stroke="#10b981" strokeWidth={2} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TopProducts({ days }: { days: number }) {
+  const { data } = useQuery<{ products: Array<{ sku: string; name: string | null; revenue: number; units: number; growth_pct: number | null }> }>({
+    queryKey: ['/api/marketing-analytics/cmo/product-mix', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/product-mix?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  if (!data?.products?.length) return null;
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm">Product Mix ({days}d)</CardTitle></CardHeader>
+      <CardContent className="p-0">
+        {data.products.slice(0, 8).map((p) => (
+          <div key={p.sku} className="flex items-center justify-between px-4 py-2 border-b last:border-0 text-sm">
+            <div className="min-w-0 flex-1"><span className="font-medium truncate block">{p.name || p.sku}</span></div>
+            <div className="flex items-center gap-3 shrink-0">
+              <span className="text-muted-foreground">{p.units} units</span>
+              <span className="font-medium w-20 text-right">{fmt(p.revenue)}</span>
+              {p.growth_pct != null ? (
+                <Badge variant="outline" className={`text-xs w-16 justify-center ${p.growth_pct >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                  {p.growth_pct >= 0 ? '+' : ''}{p.growth_pct.toFixed(0)}%
+                </Badge>
+              ) : <span className="w-16 text-xs text-center text-muted-foreground">new</span>}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TopStates({ days }: { days: number }) {
+  const { data } = useQuery<{ states: GeoState[] }>({
+    queryKey: ['/api/marketing-analytics/cmo/geographic', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/geographic?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  if (!data?.states?.length) return null;
+  const top5 = data.states.slice(0, 5);
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> Top Markets</CardTitle></CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={130}>
+          <BarChart data={top5} layout="vertical">
+            <XAxis type="number" hide />
+            <YAxis type="category" dataKey="state" tick={{ fontSize: 11 }} width={30} />
+            <Tooltip formatter={(v: number) => fmt(v)} />
+            <Bar dataKey="revenue" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CustomerInsight({ days }: { days: number }) {
+  const { data } = useQuery<{ split: Array<{ customer_type: string; orders: number; revenue: number; aov: number }> }>({
+    queryKey: ['/api/marketing-analytics/cmo/customer-split', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/customer-split?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+  if (!data?.split?.length) return null;
+  const newC = data.split.find(s => s.customer_type === 'new');
+  const retC = data.split.find(s => s.customer_type === 'returning');
+  const total = (newC?.revenue || 0) + (retC?.revenue || 0);
+  const newPct = total > 0 ? Math.round((newC?.revenue || 0) / total * 100) : 0;
+
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm">New vs Returning</CardTitle></CardHeader>
+      <CardContent>
+        <div className="h-4 w-full rounded-full bg-muted overflow-hidden flex">
+          <div className="bg-blue-500 h-full" style={{ width: `${newPct}%` }} />
+          <div className="bg-violet-500 h-full" style={{ width: `${100 - newPct}%` }} />
+        </div>
+        <div className="flex justify-between text-xs mt-2">
+          <span className="text-blue-600">New {newPct}% · {fmt(newC?.aov || 0)} AOV</span>
+          <span className="text-violet-600">Returning {100 - newPct}% · {fmt(retC?.aov || 0)} AOV</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function CommandCenterView({ days }: { days: number }) {
+  return (
+    <div className="space-y-4">
+      <TopMetrics />
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 space-y-4">
+          <RevenueTargetGauge />
+          <RevenueSpark days={days} />
+          <TopProducts days={days} />
+        </div>
+        <div className="space-y-4">
+          <WastedSpendView days={days} compact />
+          <TopStates days={days} />
+          <CustomerInsight days={days} />
+        </div>
+      </div>
+
+      <NextBestActionView />
+    </div>
+  );
+}

@@ -3141,6 +3141,42 @@ export const insertCopyRootSchema = createInsertSchema(copyRoots).omit({ id: tru
 export type InsertCopyRoot = z.infer<typeof insertCopyRootSchema>;
 export type CopyRoot = typeof copyRoots.$inferSelect;
 
+// ── historical_monthly_sales — pre-app revenue data (imported from spreadsheet) ──
+
+export const historicalMonthlySales = pgTable("historical_monthly_sales", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  year: integer("year").notNull(),
+  month: integer("month").notNull(), // 1-12
+  revenue: real("revenue").notNull().default(0),
+  returns: real("returns").default(0),
+  totalIncome: real("total_income").default(0),
+  cogs: real("cogs").default(0),
+  grossProfit: real("gross_profit").default(0),
+  adSpend: real("ad_spend").default(0),
+  totalExpenses: real("total_expenses").default(0),
+  netIncome: real("net_income").default(0),
+  grossMarginPct: real("gross_margin_pct").default(0),
+  source: text("source").notNull().default("spreadsheet"),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  yearMonthIdx: uniqueIndex("historical_monthly_sales_year_month_idx").on(table.year, table.month),
+}));
+
+// ── marketing_recommendations — Claude-generated CMO next-best-actions ──
+
+export const marketingRecommendations = pgTable("marketing_recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  generatedAt: timestamp("generated_at").notNull().default(sql`now()`),
+  recommendations: jsonb("recommendations"), // ranked array: [{rank, title, rationale, expectedImpact, action, owner}]
+  inputSnapshot: jsonb("input_snapshot"),    // data fed to Claude, for audit
+  model: text("model"),
+  createdBy: text("created_by"),
+});
+
+export const insertMarketingRecommendationSchema = createInsertSchema(marketingRecommendations).omit({ id: true, generatedAt: true });
+export type InsertMarketingRecommendation = z.infer<typeof insertMarketingRecommendationSchema>;
+export type MarketingRecommendation = typeof marketingRecommendations.$inferSelect;
+
 // ============================================================================
 // REORDER ALERTS
 // ============================================================================

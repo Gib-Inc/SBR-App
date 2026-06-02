@@ -443,3 +443,105 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     };
   });
 }
+
+// ── Sales velocity + multi-year comparison ──
+
+export async function querySalesVelocity(db: DB, days: number) {
+  const result = await db.execute(sql`
+    WITH daily AS (
+      SELECT order_date::date as day,
+             COALESCE(SUM(total_amount), 0)::real as revenue,
+             COUNT(*)::int as orders
+      FROM sales_orders
+      WHERE order_date >= current_date - make_interval(days => ${days})
+        AND status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY order_date::date
+    )
+    SELECT AVG(revenue)::real as avg_daily_revenue,
+           AVG(orders)::real as avg_daily_orders,
+           MAX(revenue)::real as peak_day_revenue,
+           MIN(revenue)::real as low_day_revenue,
+           STDDEV(revenue)::real as revenue_stddev,
+           COUNT(*)::int as days_with_sales
+    FROM daily
+  `);
+
+  const weekly = await db.execute(sql`
+    SELECT EXTRACT(DOW FROM order_date) as dow,
+           COALESCE(AVG(total_amount), 0)::real as avg_order_value,
+           COUNT(*)::real / GREATEST(COUNT(DISTINCT order_date::date), 1) as avg_orders_per_day
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(days => ${days})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY EXTRACT(DOW FROM order_date)
+    ORDER BY dow
+  `);
+
+  const productVelocity = await db.execute(sql`
+    SELECT sol.sku, i.name,
+           SUM(sol.qty_ordered)::int as units_sold,
+           SUM(sol.qty_ordered * sol.unit_price)::real as revenue,
+           (SUM(sol.qty_ordered)::real / GREATEST(${days}, 1))::real as units_per_day,
+           (SUM(sol.qty_ordered * sol.unit_price)::real / GREATEST(${days}, 1))::real as revenue_per_day,
+           COALESCE(i.available_for_sale_qty, 0)::int as current_stock,
+           CASE WHEN SUM(sol.qty_ordered) > 0
+             THEN (COALESCE(i.available_for_sale_qty, 0)::real / (SUM(sol.qty_ordered)::real / GREATEST(${days}, 1)))::real
+             ELSE NULL END as days_of_stock
+    FROM sales_order_lines sol
+    JOIN sales_orders so ON so.id = sol.sales_order_id
+    LEFT JOIN items i ON i.sku = sol.sku
+    WHERE so.order_date >= current_date - make_interval(days => ${days})
+      AND so.status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY sol.sku, i.name, i.available_for_sale_qty
+    ORDER BY revenue DESC
+    LIMIT 20
+  `);
+
+  const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return {
+    summary: rows(result)[0] || {},
+    byDayOfWeek: rows(weekly).map((r: any) => ({ ...r, dayName: DOW_NAMES[Math.round(r.dow)] })),
+    productVelocity: rows(productVelocity),
+  };
+}
+
+export async function queryMultiYearComparison(db: DB) {
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear, currentYear - 1, currentYear - 2];
+
+  const result = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM order_date)::int as year,
+           EXTRACT(MONTH FROM order_date)::int as month,
+           COALESCE(SUM(total_amount), 0)::real as revenue,
+           COUNT(*)::int as orders,
+           COALESCE(AVG(total_amount), 0)::real as aov,
+           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as customers
+    FROM sales_orders
+    WHERE EXTRACT(YEAR FROM order_date) IN (${years[0]}, ${years[1]}, ${years[2]})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date)
+    ORDER BY year, month
+  `);
+
+  const annual = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM order_date)::int as year,
+           COALESCE(SUM(total_amount), 0)::real as revenue,
+           COUNT(*)::int as orders,
+           COALESCE(AVG(total_amount), 0)::real as aov,
+           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as customers
+    FROM sales_orders
+    WHERE EXTRACT(YEAR FROM order_date) IN (${years[0]}, ${years[1]}, ${years[2]})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY EXTRACT(YEAR FROM order_date)
+    ORDER BY year
+  `);
+
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthly = rows(result).map((r: any) => ({ ...r, monthName: MONTH_NAMES[r.month] }));
+
+  return {
+    years,
+    monthly,
+    annual: rows(annual),
+  };
+}

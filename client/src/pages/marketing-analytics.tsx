@@ -14,6 +14,8 @@ import { CustomerSplitView } from '@/components/marketing-analytics/customer-spl
 import { GeographicView } from '@/components/marketing-analytics/geographic-view';
 import { CreativeFatigueView } from '@/components/marketing-analytics/creative-fatigue-view';
 import { MonthlyPerformanceView } from '@/components/marketing-analytics/monthly-performance-view';
+import { SalesVelocityView } from '@/components/marketing-analytics/sales-velocity-view';
+import { MultiYearView } from '@/components/marketing-analytics/multi-year-view';
 
 export default function MarketingAnalytics() {
   const [days, setDays] = useState(30);
@@ -47,6 +49,8 @@ export default function MarketingAnalytics() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="command">Command Center</TabsTrigger>
           <TabsTrigger value="monthly">Monthly</TabsTrigger>
+          <TabsTrigger value="velocity">Velocity</TabsTrigger>
+          <TabsTrigger value="years">Year/Year</TabsTrigger>
           <TabsTrigger value="spend">Spend Pacing</TabsTrigger>
           <TabsTrigger value="channels">Channel Mix</TabsTrigger>
           <TabsTrigger value="breakeven">Break-even</TabsTrigger>
@@ -59,6 +63,8 @@ export default function MarketingAnalytics() {
         </TabsList>
         <TabsContent value="command"><CommandCenterView days={days} /></TabsContent>
         <TabsContent value="monthly"><MonthlyPerformanceView /></TabsContent>
+        <TabsContent value="velocity"><SalesVelocityView days={days} /></TabsContent>
+        <TabsContent value="years"><MultiYearView /></TabsContent>
         <TabsContent value="spend"><SpendPacingView days={days} /></TabsContent>
         <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
         <TabsContent value="breakeven"><BreakevenRoasView days={days} /></TabsContent>

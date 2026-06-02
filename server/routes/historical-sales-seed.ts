@@ -123,3 +123,151 @@ export async function queryFullYearComparison(db: DB) {
     annual,
   };
 }
+
+/**
+ * Query that combines historical revenue with ad spend data
+ * to produce a full CMO performance history.
+ * Revenue: historical_monthly_sales (spreadsheet) merged with sales_orders (live)
+ * Ad spend: ad_metrics_daily (auto-populates once platforms connected)
+ */
+export async function queryFullCMOHistory(db: DB) {
+  const rows = (r: any) => r.rows || r;
+
+  // Historical + live revenue (same merge logic as queryFullYearComparison)
+  const historical = await db.execute(sql`
+    SELECT year, month, revenue::real as revenue FROM historical_monthly_sales ORDER BY year, month
+  `);
+  const liveRevenue = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM order_date)::int as year,
+           EXTRACT(MONTH FROM order_date)::int as month,
+           COALESCE(SUM(total_amount), 0)::real as revenue,
+           COUNT(*)::int as orders,
+           COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as customers,
+           COALESCE(AVG(total_amount), 0)::real as aov
+    FROM sales_orders
+    WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date)
+  `);
+
+  // Ad spend by platform by month (backfills as platforms connect)
+  const adSpend = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM date)::int as year,
+           EXTRACT(MONTH FROM date)::int as month,
+           platform,
+           SUM(spend)::real as spend,
+           SUM(revenue)::real as ad_revenue,
+           SUM(conversions)::int as conversions,
+           SUM(clicks)::int as clicks,
+           SUM(impressions)::int as impressions
+    FROM ad_metrics_daily
+    GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date), platform
+    ORDER BY year, month, platform
+  `);
+
+  // Build merged monthly dataset
+  const revenueMap = new Map<string, any>();
+  for (const h of rows(historical)) {
+    revenueMap.set(`${h.year}-${h.month}`, { year: h.year, month: h.month, revenue: h.revenue, orders: 0, customers: 0, aov: 0 });
+  }
+  for (const l of rows(liveRevenue)) {
+    const key = `${l.year}-${l.month}`;
+    const existing = revenueMap.get(key);
+    revenueMap.set(key, {
+      year: l.year, month: l.month,
+      revenue: existing ? Math.max(existing.revenue, l.revenue) : l.revenue,
+      orders: l.orders, customers: l.customers, aov: l.aov,
+    });
+  }
+
+  // Group ad spend by month (all platforms combined) and by platform
+  const adByMonth = new Map<string, { totalSpend: number; totalAdRevenue: number; totalConversions: number; platforms: any[] }>();
+  for (const a of rows(adSpend)) {
+    const key = `${a.year}-${a.month}`;
+    if (!adByMonth.has(key)) {
+      adByMonth.set(key, { totalSpend: 0, totalAdRevenue: 0, totalConversions: 0, platforms: [] });
+    }
+    const entry = adByMonth.get(key)!;
+    entry.totalSpend += a.spend;
+    entry.totalAdRevenue += a.ad_revenue;
+    entry.totalConversions += a.conversions;
+    entry.platforms.push({
+      platform: a.platform,
+      spend: a.spend,
+      adRevenue: a.ad_revenue,
+      conversions: a.conversions,
+      clicks: a.clicks,
+      impressions: a.impressions,
+      roas: a.spend > 0 ? a.ad_revenue / a.spend : null,
+      cpa: a.conversions > 0 ? a.spend / a.conversions : null,
+    });
+  }
+
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const allMonths = Array.from(revenueMap.values()).sort((a, b) => a.year * 100 + a.month - b.year * 100 - b.month);
+
+  const monthly = allMonths.map(m => {
+    const key = `${m.year}-${m.month}`;
+    const ad = adByMonth.get(key);
+    return {
+      year: m.year,
+      month: m.month,
+      monthName: MONTH_NAMES[m.month],
+      revenue: m.revenue,
+      orders: m.orders,
+      customers: m.customers,
+      aov: m.aov,
+      adSpend: ad?.totalSpend || 0,
+      adRevenue: ad?.totalAdRevenue || 0,
+      conversions: ad?.totalConversions || 0,
+      blendedRoas: ad && ad.totalSpend > 0 ? m.revenue / ad.totalSpend : null,
+      adRoas: ad && ad.totalSpend > 0 ? ad.totalAdRevenue / ad.totalSpend : null,
+      cac: m.customers > 0 && ad ? ad.totalSpend / m.customers : null,
+      spendPercent: m.revenue > 0 && ad ? (ad.totalSpend / m.revenue) * 100 : null,
+      platforms: ad?.platforms || [],
+    };
+  });
+
+  // Annual rollups
+  const years = [...new Set(monthly.map(m => m.year))].sort();
+  const annual = years.map(y => {
+    const yData = monthly.filter(m => m.year === y);
+    const totalRevenue = yData.reduce((s, m) => s + m.revenue, 0);
+    const totalSpend = yData.reduce((s, m) => s + m.adSpend, 0);
+    const totalCustomers = yData.reduce((s, m) => s + m.customers, 0);
+    const totalOrders = yData.reduce((s, m) => s + m.orders, 0);
+
+    // Platform annual breakdown
+    const platformMap = new Map<string, { spend: number; adRevenue: number; conversions: number }>();
+    for (const m of yData) {
+      for (const p of m.platforms) {
+        const existing = platformMap.get(p.platform) || { spend: 0, adRevenue: 0, conversions: 0 };
+        existing.spend += p.spend;
+        existing.adRevenue += p.adRevenue;
+        existing.conversions += p.conversions;
+        platformMap.set(p.platform, existing);
+      }
+    }
+
+    return {
+      year: y,
+      revenue: totalRevenue,
+      adSpend: totalSpend,
+      orders: totalOrders,
+      customers: totalCustomers,
+      blendedRoas: totalSpend > 0 ? totalRevenue / totalSpend : null,
+      cac: totalCustomers > 0 ? totalSpend / totalCustomers : null,
+      spendPercent: totalRevenue > 0 ? (totalSpend / totalRevenue) * 100 : null,
+      monthsReported: yData.length,
+      platforms: Array.from(platformMap.entries()).map(([platform, data]) => ({
+        platform,
+        spend: data.spend,
+        adRevenue: data.adRevenue,
+        conversions: data.conversions,
+        roas: data.spend > 0 ? data.adRevenue / data.spend : null,
+      })),
+    };
+  });
+
+  return { years, monthly, annual };
+}

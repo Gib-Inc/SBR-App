@@ -19,7 +19,7 @@ import {
   queryMonthlySales, queryMonthlyAdSpend, queryMonthlyBlended,
   querySalesVelocity, queryMultiYearComparison,
 } from './marketing-analytics-queries-v2';
-import { seedHistoricalSales, queryFullYearComparison } from './historical-sales-seed';
+import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 
@@ -66,6 +66,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/multi-year', requireAuth, handle(() => queryMultiYearComparison(getDb())));
   app.get('/api/marketing-analytics/cmo/full-year', requireAuth, handle(() => queryFullYearComparison(getDb())));
   app.post('/api/marketing-analytics/cmo/seed-historical', requireAuth, handle(() => seedHistoricalSales(getDb())));
+  app.get('/api/marketing-analytics/cmo/cmo-history', requireAuth, handle(() => queryFullCMOHistory(getDb())));
 
   // Next Best Action — cached latest recommendation
   app.get('/api/marketing-analytics/cmo/next-best-action', requireAuth, async (_req: Request, res: Response) => {

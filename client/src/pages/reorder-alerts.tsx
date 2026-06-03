@@ -107,6 +107,36 @@ export default function ReorderAlerts() {
     },
   });
 
+  // One-click "reorder needs -> draft POs": groups items needing reorder by
+  // supplier into DRAFT purchase orders (idempotent for the day). Review and
+  // send them from the Purchase Orders page.
+  const autoDraftMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/purchase-orders/auto-draft", {});
+      return await res.json();
+    },
+    onSuccess: (result) => {
+      const created = result?.created?.length ?? 0;
+      const exists = result?.alreadyExists?.length ?? 0;
+      const skipped = result?.skipped?.length ?? 0;
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      toast({
+        title: created > 0 ? `Created ${created} draft PO${created === 1 ? "" : "s"}` : "No new draft POs needed",
+        description:
+          [
+            created > 0 ? `${created} created` : null,
+            exists > 0 ? `${exists} already drafted today` : null,
+            skipped > 0 ? `${skipped} skipped (missing supplier/cost)` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "Everything needing reorder is already drafted.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Draft PO generation failed", description: error.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -124,6 +154,10 @@ export default function ReorderAlerts() {
           <Button variant="outline" size="sm" onClick={() => runMutation.mutate()} disabled={runMutation.isPending || !isAdmin}>
             {runMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BellRing className="mr-2 h-4 w-4" />}
             Check Now
+          </Button>
+          <Button size="sm" onClick={() => autoDraftMutation.mutate()} disabled={autoDraftMutation.isPending || !isAdmin}>
+            {autoDraftMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
+            Generate Draft POs
           </Button>
         </div>
       </div>

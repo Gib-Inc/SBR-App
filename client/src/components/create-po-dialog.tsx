@@ -62,6 +62,7 @@ interface DraftLineItem {
   taxAmount: number; // Manual tax input
   taxRate?: number | null; // Tax percentage from QuickBooks
   unitOfMeasure?: string; // EA, CS, PK, etc.
+  expectedArrivalDate?: string | null; // per-line ETA (YYYY-MM-DD)
   quickbooksItemId?: string | null;
   // Snapshots from /api/supplier-items?supplierId for the suggested-order
   // calculation. Optional because manually-added lines may not have them.
@@ -373,6 +374,7 @@ export function CreatePODialog({
             unitCost: line.unitCost,
             taxAmount: line.taxAmount || 0,
             unitOfMeasure: line.unitOfMeasure || 'EA',
+            expectedArrivalDate: line.expectedArrivalDate || undefined,
           })),
       };
 
@@ -520,6 +522,12 @@ export function CreatePODialog({
   const handleUpdateLineUom = useCallback((lineId: string, uom: string) => {
     setLineItems(prev => prev.map(l =>
       l.id === lineId ? { ...l, unitOfMeasure: uom } : l
+    ));
+  }, []);
+
+  const handleUpdateLineExpected = useCallback((lineId: string, date: string) => {
+    setLineItems(prev => prev.map(l =>
+      l.id === lineId ? { ...l, expectedArrivalDate: date || null } : l
     ));
   }, []);
 
@@ -778,12 +786,13 @@ export function CreatePODialog({
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[32%]">Item</TableHead>
+                        <TableHead className="w-[22%]">Item</TableHead>
                         <TableHead className="w-[10%] text-center">Qty</TableHead>
                         <TableHead className="w-[8%] text-center">UoM</TableHead>
-                        <TableHead className="w-[15%] text-right">Unit Cost</TableHead>
-                        <TableHead className="w-[12%] text-right">Tax</TableHead>
-                        <TableHead className="w-[15%] text-right">Line Total</TableHead>
+                        <TableHead className="w-[13%] text-right">Unit Cost</TableHead>
+                        <TableHead className="w-[10%] text-right">Tax</TableHead>
+                        <TableHead className="w-[13%] text-right">Line Total</TableHead>
+                        <TableHead className="w-[14%] text-center">Expected</TableHead>
                         <TableHead className="w-[8%]"></TableHead>
                       </TableRow>
                     </TableHeader>
@@ -874,6 +883,15 @@ export function CreatePODialog({
                           </TableCell>
                           <TableCell className="text-right font-medium">
                             {formatCurrency(line.qtyOrdered * line.unitCost + line.taxAmount)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Input
+                              type="date"
+                              value={line.expectedArrivalDate ?? ""}
+                              onChange={(e) => handleUpdateLineExpected(line.id, e.target.value)}
+                              className="w-36"
+                              data-testid={`input-expected-${line.id}`}
+                            />
                           </TableCell>
                           <TableCell>
                             <Button

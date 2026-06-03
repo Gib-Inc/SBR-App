@@ -14766,7 +14766,11 @@ Notes: ${po.notes || 'None'}
           const unitCost = Number(line.unitCost) || 0;
           const qtyOrdered = Number(line.quantity) || Number(line.qtyOrdered) || 1;
           const lineTotal = Math.round(qtyOrdered * unitCost * 100) / 100;
-          
+          // Per-line ETA arrives as a YYYY-MM-DD string; the line schema needs a Date.
+          if (line.expectedArrivalDate && typeof line.expectedArrivalDate === 'string') {
+            line.expectedArrivalDate = new Date(line.expectedArrivalDate);
+          }
+
           const validatedLine = insertPurchaseOrderLineSchema.parse({
             ...line,
             purchaseOrderId: purchaseOrder.id,

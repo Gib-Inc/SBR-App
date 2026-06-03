@@ -84,8 +84,13 @@ export async function fetchWindsorRows(opts: WindsorFetchOptions): Promise<Winds
 export function normalizePlatform(source: string | undefined): string | null {
   if (!source) return null;
   const s = source.toLowerCase().trim();
-  // Skip non-ad traffic sources
-  if (s === "(direct)" || s === "(not set)" || s === "(none)" || s === "direct") return null;
+
+  // Skip non-ad / organic / junk traffic sources
+  if (s === "(direct)" || s === "(not set)" || s === "(none)" || s === "direct" ||
+      s === "(data not available)" || s.startsWith("{{") ||
+      s === "duckduckgo" || s === "chatgpt.com" || s === "shopify_email" ||
+      s.includes("clickup.com") || s.includes(".com") && !KNOWN_DOMAINS.has(s)) return null;
+
   // Meta family (Facebook + Instagram)
   if (s === "fb" || s === "ig" || s.includes("facebook") || s.includes("meta") || s.includes("instagram")) return "META";
   // Google family (Search + Shopping + YouTube)
@@ -102,5 +107,10 @@ export function normalizePlatform(source: string | undefined): string | null {
   if (s === "reddit.com" || s.includes("reddit")) return "REDDIT";
   // Yahoo / Gemini
   if (s === "yahoo" || s.includes("yahoo")) return "YAHOO";
-  return source.toUpperCase();
+  // Anything else not recognized — skip rather than pollute
+  return null;
 }
+
+const KNOWN_DOMAINS = new Set([
+  "youtube.com", "reddit.com", "amazon.com", "pinterest.com", "tiktok.com",
+]);

@@ -68,6 +68,8 @@ function aggregate(rows: WindsorRow[]): Map<string, InsertAdMetricsDaily> {
     if (!platform) continue;
     const date = (r.date || "").slice(0, 10);
     if (!date) continue;
+    // Skip rows with zero spend — organic/referral traffic, not paid ads
+    if (num(r.spend) <= 0) continue;
 
     const sku = (r.product_item_id && String(r.product_item_id).trim()) || ACCOUNT_SKU;
     const key = `${platform}|${sku}|${date}`;

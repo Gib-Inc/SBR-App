@@ -662,6 +662,77 @@ export async function queryLtvCac(db: DB, months: number = 18) {
   };
 }
 
+// ── BOM completeness ──
+// For each finished product with a selling price, reports whether it has a BOM
+// and whether every component has a default_purchase_cost. Surfaces the gap
+// that forces queryBreakevenRoas to fall back to an estimated margin. Sorted
+// by ad spend so the team fills in the SKUs that matter to ROAS first.
+export async function queryBomCompleteness(db: DB, days: number = 30) {
+  const result = await db.execute(sql`
+    WITH bom_rollup AS (
+      SELECT bom.finished_product_id,
+             COUNT(*)::int as component_count,
+             COUNT(*) FILTER (WHERE comp.default_purchase_cost IS NULL OR comp.default_purchase_cost = 0)::int as missing_cost_count,
+             SUM(COALESCE(comp.default_purchase_cost, 0) * bom.quantity_required * (1 + bom.wastage_percent / 100.0))::real as cogs,
+             ARRAY_AGG(comp.name) FILTER (WHERE comp.default_purchase_cost IS NULL OR comp.default_purchase_cost = 0) as missing_components
+      FROM bill_of_materials bom
+      JOIN items comp ON comp.id = bom.component_id
+      GROUP BY bom.finished_product_id
+    ),
+    ad AS (
+      SELECT sku, SUM(spend)::real as spend
+      FROM ad_metrics_daily
+      WHERE date >= current_date - make_interval(days => ${days})
+      GROUP BY sku
+    )
+    SELECT i.sku, i.name, i.selling_price::real as price,
+           COALESCE(br.component_count, 0) as component_count,
+           COALESCE(br.missing_cost_count, 0) as missing_cost_count,
+           br.cogs,
+           br.missing_components,
+           COALESCE(ad.spend, 0)::real as ad_spend
+    FROM items i
+    LEFT JOIN bom_rollup br ON br.finished_product_id = i.id
+    LEFT JOIN ad ON ad.sku = i.sku
+    WHERE i.type = 'finished_product' AND i.selling_price IS NOT NULL AND i.selling_price > 0
+    ORDER BY ad.spend DESC NULLS LAST, i.selling_price DESC
+  `);
+
+  const items = rows(result).map((r: any) => {
+    const hasBom = r.component_count > 0;
+    const costComplete = hasBom && r.missing_cost_count === 0;
+    let status: 'complete' | 'missing_costs' | 'no_bom';
+    if (!hasBom) status = 'no_bom';
+    else if (costComplete) status = 'complete';
+    else status = 'missing_costs';
+    return {
+      sku: r.sku,
+      name: r.name,
+      price: r.price,
+      componentCount: r.component_count,
+      missingCostCount: r.missing_cost_count,
+      cogs: costComplete ? r.cogs : null,
+      missingComponents: r.missing_components || [],
+      adSpend: r.ad_spend,
+      status,
+    };
+  });
+
+  const total = items.length;
+  const complete = items.filter((i: any) => i.status === 'complete').length;
+  const missingCosts = items.filter((i: any) => i.status === 'missing_costs').length;
+  const noBom = items.filter((i: any) => i.status === 'no_bom').length;
+  // Spend riding on incomplete COGS — the dollars where break-even ROAS is a guess.
+  const spendOnEstimated = items
+    .filter((i: any) => i.status !== 'complete')
+    .reduce((s: number, i: any) => s + i.adSpend, 0);
+
+  return {
+    summary: { total, complete, missingCosts, noBom, completePct: total > 0 ? (complete / total * 100) : null, spendOnEstimated },
+    items,
+  };
+}
+
 // ── Customer cohort intelligence ──
 // Repeat-purchase rate, retention, AOV by order-count, and revenue
 // concentration (what share of revenue the top decile of customers drives).

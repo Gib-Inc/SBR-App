@@ -351,10 +351,65 @@ function calculateLeadTime(sentAt: Date | string | null | undefined, receivedAt:
   return `${diffDays} days`;
 }
 
+// Delivery status derived from the unified PO lifecycle status.
+type DeliveryState = "received" | "partial" | "none" | "cancelled";
+function deriveDelivery(po: any): DeliveryState {
+  const s = String((po as any).displayStatus || po.status || "").toUpperCase();
+  if (s === "CANCELLED") return "cancelled";
+  if (s === "RECEIVED" || s === "CLOSED") return "received";
+  if (s === "PARTIAL" || s === "PARTIAL_RECEIVED" || s === "PARTIALLY_RECEIVED") return "partial";
+  return "none";
+}
+
+// Billing status derived from the QuickBooks stamps on the PO.
+type BillingState = "paid" | "billed" | "none";
+function deriveBilling(po: any): BillingState {
+  if ((po as any).paidAt) return "paid";
+  if ((po as any).externalAccountingId) return "billed";
+  return "none";
+}
+
+function DeliveryStatusBadge({ po }: { po: any }) {
+  const d = deriveDelivery(po);
+  const cfg: Record<DeliveryState, { label: string; icon: any; cls: string }> = {
+    received: { label: "Received", icon: PackageCheck, cls: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+    partial: { label: "Partial", icon: Truck, cls: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" },
+    none: { label: "Not received", icon: Clock, cls: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
+    cancelled: { label: "—", icon: XCircle, cls: "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-500" },
+  };
+  const c = cfg[d];
+  const Icon = c.icon;
+  return (
+    <Badge className={`${c.cls} font-medium`} data-testid={`badge-delivery-${d}`}>
+      <Icon className="w-3 h-3 mr-1" />
+      {c.label}
+    </Badge>
+  );
+}
+
+function BillingStatusBadge({ po }: { po: any }) {
+  const b = deriveBilling(po);
+  const cfg: Record<BillingState, { label: string; icon: any; cls: string }> = {
+    paid: { label: "Paid", icon: CheckCircle2, cls: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" },
+    billed: { label: "Billed", icon: FileText, cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+    none: { label: "Not billed", icon: Clock, cls: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
+  };
+  const c = cfg[b];
+  const Icon = c.icon;
+  return (
+    <Badge className={`${c.cls} font-medium`} title="QuickBooks billing: a Bill is created when the PO is received, then marked Paid on mark-paid." data-testid={`badge-billing-${b}`}>
+      <Icon className="w-3 h-3 mr-1" />
+      {c.label}
+    </Badge>
+  );
+}
+
 export default function PurchaseOrders() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [deliveryFilter, setDeliveryFilter] = useState<string>("all");
+  const [billingFilter, setBillingFilter] = useState<string>("all");
   const [selectedPO, setSelectedPO] = useState<PurchaseOrderWithSupplier | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -615,8 +670,10 @@ export default function PurchaseOrders() {
     // Use displayStatus for filtering (unified lifecycle status)
     const poDisplayStatus = (po as any).displayStatus || po.status;
     const matchesStatus = statusFilter === "all" || poDisplayStatus === statusFilter;
-    
-    return matchesSearch && matchesStatus;
+    const matchesDelivery = deliveryFilter === "all" || deriveDelivery(po) === deliveryFilter;
+    const matchesBilling = billingFilter === "all" || deriveBilling(po) === billingFilter;
+
+    return matchesSearch && matchesStatus && matchesDelivery && matchesBilling;
   });
 
   const sortedPOs = [...filteredPOs].sort((a, b) => {
@@ -823,6 +880,30 @@ export default function PurchaseOrders() {
                   <SelectItem value="CANCELLED">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={deliveryFilter} onValueChange={setDeliveryFilter}>
+                <SelectTrigger className="w-40" data-testid="select-delivery-filter">
+                  <Truck className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="Delivery" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Deliveries</SelectItem>
+                  <SelectItem value="none">Not received</SelectItem>
+                  <SelectItem value="partial">Partial</SelectItem>
+                  <SelectItem value="received">Received</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={billingFilter} onValueChange={setBillingFilter}>
+                <SelectTrigger className="w-40" data-testid="select-billing-filter">
+                  <FileText className="h-4 w-4 mr-2" />
+                  <SelectValue placeholder="Billing" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Billing</SelectItem>
+                  <SelectItem value="none">Not billed</SelectItem>
+                  <SelectItem value="billed">Billed</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                </SelectContent>
+              </Select>
               <Badge variant="secondary" className="text-sm font-medium" data-testid="badge-total-pos">
                 {sortedPOs.length} {sortedPOs.length === 1 ? 'PO' : 'POs'}
               </Badge>
@@ -851,13 +932,15 @@ export default function PurchaseOrders() {
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Expected</th>
                   <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">Lead Time</th>
                   <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Total</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Delivery</th>
+                  <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Billing</th>
                   <th className="sticky right-0 z-20 bg-muted p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedPOs.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="h-32 text-center text-muted-foreground">
+                    <td colSpan={12} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -921,6 +1004,12 @@ export default function PurchaseOrders() {
                       </td>
                       <td className="p-3 align-middle whitespace-nowrap text-right font-medium">
                         {formatCurrency(po.total)}
+                      </td>
+                      <td className="p-3 align-middle whitespace-nowrap">
+                        <DeliveryStatusBadge po={po} />
+                      </td>
+                      <td className="p-3 align-middle whitespace-nowrap">
+                        <BillingStatusBadge po={po} />
                       </td>
                       <td className={`sticky right-0 z-10 p-3 align-middle whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)] ${isAutoDraft ? "bg-amber-50 dark:bg-amber-950/30" : "bg-background"}`}>
                         <div className="flex justify-end gap-2">

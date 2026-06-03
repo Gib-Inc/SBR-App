@@ -15,7 +15,22 @@ const WINDSOR_BASE = "https://connectors.windsor.ai/all";
 
 // Fields we ask Windsor for. Defensive: not every source populates every
 // field, so the ingestion layer reads multiple aliases and coerces to numbers.
-const WINDSOR_FIELDS = [
+// Two field sets: Google Ads doesn't allow product_item_id in the same query
+// as geographic/device segments. We pull them separately and merge.
+const PRODUCT_FIELDS = [
+  "source",
+  "date",
+  "campaign",
+  "clicks",
+  "impressions",
+  "spend",
+  "conversions",
+  "total_conversion_value",
+  "product_item_id",
+  "currency",
+].join(",");
+
+const DIMENSION_FIELDS = [
   "source",
   "date",
   "campaign",
@@ -26,7 +41,6 @@ const WINDSOR_FIELDS = [
   "spend",
   "conversions",
   "total_conversion_value",
-  "product_item_id",
   "currency",
 ].join(",");
 
@@ -54,17 +68,12 @@ export interface WindsorFetchOptions {
   dateTo: string; // YYYY-MM-DD
 }
 
-/**
- * Pull raw rows from Windsor for the given date window. Returns the flat
- * `data` array exactly as Windsor sends it; mapping/normalization happens in
- * the ingestion service so this stays a thin transport layer.
- */
-export async function fetchWindsorRows(opts: WindsorFetchOptions): Promise<WindsorRow[]> {
+async function fetchWithFields(opts: WindsorFetchOptions, fields: string): Promise<WindsorRow[]> {
   const params = new URLSearchParams({
     api_key: opts.apiKey,
     date_from: opts.dateFrom,
     date_to: opts.dateTo,
-    fields: WINDSOR_FIELDS,
+    fields,
     _renderer: "json",
   });
 
@@ -79,6 +88,24 @@ export async function fetchWindsorRows(opts: WindsorFetchOptions): Promise<Winds
   const json = (await res.json()) as { data?: WindsorRow[]; error?: string };
   if (json.error) throw new Error(`Windsor API error: ${json.error}`);
   return Array.isArray(json.data) ? json.data : [];
+}
+
+/**
+ * Pull raw rows from Windsor for the given date window. Makes two requests:
+ * 1. Product-level (with product_item_id, no device/country)
+ * 2. Dimension-level (with device/country, no product_item_id)
+ * Google Ads doesn't allow mixing product segments with geographic/device
+ * segments in one query, so splitting avoids the 400 error.
+ */
+export async function fetchWindsorRows(opts: WindsorFetchOptions): Promise<WindsorRow[]> {
+  const [productRows, dimensionRows] = await Promise.all([
+    fetchWithFields(opts, PRODUCT_FIELDS),
+    fetchWithFields(opts, DIMENSION_FIELDS).catch((e) => {
+      console.warn(`[Windsor] Dimension fetch failed (non-fatal): ${e.message}`);
+      return [] as WindsorRow[];
+    }),
+  ]);
+  return [...productRows, ...dimensionRows];
 }
 
 /**

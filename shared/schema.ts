@@ -651,6 +651,8 @@ export const purchaseOrderLines = pgTable("purchase_order_lines", {
   // Item Details (denormalized for historical record)
   sku: text("sku"), // Snapshot at line creation
   itemName: text("item_name"), // Snapshot at line creation
+  supplierItemCode: text("supplier_item_code"), // Vendor's own SKU/part number for this line item
+  internalBarcode: text("internal_barcode"), // Item barcode snapshot (scan-receiving / invoice matching)
   unitOfMeasure: text("unit_of_measure").notNull().default('EA'), // EA, CS, PK, etc.
   
   // Quantities

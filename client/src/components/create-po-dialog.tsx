@@ -63,6 +63,8 @@ interface DraftLineItem {
   taxRate?: number | null; // Tax percentage from QuickBooks
   unitOfMeasure?: string; // EA, CS, PK, etc.
   expectedArrivalDate?: string | null; // per-line ETA (YYYY-MM-DD)
+  supplierItemCode?: string | null; // vendor's SKU/part number
+  internalBarcode?: string | null; // item barcode snapshot
   quickbooksItemId?: string | null;
   // Snapshots from /api/supplier-items?supplierId for the suggested-order
   // calculation. Optional because manually-added lines may not have them.
@@ -375,6 +377,8 @@ export function CreatePODialog({
             taxAmount: line.taxAmount || 0,
             unitOfMeasure: line.unitOfMeasure || 'EA',
             expectedArrivalDate: line.expectedArrivalDate || undefined,
+            supplierItemCode: line.supplierItemCode || undefined,
+            internalBarcode: line.internalBarcode || undefined,
           })),
       };
 
@@ -528,6 +532,18 @@ export function CreatePODialog({
   const handleUpdateLineExpected = useCallback((lineId: string, date: string) => {
     setLineItems(prev => prev.map(l =>
       l.id === lineId ? { ...l, expectedArrivalDate: date || null } : l
+    ));
+  }, []);
+
+  const handleUpdateLineSupplierCode = useCallback((lineId: string, code: string) => {
+    setLineItems(prev => prev.map(l =>
+      l.id === lineId ? { ...l, supplierItemCode: code || null } : l
+    ));
+  }, []);
+
+  const handleUpdateLineBarcode = useCallback((lineId: string, code: string) => {
+    setLineItems(prev => prev.map(l =>
+      l.id === lineId ? { ...l, internalBarcode: code || null } : l
     ));
   }, []);
 
@@ -820,6 +836,22 @@ export function CreatePODialog({
                                     )}
                                   </p>
                                 )}
+                                <div className="mt-1 flex gap-1">
+                                  <Input
+                                    value={line.supplierItemCode ?? ""}
+                                    onChange={(e) => handleUpdateLineSupplierCode(line.id, e.target.value)}
+                                    placeholder="Supplier code"
+                                    className="h-7 text-xs"
+                                    data-testid={`input-suppliercode-${line.id}`}
+                                  />
+                                  <Input
+                                    value={line.internalBarcode ?? ""}
+                                    onChange={(e) => handleUpdateLineBarcode(line.id, e.target.value)}
+                                    placeholder="Barcode"
+                                    className="h-7 text-xs"
+                                    data-testid={`input-barcode-${line.id}`}
+                                  />
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell>

@@ -22,6 +22,7 @@
 // routes work, but failures are logged loudly so they're caught fast.
 
 import pg from "pg";
+import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
 
 const REQUIRED_TABLES = [
   "production_logs",
@@ -510,6 +511,51 @@ async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
   return result.rowCount ?? 0;
 }
 
+// Auto-seed historical P&L data from the QuickBooks snapshot if the table is
+// empty. Uses ON CONFLICT (year, month) DO NOTHING for safety so re-runs or
+// partial seeds never create duplicates. Non-fatal — boot continues on error.
+async function seedHistoricalPLIfEmpty(client: pg.PoolClient): Promise<void> {
+  const countResult = await client.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM historical_monthly_sales`,
+  );
+  const existingCount = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  if (existingCount > 0) {
+    console.log(`[Startup Checks] Historical P&L already populated (${existingCount} rows)`);
+    return;
+  }
+
+  let inserted = 0;
+  for (const row of HISTORICAL_PL_DATA) {
+    const grossMarginPct =
+      row.totalIncome > 0
+        ? (row.grossProfit / row.totalIncome) * 100
+        : 0;
+    const r = await client.query(
+      `INSERT INTO historical_monthly_sales
+         (year, month, revenue, returns, total_income, cogs, gross_profit,
+          ad_spend, total_expenses, net_income, gross_margin_pct, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'quickbooks')
+       ON CONFLICT (year, month) DO NOTHING`,
+      [
+        row.year,
+        row.month,
+        row.grossSales,
+        row.returns,
+        row.totalIncome,
+        row.cogs,
+        row.grossProfit,
+        row.adSpend,
+        row.totalExpenses,
+        row.netIncome,
+        grossMarginPct,
+      ],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  console.log(`[Startup Checks] Seeded ${inserted} months of historical P&L data`);
+}
+
 export async function runStartupChecks(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
@@ -540,6 +586,15 @@ export async function runStartupChecks(): Promise<void> {
       await ensureProductionLogsShape(client);
     } catch (err: any) {
       console.error("[Startup Checks] ensureProductionLogsShape failed:", err?.message ?? err);
+    }
+
+    // ── Auto-seed historical P&L from QuickBooks snapshot ──────────────
+    // Tables must exist before we can seed — this runs after
+    // ensureTablesExist which creates historical_monthly_sales.
+    try {
+      await seedHistoricalPLIfEmpty(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Historical P&L seed failed:", err?.message ?? err);
     }
 
     let allOk = true;

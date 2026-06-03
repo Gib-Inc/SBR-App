@@ -1,12 +1,15 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/queryClient';
+import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, TrendingUp, TrendingDown, Minus, DollarSign, ShoppingCart, Users, MapPin, Package } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Loader2, TrendingUp, TrendingDown, Minus, DollarSign, ShoppingCart, Users, MapPin, Package, RefreshCw, Megaphone } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { RevenueTargetGauge } from './revenue-target-gauge';
 import { NextBestActionView } from './next-best-action-view';
 import { WastedSpendView } from './wasted-spend-view';
-import type { GeoState, RevenueTarget } from './types';
+import type { GeoState, RevenueTarget, ChannelMatrixItem } from './types';
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
 
@@ -160,6 +163,106 @@ function CustomerInsight({ days }: { days: number }) {
   );
 }
 
+function WindsorAdSpendCard({ days }: { days: number }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<{ channels: ChannelMatrixItem[] }>({
+    queryKey: ['/api/marketing-analytics/cmo/channel-matrix', { days }],
+    queryFn: async () => {
+      const res = await fetch(`/api/marketing-analytics/cmo/channel-matrix?days=${days}`, { credentials: 'include' });
+      return res.json();
+    },
+  });
+
+  const sync = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest('POST', '/api/marketing-analytics/cmo/windsor/sync', { days: 90 });
+      return r.json();
+    },
+    onSuccess: (d: any) => {
+      qc.invalidateQueries({ queryKey: ['/api/marketing-analytics/cmo/channel-matrix'] });
+      if (d.rowsUpserted > 0) {
+        toast({ title: 'Windsor sync complete', description: `${d.rowsUpserted} rows across ${Object.keys(d.platforms || {}).join(', ') || 'no platforms'}` });
+      } else {
+        toast({ title: 'Windsor sync', description: (d.errors?.[0]) || 'No rows returned. Check the Windsor API key.', variant: 'destructive' });
+      }
+    },
+    onError: (e: any) => toast({ title: 'Windsor sync failed', description: e.message, variant: 'destructive' }),
+  });
+
+  const channels = data?.channels ?? [];
+  const totalSpend = channels.reduce((s, c) => s + c.spend, 0);
+  const totalRevenue = channels.reduce((s, c) => s + c.revenue, 0);
+  const blendedRoas = totalSpend > 0 ? totalRevenue / totalSpend : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-1">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-1">
+            <Megaphone className="h-3.5 w-3.5" /> Windsor Ad Spend ({days}d)
+          </CardTitle>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => sync.mutate()}
+            disabled={sync.isPending}
+          >
+            {sync.isPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+            Sync Windsor
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin" /></div>
+        ) : channels.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-3">No ad data yet. Hit "Sync Windsor" to pull.</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-muted-foreground">Total Spend</div>
+                <div className="text-lg font-bold">{fmt(totalSpend)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-muted-foreground">Total Revenue</div>
+                <div className="text-lg font-bold">{fmt(totalRevenue)}</div>
+              </div>
+              {blendedRoas != null && (
+                <div className="text-right">
+                  <div className="text-xs text-muted-foreground">Blended ROAS</div>
+                  <div className={`text-lg font-bold ${blendedRoas >= 1 ? 'text-green-600' : 'text-red-600'}`}>
+                    {blendedRoas.toFixed(1)}x
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="space-y-1">
+              {channels.map((c) => (
+                <div key={c.platform} className="flex items-center justify-between text-sm border-b last:border-0 py-1">
+                  <span className="font-medium">{c.platform}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-muted-foreground">{fmt(c.spend)}</span>
+                    <span>{fmt(c.revenue)}</span>
+                    <Badge
+                      variant="outline"
+                      className={`text-xs w-14 justify-center ${c.roas >= 1 ? 'text-green-700' : 'text-red-700'}`}
+                    >
+                      {c.roas.toFixed(1)}x
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function CommandCenterView({ days }: { days: number }) {
   return (
     <div className="space-y-4">
@@ -172,6 +275,7 @@ export function CommandCenterView({ days }: { days: number }) {
           <TopProducts days={days} />
         </div>
         <div className="space-y-4">
+          <WindsorAdSpendCard days={days} />
           <WastedSpendView days={days} compact />
           <TopStates days={days} />
           <CustomerInsight days={days} />

@@ -30,6 +30,8 @@ const REQUIRED_TABLES = [
   "inventory_lots",
   "lot_consumption_events",
   "backorder_notices",
+  "historical_monthly_sales",
+  "marketing_recommendations",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -118,6 +120,41 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
     );
     CREATE INDEX IF NOT EXISTS backorder_notices_sales_order_id_idx ON backorder_notices(sales_order_id);
     CREATE UNIQUE INDEX IF NOT EXISTS backorder_notices_order_item_unique_idx ON backorder_notices(sales_order_id, item_id);
+  `,
+  // Marketing Analytics CMO history. The unique (year, month) index backs the
+  // ON CONFLICT upsert in seedHistoricalSales — without it the QuickBooks P&L
+  // import throws "no unique constraint matching ON CONFLICT" and every row is
+  // skipped. drizzle-kit push is skipped at build time (no DATABASE_URL), so
+  // this is the only path that creates the table on Railway.
+  historical_monthly_sales: `
+    CREATE TABLE IF NOT EXISTS historical_monthly_sales (
+      id               VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      year             INTEGER NOT NULL,
+      month            INTEGER NOT NULL,
+      revenue          REAL NOT NULL DEFAULT 0,
+      returns          REAL DEFAULT 0,
+      total_income     REAL DEFAULT 0,
+      cogs             REAL DEFAULT 0,
+      gross_profit     REAL DEFAULT 0,
+      ad_spend         REAL DEFAULT 0,
+      total_expenses   REAL DEFAULT 0,
+      net_income       REAL DEFAULT 0,
+      gross_margin_pct REAL DEFAULT 0,
+      source           TEXT NOT NULL DEFAULT 'spreadsheet',
+      created_at       TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS historical_monthly_sales_year_month_idx ON historical_monthly_sales(year, month);
+  `,
+  marketing_recommendations: `
+    CREATE TABLE IF NOT EXISTS marketing_recommendations (
+      id              VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+      recommendations JSONB,
+      input_snapshot  JSONB,
+      model           TEXT,
+      created_by      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS marketing_recommendations_generated_at_idx ON marketing_recommendations(generated_at);
   `,
 };
 

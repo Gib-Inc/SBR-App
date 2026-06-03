@@ -266,11 +266,13 @@ async function performAdPerformanceSync(): Promise<void> {
   let usersChecked = 0;
   let googleSynced = 0;
   let metaSynced = 0;
+  let dashboardSynced = 0;
   const errors: string[] = [];
 
   try {
     const { googleAdsDemandService } = await import("./services/google-ads-demand-service");
     const { metaAdsDemandService } = await import("./services/meta-ads-demand-service");
+    const { adMetricsSyncService } = await import("./services/ad-metrics-sync");
     const allUsers = await storage.getAllUsers();
 
     for (const user of allUsers) {
@@ -306,18 +308,35 @@ async function performAdPerformanceSync(): Promise<void> {
       } catch (e: any) {
         errors.push(`meta/${user.id}: ${e?.message ?? e}`);
       }
+
+      // Dashboard feed: aggregate Meta + Google by SKU into ad_metrics_daily,
+      // the table the marketing-analytics dashboard reads. No-ops if the user
+      // has no connected ad platforms. Without this on a schedule the dashboard
+      // has no live data feed (its only other trigger is a manual route).
+      try {
+        const r = await adMetricsSyncService.syncAllForUser(user.id, 7);
+        const upserted = r.reduce((s, x) => s + (x.metricsUpserted || 0), 0);
+        if (upserted > 0) {
+          dashboardSynced++;
+          console.log(`[Ad Sync] ad_metrics_daily for user ${user.id}: ${upserted} rows upserted`);
+        }
+        const failed = r.filter((x) => !x.success);
+        if (failed.length) errors.push(`admetrics/${user.id}: ${failed.map((x) => x.error).slice(0, 1).join("; ")}`);
+      } catch (e: any) {
+        errors.push(`admetrics/${user.id}: ${e?.message ?? e}`);
+      }
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced} (users checked ${usersChecked})`);
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, dashboard ${dashboardSynced} (users checked ${usersChecked})`);
     await recordRunSafe({
       schedulerId: "ad-performance-sync",
-      schedulerName: "Marketing ad performance sync (Google + Meta)",
+      schedulerName: "Marketing ad performance sync (Google + Meta + dashboard)",
       status: errors.length > 0 ? "partial" : "success",
       startedAt: schedulerStartedAt,
       durationMs: duration,
       errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
-      details: { usersChecked, googleSynced, metaSynced, errorCount: errors.length },
+      details: { usersChecked, googleSynced, metaSynced, dashboardSynced, errorCount: errors.length },
     });
   } catch (error: any) {
     console.error("[Ad Sync] Failed:", error);

@@ -83,11 +83,24 @@ export async function fetchWindsorRows(opts: WindsorFetchOptions): Promise<Winds
  */
 export function normalizePlatform(source: string | undefined): string | null {
   if (!source) return null;
-  const s = source.toLowerCase();
-  if (s.includes("facebook") || s.includes("meta") || s.includes("instagram")) return "META";
-  if (s.includes("google")) return "GOOGLE";
+  const s = source.toLowerCase().trim();
+  // Skip non-ad traffic sources
+  if (s === "(direct)" || s === "(not set)" || s === "(none)" || s === "direct") return null;
+  // Meta family (Facebook + Instagram)
+  if (s === "fb" || s === "ig" || s.includes("facebook") || s.includes("meta") || s.includes("instagram")) return "META";
+  // Google family (Search + Shopping + YouTube)
+  if (s === "google" || s.includes("google") || s === "youtube.com" || s.includes("youtube")) return "GOOGLE";
+  // Microsoft / Bing
+  if (s === "bing" || s.includes("bing") || s.includes("microsoft")) return "MICROSOFT";
+  // Amazon
   if (s.includes("amazon")) return "AMAZON";
+  // TikTok
   if (s.includes("tiktok")) return "TIKTOK";
+  // Pinterest
   if (s.includes("pinterest")) return "PINTEREST";
+  // Reddit
+  if (s === "reddit.com" || s.includes("reddit")) return "REDDIT";
+  // Yahoo / Gemini
+  if (s === "yahoo" || s.includes("yahoo")) return "YAHOO";
   return source.toUpperCase();
 }

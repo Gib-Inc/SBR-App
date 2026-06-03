@@ -263,10 +263,47 @@ function WindsorAdSpendCard({ days }: { days: number }) {
   );
 }
 
+function MorningHeadline() {
+  const { data: ltv } = useQuery<{ summary: { blendedCac: number | null; blendedRatio: number | null; healthy: boolean | null } }>({
+    queryKey: ['/api/marketing-analytics/cmo/ltv-cac'],
+  });
+  const { data: cohorts } = useQuery<{ repeatRate: number | null; top10PctShare: number | null }>({
+    queryKey: ['/api/marketing-analytics/cmo/customer-cohorts'],
+  });
+  const s = ltv?.summary;
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground">LTV : CAC</div>
+        <div className={`text-xl font-bold ${s?.healthy === false ? 'text-red-600' : s?.healthy ? 'text-green-600' : ''}`}>
+          {s?.blendedRatio != null ? `${s.blendedRatio.toFixed(1)}x` : '—'}
+        </div>
+        <div className="text-xs text-muted-foreground">healthy ≥ 3x</div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground">Blended CAC</div>
+        <div className="text-xl font-bold">{s?.blendedCac != null ? `$${Math.round(s.blendedCac).toLocaleString()}` : '—'}</div>
+        <div className="text-xs text-muted-foreground">cost per new customer</div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground">Repeat Rate</div>
+        <div className="text-xl font-bold">{cohorts?.repeatRate != null ? `${cohorts.repeatRate.toFixed(1)}%` : '—'}</div>
+        <div className="text-xs text-muted-foreground">bought 2+ times</div>
+      </CardContent></Card>
+      <Card><CardContent className="pt-3 pb-2">
+        <div className="text-xs text-muted-foreground">Top 10% Share</div>
+        <div className="text-xl font-bold">{cohorts?.top10PctShare != null ? `${cohorts.top10PctShare.toFixed(0)}%` : '—'}</div>
+        <div className="text-xs text-muted-foreground">of revenue</div>
+      </CardContent></Card>
+    </div>
+  );
+}
+
 export function CommandCenterView({ days }: { days: number }) {
   return (
     <div className="space-y-4">
       <TopMetrics />
+      <MorningHeadline />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 space-y-4">

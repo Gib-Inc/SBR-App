@@ -18,6 +18,7 @@ import { SalesVelocityView } from '@/components/marketing-analytics/sales-veloci
 import { MultiYearView } from '@/components/marketing-analytics/multi-year-view';
 import { CMOHistoryView } from '@/components/marketing-analytics/cmo-history-view';
 import { LtvCacView } from '@/components/marketing-analytics/ltv-cac-view';
+import { CustomerCohortsView } from '@/components/marketing-analytics/customer-cohorts-view';
 
 export default function MarketingAnalytics() {
   const [days, setDays] = useState(30);
@@ -73,7 +74,7 @@ export default function MarketingAnalytics() {
         <TabsContent value="spend"><SpendPacingView days={days} /></TabsContent>
         <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
         <TabsContent value="breakeven"><BreakevenRoasView days={days} /></TabsContent>
-        <TabsContent value="customers"><CustomerSplitView days={days} /></TabsContent>
+        <TabsContent value="customers"><div className="space-y-4"><CustomerCohortsView /><CustomerSplitView days={days} /></div></TabsContent>
         <TabsContent value="ltvcac"><LtvCacView /></TabsContent>
         <TabsContent value="geography"><GeographicView days={days} /></TabsContent>
         <TabsContent value="products"><ProductPerformanceView days={days} /></TabsContent>

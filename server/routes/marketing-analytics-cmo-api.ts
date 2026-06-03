@@ -17,7 +17,7 @@ import {
   queryCustomerSplit, queryGeographic, queryCreativeFatigue, queryWastedSpend,
   queryDailyRevenueSpark, queryProductMixTrend, queryRepeatPurchase, queryTopMetrics,
   queryMonthlySales, queryMonthlyAdSpend, queryMonthlyBlended,
-  querySalesVelocity, queryMultiYearComparison, queryLtvCac,
+  querySalesVelocity, queryMultiYearComparison, queryLtvCac, queryCustomerCohorts,
 } from './marketing-analytics-queries-v2';
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
@@ -66,6 +66,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/sales-velocity', requireAuth, handle((req) => querySalesVelocity(getDb(), parseDays(req))));
   app.get('/api/marketing-analytics/cmo/multi-year', requireAuth, handle(() => queryMultiYearComparison(getDb())));
   app.get('/api/marketing-analytics/cmo/ltv-cac', requireAuth, handle((req) => queryLtvCac(getDb(), Math.min(Math.max(parseInt(req.query.months as string) || 18, 1), 60))));
+  app.get('/api/marketing-analytics/cmo/customer-cohorts', requireAuth, handle(() => queryCustomerCohorts(getDb())));
 
   // Windsor.ai unified ad-spend ingestion — populates ad_metrics_daily for
   // Google + Meta + Amazon + TikTok from one connector, before native OAuth.

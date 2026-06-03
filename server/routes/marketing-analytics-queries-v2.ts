@@ -421,25 +421,39 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     GROUP BY date_trunc('month', date)
     ORDER BY month
   `);
+  // Historical ad spend (QuickBooks) keyed to month-start, used as a fallback
+  // for months that have no live ad_metrics_daily rows yet — keeps the blended
+  // ROAS / CAC series continuous back through the QuickBooks history instead of
+  // dropping to zero before the platforms were connected.
+  const hist = await db.execute(sql`
+    SELECT make_date(year, month, 1)::text as month, COALESCE(ad_spend, 0)::real as ad_spend
+    FROM historical_monthly_sales
+  `);
 
   const salesMap = new Map((rows(sales) as any[]).map(r => [r.month, r]));
   const adsMap = new Map((rows(ads) as any[]).map(r => [r.month, r]));
+  const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r.ad_spend]));
   const allMonths = new Set([...salesMap.keys(), ...adsMap.keys()]);
 
   return Array.from(allMonths).sort().map(month => {
     const s = salesMap.get(month) || { total_revenue: 0, new_customers: 0 };
     const a = adsMap.get(month) || { total_spend: 0, ad_revenue: 0, total_conversions: 0 };
+    // Use live spend if present, else fall back to the QuickBooks total.
+    const liveSpend = a.total_spend || 0;
+    const adSpend = liveSpend > 0 ? liveSpend : (histMap.get(month) || 0);
+    const spendSource = liveSpend > 0 ? 'live' : (histMap.has(month) ? 'historical' : 'none');
     return {
       month,
       totalRevenue: s.total_revenue,
-      adSpend: a.total_spend,
+      adSpend,
       adRevenue: a.ad_revenue,
-      blendedRoas: a.total_spend > 0 ? s.total_revenue / a.total_spend : null,
-      adRoas: a.total_spend > 0 ? a.ad_revenue / a.total_spend : null,
-      cac: s.new_customers > 0 ? a.total_spend / s.new_customers : null,
+      spendSource,
+      blendedRoas: adSpend > 0 ? s.total_revenue / adSpend : null,
+      adRoas: liveSpend > 0 ? a.ad_revenue / liveSpend : null,
+      cac: s.new_customers > 0 && adSpend > 0 ? adSpend / s.new_customers : null,
       newCustomers: s.new_customers,
       conversions: a.total_conversions,
-      spendToRevenueRatio: s.total_revenue > 0 ? (a.total_spend / s.total_revenue * 100) : null,
+      spendToRevenueRatio: s.total_revenue > 0 ? (adSpend / s.total_revenue * 100) : null,
     };
   });
 }
@@ -645,5 +659,97 @@ export async function queryLtvCac(db: DB, months: number = 18) {
       // Healthy DTC benchmark is 3x. Flag below 3.
       healthy: blendedRatio != null ? blendedRatio >= 3 : null,
     },
+  };
+}
+
+// ── Customer cohort intelligence ──
+// Repeat-purchase rate, retention, AOV by order-count, and revenue
+// concentration (what share of revenue the top decile of customers drives).
+// All from sales_orders — no ad APIs needed.
+export async function queryCustomerCohorts(db: DB) {
+  // Per-customer lifetime stats.
+  const perCustomer = await db.execute(sql`
+    SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+           COUNT(*)::int as orders,
+           SUM(total_amount)::real as ltv,
+           MIN(order_date) as first_order,
+           MAX(order_date) as last_order
+    FROM sales_orders
+    WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+      AND COALESCE(customer_email, external_customer_id, id) IS NOT NULL
+    GROUP BY cust_id
+  `);
+  const customers = rows(perCustomer) as any[];
+  const total = customers.length;
+
+  if (total === 0) {
+    return {
+      totalCustomers: 0, repeatCustomers: 0, repeatRate: null, avgOrdersPerCustomer: null,
+      oneTime: 0, twoOrders: 0, threePlus: 0,
+      revenueConcentration: null, top10PctShare: null, retention90d: null,
+      byOrderCount: [],
+    };
+  }
+
+  const repeat = customers.filter(c => c.orders >= 2).length;
+  const oneTime = customers.filter(c => c.orders === 1).length;
+  const twoOrders = customers.filter(c => c.orders === 2).length;
+  const threePlus = customers.filter(c => c.orders >= 3).length;
+  const totalOrders = customers.reduce((s, c) => s + c.orders, 0);
+  const totalRevenue = customers.reduce((s, c) => s + (c.ltv || 0), 0);
+
+  // Revenue concentration — top 10% of customers by LTV.
+  const sorted = [...customers].sort((a, b) => (b.ltv || 0) - (a.ltv || 0));
+  const top10Count = Math.max(1, Math.floor(total * 0.1));
+  const top10Revenue = sorted.slice(0, top10Count).reduce((s, c) => s + (c.ltv || 0), 0);
+  const top10PctShare = totalRevenue > 0 ? (top10Revenue / totalRevenue * 100) : null;
+
+  // 90-day retention: of customers whose FIRST order was 90-180 days ago
+  // (so they had a full window to come back), what share ordered again
+  // within 90 days of that first order.
+  const now = Date.now();
+  const cohortEligible = customers.filter(c => {
+    const first = new Date(c.first_order).getTime();
+    const ageDays = (now - first) / 86400000;
+    return ageDays >= 90 && ageDays <= 180;
+  });
+  const retained = cohortEligible.filter(c => {
+    if (c.orders < 2) return false;
+    const first = new Date(c.first_order).getTime();
+    const last = new Date(c.last_order).getTime();
+    return (last - first) / 86400000 <= 90;
+  });
+  const retention90d = cohortEligible.length > 0
+    ? (retained.length / cohortEligible.length * 100) : null;
+
+  // AOV / LTV by order-count bucket.
+  const buckets = [
+    { label: '1 order', filter: (c: any) => c.orders === 1 },
+    { label: '2 orders', filter: (c: any) => c.orders === 2 },
+    { label: '3-4 orders', filter: (c: any) => c.orders >= 3 && c.orders <= 4 },
+    { label: '5+ orders', filter: (c: any) => c.orders >= 5 },
+  ];
+  const byOrderCount = buckets.map(b => {
+    const grp = customers.filter(b.filter);
+    const rev = grp.reduce((s, c) => s + (c.ltv || 0), 0);
+    return {
+      label: b.label,
+      customers: grp.length,
+      revenue: rev,
+      avgLtv: grp.length > 0 ? rev / grp.length : 0,
+      pctOfRevenue: totalRevenue > 0 ? (rev / totalRevenue * 100) : 0,
+    };
+  });
+
+  return {
+    totalCustomers: total,
+    repeatCustomers: repeat,
+    repeatRate: total > 0 ? (repeat / total * 100) : null,
+    avgOrdersPerCustomer: total > 0 ? totalOrders / total : null,
+    oneTime, twoOrders, threePlus,
+    top10PctShare,
+    retention90d,
+    totalRevenue,
+    byOrderCount,
   };
 }

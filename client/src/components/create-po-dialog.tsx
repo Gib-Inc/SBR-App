@@ -61,6 +61,7 @@ interface DraftLineItem {
   unitCost: number;
   taxAmount: number; // Manual tax input
   taxRate?: number | null; // Tax percentage from QuickBooks
+  unitOfMeasure?: string; // EA, CS, PK, etc.
   quickbooksItemId?: string | null;
   // Snapshots from /api/supplier-items?supplierId for the suggested-order
   // calculation. Optional because manually-added lines may not have them.
@@ -371,6 +372,7 @@ export function CreatePODialog({
             qtyOrdered: line.qtyOrdered,
             unitCost: line.unitCost,
             taxAmount: line.taxAmount || 0,
+            unitOfMeasure: line.unitOfMeasure || 'EA',
           })),
       };
 
@@ -512,6 +514,12 @@ export function CreatePODialog({
     if (tax < 0) return;
     setLineItems(prev => prev.map(l => 
       l.id === lineId ? { ...l, taxAmount: tax } : l
+    ));
+  }, []);
+
+  const handleUpdateLineUom = useCallback((lineId: string, uom: string) => {
+    setLineItems(prev => prev.map(l =>
+      l.id === lineId ? { ...l, unitOfMeasure: uom } : l
     ));
   }, []);
 
@@ -770,8 +778,9 @@ export function CreatePODialog({
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[40%]">Item</TableHead>
+                        <TableHead className="w-[32%]">Item</TableHead>
                         <TableHead className="w-[10%] text-center">Qty</TableHead>
+                        <TableHead className="w-[8%] text-center">UoM</TableHead>
                         <TableHead className="w-[15%] text-right">Unit Cost</TableHead>
                         <TableHead className="w-[12%] text-right">Tax</TableHead>
                         <TableHead className="w-[15%] text-right">Line Total</TableHead>
@@ -826,6 +835,14 @@ export function CreatePODialog({
                                   </button>
                                 )}
                               </div>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Input
+                                value={line.unitOfMeasure ?? 'EA'}
+                                onChange={(e) => handleUpdateLineUom(line.id, e.target.value)}
+                                className="w-16 text-center"
+                                data-testid={`input-uom-${line.id}`}
+                              />
                             </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">

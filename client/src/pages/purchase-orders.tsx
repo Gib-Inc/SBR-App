@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
@@ -410,6 +411,7 @@ export default function PurchaseOrders() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [deliveryFilter, setDeliveryFilter] = useState<string>("all");
   const [billingFilter, setBillingFilter] = useState<string>("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectedPO, setSelectedPO] = useState<PurchaseOrderWithSupplier | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -919,10 +921,38 @@ export default function PurchaseOrders() {
           </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 p-0">
+          {selectedIds.size > 0 && (
+            <div className="mx-4 mb-2 flex items-center gap-3 rounded-md border bg-muted/40 px-3 py-2">
+              <span className="text-sm font-medium" data-testid="text-bulk-count">{selectedIds.size} selected</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  sortedPOs
+                    .filter((p) => selectedIds.has(p.id))
+                    .forEach((p) => window.open(`/api/purchase-orders/${p.id}/pdf`, "_blank"))
+                }
+                data-testid="button-bulk-download"
+              >
+                <FileDown className="h-4 w-4 mr-2" />
+                Download {selectedIds.size} PDF{selectedIds.size > 1 ? "s" : ""}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} data-testid="button-bulk-clear">
+                Clear
+              </Button>
+            </div>
+          )}
           <div className="m-4 mt-0 h-[calc(100%-1rem)] min-h-0 overflow-auto rounded-md border">
             <table className="w-full table-auto">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr className="border-b">
+                  <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">
+                    <Checkbox
+                      checked={sortedPOs.length > 0 && sortedPOs.every((p) => selectedIds.has(p.id))}
+                      onCheckedChange={(c) => setSelectedIds(c ? new Set(sortedPOs.map((p) => p.id)) : new Set())}
+                      data-testid="checkbox-select-all"
+                    />
+                  </th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">PO Number</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Supplier</th>
                   <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">Status</th>
@@ -940,7 +970,7 @@ export default function PurchaseOrders() {
               <tbody>
                 {sortedPOs.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="h-32 text-center text-muted-foreground">
+                    <td colSpan={13} className="h-32 text-center text-muted-foreground">
                       {searchQuery || statusFilter !== "all"
                         ? "No purchase orders match your filters"
                         : "No purchase orders yet. Create your first one!"}
@@ -960,6 +990,19 @@ export default function PurchaseOrders() {
                       onClick={() => handleViewDetails(po)}
                       data-testid={`row-po-${po.id}`}
                     >
+                      <td className="p-3 align-middle text-center w-px" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedIds.has(po.id)}
+                          onCheckedChange={(c) =>
+                            setSelectedIds((prev) => {
+                              const next = new Set(prev);
+                              if (c) next.add(po.id); else next.delete(po.id);
+                              return next;
+                            })
+                          }
+                          data-testid={`checkbox-po-${po.id}`}
+                        />
+                      </td>
                       <td className="p-3 align-middle whitespace-nowrap font-medium">
                         <div className="flex items-center gap-2">
                           {isAutoDraft && (

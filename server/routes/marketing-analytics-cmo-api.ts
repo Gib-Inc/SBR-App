@@ -17,8 +17,9 @@ import {
   queryCustomerSplit, queryGeographic, queryCreativeFatigue, queryWastedSpend,
   queryDailyRevenueSpark, queryProductMixTrend, queryRepeatPurchase, queryTopMetrics,
   queryMonthlySales, queryMonthlyAdSpend, queryMonthlyBlended,
-  querySalesVelocity, queryMultiYearComparison,
+  querySalesVelocity, queryMultiYearComparison, queryLtvCac,
 } from './marketing-analytics-queries-v2';
+import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
@@ -64,6 +65,29 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/monthly-blended', requireAuth, handle(() => queryMonthlyBlended(getDb())));
   app.get('/api/marketing-analytics/cmo/sales-velocity', requireAuth, handle((req) => querySalesVelocity(getDb(), parseDays(req))));
   app.get('/api/marketing-analytics/cmo/multi-year', requireAuth, handle(() => queryMultiYearComparison(getDb())));
+  app.get('/api/marketing-analytics/cmo/ltv-cac', requireAuth, handle((req) => queryLtvCac(getDb(), Math.min(Math.max(parseInt(req.query.months as string) || 18, 1), 60))));
+
+  // Windsor.ai unified ad-spend ingestion — populates ad_metrics_daily for
+  // Google + Meta + Amazon + TikTok from one connector, before native OAuth.
+  app.get('/api/marketing-analytics/cmo/windsor/status', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const hasKey = !!(await getWindsorApiKey(userId));
+      res.json({ connected: hasKey });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/marketing-analytics/cmo/windsor/sync', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const days = Math.min(Math.max(parseInt(req.body?.days) || 30, 1), 365);
+      const result = await runWindsorSync(userId, days);
+      res.status(result.success || result.rowsUpserted > 0 ? 200 : 400).json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
   app.get('/api/marketing-analytics/cmo/full-year', requireAuth, handle(() => queryFullYearComparison(getDb())));
   app.post('/api/marketing-analytics/cmo/seed-historical', requireAuth, handle(() => seedHistoricalSales(getDb())));
   app.get('/api/marketing-analytics/cmo/cmo-history', requireAuth, handle(() => queryFullCMOHistory(getDb())));

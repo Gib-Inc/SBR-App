@@ -545,3 +545,105 @@ export async function queryMultiYearComparison(db: DB) {
     annual: rows(annual),
   };
 }
+
+// ── LTV / CAC by acquisition cohort ──
+// Groups customers by the MONTH of their first order, then measures the full
+// lifetime value of that cohort (all orders ever, not just the cohort month)
+// against what it cost to acquire them that month. CAC uses ad spend from
+// ad_metrics_daily when present, falling back to historical_monthly_sales.ad_spend
+// for months before the platforms were connected — so the series is continuous.
+export async function queryLtvCac(db: DB, months: number = 18) {
+  // 1. First-order month per customer + their full lifetime value.
+  const cohorts = await db.execute(sql`
+    WITH customer_first AS (
+      SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+             MIN(order_date) as first_order
+      FROM sales_orders
+      WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY cust_id
+    ),
+    customer_ltv AS (
+      SELECT COALESCE(o.customer_email, o.external_customer_id, o.id) as cust_id,
+             SUM(o.total_amount)::real as lifetime_value,
+             COUNT(*)::int as lifetime_orders
+      FROM sales_orders o
+      WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY cust_id
+    )
+    SELECT EXTRACT(YEAR FROM cf.first_order)::int as year,
+           EXTRACT(MONTH FROM cf.first_order)::int as month,
+           COUNT(*)::int as new_customers,
+           COALESCE(AVG(cl.lifetime_value), 0)::real as avg_ltv,
+           COALESCE(SUM(cl.lifetime_value), 0)::real as cohort_revenue,
+           COALESCE(AVG(cl.lifetime_orders), 0)::real as avg_orders
+    FROM customer_first cf
+    JOIN customer_ltv cl ON cl.cust_id = cf.cust_id
+    WHERE cf.first_order >= date_trunc('month', current_date) - make_interval(months => ${months})
+    GROUP BY EXTRACT(YEAR FROM cf.first_order), EXTRACT(MONTH FROM cf.first_order)
+    ORDER BY year, month
+  `);
+
+  // 2. Ad spend per month from the live fact table.
+  const liveSpend = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM date)::int as year,
+           EXTRACT(MONTH FROM date)::int as month,
+           COALESCE(SUM(spend), 0)::real as ad_spend
+    FROM ad_metrics_daily
+    GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+  `);
+
+  // 3. Historical ad spend fallback (pre-platform-connection months).
+  const histSpend = await db.execute(sql`
+    SELECT year, month, COALESCE(ad_spend, 0)::real as ad_spend
+    FROM historical_monthly_sales
+  `);
+
+  const liveMap = new Map<string, number>();
+  for (const r of rows(liveSpend)) liveMap.set(`${r.year}-${r.month}`, r.ad_spend);
+  const histMap = new Map<string, number>();
+  for (const r of rows(histSpend)) histMap.set(`${r.year}-${r.month}`, r.ad_spend);
+
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const series = rows(cohorts).map((c: any) => {
+    const key = `${c.year}-${c.month}`;
+    const adSpend = liveMap.get(key) ?? histMap.get(key) ?? 0;
+    const spendSource = liveMap.has(key) ? 'live' : (histMap.has(key) ? 'historical' : 'none');
+    const cac = c.new_customers > 0 && adSpend > 0 ? adSpend / c.new_customers : null;
+    const ltvCacRatio = cac && cac > 0 ? c.avg_ltv / cac : null;
+    return {
+      year: c.year,
+      month: c.month,
+      label: `${MONTH_NAMES[c.month]} ${String(c.year).slice(2)}`,
+      newCustomers: c.new_customers,
+      avgLtv: c.avg_ltv,
+      avgOrders: c.avg_orders,
+      cohortRevenue: c.cohort_revenue,
+      adSpend,
+      spendSource,
+      cac,
+      ltvCacRatio,
+    };
+  });
+
+  // Blended summary across the window.
+  const totalNew = series.reduce((s: number, r: any) => s + r.newCustomers, 0);
+  const totalSpend = series.reduce((s: number, r: any) => s + r.adSpend, 0);
+  const totalLtv = series.reduce((s: number, r: any) => s + r.cohortRevenue, 0);
+  const blendedCac = totalNew > 0 && totalSpend > 0 ? totalSpend / totalNew : null;
+  const blendedLtv = totalNew > 0 ? totalLtv / totalNew : null;
+  const blendedRatio = blendedCac && blendedLtv ? blendedLtv / blendedCac : null;
+
+  return {
+    series,
+    summary: {
+      totalNewCustomers: totalNew,
+      totalAdSpend: totalSpend,
+      blendedCac,
+      blendedLtv,
+      blendedRatio,
+      // Healthy DTC benchmark is 3x. Flag below 3.
+      healthy: blendedRatio != null ? blendedRatio >= 3 : null,
+    },
+  };
+}

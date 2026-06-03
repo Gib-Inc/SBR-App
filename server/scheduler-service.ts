@@ -271,10 +271,29 @@ async function performAdPerformanceSync(): Promise<void> {
   try {
     const { googleAdsDemandService } = await import("./services/google-ads-demand-service");
     const { metaAdsDemandService } = await import("./services/meta-ads-demand-service");
+    const { runWindsorSync, getWindsorApiKey } = await import("./services/windsor-ingestion-service");
     const allUsers = await storage.getAllUsers();
+    let windsorSynced = 0;
 
     for (const user of allUsers) {
       usersChecked++;
+
+      // Windsor.ai unified connector — pulls Google + Meta + Amazon + TikTok
+      // spend into ad_metrics_daily from one API key. No-op for users without
+      // a Windsor key configured (UI config or WINDSOR_API_KEY env).
+      try {
+        if (await getWindsorApiKey(user.id)) {
+          const w = await runWindsorSync(user.id, 30);
+          if (w.success || w.rowsUpserted > 0) {
+            windsorSynced++;
+            console.log(`[Ad Sync] Windsor for user ${user.id}: ${w.rowsUpserted} rows across ${Object.keys(w.platforms).join(", ") || "none"}`);
+          } else {
+            errors.push(`windsor/${user.id}: ${w.errors.slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`windsor/${user.id}: ${e?.message ?? e}`);
+      }
 
       // Google Ads — initialize() returns false (and we skip) if this user has
       // not connected/enabled Google Ads, so unconfigured users are no-ops.
@@ -309,15 +328,15 @@ async function performAdPerformanceSync(): Promise<void> {
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced} (users checked ${usersChecked})`);
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, windsor ${windsorSynced} (users checked ${usersChecked})`);
     await recordRunSafe({
       schedulerId: "ad-performance-sync",
-      schedulerName: "Marketing ad performance sync (Google + Meta)",
+      schedulerName: "Marketing ad performance sync (Google + Meta + Windsor)",
       status: errors.length > 0 ? "partial" : "success",
       startedAt: schedulerStartedAt,
       durationMs: duration,
       errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
-      details: { usersChecked, googleSynced, metaSynced, errorCount: errors.length },
+      details: { usersChecked, googleSynced, metaSynced, windsorSynced, errorCount: errors.length },
     });
   } catch (error: any) {
     console.error("[Ad Sync] Failed:", error);

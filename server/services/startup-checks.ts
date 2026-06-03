@@ -32,6 +32,7 @@ const REQUIRED_TABLES = [
   "backorder_notices",
   "historical_monthly_sales",
   "marketing_recommendations",
+  "ad_metrics_daily",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -155,6 +156,28 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
       created_by      TEXT
     );
     CREATE INDEX IF NOT EXISTS marketing_recommendations_generated_at_idx ON marketing_recommendations(generated_at);
+  `,
+  // Normalized ad-spend fact table. Windsor ingestion + the native Google/Meta
+  // syncs all upsert here, and the whole Marketing Analytics query layer reads
+  // it. The unique (platform, sku, date) index backs those upserts.
+  ad_metrics_daily: `
+    CREATE TABLE IF NOT EXISTS ad_metrics_daily (
+      id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      platform    TEXT NOT NULL,
+      sku         TEXT NOT NULL,
+      date        DATE NOT NULL,
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks      INTEGER NOT NULL DEFAULT 0,
+      spend       REAL NOT NULL DEFAULT 0,
+      conversions INTEGER DEFAULT 0,
+      revenue     REAL DEFAULT 0,
+      currency    TEXT DEFAULT 'USD',
+      created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ad_metrics_platform_sku_date_idx ON ad_metrics_daily(platform, sku, date);
+    CREATE INDEX IF NOT EXISTS ad_metrics_date_idx ON ad_metrics_daily(date);
+    CREATE INDEX IF NOT EXISTS ad_metrics_sku_idx ON ad_metrics_daily(sku);
   `,
 };
 

@@ -17,6 +17,7 @@ import { MonthlyPerformanceView } from '@/components/marketing-analytics/monthly
 import { SalesVelocityView } from '@/components/marketing-analytics/sales-velocity-view';
 import { MultiYearView } from '@/components/marketing-analytics/multi-year-view';
 import { CMOHistoryView } from '@/components/marketing-analytics/cmo-history-view';
+import { LtvCacView } from '@/components/marketing-analytics/ltv-cac-view';
 
 export default function MarketingAnalytics() {
   const [days, setDays] = useState(30);
@@ -57,6 +58,7 @@ export default function MarketingAnalytics() {
           <TabsTrigger value="channels">Channel Mix</TabsTrigger>
           <TabsTrigger value="breakeven">Break-even</TabsTrigger>
           <TabsTrigger value="customers">Customers</TabsTrigger>
+          <TabsTrigger value="ltvcac">LTV / CAC</TabsTrigger>
           <TabsTrigger value="geography">Geography</TabsTrigger>
           <TabsTrigger value="products">Products</TabsTrigger>
           <TabsTrigger value="creative">Creative Intel</TabsTrigger>
@@ -72,6 +74,7 @@ export default function MarketingAnalytics() {
         <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
         <TabsContent value="breakeven"><BreakevenRoasView days={days} /></TabsContent>
         <TabsContent value="customers"><CustomerSplitView days={days} /></TabsContent>
+        <TabsContent value="ltvcac"><LtvCacView /></TabsContent>
         <TabsContent value="geography"><GeographicView days={days} /></TabsContent>
         <TabsContent value="products"><ProductPerformanceView days={days} /></TabsContent>
         <TabsContent value="creative"><CreativeIntelligenceView days={days} /></TabsContent>

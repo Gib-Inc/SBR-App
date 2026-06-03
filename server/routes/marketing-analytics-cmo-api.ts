@@ -21,6 +21,7 @@ import {
   queryBomCompleteness,
 } from './marketing-analytics-queries-v2';
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
+import { WeeklyDigestService } from '../services/weekly-digest-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
@@ -69,6 +70,24 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/ltv-cac', requireAuth, handle((req) => queryLtvCac(getDb(), Math.min(Math.max(parseInt(req.query.months as string) || 18, 1), 60))));
   app.get('/api/marketing-analytics/cmo/customer-cohorts', requireAuth, handle(() => queryCustomerCohorts(getDb())));
   app.get('/api/marketing-analytics/cmo/bom-completeness', requireAuth, handle((req) => queryBomCompleteness(getDb(), parseDays(req))));
+
+  // Weekly CMO digest — preview (no SMS) and send-now.
+  app.get('/api/marketing-analytics/cmo/weekly-digest/preview', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const r = await WeeklyDigestService.run(req.session.userId!, { sendSms: false });
+      res.json(r);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  app.post('/api/marketing-analytics/cmo/weekly-digest/send', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const r = await WeeklyDigestService.run(req.session.userId!, { sendSms: true });
+      res.status(r.success ? 200 : 400).json(r);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // Windsor.ai unified ad-spend ingestion — populates ad_metrics_daily for
   // Google + Meta + Amazon + TikTok from one connector, before native OAuth.

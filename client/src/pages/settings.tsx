@@ -83,6 +83,7 @@ export default function Settings() {
 
         <TabsContent value="marketing" className="space-y-4">
           <MarketingIntegrationsTab />
+          <WeeklyDigestCard />
         </TabsContent>
 
         <TabsContent value="team" className="space-y-4">
@@ -98,6 +99,57 @@ export default function Settings() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function WeeklyDigestCard() {
+  const { toast } = useToast();
+  const [preview, setPreview] = useState<string | null>(null);
+
+  const previewMut = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/marketing-analytics/cmo/weekly-digest/preview", { credentials: "include" });
+      if (!res.ok) throw new Error("Preview failed");
+      return res.json();
+    },
+    onSuccess: (d: any) => setPreview(d.digest || "(empty)"),
+    onError: (e: any) => toast({ title: "Preview failed", description: e.message, variant: "destructive" }),
+  });
+
+  const sendMut = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", "/api/marketing-analytics/cmo/weekly-digest/send", {});
+      return r.json();
+    },
+    onSuccess: (d: any) => {
+      if (d.smsSent) toast({ title: "Digest sent", description: "Texted to Zo via GHL." });
+      else toast({ title: "Not sent", description: d.error || "Check GHL config.", variant: "destructive" });
+    },
+    onError: (e: any) => toast({ title: "Send failed", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2"><Mail className="h-5 w-5" /> Weekly CMO Digest</CardTitle>
+        <CardDescription>
+          A text to Zo every Monday at 7 AM MST with the headline numbers: revenue vs target, ad spend, blended ROAS, LTV:CAC, and repeat rate. Sends through the same GHL connection as the Morning Trap.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => previewMut.mutate()} disabled={previewMut.isPending}>
+            {previewMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Eye className="h-4 w-4 mr-1" />} Preview
+          </Button>
+          <Button onClick={() => sendMut.mutate()} disabled={sendMut.isPending}>
+            {sendMut.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Mail className="h-4 w-4 mr-1" />} Send now
+          </Button>
+        </div>
+        {preview && (
+          <pre className="rounded-md bg-muted p-3 text-xs whitespace-pre-wrap font-mono">{preview}</pre>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

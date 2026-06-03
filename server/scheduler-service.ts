@@ -4,6 +4,7 @@ import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 import { MorningTrapService } from "./services/morning-trap-service";
+import { WeeklyDigestService } from "./services/weekly-digest-service";
 import { recordSchedulerRun, type SchedulerRunStatus } from "./services/scheduler-run-recorder";
 import { runDriftReport } from "./services/inventory-drift-service";
 
@@ -31,6 +32,7 @@ let morningTrapTimer: NodeJS.Timeout | null = null;
 let velocityTimer: NodeJS.Timeout | null = null;
 let driftReportTimer: NodeJS.Timeout | null = null;
 let adSyncTimer: NodeJS.Timeout | null = null;
+let weeklyDigestTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -407,6 +409,38 @@ async function performMorningTrapCheck(): Promise<void> {
 }
 
 /**
+ * Weekly CMO digest. Fires daily at 7 AM MST but only sends on Mondays —
+ * the headline CMO numbers (revenue vs target, blended ROAS, LTV:CAC,
+ * repeat rate) texted to Zo via GHL.
+ */
+async function performWeeklyDigest(): Promise<void> {
+  // Gate to Monday in Mountain Time (UTC-7). 7 AM MST = 14:00 UTC, so the
+  // UTC day is the same as the MT day at that hour.
+  const dayOfWeek = new Date().getUTCDay(); // 0=Sun, 1=Mon
+  if (dayOfWeek !== 1) {
+    return;
+  }
+  console.log("[Scheduler] Starting Weekly CMO Digest...");
+  const startTime = Date.now();
+  try {
+    const allUsers = await storage.getAllUsers();
+    const adminUser = allUsers.find(u => u.role === 'admin');
+    if (!adminUser) {
+      console.warn("[Scheduler] No admin user found for weekly digest");
+      return;
+    }
+    const result = await WeeklyDigestService.run(adminUser.id, { sendSms: true });
+    const duration = Date.now() - startTime;
+    console.log(`[Scheduler] Weekly CMO Digest completed in ${duration}ms. SMS sent: ${result.smsSent}`);
+    if (!result.success && result.error) {
+      console.warn(`[Scheduler] Weekly Digest issue: ${result.error}`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Error during Weekly CMO Digest:", error);
+  }
+}
+
+/**
  * Refresh items.daily_usage from sales velocity. Runs nightly at 12:05
  * AM MT (just after the morning's sales sync would settle a UTC day) so
  * the day's order activity is reflected in the next day's reorder
@@ -693,6 +727,26 @@ export async function startScheduler(): Promise<void> {
     console.error("[Scheduler] Morning Trap failed to initialize:", err);
   }
 
+  // ── Weekly CMO digest (Mondays 7 AM MST) ──────────────────────────────
+  try {
+    if (weeklyDigestTimer) {
+      clearTimeout(weeklyDigestTimer);
+      clearInterval(weeklyDigestTimer);
+    }
+    const msUntil7amDigest = msUntilNext7amMST();
+    console.log(`[Scheduler] Weekly CMO Digest scheduled. Checks daily at 7 AM MST, sends on Mondays.`);
+    // Fire daily at 7 AM; performWeeklyDigest self-gates to Monday.
+    weeklyDigestTimer = setTimeout(() => {
+      performWeeklyDigest().catch(err => console.error("[Scheduler] Weekly Digest failed:", err));
+      weeklyDigestTimer = setInterval(() => {
+        performWeeklyDigest().catch(err => console.error("[Scheduler] Weekly Digest failed:", err));
+      }, 24 * 60 * 60 * 1000);
+    }, msUntil7amDigest);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Weekly Digest failed to initialize:", err);
+  }
+
   try {
     performVelocityRefresh({ onlyZeroOrNull: true }).catch((err) => {
       console.error("[Scheduler] Boot-time velocity backfill failed:", err);
@@ -790,6 +844,13 @@ export function stopScheduler(): void {
   if (aiSystemReviewTimer) {
     clearInterval(aiSystemReviewTimer);
     aiSystemReviewTimer = null;
+  }
+
+  // Stop Weekly Digest timer
+  if (weeklyDigestTimer) {
+    clearTimeout(weeklyDigestTimer);
+    clearInterval(weeklyDigestTimer);
+    weeklyDigestTimer = null;
   }
 
   // Stop Extensiv sync timer

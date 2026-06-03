@@ -167,6 +167,9 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
       platform    TEXT NOT NULL,
       sku         TEXT NOT NULL,
       date        DATE NOT NULL,
+      campaign    TEXT NOT NULL DEFAULT '_all',
+      device      TEXT NOT NULL DEFAULT '_all',
+      country     TEXT NOT NULL DEFAULT '_all',
       impressions INTEGER NOT NULL DEFAULT 0,
       clicks      INTEGER NOT NULL DEFAULT 0,
       spend       REAL NOT NULL DEFAULT 0,
@@ -176,7 +179,6 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
       created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
       updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS ad_metrics_platform_sku_date_idx ON ad_metrics_daily(platform, sku, date);
     CREATE INDEX IF NOT EXISTS ad_metrics_date_idx ON ad_metrics_daily(date);
     CREATE INDEX IF NOT EXISTS ad_metrics_sku_idx ON ad_metrics_daily(sku);
   `,
@@ -258,6 +260,15 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
     `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
+    // ad_metrics_daily dimension columns + widened unique index. The old
+    // (platform, sku, date) unique index must be dropped first since the new
+    // one covers more columns. DO blocks swallow errors if columns/indexes
+    // already exist or don't exist.
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS campaign TEXT NOT NULL DEFAULT '_all'`,
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS device TEXT NOT NULL DEFAULT '_all'`,
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS country TEXT NOT NULL DEFAULT '_all'`,
+    `DO $$ BEGIN DROP INDEX IF EXISTS ad_metrics_platform_sku_date_idx; EXCEPTION WHEN others THEN NULL; END $$`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ad_metrics_platform_sku_date_idx ON ad_metrics_daily(platform, sku, date, campaign, device, country)`,
   ];
   for (const stmt of ADDS) {
     try {

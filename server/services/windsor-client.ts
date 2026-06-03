@@ -19,6 +19,8 @@ const WINDSOR_FIELDS = [
   "source",
   "date",
   "campaign",
+  "device",
+  "country",
   "clicks",
   "impressions",
   "spend",
@@ -32,6 +34,8 @@ export interface WindsorRow {
   source?: string;
   date?: string;
   campaign?: string;
+  device?: string;
+  country?: string;
   clicks?: number | string;
   impressions?: number | string;
   spend?: number | string;

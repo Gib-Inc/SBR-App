@@ -20,6 +20,7 @@ import { CMOHistoryView } from '@/components/marketing-analytics/cmo-history-vie
 import { LtvCacView } from '@/components/marketing-analytics/ltv-cac-view';
 import { CustomerCohortsView } from '@/components/marketing-analytics/customer-cohorts-view';
 import { BomCompletenessView } from '@/components/marketing-analytics/bom-completeness-view';
+import { ChannelDeepDiveView } from '@/components/marketing-analytics/channel-deep-dive-view';
 
 export default function MarketingAnalytics() {
   const [days, setDays] = useState(30);
@@ -58,6 +59,7 @@ export default function MarketingAnalytics() {
           <TabsTrigger value="history">CMO History</TabsTrigger>
           <TabsTrigger value="spend">Spend Pacing</TabsTrigger>
           <TabsTrigger value="channels">Channel Mix</TabsTrigger>
+          <TabsTrigger value="deep-dive">Deep Dive</TabsTrigger>
           <TabsTrigger value="breakeven">Break-even</TabsTrigger>
           <TabsTrigger value="customers">Customers</TabsTrigger>
           <TabsTrigger value="ltvcac">LTV / CAC</TabsTrigger>
@@ -74,6 +76,7 @@ export default function MarketingAnalytics() {
         <TabsContent value="history"><CMOHistoryView /></TabsContent>
         <TabsContent value="spend"><SpendPacingView days={days} /></TabsContent>
         <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
+        <TabsContent value="deep-dive"><ChannelDeepDiveView days={days} /></TabsContent>
         <TabsContent value="breakeven"><div className="space-y-4"><BreakevenRoasView days={days} /><BomCompletenessView days={days} /></div></TabsContent>
         <TabsContent value="customers"><div className="space-y-4"><CustomerCohortsView /><CustomerSplitView days={days} /></div></TabsContent>
         <TabsContent value="ltvcac"><LtvCacView /></TabsContent>

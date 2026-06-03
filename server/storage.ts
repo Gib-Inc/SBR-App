@@ -3886,9 +3886,12 @@ export class MemStorage implements IStorage {
   }
 
   async upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily> {
-    // Find existing by platform + sku + date
+    // Find existing by platform + sku + date + campaign + device + country
     const existing = Array.from(this.adMetricsDaily.values())
-      .find(m => m.platform === metrics.platform && m.sku === metrics.sku && m.date === metrics.date);
+      .find(m => m.platform === metrics.platform && m.sku === metrics.sku && m.date === metrics.date
+        && (m.campaign ?? '_all') === (metrics.campaign ?? '_all')
+        && (m.device ?? '_all') === (metrics.device ?? '_all')
+        && (m.country ?? '_all') === (metrics.country ?? '_all'));
     
     if (existing) {
       const updated: AdMetricsDaily = {
@@ -7636,12 +7639,15 @@ export class PostgresStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     
-    // Try to find existing
+    // Try to find existing — match on all unique-index columns
     const existing = await this.db.select().from(schema.adMetricsDaily)
       .where(and(
         eq(schema.adMetricsDaily.platform, metrics.platform),
         eq(schema.adMetricsDaily.sku, metrics.sku),
-        eq(schema.adMetricsDaily.date, metrics.date)
+        eq(schema.adMetricsDaily.date, metrics.date),
+        eq(schema.adMetricsDaily.campaign, metrics.campaign ?? '_all'),
+        eq(schema.adMetricsDaily.device, metrics.device ?? '_all'),
+        eq(schema.adMetricsDaily.country, metrics.country ?? '_all'),
       ));
     
     if (existing.length > 0) {

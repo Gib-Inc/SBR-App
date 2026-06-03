@@ -18,7 +18,7 @@ import {
   queryDailyRevenueSpark, queryProductMixTrend, queryRepeatPurchase, queryTopMetrics,
   queryMonthlySales, queryMonthlyAdSpend, queryMonthlyBlended,
   querySalesVelocity, queryMultiYearComparison, queryLtvCac, queryCustomerCohorts,
-  queryBomCompleteness,
+  queryBomCompleteness, queryCampaignBreakdown, queryDeviceBreakdown, queryAdGeoPerformance,
 } from './marketing-analytics-queries-v2';
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
 import { WeeklyDigestService } from '../services/weekly-digest-service';
@@ -70,6 +70,9 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/ltv-cac', requireAuth, handle((req) => queryLtvCac(getDb(), Math.min(Math.max(parseInt(req.query.months as string) || 18, 1), 60))));
   app.get('/api/marketing-analytics/cmo/customer-cohorts', requireAuth, handle(() => queryCustomerCohorts(getDb())));
   app.get('/api/marketing-analytics/cmo/bom-completeness', requireAuth, handle((req) => queryBomCompleteness(getDb(), parseDays(req))));
+  app.get('/api/marketing-analytics/cmo/campaign-breakdown', requireAuth, handle((req) => queryCampaignBreakdown(getDb(), parseDays(req), req.query.platform as string | undefined)));
+  app.get('/api/marketing-analytics/cmo/device-breakdown', requireAuth, handle((req) => queryDeviceBreakdown(getDb(), parseDays(req))));
+  app.get('/api/marketing-analytics/cmo/ad-geo', requireAuth, handle((req) => queryAdGeoPerformance(getDb(), parseDays(req))));
 
   // Weekly CMO digest — preview (no SMS) and send-now.
   app.get('/api/marketing-analytics/cmo/weekly-digest/preview', requireAuth, async (req: Request, res: Response) => {

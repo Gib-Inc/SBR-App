@@ -119,6 +119,90 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
   });
 }
 
+// ── Campaign drill-down ──
+// Top campaigns by spend, with ROAS. Helps find which campaigns to scale vs pause.
+export async function queryCampaignBreakdown(db: DB, days: number, platform?: string) {
+  const platformFilter = platform ? sql` AND platform = ${platform}` : sql``;
+  const result = await db.execute(sql`
+    SELECT platform, campaign,
+           SUM(spend)::real as spend, SUM(revenue)::real as revenue,
+           SUM(impressions)::int as impressions, SUM(clicks)::int as clicks,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
+           CASE WHEN SUM(clicks) > 0 THEN (SUM(spend) / SUM(clicks))::real ELSE NULL END as cpc,
+           CASE WHEN SUM(impressions) > 0 THEN (SUM(clicks)::real / SUM(impressions) * 100)::real ELSE NULL END as ctr
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND campaign <> '_all'
+      ${platformFilter}
+    GROUP BY platform, campaign
+    HAVING SUM(spend) > 0
+    ORDER BY spend DESC
+    LIMIT 50
+  `);
+  return rows(result);
+}
+
+// ── Device efficiency ──
+// Mobile vs desktop vs tablet ROAS across platforms.
+export async function queryDeviceBreakdown(db: DB, days: number) {
+  const result = await db.execute(sql`
+    SELECT device, platform,
+           SUM(spend)::real as spend, SUM(revenue)::real as revenue,
+           SUM(impressions)::int as impressions, SUM(clicks)::int as clicks,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
+           CASE WHEN SUM(clicks) > 0 THEN (SUM(spend) / SUM(clicks))::real ELSE NULL END as cpc
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND device <> '_all'
+    GROUP BY device, platform
+    HAVING SUM(spend) > 0
+    ORDER BY spend DESC
+  `);
+  return rows(result);
+}
+
+// ── Geo performance ──
+// Ad spend + ROAS by country, cross-referenced with sales_orders revenue.
+export async function queryAdGeoPerformance(db: DB, days: number) {
+  // Ad spend by country from Windsor
+  const adGeo = await db.execute(sql`
+    SELECT country,
+           SUM(spend)::real as ad_spend, SUM(revenue)::real as ad_revenue,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND country <> '_all'
+    GROUP BY country
+    HAVING SUM(spend) > 0
+    ORDER BY ad_spend DESC
+    LIMIT 30
+  `);
+  // Sales revenue by country from Shopify orders
+  const salesGeo = await db.execute(sql`
+    SELECT UPPER(COALESCE(ship_to_country, 'US')) as country,
+           COALESCE(SUM(total_amount), 0)::real as sales_revenue,
+           COUNT(*)::int as orders
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(days => ${days})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY UPPER(COALESCE(ship_to_country, 'US'))
+  `);
+
+  const salesMap = new Map((rows(salesGeo) as any[]).map(r => [r.country, r]));
+  return rows(adGeo).map((a: any) => ({
+    country: a.country,
+    adSpend: a.ad_spend,
+    adRevenue: a.ad_revenue,
+    conversions: a.conversions,
+    roas: a.roas,
+    salesRevenue: salesMap.get(a.country)?.sales_revenue ?? 0,
+    salesOrders: salesMap.get(a.country)?.orders ?? 0,
+  }));
+}
+
 export async function queryChannelMatrix(db: DB, days: number) {
   const result = await db.execute(sql`
     SELECT platform,

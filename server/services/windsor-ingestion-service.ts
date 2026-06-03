@@ -20,6 +20,16 @@ import type { InsertAdMetricsDaily } from "@shared/schema";
 
 const ACCOUNT_SKU = "ACCOUNT";
 
+function normalizeDevice(d: string | undefined): string {
+  if (!d) return "_all";
+  const s = d.toLowerCase().trim();
+  if (s.includes("mobile") || s.includes("phone")) return "mobile";
+  if (s.includes("desktop") || s.includes("computer")) return "desktop";
+  if (s.includes("tablet")) return "tablet";
+  if (s === "(not set)" || s === "not set") return "_all";
+  return s || "_all";
+}
+
 function num(...vals: unknown[]): number {
   for (const v of vals) {
     if (v == null) continue;
@@ -72,7 +82,10 @@ function aggregate(rows: WindsorRow[]): Map<string, InsertAdMetricsDaily> {
     if (num(r.spend) <= 0) continue;
 
     const sku = (r.product_item_id && String(r.product_item_id).trim()) || ACCOUNT_SKU;
-    const key = `${platform}|${sku}|${date}`;
+    const campaign = (r.campaign && String(r.campaign).trim()) || "_all";
+    const device = normalizeDevice(r.device);
+    const country = (r.country && String(r.country).trim().toUpperCase()) || "_all";
+    const key = `${platform}|${sku}|${date}|${campaign}|${device}|${country}`;
 
     const existing = out.get(key);
     const impressions = num(r.impressions);
@@ -93,6 +106,9 @@ function aggregate(rows: WindsorRow[]): Map<string, InsertAdMetricsDaily> {
         platform,
         sku,
         date,
+        campaign,
+        device,
+        country,
         impressions: Math.round(impressions),
         clicks: Math.round(clicks),
         spend,

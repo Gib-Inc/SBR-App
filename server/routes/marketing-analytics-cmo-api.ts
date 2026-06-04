@@ -23,6 +23,7 @@ import {
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
 import { WeeklyDigestService } from '../services/weekly-digest-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
+import { seedZoKpiData } from './zo-kpi-seed';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
 
@@ -115,6 +116,7 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   });
   app.get('/api/marketing-analytics/cmo/full-year', requireAuth, handle(() => queryFullYearComparison(getDb())));
   app.post('/api/marketing-analytics/cmo/seed-historical', requireAuth, handle(() => seedHistoricalSales(getDb())));
+  app.post('/api/marketing-analytics/cmo/seed-zo-kpi', requireAuth, handle(() => seedZoKpiData(getDb())));
   app.get('/api/marketing-analytics/cmo/cmo-history', requireAuth, handle(() => queryFullCMOHistory(getDb())));
 
   // Next Best Action — cached latest recommendation

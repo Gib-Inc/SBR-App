@@ -23,6 +23,7 @@
 
 import pg from "pg";
 import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
+import { ZO_KPI_DATA } from "../routes/zo-kpi-data";
 
 const REQUIRED_TABLES = [
   "production_logs",
@@ -567,6 +568,32 @@ async function seedHistoricalPLIfEmpty(client: pg.PoolClient): Promise<void> {
   console.log(`[Startup Checks] Seeded ${inserted} months of historical P&L data`);
 }
 
+async function seedZoKpiIfEmpty(client: pg.PoolClient): Promise<void> {
+  const countResult = await client.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM ad_metrics_daily WHERE platform = 'GOOGLE' AND campaign <> '_all'`,
+  );
+  const existingCount = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  if (existingCount > 100) {
+    console.log(`[Startup Checks] Zo KPI campaign data already populated (${existingCount} rows)`);
+    return;
+  }
+
+  let inserted = 0;
+  for (const row of ZO_KPI_DATA) {
+    if (row.spend <= 0 && row.revenue <= 0) continue;
+    const r = await client.query(
+      `INSERT INTO ad_metrics_daily
+         (platform, sku, date, campaign, device, country, impressions, clicks, spend, conversions, revenue, currency)
+       VALUES ('GOOGLE', 'ACCOUNT', $1, $2, '_all', '_all', 0, 0, $3, $4, $5, 'USD')
+       ON CONFLICT (platform, sku, date, campaign, device, country) DO NOTHING`,
+      [row.date, row.campaign, row.spend, Math.round(row.conversions), row.revenue],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  console.log(`[Startup Checks] Seeded ${inserted} Zo KPI campaign rows into ad_metrics_daily`);
+}
+
 export async function runStartupChecks(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
@@ -606,6 +633,12 @@ export async function runStartupChecks(): Promise<void> {
       await seedHistoricalPLIfEmpty(client);
     } catch (err: any) {
       console.error("[Startup Checks] Historical P&L seed failed:", err?.message ?? err);
+    }
+
+    try {
+      await seedZoKpiIfEmpty(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Zo KPI seed failed:", err?.message ?? err);
     }
 
     let allOk = true;

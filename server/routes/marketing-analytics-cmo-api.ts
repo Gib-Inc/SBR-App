@@ -9,6 +9,8 @@ import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { sql } from 'drizzle-orm';
 import Anthropic from '@anthropic-ai/sdk';
+import multer from 'multer';
+import { parse as csvParse } from 'csv-parse/sync';
 import * as schema from '@shared/schema';
 import { storage } from '../storage';
 import { requireAuth } from '../middleware/auth';
@@ -24,8 +26,261 @@ import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-
 import { WeeklyDigestService } from '../services/weekly-digest-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 import { seedZoKpiData } from './zo-kpi-seed';
+import type { InsertAdMetricsDaily } from '@shared/schema';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-5-20250929';
+
+const adCsvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+// ============================================================================
+// AD CSV PARSING UTILITIES
+// ============================================================================
+
+type PlatformType = 'GOOGLE' | 'META' | 'AMAZON' | 'PINTEREST';
+
+/** Column alias maps — each key is the canonical field, values are possible CSV header names (case-insensitive). */
+const COLUMN_ALIASES: Record<PlatformType, Record<string, string[]>> = {
+  GOOGLE: {
+    campaign: ['campaign', 'campaign name'],
+    date: ['day', 'date'],
+    spend: ['cost', 'spend'],
+    conversions: ['conversions', 'conv.', 'conv'],
+    revenue: ['conv. value', 'conversion value', 'total conv. value', 'conv value', 'total conversion value'],
+    impressions: ['impressions', 'impr.', 'impr'],
+    clicks: ['clicks'],
+    device: ['device'],
+    country: ['country/territory', 'country', 'country / territory'],
+  },
+  META: {
+    campaign: ['campaign name', 'campaign'],
+    date: ['day', 'date', 'reporting starts', 'reporting start'],
+    spend: ['amount spent (usd)', 'amount spent', 'spend'],
+    conversions: ['purchases', 'results', 'conversions'],
+    revenue: ['purchase roas', 'purchase conversion value', 'conversion value', 'website purchase roas'],
+    impressions: ['impressions'],
+    clicks: ['link clicks', 'clicks (all)', 'clicks'],
+    device: ['platform', 'placement'],
+    country: ['country', 'country/region'],
+  },
+  AMAZON: {
+    campaign: ['campaign name', 'campaign'],
+    date: ['date', 'start date'],
+    spend: ['spend', 'cost', 'total spend'],
+    conversions: ['orders', '14 day total orders', 'total orders', 'purchases'],
+    revenue: ['sales', '14 day total sales', 'attributed sales', 'total sales'],
+    impressions: ['impressions'],
+    clicks: ['clicks'],
+    device: ['device'],
+    country: ['country'],
+  },
+  PINTEREST: {
+    campaign: ['campaign name', 'campaign'],
+    date: ['date'],
+    spend: ['spend', 'amount spent', 'total spend'],
+    conversions: ['conversions', 'total conversions', 'checkout'],
+    revenue: ['conversion value', 'total conversion value'],
+    impressions: ['impressions'],
+    clicks: ['clicks', 'pin clicks', 'outbound clicks'],
+    device: ['device'],
+    country: ['country'],
+  },
+};
+
+/** Detect which CSV column maps to which canonical field. */
+function autoMapColumns(headers: string[], platform: PlatformType): Record<string, string> {
+  const aliases = COLUMN_ALIASES[platform];
+  const mapping: Record<string, string> = {}; // canonical → csv header
+  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
+
+  for (const [canonical, alts] of Object.entries(aliases)) {
+    for (const alt of alts) {
+      const idx = lowerHeaders.indexOf(alt.toLowerCase());
+      if (idx !== -1) {
+        mapping[canonical] = headers[idx];
+        break;
+      }
+    }
+  }
+  return mapping;
+}
+
+/** Strip currency symbols, commas, whitespace from a numeric string. */
+function cleanNumber(val: string | undefined | null): number {
+  if (val == null || val === '' || val === '--' || val === 'N/A') return 0;
+  const cleaned = String(val).replace(/[$€£¥,\s]/g, '').trim();
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : n;
+}
+
+/** Parse dates in multiple formats → YYYY-MM-DD or null. */
+function parseDate(val: string | undefined | null): string | null {
+  if (!val || val.trim() === '') return null;
+  const s = val.trim();
+
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // MM/DD/YYYY
+  const mdyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdyMatch) {
+    const [, m, d, y] = mdyMatch;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // DD/MM/YYYY (try if day > 12)
+  const dmyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmyMatch) {
+    const [, first, second, y] = dmyMatch;
+    if (parseInt(first) > 12) {
+      return `${y}-${second.padStart(2, '0')}-${first.padStart(2, '0')}`;
+    }
+  }
+
+  // "Jan 1, 2026" or "January 1, 2026"
+  const months: Record<string, string> = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+  };
+  const namedMatch = s.match(/^(\w+)\s+(\d{1,2}),?\s*(\d{4})$/);
+  if (namedMatch) {
+    const [, mon, d, y] = namedMatch;
+    const mm = months[mon.toLowerCase().slice(0, 3)];
+    if (mm) return `${y}-${mm}-${d.padStart(2, '0')}`;
+  }
+
+  // YYYY/MM/DD
+  const ymdSlash = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (ymdSlash) {
+    const [, y, m, d] = ymdSlash;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // Fallback: try Date.parse
+  const ts = Date.parse(s);
+  if (!isNaN(ts)) {
+    const dt = new Date(ts);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  return null;
+}
+
+interface CsvUploadResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+  totalRows: number;
+}
+
+/** Parse a platform CSV buffer and upsert rows into ad_metrics_daily. */
+async function parseAndUpsertAdCsv(buffer: Buffer, platform: PlatformType): Promise<CsvUploadResult> {
+  // Strip BOM
+  let raw = buffer.toString('utf-8');
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1);
+
+  // Parse CSV with csv-parse (handles quoted fields, commas inside quotes, etc.)
+  let rows: Record<string, string>[];
+  try {
+    rows = csvParse(raw, {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+      relax_column_count: true,
+      relax_quotes: true,
+    });
+  } catch (e: any) {
+    return { inserted: 0, updated: 0, skipped: 0, errors: [`CSV parse error: ${e.message}`], totalRows: 0 };
+  }
+
+  if (rows.length === 0) {
+    return { inserted: 0, updated: 0, skipped: 0, errors: ['CSV file contains no data rows'], totalRows: 0 };
+  }
+
+  const headers = Object.keys(rows[0]);
+  const colMap = autoMapColumns(headers, platform);
+
+  // Require at minimum: date and campaign (or at least date)
+  if (!colMap.date) {
+    return { inserted: 0, updated: 0, skipped: 0, errors: [`Could not find a date column. Headers found: ${headers.join(', ')}`], totalRows: rows.length };
+  }
+  if (!colMap.campaign) {
+    return { inserted: 0, updated: 0, skipped: 0, errors: [`Could not find a campaign column. Headers found: ${headers.join(', ')}`], totalRows: rows.length };
+  }
+
+  const result: CsvUploadResult = { inserted: 0, updated: 0, skipped: 0, errors: [], totalRows: rows.length };
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNum = i + 2; // +2 because row 1 is header, data starts at 2
+
+    try {
+      const dateStr = parseDate(row[colMap.date]);
+      if (!dateStr) {
+        result.errors.push(`Row ${rowNum}: invalid date "${row[colMap.date]}"`);
+        result.skipped++;
+        continue;
+      }
+
+      const campaign = (row[colMap.campaign] || '').trim();
+      if (!campaign) {
+        result.errors.push(`Row ${rowNum}: empty campaign name`);
+        result.skipped++;
+        continue;
+      }
+
+      const spend = cleanNumber(row[colMap.spend]);
+      const revenue = cleanNumber(row[colMap.revenue]);
+      const impressions = Math.round(cleanNumber(row[colMap.impressions]));
+      const clicks = Math.round(cleanNumber(row[colMap.clicks]));
+      const conversions = Math.round(cleanNumber(row[colMap.conversions]));
+
+      // Skip rows where both spend and revenue are 0
+      if (spend === 0 && revenue === 0) {
+        result.skipped++;
+        continue;
+      }
+
+      const device = colMap.device ? (row[colMap.device] || '').trim().toLowerCase() || '_all' : '_all';
+      const country = colMap.country ? (row[colMap.country] || '').trim() || '_all' : '_all';
+
+      const metrics: InsertAdMetricsDaily = {
+        platform,
+        sku: 'ACCOUNT',
+        date: dateStr,
+        campaign,
+        device,
+        country,
+        impressions,
+        clicks,
+        spend,
+        conversions,
+        revenue,
+        currency: 'USD',
+      };
+
+      const existing = await storage.upsertAdMetricsDaily(metrics);
+      // upsertAdMetricsDaily returns the row — if its createdAt equals updatedAt it was freshly inserted
+      if (existing.createdAt && existing.updatedAt && existing.createdAt.getTime() === existing.updatedAt.getTime()) {
+        result.inserted++;
+      } else {
+        result.updated++;
+      }
+    } catch (e: any) {
+      result.errors.push(`Row ${rowNum}: ${e.message}`);
+      result.skipped++;
+    }
+  }
+
+  // Cap errors array to prevent massive responses
+  if (result.errors.length > 50) {
+    const total = result.errors.length;
+    result.errors = result.errors.slice(0, 50);
+    result.errors.push(`... and ${total - 50} more errors`);
+  }
+
+  return result;
+}
 
 let cachedDb: ReturnType<typeof drizzle> | null = null;
 const getDb = () => {
@@ -190,6 +445,61 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
 
       res.json({ recommendations, generatedAt: new Date().toISOString() });
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ============================================================================
+  // AD CSV UPLOAD — lets VAs upload platform export CSVs
+  // ============================================================================
+
+  app.post('/api/marketing-analytics/cmo/upload-ad-csv', requireAuth, adCsvUpload.single('file'), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      const platform = (req.body?.platform || '').toUpperCase() as PlatformType;
+      if (!['GOOGLE', 'META', 'AMAZON', 'PINTEREST'].includes(platform)) {
+        return res.status(400).json({ error: `Invalid platform "${req.body?.platform}". Must be GOOGLE, META, AMAZON, or PINTEREST.` });
+      }
+
+      console.log(`[Ad CSV Upload] Processing ${req.file.originalname} for platform ${platform} (${req.file.size} bytes)`);
+
+      const result = await parseAndUpsertAdCsv(req.file.buffer, platform);
+
+      console.log(`[Ad CSV Upload] Done: inserted=${result.inserted}, updated=${result.updated}, skipped=${result.skipped}, errors=${result.errors.length}`);
+
+      res.json(result);
+    } catch (err: any) {
+      console.error('[Ad CSV Upload] Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // KPI Spreadsheet upload — same as ad CSV but defaults to GOOGLE since
+  // Zo's KPI data is Google Ads data.
+  app.post('/api/marketing-analytics/cmo/upload-kpi-spreadsheet', requireAuth, adCsvUpload.single('file'), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      // Default to GOOGLE since Zo's KPI data is Google Ads
+      const platform = ((req.body?.platform || 'GOOGLE').toUpperCase()) as PlatformType;
+      if (!['GOOGLE', 'META', 'AMAZON', 'PINTEREST'].includes(platform)) {
+        return res.status(400).json({ error: `Invalid platform "${req.body?.platform}".` });
+      }
+
+      console.log(`[KPI Upload] Processing ${req.file.originalname} for platform ${platform} (${req.file.size} bytes)`);
+
+      const result = await parseAndUpsertAdCsv(req.file.buffer, platform);
+
+      console.log(`[KPI Upload] Done: inserted=${result.inserted}, updated=${result.updated}, skipped=${result.skipped}, errors=${result.errors.length}`);
+
+      res.json(result);
+    } catch (err: any) {
+      console.error('[KPI Upload] Error:', err);
       res.status(500).json({ error: err.message });
     }
   });

@@ -927,11 +927,26 @@ export default function PurchaseOrders() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() =>
-                  sortedPOs
+                onClick={() => {
+                  // Sequential anchor-element downloads. The old window.open
+                  // loop was blocked by the popup blocker after the first PO;
+                  // a hidden <a download> per file (staggered so the browser
+                  // doesn't drop concurrent requests) downloads them reliably.
+                  const ids = sortedPOs
                     .filter((p) => selectedIds.has(p.id))
-                    .forEach((p) => window.open(`/api/purchase-orders/${p.id}/pdf`, "_blank"))
-                }
+                    .map((p) => p.id);
+                  ids.forEach((id, i) => {
+                    setTimeout(() => {
+                      const a = document.createElement("a");
+                      a.href = `/api/purchase-orders/${id}/pdf`;
+                      a.download = "";
+                      a.style.display = "none";
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                    }, i * 350);
+                  });
+                }}
                 data-testid="button-bulk-download"
               >
                 <FileDown className="h-4 w-4 mr-2" />

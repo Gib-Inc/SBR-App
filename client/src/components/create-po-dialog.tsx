@@ -376,7 +376,11 @@ export function CreatePODialog({
             unitCost: line.unitCost,
             taxAmount: line.taxAmount || 0,
             unitOfMeasure: line.unitOfMeasure || 'EA',
-            expectedArrivalDate: line.expectedArrivalDate || undefined,
+            // Send local-noon ISO so the calendar day is stable across timezones
+            // (a bare YYYY-MM-DD parses as UTC midnight and renders a day early).
+            expectedArrivalDate: line.expectedArrivalDate
+              ? new Date(`${line.expectedArrivalDate}T12:00:00`).toISOString()
+              : undefined,
             supplierItemCode: line.supplierItemCode || undefined,
             internalBarcode: line.internalBarcode || undefined,
           })),

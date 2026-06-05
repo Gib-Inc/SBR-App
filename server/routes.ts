@@ -4,6 +4,9 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
+import { db } from "./db";
+import { salesOrders, salesOrderLines, items } from "@shared/schema";
+import { eq, or, desc, ilike, sql } from "drizzle-orm";
 import {
   COUNT_ADJUSTMENT_TYPE,
   adjustmentLocationFor,
@@ -20017,7 +20020,7 @@ Generate only the email body text, no subject line.`;
         message: `Review workflows triggered for order ${order_id}: First Take=${firstTakeTriggered}, SBR=${sbrTriggered}`,
         entityType: 'salesOrder',
         entityId: order.id,
-        metadata: { 
+        details: { 
           orderType,
           firstTakeStatus: 'status' in firstTakeResponse ? firstTakeResponse.status : 0,
           sbrStatus: 'status' in sbrResponse ? sbrResponse.status : 0,
@@ -20078,7 +20081,7 @@ Generate only the email body text, no subject line.`;
           severity: 'INFO',
           message: `No order found for phone: ${phone || 'N/A'}, email: ${email || 'N/A'}`,
           entityType: 'salesOrder',
-          metadata: { phone, email, contact_name }
+          details: { phone, email, contact_name }
         });
         
         return res.json({ 
@@ -20147,7 +20150,7 @@ Generate only the email body text, no subject line.`;
         message: `Order lookup successful: ${order.externalOrderId}, size: ${rollerSize}`,
         entityType: 'salesOrder',
         entityId: order.id,
-        metadata: { rollerSize, replacementVariantId }
+        details: { rollerSize, replacementVariantId }
       });
       
       res.json({
@@ -20230,7 +20233,7 @@ Generate only the email body text, no subject line.`;
         message: `Order status check: ${matchingOrder.externalOrderId}, shipped: ${isShipped}`,
         entityType: 'salesOrder',
         entityId: matchingOrder.id,
-        metadata: { product_type, status: matchingOrder.status }
+        details: { product_type, status: matchingOrder.status }
       });
       
       res.json({

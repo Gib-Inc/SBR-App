@@ -41,7 +41,7 @@ export function WastedSpendView({ days, compact = false }: { days: number; compa
                 <div className="flex gap-2 items-center">
                   <span className="text-muted-foreground">{fmt(item.spend)}</span>
                   <Badge variant="destructive" className="text-xs">
-                    {item.actualRoas?.toFixed(1)}x vs {item.breakevenRoas?.toFixed(1)}x needed
+                    {item.actualRoas != null ? `${item.actualRoas.toFixed(1)}x` : 'N/A'} vs {item.breakevenRoas != null ? `${item.breakevenRoas.toFixed(1)}x` : 'N/A'} needed
                   </Badge>
                 </div>
               </div>

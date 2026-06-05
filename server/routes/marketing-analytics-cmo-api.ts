@@ -50,6 +50,7 @@ const COLUMN_ALIASES: Record<PlatformType, Record<string, string[]>> = {
     clicks: ['clicks'],
     device: ['device'],
     country: ['country/territory', 'country', 'country / territory'],
+    sku: ['product', 'sku', 'item id', 'product id', 'product item id'],
   },
   META: {
     campaign: ['campaign name', 'campaign'],
@@ -61,6 +62,7 @@ const COLUMN_ALIASES: Record<PlatformType, Record<string, string[]>> = {
     clicks: ['link clicks', 'clicks (all)', 'clicks'],
     device: ['platform', 'placement'],
     country: ['country', 'country/region'],
+    sku: ['product', 'sku', 'product id', 'product name'],
   },
   AMAZON: {
     campaign: ['campaign name', 'campaign'],
@@ -72,6 +74,7 @@ const COLUMN_ALIASES: Record<PlatformType, Record<string, string[]>> = {
     clicks: ['clicks'],
     device: ['device'],
     country: ['country'],
+    sku: ['sku', 'asin', 'product', 'advertised sku', 'advertised asin'],
   },
   PINTEREST: {
     campaign: ['campaign name', 'campaign'],
@@ -83,6 +86,7 @@ const COLUMN_ALIASES: Record<PlatformType, Record<string, string[]>> = {
     clicks: ['clicks', 'pin clicks', 'outbound clicks'],
     device: ['device'],
     country: ['country'],
+    sku: ['product', 'sku', 'product id', 'pin id'],
   },
 };
 
@@ -244,9 +248,11 @@ async function parseAndUpsertAdCsv(buffer: Buffer, platform: PlatformType): Prom
       const device = colMap.device ? (row[colMap.device] || '').trim().toLowerCase() || '_all' : '_all';
       const country = colMap.country ? (row[colMap.country] || '').trim() || '_all' : '_all';
 
+      const sku = colMap.sku ? (row[colMap.sku] || '').trim() || 'ACCOUNT' : 'ACCOUNT';
+
       const metrics: InsertAdMetricsDaily = {
         platform,
-        sku: 'ACCOUNT',
+        sku,
         date: dateStr,
         campaign,
         device,

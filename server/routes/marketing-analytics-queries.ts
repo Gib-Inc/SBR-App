@@ -118,13 +118,13 @@ export async function queryCreativeIntelligence(db: DB, days: number) {
 
 export async function querySeasonalIntelligence(db: DB, currentYear: number, compareYear: number) {
   const yoy = await db.execute(sql`
-    SELECT EXTRACT(WEEK FROM created_at) as week_num,
-           SUM(CASE WHEN EXTRACT(YEAR FROM created_at) = ${currentYear} THEN total_amount::real ELSE 0 END) as current_revenue,
-           SUM(CASE WHEN EXTRACT(YEAR FROM created_at) = ${compareYear} THEN total_amount::real ELSE 0 END) as prior_revenue,
-           COUNT(CASE WHEN EXTRACT(YEAR FROM created_at) = ${currentYear} THEN 1 END)::int as current_orders,
-           COUNT(CASE WHEN EXTRACT(YEAR FROM created_at) = ${compareYear} THEN 1 END)::int as prior_orders
+    SELECT EXTRACT(WEEK FROM order_date) as week_num,
+           SUM(CASE WHEN EXTRACT(YEAR FROM order_date) = ${currentYear} THEN total_amount::real ELSE 0 END) as current_revenue,
+           SUM(CASE WHEN EXTRACT(YEAR FROM order_date) = ${compareYear} THEN total_amount::real ELSE 0 END) as prior_revenue,
+           COUNT(CASE WHEN EXTRACT(YEAR FROM order_date) = ${currentYear} THEN 1 END)::int as current_orders,
+           COUNT(CASE WHEN EXTRACT(YEAR FROM order_date) = ${compareYear} THEN 1 END)::int as prior_orders
     FROM sales_orders
-    WHERE EXTRACT(YEAR FROM created_at) IN (${currentYear}, ${compareYear})
+    WHERE EXTRACT(YEAR FROM order_date) IN (${currentYear}, ${compareYear})
     GROUP BY week_num
     ORDER BY week_num
   `);

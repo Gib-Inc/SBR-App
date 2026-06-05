@@ -208,7 +208,7 @@ export async function queryChannelMatrix(db: DB, days: number) {
     SELECT platform,
            SUM(spend)::real as spend,
            SUM(revenue)::real as revenue,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE 0 END as roas
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
     FROM ad_metrics_daily
     WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY platform

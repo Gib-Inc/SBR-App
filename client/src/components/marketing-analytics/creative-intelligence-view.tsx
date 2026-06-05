@@ -38,8 +38,8 @@ export function CreativeIntelligenceView({ days }: { days: number }) {
     );
   }
 
-  const killList = data.killScale.filter(c => c.roas < 1 && c.spend > 50);
-  const scaleList = data.killScale.filter(c => c.roas >= 3 && c.ctr >= 0.01);
+  const killList = (data.killScale ?? []).filter(c => c.roas < 1 && c.spend > 50);
+  const scaleList = (data.killScale ?? []).filter(c => c.roas >= 3 && c.ctr >= 0.01);
 
   return (
     <div className="space-y-4">
@@ -98,7 +98,7 @@ export function CreativeIntelligenceView({ days }: { days: number }) {
         </Card>
       </div>
 
-      {data.roots.length > 0 && (
+      {data.roots?.length > 0 && (
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">Pattern Insights (copy_roots)</CardTitle></CardHeader>
           <CardContent>

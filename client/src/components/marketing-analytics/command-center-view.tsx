@@ -248,9 +248,9 @@ function WindsorAdSpendCard({ days }: { days: number }) {
                     <span>{fmt(c.revenue)}</span>
                     <Badge
                       variant="outline"
-                      className={`text-xs w-14 justify-center ${c.roas >= 1 ? 'text-green-700' : 'text-red-700'}`}
+                      className={`text-xs w-14 justify-center ${(c.roas ?? 0) >= 1 ? 'text-green-700' : 'text-red-700'}`}
                     >
-                      {c.roas.toFixed(1)}x
+                      {c.roas != null ? `${c.roas.toFixed(1)}x` : 'N/A'}
                     </Badge>
                   </div>
                 </div>

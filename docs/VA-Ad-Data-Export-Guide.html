@@ -17,7 +17,6 @@
   li { margin-bottom: 4px; }
   strong { color: #111; }
   hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
-  .page-break { page-break-before: always; }
 </style>
 </head>
 <body>
@@ -120,20 +119,21 @@
 <h2>UPLOADING TO THE SBR APP</h2>
 <p>After downloading the CSV files:</p>
 <ol>
-<li>Go to <strong>https://sbr-app-production-f1c4.up.railway.app</strong></li>
-<li>Log in</li>
-<li>Navigate to <strong>Ad Analytics</strong> (in the sidebar under Tools)</li>
-<li>Click the <strong>Deep Dive</strong> tab (or look for the <strong>Upload Ad Data</strong> section)</li>
+<li>Go to <strong>https://sbr-app-production-f1c4.up.railway.app/upload</strong></li>
+<li>Log in (ask Matt for your login credentials if you don't have them)</li>
+<li>You'll see the <strong>Ad Data Upload</strong> page — no need to navigate anywhere else</li>
 <li>For each CSV file:
    a. Select the <strong>Platform</strong> (Google Ads, Meta Ads, Amazon Ads, or Pinterest Ads)
    b. Click <strong>Choose File</strong> and select the CSV
    c. Click <strong>Upload</strong>
    d. Verify the results: "Inserted: X, Updated: Y, Skipped: Z"</li>
+<li>Repeat for each platform's CSV file</li>
 <li>If errors appear, check that:</li>
 <li>The file is a CSV (not PDF or XLSX)</li>
 <li>The correct platform is selected</li>
-<li>The date range doesn't overlap with previously uploaded data (duplicates are OK — they update, not duplicate)</li>
+<li>Duplicates are OK — re-uploading the same data just updates existing rows</li>
 </ol>
+<p><strong>Bookmark this link:</strong> https://sbr-app-production-f1c4.up.railway.app/upload</p>
 <hr />
 <h2>Weekly Schedule (Set a recurring calendar reminder)</h2>
 <table>

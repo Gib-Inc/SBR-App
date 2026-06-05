@@ -57,6 +57,7 @@ import ProductionPriority from "@/pages/production-priority";
 import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
 import SupplierIntel from "@/pages/supplier-intel";
+import AdUploadPage from "@/pages/ad-upload";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -160,6 +161,7 @@ function AuthenticatedApp() {
                     <Route path="/sku-mappings" component={SkuMappings} />
                     <Route path="/log-order" component={LogOrder} />
                     <Route path="/in-house-shipping" component={InHouseShipping} />
+                    <Route path="/upload" component={AdUploadPage} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

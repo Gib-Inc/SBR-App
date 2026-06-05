@@ -117,19 +117,21 @@ The report emails every Monday. Download the CSV attachment.
 
 After downloading the CSV files:
 
-1. Go to **https://sbr-app-production-f1c4.up.railway.app**
-2. Log in
-3. Navigate to **Ad Analytics** (in the sidebar under Tools)
-4. Click the **Deep Dive** tab (or look for the **Upload Ad Data** section)
-5. For each CSV file:
+1. Go to **https://sbr-app-production-f1c4.up.railway.app/upload**
+2. Log in (ask Matt for your login credentials if you don't have them)
+3. You'll see the **Ad Data Upload** page — no need to navigate anywhere else
+4. For each CSV file:
    a. Select the **Platform** (Google Ads, Meta Ads, Amazon Ads, or Pinterest Ads)
    b. Click **Choose File** and select the CSV
    c. Click **Upload**
    d. Verify the results: "Inserted: X, Updated: Y, Skipped: Z"
+5. Repeat for each platform's CSV file
 6. If errors appear, check that:
    - The file is a CSV (not PDF or XLSX)
    - The correct platform is selected
-   - The date range doesn't overlap with previously uploaded data (duplicates are OK — they update, not duplicate)
+   - Duplicates are OK — re-uploading the same data just updates existing rows
+
+**Bookmark this link:** https://sbr-app-production-f1c4.up.railway.app/upload
 
 ---
 

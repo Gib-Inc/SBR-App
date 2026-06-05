@@ -3899,8 +3899,8 @@ export class MemStorage implements IStorage {
         impressions: metrics.impressions ?? existing.impressions,
         clicks: metrics.clicks ?? existing.clicks,
         spend: metrics.spend ?? existing.spend,
-        conversions: metrics.conversions ?? existing.conversions,
-        revenue: metrics.revenue ?? existing.revenue,
+        conversions: (metrics.conversions && metrics.conversions > 0) ? metrics.conversions : existing.conversions,
+        revenue: (metrics.revenue && metrics.revenue > 0) ? metrics.revenue : existing.revenue,
         currency: metrics.currency ?? existing.currency,
         updatedAt: new Date(),
       };
@@ -7651,17 +7651,21 @@ export class PostgresStorage implements IStorage {
       ));
     
     if (existing.length > 0) {
+      const ex = existing[0];
       const result = await this.db.update(schema.adMetricsDaily)
         .set({
-          impressions: metrics.impressions ?? existing[0].impressions,
-          clicks: metrics.clicks ?? existing[0].clicks,
-          spend: metrics.spend ?? existing[0].spend,
-          conversions: metrics.conversions ?? existing[0].conversions,
-          revenue: metrics.revenue ?? existing[0].revenue,
-          currency: metrics.currency ?? existing[0].currency,
+          impressions: metrics.impressions ?? ex.impressions,
+          clicks: metrics.clicks ?? ex.clicks,
+          spend: metrics.spend ?? ex.spend,
+          // Never overwrite non-zero revenue/conversions with zero — Windsor
+          // returns spend but not revenue for Google Ads, so a sync would
+          // clobber revenue from the Zo KPI seed or other sources.
+          conversions: (metrics.conversions && metrics.conversions > 0) ? metrics.conversions : ex.conversions,
+          revenue: (metrics.revenue && metrics.revenue > 0) ? metrics.revenue : ex.revenue,
+          currency: metrics.currency ?? ex.currency,
           updatedAt: now,
         })
-        .where(eq(schema.adMetricsDaily.id, existing[0].id))
+        .where(eq(schema.adMetricsDaily.id, ex.id))
         .returning();
       return result[0];
     }

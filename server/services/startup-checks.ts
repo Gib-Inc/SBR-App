@@ -22,6 +22,8 @@
 // routes work, but failures are logged loudly so they're caught fast.
 
 import pg from "pg";
+import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
+import { ZO_KPI_DATA } from "../routes/zo-kpi-data";
 
 const REQUIRED_TABLES = [
   "production_logs",
@@ -30,6 +32,9 @@ const REQUIRED_TABLES = [
   "inventory_lots",
   "lot_consumption_events",
   "backorder_notices",
+  "historical_monthly_sales",
+  "marketing_recommendations",
+  "ad_metrics_daily",
 ] as const;
 
 const FX_INDUSTRIES_LEAD_TIME = 21;
@@ -119,6 +124,65 @@ const CREATE_TABLE_STATEMENTS: Record<typeof REQUIRED_TABLES[number], string> = 
     CREATE INDEX IF NOT EXISTS backorder_notices_sales_order_id_idx ON backorder_notices(sales_order_id);
     CREATE UNIQUE INDEX IF NOT EXISTS backorder_notices_order_item_unique_idx ON backorder_notices(sales_order_id, item_id);
   `,
+  // Marketing Analytics CMO history. The unique (year, month) index backs the
+  // ON CONFLICT upsert in seedHistoricalSales — without it the QuickBooks P&L
+  // import throws "no unique constraint matching ON CONFLICT" and every row is
+  // skipped. drizzle-kit push is skipped at build time (no DATABASE_URL), so
+  // this is the only path that creates the table on Railway.
+  historical_monthly_sales: `
+    CREATE TABLE IF NOT EXISTS historical_monthly_sales (
+      id               VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      year             INTEGER NOT NULL,
+      month            INTEGER NOT NULL,
+      revenue          REAL NOT NULL DEFAULT 0,
+      returns          REAL DEFAULT 0,
+      total_income     REAL DEFAULT 0,
+      cogs             REAL DEFAULT 0,
+      gross_profit     REAL DEFAULT 0,
+      ad_spend         REAL DEFAULT 0,
+      total_expenses   REAL DEFAULT 0,
+      net_income       REAL DEFAULT 0,
+      gross_margin_pct REAL DEFAULT 0,
+      source           TEXT NOT NULL DEFAULT 'spreadsheet',
+      created_at       TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS historical_monthly_sales_year_month_idx ON historical_monthly_sales(year, month);
+  `,
+  marketing_recommendations: `
+    CREATE TABLE IF NOT EXISTS marketing_recommendations (
+      id              VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      generated_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+      recommendations JSONB,
+      input_snapshot  JSONB,
+      model           TEXT,
+      created_by      TEXT
+    );
+    CREATE INDEX IF NOT EXISTS marketing_recommendations_generated_at_idx ON marketing_recommendations(generated_at);
+  `,
+  // Normalized ad-spend fact table. Windsor ingestion + the native Google/Meta
+  // syncs all upsert here, and the whole Marketing Analytics query layer reads
+  // it. The unique (platform, sku, date) index backs those upserts.
+  ad_metrics_daily: `
+    CREATE TABLE IF NOT EXISTS ad_metrics_daily (
+      id          VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      platform    TEXT NOT NULL,
+      sku         TEXT NOT NULL,
+      date        DATE NOT NULL,
+      campaign    TEXT NOT NULL DEFAULT '_all',
+      device      TEXT NOT NULL DEFAULT '_all',
+      country     TEXT NOT NULL DEFAULT '_all',
+      impressions INTEGER NOT NULL DEFAULT 0,
+      clicks      INTEGER NOT NULL DEFAULT 0,
+      spend       REAL NOT NULL DEFAULT 0,
+      conversions INTEGER DEFAULT 0,
+      revenue     REAL DEFAULT 0,
+      currency    TEXT DEFAULT 'USD',
+      created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMP NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ad_metrics_date_idx ON ad_metrics_daily(date);
+    CREATE INDEX IF NOT EXISTS ad_metrics_sku_idx ON ad_metrics_daily(sku);
+  `,
 };
 
 async function ensureTablesExist(client: pg.PoolClient): Promise<void> {
@@ -197,6 +261,15 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
      )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS sku_mappings_external_source_idx ON sku_mappings(external_sku, source)`,
     `CREATE INDEX IF NOT EXISTS sku_mappings_canonical_sku_idx ON sku_mappings(canonical_sku)`,
+    // ad_metrics_daily dimension columns + widened unique index. The old
+    // (platform, sku, date) unique index must be dropped first since the new
+    // one covers more columns. DO blocks swallow errors if columns/indexes
+    // already exist or don't exist.
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS campaign TEXT NOT NULL DEFAULT '_all'`,
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS device TEXT NOT NULL DEFAULT '_all'`,
+    `ALTER TABLE ad_metrics_daily ADD COLUMN IF NOT EXISTS country TEXT NOT NULL DEFAULT '_all'`,
+    `DO $$ BEGIN DROP INDEX IF EXISTS ad_metrics_platform_sku_date_idx; EXCEPTION WHEN others THEN NULL; END $$`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ad_metrics_platform_sku_date_idx ON ad_metrics_daily(platform, sku, date, campaign, device, country)`,
   ];
   for (const stmt of ADDS) {
     try {
@@ -450,6 +523,77 @@ async function cleanupRollsMadeRows(client: pg.PoolClient): Promise<number> {
   return result.rowCount ?? 0;
 }
 
+// Auto-seed historical P&L data from the QuickBooks snapshot if the table is
+// empty. Uses ON CONFLICT (year, month) DO NOTHING for safety so re-runs or
+// partial seeds never create duplicates. Non-fatal — boot continues on error.
+async function seedHistoricalPLIfEmpty(client: pg.PoolClient): Promise<void> {
+  const countResult = await client.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM historical_monthly_sales`,
+  );
+  const existingCount = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  if (existingCount > 0) {
+    console.log(`[Startup Checks] Historical P&L already populated (${existingCount} rows)`);
+    return;
+  }
+
+  let inserted = 0;
+  for (const row of HISTORICAL_PL_DATA) {
+    const grossMarginPct =
+      row.totalIncome > 0
+        ? (row.grossProfit / row.totalIncome) * 100
+        : 0;
+    const r = await client.query(
+      `INSERT INTO historical_monthly_sales
+         (year, month, revenue, returns, total_income, cogs, gross_profit,
+          ad_spend, total_expenses, net_income, gross_margin_pct, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'quickbooks')
+       ON CONFLICT (year, month) DO NOTHING`,
+      [
+        row.year,
+        row.month,
+        row.grossSales,
+        row.returns,
+        row.totalIncome,
+        row.cogs,
+        row.grossProfit,
+        row.adSpend,
+        row.totalExpenses,
+        row.netIncome,
+        grossMarginPct,
+      ],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  console.log(`[Startup Checks] Seeded ${inserted} months of historical P&L data`);
+}
+
+async function seedZoKpiIfEmpty(client: pg.PoolClient): Promise<void> {
+  const countResult = await client.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM ad_metrics_daily WHERE platform = 'GOOGLE' AND campaign <> '_all'`,
+  );
+  const existingCount = parseInt(countResult.rows[0]?.count ?? "0", 10);
+
+  if (existingCount > 100) {
+    console.log(`[Startup Checks] Zo KPI campaign data already populated (${existingCount} rows)`);
+    return;
+  }
+
+  let inserted = 0;
+  for (const row of ZO_KPI_DATA) {
+    if (row.spend <= 0 && row.revenue <= 0) continue;
+    const r = await client.query(
+      `INSERT INTO ad_metrics_daily
+         (platform, sku, date, campaign, device, country, impressions, clicks, spend, conversions, revenue, currency)
+       VALUES ('GOOGLE', 'ACCOUNT', $1, $2, '_all', '_all', 0, 0, $3, $4, $5, 'USD')
+       ON CONFLICT (platform, sku, date, campaign, device, country) DO NOTHING`,
+      [row.date, row.campaign, row.spend, Math.round(row.conversions), row.revenue],
+    );
+    inserted += r.rowCount ?? 0;
+  }
+  console.log(`[Startup Checks] Seeded ${inserted} Zo KPI campaign rows into ad_metrics_daily`);
+}
+
 export async function runStartupChecks(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
@@ -480,6 +624,21 @@ export async function runStartupChecks(): Promise<void> {
       await ensureProductionLogsShape(client);
     } catch (err: any) {
       console.error("[Startup Checks] ensureProductionLogsShape failed:", err?.message ?? err);
+    }
+
+    // ── Auto-seed historical P&L from QuickBooks snapshot ──────────────
+    // Tables must exist before we can seed — this runs after
+    // ensureTablesExist which creates historical_monthly_sales.
+    try {
+      await seedHistoricalPLIfEmpty(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Historical P&L seed failed:", err?.message ?? err);
+    }
+
+    try {
+      await seedZoKpiIfEmpty(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Zo KPI seed failed:", err?.message ?? err);
     }
 
     let allOk = true;

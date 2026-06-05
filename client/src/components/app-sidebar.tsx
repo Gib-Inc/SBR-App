@@ -15,6 +15,11 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 
+// ── Sidebar groups ──────────────────────────────────────────
+// Organized by workflow: Dashboard → Sales & Fulfillment → Supply Chain → Tools
+// Sales & Fulfillment = Sammie's daily workflow (orders in → ship → returns)
+// Supply Chain = sourcing, production, and product catalog
+
 const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Health",     url: "/health",      icon: Activity   },

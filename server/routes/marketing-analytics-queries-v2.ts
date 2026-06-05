@@ -119,12 +119,96 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
   });
 }
 
+// ── Campaign drill-down ──
+// Top campaigns by spend, with ROAS. Helps find which campaigns to scale vs pause.
+export async function queryCampaignBreakdown(db: DB, days: number, platform?: string) {
+  const platformFilter = platform ? sql` AND platform = ${platform}` : sql``;
+  const result = await db.execute(sql`
+    SELECT platform, campaign,
+           SUM(spend)::real as spend, SUM(revenue)::real as revenue,
+           SUM(impressions)::int as impressions, SUM(clicks)::int as clicks,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
+           CASE WHEN SUM(clicks) > 0 THEN (SUM(spend) / SUM(clicks))::real ELSE NULL END as cpc,
+           CASE WHEN SUM(impressions) > 0 THEN (SUM(clicks)::real / SUM(impressions) * 100)::real ELSE NULL END as ctr
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND campaign <> '_all'
+      ${platformFilter}
+    GROUP BY platform, campaign
+    HAVING SUM(spend) > 0
+    ORDER BY spend DESC
+    LIMIT 50
+  `);
+  return rows(result);
+}
+
+// ── Device efficiency ──
+// Mobile vs desktop vs tablet ROAS across platforms.
+export async function queryDeviceBreakdown(db: DB, days: number) {
+  const result = await db.execute(sql`
+    SELECT device, platform,
+           SUM(spend)::real as spend, SUM(revenue)::real as revenue,
+           SUM(impressions)::int as impressions, SUM(clicks)::int as clicks,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
+           CASE WHEN SUM(clicks) > 0 THEN (SUM(spend) / SUM(clicks))::real ELSE NULL END as cpc
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND device <> '_all'
+    GROUP BY device, platform
+    HAVING SUM(spend) > 0
+    ORDER BY spend DESC
+  `);
+  return rows(result);
+}
+
+// ── Geo performance ──
+// Ad spend + ROAS by country, cross-referenced with sales_orders revenue.
+export async function queryAdGeoPerformance(db: DB, days: number) {
+  // Ad spend by country from Windsor
+  const adGeo = await db.execute(sql`
+    SELECT country,
+           SUM(spend)::real as ad_spend, SUM(revenue)::real as ad_revenue,
+           SUM(conversions)::int as conversions,
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
+    FROM ad_metrics_daily
+    WHERE date >= current_date - make_interval(days => ${days})
+      AND country <> '_all'
+    GROUP BY country
+    HAVING SUM(spend) > 0
+    ORDER BY ad_spend DESC
+    LIMIT 30
+  `);
+  // Sales revenue by country from Shopify orders
+  const salesGeo = await db.execute(sql`
+    SELECT UPPER(COALESCE(ship_to_country, 'US')) as country,
+           COALESCE(SUM(total_amount), 0)::real as sales_revenue,
+           COUNT(*)::int as orders
+    FROM sales_orders
+    WHERE order_date >= current_date - make_interval(days => ${days})
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
+    GROUP BY UPPER(COALESCE(ship_to_country, 'US'))
+  `);
+
+  const salesMap = new Map((rows(salesGeo) as any[]).map(r => [r.country, r]));
+  return rows(adGeo).map((a: any) => ({
+    country: a.country,
+    adSpend: a.ad_spend,
+    adRevenue: a.ad_revenue,
+    conversions: a.conversions,
+    roas: a.roas,
+    salesRevenue: salesMap.get(a.country)?.sales_revenue ?? 0,
+    salesOrders: salesMap.get(a.country)?.orders ?? 0,
+  }));
+}
+
 export async function queryChannelMatrix(db: DB, days: number) {
   const result = await db.execute(sql`
     SELECT platform,
            SUM(spend)::real as spend,
            SUM(revenue)::real as revenue,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE 0 END as roas
+           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
     FROM ad_metrics_daily
     WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY platform
@@ -421,25 +505,39 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     GROUP BY date_trunc('month', date)
     ORDER BY month
   `);
+  // Historical ad spend (QuickBooks) keyed to month-start, used as a fallback
+  // for months that have no live ad_metrics_daily rows yet — keeps the blended
+  // ROAS / CAC series continuous back through the QuickBooks history instead of
+  // dropping to zero before the platforms were connected.
+  const hist = await db.execute(sql`
+    SELECT make_date(year, month, 1)::text as month, COALESCE(ad_spend, 0)::real as ad_spend
+    FROM historical_monthly_sales
+  `);
 
   const salesMap = new Map((rows(sales) as any[]).map(r => [r.month, r]));
   const adsMap = new Map((rows(ads) as any[]).map(r => [r.month, r]));
+  const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r.ad_spend]));
   const allMonths = new Set([...salesMap.keys(), ...adsMap.keys()]);
 
   return Array.from(allMonths).sort().map(month => {
     const s = salesMap.get(month) || { total_revenue: 0, new_customers: 0 };
     const a = adsMap.get(month) || { total_spend: 0, ad_revenue: 0, total_conversions: 0 };
+    // Use live spend if present, else fall back to the QuickBooks total.
+    const liveSpend = a.total_spend || 0;
+    const adSpend = liveSpend > 0 ? liveSpend : (histMap.get(month) || 0);
+    const spendSource = liveSpend > 0 ? 'live' : (histMap.has(month) ? 'historical' : 'none');
     return {
       month,
       totalRevenue: s.total_revenue,
-      adSpend: a.total_spend,
+      adSpend,
       adRevenue: a.ad_revenue,
-      blendedRoas: a.total_spend > 0 ? s.total_revenue / a.total_spend : null,
-      adRoas: a.total_spend > 0 ? a.ad_revenue / a.total_spend : null,
-      cac: s.new_customers > 0 ? a.total_spend / s.new_customers : null,
+      spendSource,
+      blendedRoas: adSpend > 0 ? s.total_revenue / adSpend : null,
+      adRoas: liveSpend > 0 ? a.ad_revenue / liveSpend : null,
+      cac: s.new_customers > 0 && adSpend > 0 ? adSpend / s.new_customers : null,
       newCustomers: s.new_customers,
       conversions: a.total_conversions,
-      spendToRevenueRatio: s.total_revenue > 0 ? (a.total_spend / s.total_revenue * 100) : null,
+      spendToRevenueRatio: s.total_revenue > 0 ? (adSpend / s.total_revenue * 100) : null,
     };
   });
 }
@@ -543,5 +641,270 @@ export async function queryMultiYearComparison(db: DB) {
     years,
     monthly,
     annual: rows(annual),
+  };
+}
+
+// ── LTV / CAC by acquisition cohort ──
+// Groups customers by the MONTH of their first order, then measures the full
+// lifetime value of that cohort (all orders ever, not just the cohort month)
+// against what it cost to acquire them that month. CAC uses ad spend from
+// ad_metrics_daily when present, falling back to historical_monthly_sales.ad_spend
+// for months before the platforms were connected — so the series is continuous.
+export async function queryLtvCac(db: DB, months: number = 18) {
+  // 1. First-order month per customer + their full lifetime value.
+  const cohorts = await db.execute(sql`
+    WITH customer_first AS (
+      SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+             MIN(order_date) as first_order
+      FROM sales_orders
+      WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY cust_id
+    ),
+    customer_ltv AS (
+      SELECT COALESCE(o.customer_email, o.external_customer_id, o.id) as cust_id,
+             SUM(o.total_amount)::real as lifetime_value,
+             COUNT(*)::int as lifetime_orders
+      FROM sales_orders o
+      WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY cust_id
+    )
+    SELECT EXTRACT(YEAR FROM cf.first_order)::int as year,
+           EXTRACT(MONTH FROM cf.first_order)::int as month,
+           COUNT(*)::int as new_customers,
+           COALESCE(AVG(cl.lifetime_value), 0)::real as avg_ltv,
+           COALESCE(SUM(cl.lifetime_value), 0)::real as cohort_revenue,
+           COALESCE(AVG(cl.lifetime_orders), 0)::real as avg_orders
+    FROM customer_first cf
+    JOIN customer_ltv cl ON cl.cust_id = cf.cust_id
+    WHERE cf.first_order >= date_trunc('month', current_date) - make_interval(months => ${months})
+    GROUP BY EXTRACT(YEAR FROM cf.first_order), EXTRACT(MONTH FROM cf.first_order)
+    ORDER BY year, month
+  `);
+
+  // 2. Ad spend per month from the live fact table.
+  const liveSpend = await db.execute(sql`
+    SELECT EXTRACT(YEAR FROM date)::int as year,
+           EXTRACT(MONTH FROM date)::int as month,
+           COALESCE(SUM(spend), 0)::real as ad_spend
+    FROM ad_metrics_daily
+    GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
+  `);
+
+  // 3. Historical ad spend fallback (pre-platform-connection months).
+  const histSpend = await db.execute(sql`
+    SELECT year, month, COALESCE(ad_spend, 0)::real as ad_spend
+    FROM historical_monthly_sales
+  `);
+
+  const liveMap = new Map<string, number>();
+  for (const r of rows(liveSpend)) liveMap.set(`${r.year}-${r.month}`, r.ad_spend);
+  const histMap = new Map<string, number>();
+  for (const r of rows(histSpend)) histMap.set(`${r.year}-${r.month}`, r.ad_spend);
+
+  const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const series = rows(cohorts).map((c: any) => {
+    const key = `${c.year}-${c.month}`;
+    const adSpend = liveMap.get(key) ?? histMap.get(key) ?? 0;
+    const spendSource = liveMap.has(key) ? 'live' : (histMap.has(key) ? 'historical' : 'none');
+    const cac = c.new_customers > 0 && adSpend > 0 ? adSpend / c.new_customers : null;
+    const ltvCacRatio = cac && cac > 0 ? c.avg_ltv / cac : null;
+    return {
+      year: c.year,
+      month: c.month,
+      label: `${MONTH_NAMES[c.month]} ${String(c.year).slice(2)}`,
+      newCustomers: c.new_customers,
+      avgLtv: c.avg_ltv,
+      avgOrders: c.avg_orders,
+      cohortRevenue: c.cohort_revenue,
+      adSpend,
+      spendSource,
+      cac,
+      ltvCacRatio,
+    };
+  });
+
+  // Blended summary across the window.
+  const totalNew = series.reduce((s: number, r: any) => s + r.newCustomers, 0);
+  const totalSpend = series.reduce((s: number, r: any) => s + r.adSpend, 0);
+  const totalLtv = series.reduce((s: number, r: any) => s + r.cohortRevenue, 0);
+  const blendedCac = totalNew > 0 && totalSpend > 0 ? totalSpend / totalNew : null;
+  const blendedLtv = totalNew > 0 ? totalLtv / totalNew : null;
+  const blendedRatio = blendedCac && blendedLtv ? blendedLtv / blendedCac : null;
+
+  return {
+    series,
+    summary: {
+      totalNewCustomers: totalNew,
+      totalAdSpend: totalSpend,
+      blendedCac,
+      blendedLtv,
+      blendedRatio,
+      // Healthy DTC benchmark is 3x. Flag below 3.
+      healthy: blendedRatio != null ? blendedRatio >= 3 : null,
+    },
+  };
+}
+
+// ── BOM completeness ──
+// For each finished product with a selling price, reports whether it has a BOM
+// and whether every component has a default_purchase_cost. Surfaces the gap
+// that forces queryBreakevenRoas to fall back to an estimated margin. Sorted
+// by ad spend so the team fills in the SKUs that matter to ROAS first.
+export async function queryBomCompleteness(db: DB, days: number = 30) {
+  const result = await db.execute(sql`
+    WITH bom_rollup AS (
+      SELECT bom.finished_product_id,
+             COUNT(*)::int as component_count,
+             COUNT(*) FILTER (WHERE comp.default_purchase_cost IS NULL OR comp.default_purchase_cost = 0)::int as missing_cost_count,
+             SUM(COALESCE(comp.default_purchase_cost, 0) * bom.quantity_required * (1 + bom.wastage_percent / 100.0))::real as cogs,
+             ARRAY_AGG(comp.name) FILTER (WHERE comp.default_purchase_cost IS NULL OR comp.default_purchase_cost = 0) as missing_components
+      FROM bill_of_materials bom
+      JOIN items comp ON comp.id = bom.component_id
+      GROUP BY bom.finished_product_id
+    ),
+    ad AS (
+      SELECT sku, SUM(spend)::real as spend
+      FROM ad_metrics_daily
+      WHERE date >= current_date - make_interval(days => ${days})
+      GROUP BY sku
+    )
+    SELECT i.sku, i.name, i.selling_price::real as price,
+           COALESCE(br.component_count, 0) as component_count,
+           COALESCE(br.missing_cost_count, 0) as missing_cost_count,
+           br.cogs,
+           br.missing_components,
+           COALESCE(ad.spend, 0)::real as ad_spend
+    FROM items i
+    LEFT JOIN bom_rollup br ON br.finished_product_id = i.id
+    LEFT JOIN ad ON ad.sku = i.sku
+    WHERE i.type = 'finished_product' AND i.selling_price IS NOT NULL AND i.selling_price > 0
+    ORDER BY ad.spend DESC NULLS LAST, i.selling_price DESC
+  `);
+
+  const items = rows(result).map((r: any) => {
+    const hasBom = r.component_count > 0;
+    const costComplete = hasBom && r.missing_cost_count === 0;
+    let status: 'complete' | 'missing_costs' | 'no_bom';
+    if (!hasBom) status = 'no_bom';
+    else if (costComplete) status = 'complete';
+    else status = 'missing_costs';
+    return {
+      sku: r.sku,
+      name: r.name,
+      price: r.price,
+      componentCount: r.component_count,
+      missingCostCount: r.missing_cost_count,
+      cogs: costComplete ? r.cogs : null,
+      missingComponents: r.missing_components || [],
+      adSpend: r.ad_spend,
+      status,
+    };
+  });
+
+  const total = items.length;
+  const complete = items.filter((i: any) => i.status === 'complete').length;
+  const missingCosts = items.filter((i: any) => i.status === 'missing_costs').length;
+  const noBom = items.filter((i: any) => i.status === 'no_bom').length;
+  // Spend riding on incomplete COGS — the dollars where break-even ROAS is a guess.
+  const spendOnEstimated = items
+    .filter((i: any) => i.status !== 'complete')
+    .reduce((s: number, i: any) => s + i.adSpend, 0);
+
+  return {
+    summary: { total, complete, missingCosts, noBom, completePct: total > 0 ? (complete / total * 100) : null, spendOnEstimated },
+    items,
+  };
+}
+
+// ── Customer cohort intelligence ──
+// Repeat-purchase rate, retention, AOV by order-count, and revenue
+// concentration (what share of revenue the top decile of customers drives).
+// All from sales_orders — no ad APIs needed.
+export async function queryCustomerCohorts(db: DB) {
+  // Per-customer lifetime stats.
+  const perCustomer = await db.execute(sql`
+    SELECT COALESCE(customer_email, external_customer_id, id) as cust_id,
+           COUNT(*)::int as orders,
+           SUM(total_amount)::real as ltv,
+           MIN(order_date) as first_order,
+           MAX(order_date) as last_order
+    FROM sales_orders
+    WHERE status NOT IN ('CANCELLED', 'REFUNDED')
+      AND COALESCE(customer_email, external_customer_id, id) IS NOT NULL
+    GROUP BY cust_id
+  `);
+  const customers = rows(perCustomer) as any[];
+  const total = customers.length;
+
+  if (total === 0) {
+    return {
+      totalCustomers: 0, repeatCustomers: 0, repeatRate: null, avgOrdersPerCustomer: null,
+      oneTime: 0, twoOrders: 0, threePlus: 0,
+      revenueConcentration: null, top10PctShare: null, retention90d: null,
+      byOrderCount: [],
+    };
+  }
+
+  const repeat = customers.filter(c => c.orders >= 2).length;
+  const oneTime = customers.filter(c => c.orders === 1).length;
+  const twoOrders = customers.filter(c => c.orders === 2).length;
+  const threePlus = customers.filter(c => c.orders >= 3).length;
+  const totalOrders = customers.reduce((s, c) => s + c.orders, 0);
+  const totalRevenue = customers.reduce((s, c) => s + (c.ltv || 0), 0);
+
+  // Revenue concentration — top 10% of customers by LTV.
+  const sorted = [...customers].sort((a, b) => (b.ltv || 0) - (a.ltv || 0));
+  const top10Count = Math.max(1, Math.floor(total * 0.1));
+  const top10Revenue = sorted.slice(0, top10Count).reduce((s, c) => s + (c.ltv || 0), 0);
+  const top10PctShare = totalRevenue > 0 ? (top10Revenue / totalRevenue * 100) : null;
+
+  // 90-day retention: of customers whose FIRST order was 90-180 days ago
+  // (so they had a full window to come back), what share ordered again
+  // within 90 days of that first order.
+  const now = Date.now();
+  const cohortEligible = customers.filter(c => {
+    const first = new Date(c.first_order).getTime();
+    const ageDays = (now - first) / 86400000;
+    return ageDays >= 90 && ageDays <= 180;
+  });
+  const retained = cohortEligible.filter(c => {
+    if (c.orders < 2) return false;
+    const first = new Date(c.first_order).getTime();
+    const last = new Date(c.last_order).getTime();
+    return (last - first) / 86400000 <= 90;
+  });
+  const retention90d = cohortEligible.length > 0
+    ? (retained.length / cohortEligible.length * 100) : null;
+
+  // AOV / LTV by order-count bucket.
+  const buckets = [
+    { label: '1 order', filter: (c: any) => c.orders === 1 },
+    { label: '2 orders', filter: (c: any) => c.orders === 2 },
+    { label: '3-4 orders', filter: (c: any) => c.orders >= 3 && c.orders <= 4 },
+    { label: '5+ orders', filter: (c: any) => c.orders >= 5 },
+  ];
+  const byOrderCount = buckets.map(b => {
+    const grp = customers.filter(b.filter);
+    const rev = grp.reduce((s, c) => s + (c.ltv || 0), 0);
+    return {
+      label: b.label,
+      customers: grp.length,
+      revenue: rev,
+      avgLtv: grp.length > 0 ? rev / grp.length : 0,
+      pctOfRevenue: totalRevenue > 0 ? (rev / totalRevenue * 100) : 0,
+    };
+  });
+
+  return {
+    totalCustomers: total,
+    repeatCustomers: repeat,
+    repeatRate: total > 0 ? (repeat / total * 100) : null,
+    avgOrdersPerCustomer: total > 0 ? totalOrders / total : null,
+    oneTime, twoOrders, threePlus,
+    top10PctShare,
+    retention90d,
+    totalRevenue,
+    byOrderCount,
   };
 }

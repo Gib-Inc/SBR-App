@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SBR Ad Data Export Guide - For VAs</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.6; font-size: 14px; }
+  h1 { color: #111; border-bottom: 3px solid #10b981; padding-bottom: 8px; font-size: 24px; }
+  h2 { color: #333; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; margin-top: 32px; font-size: 18px; }
+  h3 { color: #555; font-size: 15px; margin-top: 20px; }
+  table { border-collapse: collapse; width: 100%%; margin: 16px 0; }
+  th, td { border: 1px solid #d1d5db; padding: 8px 12px; text-align: left; font-size: 13px; }
+  th { background: #f3f4f6; font-weight: 600; }
+  tr:nth-child(even) { background: #f9fafb; }
+  code { background: #f3f4f6; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  ol, ul { padding-left: 24px; }
+  li { margin-bottom: 4px; }
+  strong { color: #111; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+<h1>SBR Ad Data Export Guide — For VAs</h1>
+<h2>How to get ad platform data into the SBR Inventory App</h2>
+<p><strong>Last updated:</strong> June 5, 2026
+<strong>Contact:</strong> Matt Gibson (gibson.matt27@gmail.com)</p>
+<hr />
+<h2>Overview</h2>
+<p>The SBR app needs weekly ad performance data from 4 platforms: Google Ads, Meta (Facebook/Instagram) Ads, Amazon Ads, and Pinterest Ads. Each platform has a built-in export feature — no API keys, no developer accounts, no coding required.</p>
+<p><strong>Your job:</strong> Set up scheduled exports (Google + Meta) and do weekly manual downloads (Amazon + Pinterest), then upload the CSV files to the SBR app.</p>
+<hr />
+<h2>PLATFORM 1: Google Ads</h2>
+<h3>Option A: Scheduled Email Report (Recommended — set up once, runs automatically)</h3>
+<ol>
+<li>Go to <strong>ads.google.com</strong> and log in with <code>stickerburrroller@gmail.com</code></li>
+<li>Click the <strong>Reports</strong> icon (bar chart) in the left sidebar</li>
+<li>Click <strong>+ Custom</strong> to create a new report</li>
+<li>Set report type to <strong>Table</strong></li>
+<li>Add these columns (drag from the left panel):</li>
+<li><strong>Campaign</strong> (under Attributes)</li>
+<li><strong>Day</strong> (under Time)</li>
+<li><strong>Cost</strong> (under Performance)</li>
+<li><strong>Conversions</strong> (under Conversions)</li>
+<li><strong>Conv. value</strong> (under Conversions)</li>
+<li><strong>Impressions</strong> (under Performance)</li>
+<li><strong>Clicks</strong> (under Performance)</li>
+<li>Set the date range to <strong>Last 7 days</strong></li>
+<li>Click the <strong>Schedule</strong> icon (clock icon, top right of the report)</li>
+<li>Set:</li>
+<li>Frequency: <strong>Weekly</strong> (every Monday)</li>
+<li>Format: <strong>CSV</strong></li>
+<li>Recipients: <code>gibson.matt27@gmail.com</code> (and your email)</li>
+<li>Click <strong>Save and Schedule</strong></li>
+</ol>
+<p>The report emails every Monday. Download the CSV attachment.</p>
+<h3>Option B: Google Sheets Add-on (Live data, auto-refreshing)</h3>
+<ol>
+<li>Open a new Google Sheet</li>
+<li>Go to <strong>Extensions → Add-ons → Get add-ons</strong></li>
+<li>Search for <strong>"Google Ads"</strong> and install the official Google add-on</li>
+<li>Open it: Extensions → Google Ads → Create report</li>
+<li>Select the same columns as above</li>
+<li>Click <strong>Create Report</strong> — it builds a live-updating sheet</li>
+<li>Share the sheet URL with Matt</li>
+</ol>
+<hr />
+<h2>PLATFORM 2: Meta (Facebook + Instagram) Ads</h2>
+<h3>Scheduled Email Report (Set up once)</h3>
+<ol>
+<li>Go to <strong>business.facebook.com/adsmanager</strong></li>
+<li>Click <strong>Ads Reporting</strong> (in the left sidebar, under "Analyze and report")</li>
+<li>NOT the main Campaigns table — the dedicated Reporting section</li>
+<li>Click <strong>Create Report</strong></li>
+<li>Add these columns:</li>
+<li><strong>Campaign name</strong></li>
+<li><strong>Day</strong> (set as breakdown)</li>
+<li><strong>Amount spent</strong></li>
+<li><strong>Impressions</strong></li>
+<li><strong>Link clicks</strong> (or "Clicks (all)")</li>
+<li><strong>Purchases</strong> (under Results — you may need to set the result type to "Purchases")</li>
+<li><strong>Purchase conversion value</strong> (or "Total conversion value")</li>
+<li>Set date range to <strong>Last 7 days</strong></li>
+<li>Click the <strong>Share</strong> button (top right) → <strong>Schedule recurring email</strong></li>
+<li>Set:</li>
+<li>Frequency: <strong>Weekly</strong></li>
+<li>Format: <strong>CSV</strong> or <strong>XLSX</strong></li>
+<li>Recipients: <code>gibson.matt27@gmail.com</code></li>
+<li>Click <strong>Schedule</strong></li>
+</ol>
+<hr />
+<h2>PLATFORM 3: Amazon Ads</h2>
+<h3>Manual Download (Weekly — Amazon doesn't offer auto-email)</h3>
+<ol>
+<li>Go to <strong>advertising.amazon.com</strong> and log in</li>
+<li>Click <strong>Measurement &amp; Reporting</strong> → <strong>Sponsored ads reports</strong></li>
+<li>Click <strong>Create report</strong></li>
+<li>Select report type: <strong>Sponsored Products</strong></li>
+<li>Select report: <strong>Campaign</strong></li>
+<li>Set time unit: <strong>Daily</strong></li>
+<li>Set date range: <strong>Last 7 days</strong> (or custom last week)</li>
+<li>Click <strong>Run report</strong></li>
+<li>Wait for it to generate, then click <strong>Download</strong></li>
+</ol>
+<p><strong>Do this every Monday.</strong> The file downloads as CSV.</p>
+<h3>Important: Amazon only stores 60-90 days of report data. If you skip a week, the oldest data may be lost.</h3>
+<hr />
+<h2>PLATFORM 4: Pinterest Ads</h2>
+<h3>Manual Download (Weekly)</h3>
+<ol>
+<li>Go to <strong>ads.pinterest.com</strong></li>
+<li>Click into the <strong>Campaigns</strong> view</li>
+<li>Set the date range to <strong>Last 7 days</strong></li>
+<li>Click the <strong>download icon</strong> (near the date picker, looks like a downward arrow)</li>
+<li>Select <strong>CSV</strong> format</li>
+<li>Save the file</li>
+</ol>
+<p><strong>Do this every Monday.</strong></p>
+<hr />
+<h2>UPLOADING TO THE SBR APP</h2>
+<p>After downloading the CSV files:</p>
+<ol>
+<li>Go to <strong>https://sbr-app-production-f1c4.up.railway.app</strong></li>
+<li>Log in</li>
+<li>Navigate to <strong>Ad Analytics</strong> (in the sidebar under Tools)</li>
+<li>Click the <strong>Deep Dive</strong> tab (or look for the <strong>Upload Ad Data</strong> section)</li>
+<li>For each CSV file:
+   a. Select the <strong>Platform</strong> (Google Ads, Meta Ads, Amazon Ads, or Pinterest Ads)
+   b. Click <strong>Choose File</strong> and select the CSV
+   c. Click <strong>Upload</strong>
+   d. Verify the results: "Inserted: X, Updated: Y, Skipped: Z"</li>
+<li>If errors appear, check that:</li>
+<li>The file is a CSV (not PDF or XLSX)</li>
+<li>The correct platform is selected</li>
+<li>The date range doesn't overlap with previously uploaded data (duplicates are OK — they update, not duplicate)</li>
+</ol>
+<hr />
+<h2>Weekly Schedule (Set a recurring calendar reminder)</h2>
+<table>
+<thead>
+<tr>
+<th>Day</th>
+<th>Task</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Monday</strong></td>
+<td>Download Amazon Ads CSV</td>
+<td>5 min</td>
+</tr>
+<tr>
+<td><strong>Monday</strong></td>
+<td>Download Pinterest Ads CSV</td>
+<td>5 min</td>
+</tr>
+<tr>
+<td><strong>Monday</strong></td>
+<td>Check email for Google Ads CSV (auto)</td>
+<td>1 min</td>
+</tr>
+<tr>
+<td><strong>Monday</strong></td>
+<td>Check email for Meta Ads CSV (auto)</td>
+<td>1 min</td>
+</tr>
+<tr>
+<td><strong>Monday</strong></td>
+<td>Upload all 4 CSVs to SBR app</td>
+<td>5 min</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total weekly time: ~17 minutes</strong></p>
+<hr />
+<h2>Troubleshooting</h2>
+<p><strong>"I can't find the Google Ads report scheduling option"</strong>
+→ You need Editor or higher access to the Google Ads account. Ask Matt to add you.</p>
+<p><strong>"Meta says I don't have access to Ads Reporting"</strong>
+→ You need Advertiser or Admin role on the ad account in Business Manager. Ask Matt to add you.</p>
+<p><strong>"Amazon report says no data"</strong>
+→ Check that you're looking at the right time period. If it's a new campaign, it may not have data yet.</p>
+<p><strong>"The CSV upload shows 0 inserted, 0 skipped"</strong>
+→ The file might be empty, or the column names don't match. Open the CSV in a text editor and check that it has headers like "Campaign", "Cost", etc.</p>
+<p><strong>"Upload shows errors for some rows"</strong>
+→ Some rows may have formatting issues (special characters, missing dates). The valid rows still get imported. Send the error details to Matt.</p>
+<hr />
+<h2>Questions?</h2>
+<p>Contact Matt Gibson: gibson.matt27@gmail.com
+Or post in the team Slack channel.</p>
+</body>
+</html>

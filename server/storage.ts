@@ -3886,9 +3886,12 @@ export class MemStorage implements IStorage {
   }
 
   async upsertAdMetricsDaily(metrics: InsertAdMetricsDaily): Promise<AdMetricsDaily> {
-    // Find existing by platform + sku + date
+    // Find existing by platform + sku + date + campaign + device + country
     const existing = Array.from(this.adMetricsDaily.values())
-      .find(m => m.platform === metrics.platform && m.sku === metrics.sku && m.date === metrics.date);
+      .find(m => m.platform === metrics.platform && m.sku === metrics.sku && m.date === metrics.date
+        && (m.campaign ?? '_all') === (metrics.campaign ?? '_all')
+        && (m.device ?? '_all') === (metrics.device ?? '_all')
+        && (m.country ?? '_all') === (metrics.country ?? '_all'));
     
     if (existing) {
       const updated: AdMetricsDaily = {
@@ -3896,8 +3899,8 @@ export class MemStorage implements IStorage {
         impressions: metrics.impressions ?? existing.impressions,
         clicks: metrics.clicks ?? existing.clicks,
         spend: metrics.spend ?? existing.spend,
-        conversions: metrics.conversions ?? existing.conversions,
-        revenue: metrics.revenue ?? existing.revenue,
+        conversions: (metrics.conversions && metrics.conversions > 0) ? metrics.conversions : existing.conversions,
+        revenue: (metrics.revenue && metrics.revenue > 0) ? metrics.revenue : existing.revenue,
         currency: metrics.currency ?? existing.currency,
         updatedAt: new Date(),
       };
@@ -7636,26 +7639,33 @@ export class PostgresStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     
-    // Try to find existing
+    // Try to find existing — match on all unique-index columns
     const existing = await this.db.select().from(schema.adMetricsDaily)
       .where(and(
         eq(schema.adMetricsDaily.platform, metrics.platform),
         eq(schema.adMetricsDaily.sku, metrics.sku),
-        eq(schema.adMetricsDaily.date, metrics.date)
+        eq(schema.adMetricsDaily.date, metrics.date),
+        eq(schema.adMetricsDaily.campaign, metrics.campaign ?? '_all'),
+        eq(schema.adMetricsDaily.device, metrics.device ?? '_all'),
+        eq(schema.adMetricsDaily.country, metrics.country ?? '_all'),
       ));
     
     if (existing.length > 0) {
+      const ex = existing[0];
       const result = await this.db.update(schema.adMetricsDaily)
         .set({
-          impressions: metrics.impressions ?? existing[0].impressions,
-          clicks: metrics.clicks ?? existing[0].clicks,
-          spend: metrics.spend ?? existing[0].spend,
-          conversions: metrics.conversions ?? existing[0].conversions,
-          revenue: metrics.revenue ?? existing[0].revenue,
-          currency: metrics.currency ?? existing[0].currency,
+          impressions: metrics.impressions ?? ex.impressions,
+          clicks: metrics.clicks ?? ex.clicks,
+          spend: metrics.spend ?? ex.spend,
+          // Never overwrite non-zero revenue/conversions with zero — Windsor
+          // returns spend but not revenue for Google Ads, so a sync would
+          // clobber revenue from the Zo KPI seed or other sources.
+          conversions: (metrics.conversions && metrics.conversions > 0) ? metrics.conversions : ex.conversions,
+          revenue: (metrics.revenue && metrics.revenue > 0) ? metrics.revenue : ex.revenue,
+          currency: metrics.currency ?? ex.currency,
           updatedAt: now,
         })
-        .where(eq(schema.adMetricsDaily.id, existing[0].id))
+        .where(eq(schema.adMetricsDaily.id, ex.id))
         .returning();
       return result[0];
     }

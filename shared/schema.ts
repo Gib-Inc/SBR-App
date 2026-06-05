@@ -2257,9 +2257,12 @@ export type AdSkuMapping = typeof adSkuMappings.$inferSelect;
 // Daily aggregated ad metrics per SKU (for inventory demand forecasting)
 export const adMetricsDaily = pgTable("ad_metrics_daily", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  platform: text("platform").notNull(), // 'META', 'GOOGLE'
+  platform: text("platform").notNull(), // 'META', 'GOOGLE', 'AMAZON', 'TIKTOK', 'MICROSOFT', 'REDDIT', 'YAHOO', 'PINTEREST'
   sku: text("sku").notNull(),
   date: date("date").notNull(), // YYYY-MM-DD
+  campaign: text("campaign").notNull().default('_all'), // Campaign name; '_all' = aggregate row
+  device: text("device").notNull().default('_all'), // 'mobile', 'desktop', 'tablet', '_all'
+  country: text("country").notNull().default('_all'), // ISO 3166-1 alpha-2 or '_all'
   impressions: integer("impressions").notNull().default(0),
   clicks: integer("clicks").notNull().default(0),
   spend: real("spend").notNull().default(0), // In account currency
@@ -2269,7 +2272,7 @@ export const adMetricsDaily = pgTable("ad_metrics_daily", {
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at").notNull().default(sql`now()`),
 }, (table) => ({
-  platformSkuDateIdx: uniqueIndex("ad_metrics_platform_sku_date_idx").on(table.platform, table.sku, table.date),
+  platformSkuDateIdx: uniqueIndex("ad_metrics_platform_sku_date_idx").on(table.platform, table.sku, table.date, table.campaign, table.device, table.country),
   dateIdx: index("ad_metrics_date_idx").on(table.date),
   skuIdx: index("ad_metrics_sku_idx").on(table.sku),
 }));

@@ -4,6 +4,7 @@ import { refreshAllProductForecastContexts } from "./forecast-context-service";
 import { AISystemReviewer } from "./services/ai-system-reviewer";
 import { ExtensivInventorySyncService } from "./services/extensiv-inventory-sync-service";
 import { MorningTrapService } from "./services/morning-trap-service";
+import { WeeklyDigestService } from "./services/weekly-digest-service";
 import { recordSchedulerRun, type SchedulerRunStatus } from "./services/scheduler-run-recorder";
 import { runDriftReport } from "./services/inventory-drift-service";
 
@@ -31,6 +32,7 @@ let morningTrapTimer: NodeJS.Timeout | null = null;
 let velocityTimer: NodeJS.Timeout | null = null;
 let driftReportTimer: NodeJS.Timeout | null = null;
 let adSyncTimer: NodeJS.Timeout | null = null;
+let weeklyDigestTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -273,10 +275,29 @@ async function performAdPerformanceSync(): Promise<void> {
     const { googleAdsDemandService } = await import("./services/google-ads-demand-service");
     const { metaAdsDemandService } = await import("./services/meta-ads-demand-service");
     const { adMetricsSyncService } = await import("./services/ad-metrics-sync");
+    const { runWindsorSync, getWindsorApiKey } = await import("./services/windsor-ingestion-service");
     const allUsers = await storage.getAllUsers();
+    let windsorSynced = 0;
 
     for (const user of allUsers) {
       usersChecked++;
+
+      // Windsor.ai unified connector — pulls Google + Meta + Amazon + TikTok
+      // spend into ad_metrics_daily from one API key. No-op for users without
+      // a Windsor key configured (UI config or WINDSOR_API_KEY env).
+      try {
+        if (await getWindsorApiKey(user.id)) {
+          const w = await runWindsorSync(user.id, 30);
+          if (w.success || w.rowsUpserted > 0) {
+            windsorSynced++;
+            console.log(`[Ad Sync] Windsor for user ${user.id}: ${w.rowsUpserted} rows across ${Object.keys(w.platforms).join(", ") || "none"}`);
+          } else {
+            errors.push(`windsor/${user.id}: ${w.errors.slice(0, 1).join("; ") || "sync failed"}`);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`windsor/${user.id}: ${e?.message ?? e}`);
+      }
 
       // Google Ads — initialize() returns false (and we skip) if this user has
       // not connected/enabled Google Ads, so unconfigured users are no-ops.
@@ -328,15 +349,15 @@ async function performAdPerformanceSync(): Promise<void> {
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, dashboard ${dashboardSynced} (users checked ${usersChecked})`);
+    console.log(`[Ad Sync] Completed in ${duration}ms — google ${googleSynced}, meta ${metaSynced}, windsor ${windsorSynced}, dashboard ${dashboardSynced} (users checked ${usersChecked})`);
     await recordRunSafe({
       schedulerId: "ad-performance-sync",
-      schedulerName: "Marketing ad performance sync (Google + Meta + dashboard)",
+      schedulerName: "Marketing ad performance sync (Google + Meta + Windsor + dashboard)",
       status: errors.length > 0 ? "partial" : "success",
       startedAt: schedulerStartedAt,
       durationMs: duration,
       errorMessage: errors.length > 0 ? errors.slice(0, 3).join("; ") : null,
-      details: { usersChecked, googleSynced, metaSynced, dashboardSynced, errorCount: errors.length },
+      details: { usersChecked, googleSynced, metaSynced, windsorSynced, dashboardSynced, errorCount: errors.length },
     });
   } catch (error: any) {
     console.error("[Ad Sync] Failed:", error);
@@ -403,6 +424,38 @@ async function performMorningTrapCheck(): Promise<void> {
     }
   } catch (error) {
     console.error("[Scheduler] Error during Morning Trap Check:", error);
+  }
+}
+
+/**
+ * Weekly CMO digest. Fires daily at 7 AM MST but only sends on Mondays —
+ * the headline CMO numbers (revenue vs target, blended ROAS, LTV:CAC,
+ * repeat rate) texted to Zo via GHL.
+ */
+async function performWeeklyDigest(): Promise<void> {
+  // Gate to Monday in Mountain Time (UTC-7). 7 AM MST = 14:00 UTC, so the
+  // UTC day is the same as the MT day at that hour.
+  const dayOfWeek = new Date().getUTCDay(); // 0=Sun, 1=Mon
+  if (dayOfWeek !== 1) {
+    return;
+  }
+  console.log("[Scheduler] Starting Weekly CMO Digest...");
+  const startTime = Date.now();
+  try {
+    const allUsers = await storage.getAllUsers();
+    const adminUser = allUsers.find(u => u.role === 'admin');
+    if (!adminUser) {
+      console.warn("[Scheduler] No admin user found for weekly digest");
+      return;
+    }
+    const result = await WeeklyDigestService.run(adminUser.id, { sendSms: true });
+    const duration = Date.now() - startTime;
+    console.log(`[Scheduler] Weekly CMO Digest completed in ${duration}ms. SMS sent: ${result.smsSent}`);
+    if (!result.success && result.error) {
+      console.warn(`[Scheduler] Weekly Digest issue: ${result.error}`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Error during Weekly CMO Digest:", error);
   }
 }
 
@@ -693,6 +746,26 @@ export async function startScheduler(): Promise<void> {
     console.error("[Scheduler] Morning Trap failed to initialize:", err);
   }
 
+  // ── Weekly CMO digest (Mondays 7 AM MST) ──────────────────────────────
+  try {
+    if (weeklyDigestTimer) {
+      clearTimeout(weeklyDigestTimer);
+      clearInterval(weeklyDigestTimer);
+    }
+    const msUntil7amDigest = msUntilNext7amMST();
+    console.log(`[Scheduler] Weekly CMO Digest scheduled. Checks daily at 7 AM MST, sends on Mondays.`);
+    // Fire daily at 7 AM; performWeeklyDigest self-gates to Monday.
+    weeklyDigestTimer = setTimeout(() => {
+      performWeeklyDigest().catch(err => console.error("[Scheduler] Weekly Digest failed:", err));
+      weeklyDigestTimer = setInterval(() => {
+        performWeeklyDigest().catch(err => console.error("[Scheduler] Weekly Digest failed:", err));
+      }, 24 * 60 * 60 * 1000);
+    }, msUntil7amDigest);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Weekly Digest failed to initialize:", err);
+  }
+
   try {
     performVelocityRefresh({ onlyZeroOrNull: true }).catch((err) => {
       console.error("[Scheduler] Boot-time velocity backfill failed:", err);
@@ -790,6 +863,13 @@ export function stopScheduler(): void {
   if (aiSystemReviewTimer) {
     clearInterval(aiSystemReviewTimer);
     aiSystemReviewTimer = null;
+  }
+
+  // Stop Weekly Digest timer
+  if (weeklyDigestTimer) {
+    clearTimeout(weeklyDigestTimer);
+    clearInterval(weeklyDigestTimer);
+    weeklyDigestTimer = null;
   }
 
   // Stop Extensiv sync timer

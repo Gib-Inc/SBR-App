@@ -169,6 +169,16 @@ export default async function runApp(
 ) {
   const server = await registerRoutes(app);
 
+  // Apply additive schema migrations BEFORE anything queries — DATABASE_URL is
+  // available here, unlike the build (where drizzle-kit push is skipped). This
+  // ends the recurring "column in code, missing in DB" breakage on deploy.
+  try {
+    const { runStartupMigrations } = await import("./startup-migrations");
+    await runStartupMigrations();
+  } catch (err: any) {
+    console.error("[Startup Migrations] Failed to run:", err?.message ?? err);
+  }
+
   // Boot-time schema + data migration checks. Fails loud (with clear log
   // lines) but doesn't block startup so other routes still come up if
   // anything is off. Awaited here so the output appears before the

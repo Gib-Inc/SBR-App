@@ -22,6 +22,9 @@
 // routes work, but failures are logged loudly so they're caught fast.
 
 import pg from "pg";
+import { getTableColumns, getTableName, is } from "drizzle-orm";
+import { PgTable } from "drizzle-orm/pg-core";
+import * as schema from "@shared/schema";
 import { HISTORICAL_PL_DATA } from "../routes/historical-pl-data";
 import { ZO_KPI_DATA } from "../routes/zo-kpi-data";
 
@@ -594,6 +597,73 @@ async function seedZoKpiIfEmpty(client: pg.PoolClient): Promise<void> {
   console.log(`[Startup Checks] Seeded ${inserted} Zo KPI campaign rows into ad_metrics_daily`);
 }
 
+/**
+ * Comprehensive schema-vs-DB drift radar. Introspects EVERY Drizzle table in
+ * shared/schema.ts at runtime and compares its expected columns against the
+ * live database. Unlike ensureTablesExist/ensureColumnsExist (which only know
+ * a hardcoded list of tables that previously broke), this catches ANY drift —
+ * the recurring failure mode where a table/column added in code never reaches
+ * the DB because drizzle-kit push is skipped at build time (no DATABASE_URL).
+ *
+ * Reports only (non-destructive): logs to the console AND system_logs so the
+ * /health page surfaces it. The startup-migrations runner remains where
+ * additive drift is actually FIXED; this is the early-warning radar so the
+ * next gap is caught automatically instead of by luck.
+ */
+async function reportSchemaDrift(client: pg.PoolClient): Promise<void> {
+  const expected: { table: string; columns: string[] }[] = [];
+  for (const val of Object.values(schema)) {
+    if (is(val, PgTable)) {
+      const columns = Object.values(getTableColumns(val)).map((c: any) => c.name);
+      expected.push({ table: getTableName(val), columns });
+    }
+  }
+
+  const colRes = await client.query(
+    `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'`,
+  );
+  const actual = new Map<string, Set<string>>();
+  for (const row of colRes.rows) {
+    if (!actual.has(row.table_name)) actual.set(row.table_name, new Set());
+    actual.get(row.table_name)!.add(row.column_name);
+  }
+
+  const drift: string[] = [];
+  for (const { table, columns } of expected) {
+    if (!actual.has(table)) {
+      drift.push(`MISSING TABLE: ${table}`);
+      continue;
+    }
+    const have = actual.get(table)!;
+    const missing = columns.filter((c) => !have.has(c));
+    if (missing.length) drift.push(`${table} missing column(s): ${missing.join(", ")}`);
+  }
+
+  if (drift.length === 0) {
+    console.log(`[Startup Checks] Schema drift: none (${expected.length} tables verified against DB)`);
+    return;
+  }
+
+  console.error(
+    `[Startup Checks] SCHEMA DRIFT DETECTED — ${drift.length} issue(s): ${drift.join(" | ")}. ` +
+      `Add the matching additive migration to server/startup-migrations.ts.`,
+  );
+  try {
+    await client.query(
+      `INSERT INTO system_logs (type, severity, code, message, details) VALUES ($1, $2, $3, $4, $5)`,
+      [
+        "SCHEMA_DRIFT",
+        "WARNING",
+        "SCHEMA_DRIFT",
+        `Schema drift detected at startup: ${drift.length} issue(s)`,
+        JSON.stringify({ issues: drift }),
+      ],
+    );
+  } catch (e: any) {
+    console.error(`[Startup Checks] Could not record schema drift to system_logs: ${e?.message ?? e}`);
+  }
+}
+
 export async function runStartupChecks(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.warn("[Startup Checks] DATABASE_URL not set — skipping checks");
@@ -664,6 +734,16 @@ export async function runStartupChecks(): Promise<void> {
       }
     } catch (err: any) {
       console.error("[Startup Checks] Table existence check failed:", err?.message ?? err);
+    }
+
+    // ── Comprehensive schema drift radar ────────────────────────────────
+    // Beyond the hardcoded table/column checks above: introspect every
+    // Drizzle table and flag ANY missing table/column so future drift is
+    // caught automatically instead of breaking a feature in prod first.
+    try {
+      await reportSchemaDrift(client);
+    } catch (err: any) {
+      console.error("[Startup Checks] Schema drift radar failed:", err?.message ?? err);
     }
 
     // ── Lead-time data migration ────────────────────────────────────────

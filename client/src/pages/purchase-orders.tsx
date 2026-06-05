@@ -1285,8 +1285,10 @@ export default function PurchaseOrders() {
                         <tr className="border-b">
                           <th className="p-3 text-left text-sm font-medium whitespace-nowrap">Item</th>
                           <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Qty Ordered</th>
+                          <th className="p-3 text-center text-sm font-medium whitespace-nowrap w-px">UoM</th>
                           <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Qty Received</th>
                           <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Unit Cost</th>
+                          <th className="p-3 text-left text-sm font-medium whitespace-nowrap w-px">ETA</th>
                           <th className="p-3 text-right text-sm font-medium whitespace-nowrap w-px">Line Total</th>
                           <th className="sticky right-0 z-10 bg-muted/50 p-3 text-right text-sm font-medium whitespace-nowrap w-px shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">Actions</th>
                         </tr>
@@ -1315,15 +1317,24 @@ export default function PurchaseOrders() {
                                     </TooltipContent>
                                   </Tooltip>
                                   <p className="text-xs text-muted-foreground truncate">{line.item?.sku || line.sku || "-"}</p>
+                                  {(line.supplierItemCode || line.internalBarcode) && (
+                                    <p className="text-[11px] text-muted-foreground truncate">
+                                      {line.supplierItemCode ? `Supplier: ${line.supplierItemCode}` : ""}
+                                      {line.supplierItemCode && line.internalBarcode ? " · " : ""}
+                                      {line.internalBarcode ? `Barcode: ${line.internalBarcode}` : ""}
+                                    </p>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-3 text-right whitespace-nowrap">{line.qtyOrdered}</td>
+                              <td className="p-3 text-center text-xs text-muted-foreground whitespace-nowrap">{line.unitOfMeasure || "EA"}</td>
                               <td className="p-3 text-right whitespace-nowrap">
                                 <span className={isFullyReceived ? "text-green-600" : ""}>
                                   {line.qtyReceived || 0}
                                 </span>
                               </td>
                               <td className="p-3 text-right whitespace-nowrap">{formatCurrency(line.unitCost)}</td>
+                              <td className="p-3 text-left text-xs text-muted-foreground whitespace-nowrap">{line.expectedArrivalDate ? formatDate(line.expectedArrivalDate) : "—"}</td>
                               <td className="p-3 text-right font-medium whitespace-nowrap">{formatCurrency(line.lineTotal)}</td>
                               <td className="sticky right-0 z-10 bg-background p-3 whitespace-nowrap shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.1)] dark:shadow-[inset_8px_0_8px_-8px_rgba(0,0,0,0.3)]">
                                 <div className="flex justify-end">

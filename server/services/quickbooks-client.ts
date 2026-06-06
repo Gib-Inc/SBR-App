@@ -143,6 +143,34 @@ interface NormalizedReturnsLine {
   quickbooksItemId: string;
 }
 
+// CIPH.R Phase 1 — financial-position shapes
+interface QBAccount {
+  Id: string;
+  Name?: string;
+  AccountType?: string;
+  AccountSubType?: string;
+  CurrentBalance?: number;
+  Active?: boolean;
+}
+
+interface QBOpenDoc {
+  Id?: string;
+  Balance?: number;
+  DueDate?: string;
+  TxnDate?: string;
+}
+
+export interface QBFinancialRaw {
+  bankAccounts: QBAccount[] | null;
+  openInvoices: QBOpenDoc[] | null;
+  openBills: QBOpenDoc[] | null;
+  plReport: any | null;
+  plPeriodStart: string | null;
+  plPeriodEnd: string | null;
+  realmId: string | null;
+  errors: string[]; // "DATA GAPPED: <field> — <reason>" for any call that failed
+}
+
 export class QuickBooksClient {
   private storage: IStorage;
   private baseUrl: string;
@@ -369,6 +397,74 @@ export class QuickBooksClient {
     }
 
     return response.json();
+  }
+
+  /**
+   * CIPH.R Phase 1 — pull the raw financial position from QuickBooks:
+   * Cash on Hand (Bank account balances), open Invoices (AR), open Bills (AP),
+   * and a trailing-30-day P&L report. Each call is independently try/caught so a
+   * single failure degrades to a NULL + a "DATA GAPPED" entry rather than losing
+   * the whole snapshot. Aggregation/aging/parsing lives in qb-financial-service
+   * (pure + unit-tested); this method is the I/O boundary only.
+   */
+  async fetchFinancialRaw(): Promise<QBFinancialRaw> {
+    if (!this.auth) {
+      throw new Error('QuickBooks not authenticated');
+    }
+    const errors: string[] = [];
+
+    let bankAccounts: QBAccount[] | null = null;
+    try {
+      const q = encodeURIComponent("SELECT * FROM Account WHERE AccountType = 'Bank' MAXRESULTS 1000");
+      const r = await this.apiRequest<{ QueryResponse: { Account?: QBAccount[] } }>(`/query?query=${q}`);
+      bankAccounts = (r.QueryResponse?.Account || []).filter((a) => a.Active !== false);
+    } catch (e: any) {
+      errors.push(`DATA GAPPED: Cash on Hand (Bank accounts) — ${e?.message ?? e}`);
+    }
+
+    let openInvoices: QBOpenDoc[] | null = null;
+    try {
+      const q = encodeURIComponent("SELECT * FROM Invoice WHERE Balance > '0' MAXRESULTS 1000");
+      const r = await this.apiRequest<{ QueryResponse: { Invoice?: QBOpenDoc[] } }>(`/query?query=${q}`);
+      openInvoices = r.QueryResponse?.Invoice || [];
+    } catch (e: any) {
+      errors.push(`DATA GAPPED: Accounts Receivable (open invoices) — ${e?.message ?? e}`);
+    }
+
+    let openBills: QBOpenDoc[] | null = null;
+    try {
+      const q = encodeURIComponent("SELECT * FROM Bill WHERE Balance > '0' MAXRESULTS 1000");
+      const r = await this.apiRequest<{ QueryResponse: { Bill?: QBOpenDoc[] } }>(`/query?query=${q}`);
+      openBills = r.QueryResponse?.Bill || [];
+    } catch (e: any) {
+      errors.push(`DATA GAPPED: Accounts Payable (open bills) — ${e?.message ?? e}`);
+    }
+
+    // Trailing 30-day P&L (Accrual) — OpEx / gross profit / net income.
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const plPeriodStart = fmt(start);
+    const plPeriodEnd = fmt(end);
+    let plReport: any | null = null;
+    try {
+      plReport = await this.apiRequest<any>(
+        `/reports/ProfitAndLoss?start_date=${plPeriodStart}&end_date=${plPeriodEnd}&accounting_method=Accrual`,
+      );
+    } catch (e: any) {
+      errors.push(`DATA GAPPED: P&L summary — ${e?.message ?? e}`);
+    }
+
+    return {
+      bankAccounts,
+      openInvoices,
+      openBills,
+      plReport,
+      plPeriodStart,
+      plPeriodEnd,
+      realmId: this.auth.realmId,
+      errors,
+    };
   }
 
   /**

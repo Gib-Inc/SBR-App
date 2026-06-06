@@ -23244,6 +23244,50 @@ Generate only the email body text, no subject line.`;
   });
 
   // ============================================================================
+  // CIPH.R Phase 1 — QuickBooks financial-position snapshots
+  // (cash on hand, AR/AP + aging, P&L summary; anti-hallucination dataGaps)
+  // ============================================================================
+
+  // Latest financial snapshot
+  app.get("/api/quickbooks/financial-snapshot", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const latest = await storage.getLatestQbFinancialSnapshot();
+      res.json({ success: true, snapshot: latest ?? null });
+    } catch (error: any) {
+      console.error('[QuickBooks] Financial snapshot fetch error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load financial snapshot' });
+    }
+  });
+
+  // Recent financial snapshots (history)
+  app.get("/api/quickbooks/financial-snapshots", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = typeof req.query.limit === 'string' ? Math.min(parseInt(req.query.limit, 10) || 30, 365) : 30;
+      const snapshots = await storage.getQbFinancialSnapshots(limit);
+      res.json({ success: true, snapshots });
+    } catch (error: any) {
+      console.error('[QuickBooks] Financial snapshots fetch error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load financial snapshots' });
+    }
+  });
+
+  // Capture a fresh financial snapshot from QuickBooks (live pull)
+  app.post("/api/quickbooks/financial-snapshot/capture", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId || 'system';
+      const { captureFinancialSnapshot } = await import("./services/qb-financial-service");
+      const result = await captureFinancialSnapshot(userId);
+      if (!result.ok) {
+        return res.status(409).json({ success: false, error: result.error });
+      }
+      res.json({ success: true, snapshot: result.snapshot });
+    } catch (error: any) {
+      console.error('[QuickBooks] Financial snapshot capture error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to capture financial snapshot' });
+    }
+  });
+
+  // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================
 

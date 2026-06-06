@@ -2163,6 +2163,41 @@ export const insertQuickbooksBillSchema = createInsertSchema(quickbooksBills).om
 export type InsertQuickbooksBill = z.infer<typeof insertQuickbooksBillSchema>;
 export type QuickbooksBill = typeof quickbooksBills.$inferSelect;
 
+// CIPH.R Phase 1 — Financial data foundation.
+// Point-in-time snapshot of the company's financial position pulled from
+// QuickBooks: Cash on Hand (sum of Bank account balances), Accounts Receivable
+// (open invoices) + aging, Accounts Payable (open bills) + aging, and a P&L
+// summary (OpEx / gross profit / net income). This is the spine the runway/burn
+// engine and the data-governor cross-reference build on.
+// ANTI-HALLUCINATION: any field that can't be read from QB is stored NULL and
+// named in `dataGaps`; `confidence` is the share of core fields populated.
+export const qbFinancialSnapshots = pgTable("qb_financial_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  capturedAt: timestamp("captured_at").notNull().default(sql`now()`),
+  cashOnHand: numeric("cash_on_hand", { precision: 14, scale: 2 }),
+  accountsReceivable: numeric("accounts_receivable", { precision: 14, scale: 2 }),
+  accountsPayable: numeric("accounts_payable", { precision: 14, scale: 2 }),
+  arAging: jsonb("ar_aging"), // { current, d1_30, d31_60, d61_90, d90_plus }
+  apAging: jsonb("ap_aging"),
+  operatingExpenses: numeric("operating_expenses", { precision: 14, scale: 2 }),
+  grossProfit: numeric("gross_profit", { precision: 14, scale: 2 }),
+  netIncome: numeric("net_income", { precision: 14, scale: 2 }),
+  totalIncome: numeric("total_income", { precision: 14, scale: 2 }),
+  plPeriodStart: date("pl_period_start"),
+  plPeriodEnd: date("pl_period_end"),
+  realmId: text("realm_id"),
+  dataGaps: jsonb("data_gaps"), // string[] of "DATA GAPPED: <field>" entries
+  confidence: integer("confidence"), // 0-100, share of core fields populated
+  raw: jsonb("raw"), // optional raw QB payloads for lineage/audit
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  capturedAtIdx: index("qb_financial_snapshots_captured_at_idx").on(table.capturedAt),
+}));
+
+export const insertQbFinancialSnapshotSchema = createInsertSchema(qbFinancialSnapshots).omit({ id: true, createdAt: true });
+export type InsertQbFinancialSnapshot = typeof qbFinancialSnapshots.$inferInsert;
+export type QbFinancialSnapshot = typeof qbFinancialSnapshots.$inferSelect;
+
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
 export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {

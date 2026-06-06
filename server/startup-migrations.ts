@@ -86,6 +86,34 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             created_at timestamp NOT NULL DEFAULT now()
           )`,
   },
+  // CIPH.R Phase 1 — financial-position snapshots from QuickBooks.
+  {
+    name: "qb_financial_snapshots.table",
+    sql: `CREATE TABLE IF NOT EXISTS qb_financial_snapshots (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            captured_at timestamp NOT NULL DEFAULT now(),
+            cash_on_hand numeric(14,2),
+            accounts_receivable numeric(14,2),
+            accounts_payable numeric(14,2),
+            ar_aging jsonb,
+            ap_aging jsonb,
+            operating_expenses numeric(14,2),
+            gross_profit numeric(14,2),
+            net_income numeric(14,2),
+            total_income numeric(14,2),
+            pl_period_start date,
+            pl_period_end date,
+            realm_id text,
+            data_gaps jsonb,
+            confidence integer,
+            raw jsonb,
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "qb_financial_snapshots.captured_at_idx",
+    sql: `CREATE INDEX IF NOT EXISTS qb_financial_snapshots_captured_at_idx ON qb_financial_snapshots (captured_at)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

@@ -93,6 +93,8 @@ import {
   type InsertQuickbooksItemMapping,
   type QuickbooksBill,
   type InsertQuickbooksBill,
+  type QbFinancialSnapshot,
+  type InsertQbFinancialSnapshot,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -661,6 +663,10 @@ export interface IStorage {
   // QuickBooks Bills
   getQuickbooksBillByPurchaseOrderId(purchaseOrderId: string): Promise<QuickbooksBill | null>;
   createQuickbooksBill(bill: InsertQuickbooksBill): Promise<QuickbooksBill>;
+  // CIPH.R Phase 1 — financial-position snapshots
+  createQbFinancialSnapshot(snapshot: InsertQbFinancialSnapshot): Promise<QbFinancialSnapshot>;
+  getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined>;
+  getQbFinancialSnapshots(limit?: number): Promise<QbFinancialSnapshot[]>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3749,6 +3755,16 @@ export class MemStorage implements IStorage {
 
   async createQuickbooksBill(_bill: InsertQuickbooksBill): Promise<QuickbooksBill> {
     throw new Error('QuickBooks not supported in MemStorage');
+  }
+
+  async createQbFinancialSnapshot(_snapshot: InsertQbFinancialSnapshot): Promise<QbFinancialSnapshot> {
+    throw new Error('QuickBooks not supported in MemStorage');
+  }
+  async getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    return undefined;
+  }
+  async getQbFinancialSnapshots(_limit?: number): Promise<QbFinancialSnapshot[]> {
+    return [];
   }
 
   async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
@@ -7459,6 +7475,27 @@ export class PostgresStorage implements IStorage {
       updatedAt: now,
     }).returning();
     return result[0];
+  }
+
+  // CIPH.R Phase 1 — financial-position snapshots
+  async createQbFinancialSnapshot(snapshot: InsertQbFinancialSnapshot): Promise<QbFinancialSnapshot> {
+    const result = await this.db.insert(schema.qbFinancialSnapshots).values(snapshot).returning();
+    return result[0];
+  }
+  async getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    const result = await this.db
+      .select()
+      .from(schema.qbFinancialSnapshots)
+      .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
+      .limit(1);
+    return result[0];
+  }
+  async getQbFinancialSnapshots(limit = 30): Promise<QbFinancialSnapshot[]> {
+    return await this.db
+      .select()
+      .from(schema.qbFinancialSnapshots)
+      .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
+      .limit(limit);
   }
 
   async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {

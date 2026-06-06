@@ -23304,14 +23304,23 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // CIPH.R Finances tab — monthly P&L series + latest balance-sheet snapshot.
+  // CIPH.R Finances tab — monthly P&L series + balance-sheet snapshot + the full
+  // balance-sheet position (debt stack/equity). balanceSheet currently comes from
+  // the seeded accountant export; switch to live QuickBooks once connected.
   app.get("/api/finances/overview", requireAuth, async (_req: Request, res: Response) => {
     try {
       const [monthly, snapshot] = await Promise.all([
         storage.getMonthlyFinancials(),
         storage.getLatestQbFinancialSnapshot(),
       ]);
-      res.json({ success: true, monthly, snapshot: snapshot ?? null });
+      const { FINANCIAL_SEED } = await import("./data/financial-seed");
+      res.json({
+        success: true,
+        monthly,
+        snapshot: snapshot ?? null,
+        balanceSheet: FINANCIAL_SEED.balanceSheet,
+        balanceSheetSource: "accountant_seed",
+      });
     } catch (error: any) {
       console.error('[CIPH.R] Finances overview error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to load finances' });

@@ -97,6 +97,8 @@ import {
   type InsertQbFinancialSnapshot,
   type FinancialRunwayForecast,
   type InsertFinancialRunwayForecast,
+  type MonthlyFinancial,
+  type InsertMonthlyFinancial,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -674,6 +676,10 @@ export interface IStorage {
   createFinancialRunwayForecast(forecast: InsertFinancialRunwayForecast): Promise<FinancialRunwayForecast>;
   getLatestFinancialRunwayForecast(): Promise<FinancialRunwayForecast | undefined>;
   getFinancialRunwayForecasts(limit?: number): Promise<FinancialRunwayForecast[]>;
+  // CIPH.R Finances — monthly P&L
+  createMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial>;
+  getMonthlyFinancials(): Promise<MonthlyFinancial[]>;
+  countMonthlyFinancials(): Promise<number>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3784,6 +3790,15 @@ export class MemStorage implements IStorage {
   }
   async getFinancialRunwayForecasts(_limit?: number): Promise<FinancialRunwayForecast[]> {
     return [];
+  }
+  async createMonthlyFinancial(_m: InsertMonthlyFinancial): Promise<MonthlyFinancial> {
+    throw new Error('Monthly financials not supported in MemStorage');
+  }
+  async getMonthlyFinancials(): Promise<MonthlyFinancial[]> {
+    return [];
+  }
+  async countMonthlyFinancials(): Promise<number> {
+    return 0;
   }
 
   async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
@@ -7540,6 +7555,17 @@ export class PostgresStorage implements IStorage {
       .from(schema.financialRunwayForecasts)
       .orderBy(desc(schema.financialRunwayForecasts.timestamp))
       .limit(limit);
+  }
+  async createMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial> {
+    const result = await this.db.insert(schema.monthlyFinancials).values(m).returning();
+    return result[0];
+  }
+  async getMonthlyFinancials(): Promise<MonthlyFinancial[]> {
+    return await this.db.select().from(schema.monthlyFinancials).orderBy(schema.monthlyFinancials.createdAt);
+  }
+  async countMonthlyFinancials(): Promise<number> {
+    const r = await this.db.select({ c: count() }).from(schema.monthlyFinancials);
+    return Number(r[0]?.c ?? 0);
   }
 
   async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {

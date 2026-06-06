@@ -190,6 +190,15 @@ export default async function runApp(
     console.error("[Startup Checks] Failed to run:", err?.message ?? err);
   }
 
+  // CIPH.R Finances — seed the accountant's real financials if the tables are
+  // empty, so the Finances tab is populated on first deploy (idempotent).
+  try {
+    const { seedFinancialsIfEmpty } = await import("./services/financial-seed-service");
+    await seedFinancialsIfEmpty();
+  } catch (err: any) {
+    console.error("[Finances Seed] Failed to run:", err?.message ?? err);
+  }
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

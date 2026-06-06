@@ -135,6 +135,27 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "financial_runway_forecasts.timestamp_idx",
     sql: `CREATE INDEX IF NOT EXISTS financial_runway_forecasts_timestamp_idx ON financial_runway_forecasts (timestamp)`,
   },
+  // CIPH.R Finances tab — monthly P&L (seeded from accountant export).
+  {
+    name: "monthly_financials.table",
+    sql: `CREATE TABLE IF NOT EXISTS monthly_financials (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            month text NOT NULL,
+            total_income numeric(14,2),
+            total_cogs numeric(14,2),
+            gross_profit numeric(14,2),
+            total_expenses numeric(14,2),
+            net_operating_income numeric(14,2),
+            net_income numeric(14,2),
+            expense_categories jsonb,
+            source text NOT NULL DEFAULT 'accountant_seed',
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "monthly_financials.month_idx",
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS monthly_financials_month_idx ON monthly_financials (month)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

@@ -23304,6 +23304,20 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Finances tab — monthly P&L series + latest balance-sheet snapshot.
+  app.get("/api/finances/overview", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const [monthly, snapshot] = await Promise.all([
+        storage.getMonthlyFinancials(),
+        storage.getLatestQbFinancialSnapshot(),
+      ]);
+      res.json({ success: true, monthly, snapshot: snapshot ?? null });
+    } catch (error: any) {
+      console.error('[CIPH.R] Finances overview error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load finances' });
+    }
+  });
+
   // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================

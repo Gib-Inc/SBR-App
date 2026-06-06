@@ -2225,6 +2225,29 @@ export const insertFinancialRunwayForecastSchema = createInsertSchema(financialR
 export type InsertFinancialRunwayForecast = typeof financialRunwayForecasts.$inferInsert;
 export type FinancialRunwayForecast = typeof financialRunwayForecasts.$inferSelect;
 
+// CIPH.R Finances tab — monthly P&L (the financial "playground" data source).
+// Seeded from the accountant export (Jan 2022–May 2026), augmented by QuickBooks
+// going forward. One row per month: headline totals + a per-category expense map.
+export const monthlyFinancials = pgTable("monthly_financials", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  month: text("month").notNull(), // "May 2026"
+  totalIncome: numeric("total_income", { precision: 14, scale: 2 }),
+  totalCogs: numeric("total_cogs", { precision: 14, scale: 2 }),
+  grossProfit: numeric("gross_profit", { precision: 14, scale: 2 }),
+  totalExpenses: numeric("total_expenses", { precision: 14, scale: 2 }),
+  netOperatingIncome: numeric("net_operating_income", { precision: 14, scale: 2 }),
+  netIncome: numeric("net_income", { precision: 14, scale: 2 }),
+  expenseCategories: jsonb("expense_categories"), // { "Advertising & Marketing": 55254.27, ... }
+  source: text("source").notNull().default("accountant_seed"), // accountant_seed | quickbooks
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  monthIdx: uniqueIndex("monthly_financials_month_idx").on(table.month),
+}));
+
+export const insertMonthlyFinancialSchema = createInsertSchema(monthlyFinancials).omit({ id: true, createdAt: true });
+export type InsertMonthlyFinancial = typeof monthlyFinancials.$inferInsert;
+export type MonthlyFinancial = typeof monthlyFinancials.$inferSelect;
+
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
 export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {

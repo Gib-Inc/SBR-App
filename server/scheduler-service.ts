@@ -33,6 +33,7 @@ let velocityTimer: NodeJS.Timeout | null = null;
 let driftReportTimer: NodeJS.Timeout | null = null;
 let adSyncTimer: NodeJS.Timeout | null = null;
 let weeklyDigestTimer: NodeJS.Timeout | null = null;
+let financialSnapshotTimer: NodeJS.Timeout | null = null;
 
 // AI System Review interval: weekly (168 hours)
 const AI_SYSTEM_REVIEW_INTERVAL_HOURS = 168;
@@ -375,6 +376,53 @@ async function performAdPerformanceSync(): Promise<void> {
  * Runs the AI System Review to analyze logs and generate recommendations
  * This runs weekly by default to avoid excessive API costs
  */
+/**
+ * CIPH.R — daily financial-position snapshot (the spec's "every 24h" pulse).
+ * Pulls Cash on Hand / AR / AP / P&L from QuickBooks into qb_financial_snapshots.
+ * The financial position is company-wide, so we capture for the first
+ * QB-connected user and stop. No-ops gracefully (status "skipped") when no user
+ * has QuickBooks connected, so this is safe to arm before Part B reconnect.
+ */
+async function performFinancialSnapshotCapture(): Promise<void> {
+  const startedAt = new Date();
+  try {
+    const { captureFinancialSnapshot } = await import("./services/qb-financial-service");
+    const users = await storage.getAllUsers();
+    let captured = false;
+    let lastError = "no QuickBooks-connected user";
+    for (const user of users) {
+      const r = await captureFinancialSnapshot(user.id);
+      if (r.ok) {
+        captured = true;
+        const gaps = Array.isArray(r.snapshot?.dataGaps) ? (r.snapshot!.dataGaps as unknown[]).length : 0;
+        console.log(
+          `[Financial Snapshot] Captured for user ${user.id} — confidence ${r.snapshot?.confidence ?? "?"}%, ${gaps} data gap(s)`,
+        );
+        break; // company-wide position — one snapshot/day is enough
+      }
+      lastError = r.error || lastError;
+    }
+    await recordRunSafe({
+      schedulerId: "financial-snapshot",
+      schedulerName: "CIPH.R financial-position snapshot (QuickBooks)",
+      status: captured ? "success" : "skipped",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: captured ? null : lastError,
+    });
+  } catch (error: any) {
+    console.error("[Financial Snapshot] Failed:", error);
+    await recordRunSafe({
+      schedulerId: "financial-snapshot",
+      schedulerName: "CIPH.R financial-position snapshot (QuickBooks)",
+      status: "failed",
+      startedAt,
+      durationMs: Date.now() - startedAt.getTime(),
+      errorMessage: error?.message ?? String(error),
+    });
+  }
+}
+
 async function performAISystemReview(): Promise<void> {
   console.log("[Scheduler] Starting AI System Review...");
   const startTime = Date.now();
@@ -629,7 +677,7 @@ function msUntilNext7amMST(): number {
 export async function startScheduler(): Promise<void> {
   console.log("[Scheduler] Starting per-channel scheduler...");
   let sectionsStarted = 0;
-  const totalSections = 8;
+  const totalSections = 9;
 
   try {
     const channels = await storage.getAllChannels();
@@ -837,6 +885,31 @@ export async function startScheduler(): Promise<void> {
     sectionsStarted++;
   } catch (err) {
     console.error("[Scheduler] Ad performance sync failed to initialize:", err);
+  }
+
+  try {
+    // CIPH.R financial-position snapshot. Boot run so a snapshot appears soon
+    // after QB connects, then daily at midnight MT (alongside the ad sync).
+    performFinancialSnapshotCapture().catch((err) => {
+      console.error("[Financial Snapshot] Boot-time run failed:", err);
+    });
+    if (financialSnapshotTimer) {
+      clearTimeout(financialSnapshotTimer);
+      clearInterval(financialSnapshotTimer);
+    }
+    const msUntilFin = msUntilNextMidnightMT();
+    console.log(
+      `[Financial Snapshot] Scheduled. Next run in ${(msUntilFin / (1000 * 60 * 60)).toFixed(1)} hours (12:05 AM MT), then daily`,
+    );
+    financialSnapshotTimer = setTimeout(() => {
+      performFinancialSnapshotCapture().catch(() => {});
+      financialSnapshotTimer = setInterval(() => {
+        performFinancialSnapshotCapture().catch(() => {});
+      }, 24 * 60 * 60 * 1000);
+    }, msUntilFin);
+    sectionsStarted++;
+  } catch (err) {
+    console.error("[Scheduler] Financial snapshot capture failed to initialize:", err);
   }
 
   console.log(

@@ -95,6 +95,8 @@ import {
   type InsertQuickbooksBill,
   type QbFinancialSnapshot,
   type InsertQbFinancialSnapshot,
+  type FinancialRunwayForecast,
+  type InsertFinancialRunwayForecast,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -667,6 +669,11 @@ export interface IStorage {
   createQbFinancialSnapshot(snapshot: InsertQbFinancialSnapshot): Promise<QbFinancialSnapshot>;
   getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined>;
   getQbFinancialSnapshots(limit?: number): Promise<QbFinancialSnapshot[]>;
+  // CIPH.R Phase 2 — runway forecasts + ad-spend window query
+  getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
+  createFinancialRunwayForecast(forecast: InsertFinancialRunwayForecast): Promise<FinancialRunwayForecast>;
+  getLatestFinancialRunwayForecast(): Promise<FinancialRunwayForecast | undefined>;
+  getFinancialRunwayForecasts(limit?: number): Promise<FinancialRunwayForecast[]>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3764,6 +3771,18 @@ export class MemStorage implements IStorage {
     return undefined;
   }
   async getQbFinancialSnapshots(_limit?: number): Promise<QbFinancialSnapshot[]> {
+    return [];
+  }
+  async getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
+    return Array.from(this.adMetricsDaily.values()).filter((m) => m.date >= startDate && m.date <= endDate);
+  }
+  async createFinancialRunwayForecast(_forecast: InsertFinancialRunwayForecast): Promise<FinancialRunwayForecast> {
+    throw new Error('Runway forecasts not supported in MemStorage');
+  }
+  async getLatestFinancialRunwayForecast(): Promise<FinancialRunwayForecast | undefined> {
+    return undefined;
+  }
+  async getFinancialRunwayForecasts(_limit?: number): Promise<FinancialRunwayForecast[]> {
     return [];
   }
 
@@ -7495,6 +7514,31 @@ export class PostgresStorage implements IStorage {
       .select()
       .from(schema.qbFinancialSnapshots)
       .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
+      .limit(limit);
+  }
+  async getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
+    return await this.db
+      .select()
+      .from(schema.adMetricsDaily)
+      .where(and(gte(schema.adMetricsDaily.date, startDate), lte(schema.adMetricsDaily.date, endDate)));
+  }
+  async createFinancialRunwayForecast(forecast: InsertFinancialRunwayForecast): Promise<FinancialRunwayForecast> {
+    const result = await this.db.insert(schema.financialRunwayForecasts).values(forecast).returning();
+    return result[0];
+  }
+  async getLatestFinancialRunwayForecast(): Promise<FinancialRunwayForecast | undefined> {
+    const result = await this.db
+      .select()
+      .from(schema.financialRunwayForecasts)
+      .orderBy(desc(schema.financialRunwayForecasts.timestamp))
+      .limit(1);
+    return result[0];
+  }
+  async getFinancialRunwayForecasts(limit = 30): Promise<FinancialRunwayForecast[]> {
+    return await this.db
+      .select()
+      .from(schema.financialRunwayForecasts)
+      .orderBy(desc(schema.financialRunwayForecasts.timestamp))
       .limit(limit);
   }
 

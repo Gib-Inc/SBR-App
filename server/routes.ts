@@ -23287,6 +23287,23 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Phase 2 — cash runway / burn-rate forecast. Returns the computed
+  // forecast PLUS the per-scenario daily inputs so the dashboard's What-If
+  // slider can recompute cash-out dates client-side without a round-trip.
+  app.get("/api/ciphr/runway", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { computeRunway } = await import("./services/runway-service");
+      const result = await computeRunway();
+      if (!result.ok) {
+        return res.status(409).json({ success: false, error: result.error });
+      }
+      res.json({ success: true, ...result.data });
+    } catch (error: any) {
+      console.error('[CIPH.R] Runway compute error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to compute runway' });
+    }
+  });
+
   // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================

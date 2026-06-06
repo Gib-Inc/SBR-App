@@ -402,6 +402,21 @@ async function performFinancialSnapshotCapture(): Promise<void> {
       }
       lastError = r.error || lastError;
     }
+    // After a fresh snapshot, compute + store the runway forecast (Phase 2)
+    // so the dashboard has a current cash-runway reading each day.
+    if (captured) {
+      try {
+        const { computeAndStoreRunway } = await import("./services/runway-service");
+        const rw = await computeAndStoreRunway();
+        if (rw.ok) {
+          console.log(`[Financial Snapshot] Runway forecast stored (status ${rw.forecast?.runwayStatus})`);
+        } else {
+          console.warn(`[Financial Snapshot] Runway forecast skipped: ${rw.error}`);
+        }
+      } catch (e: any) {
+        console.error("[Financial Snapshot] Runway forecast failed:", e?.message ?? e);
+      }
+    }
     await recordRunSafe({
       schedulerId: "financial-snapshot",
       schedulerName: "CIPH.R financial-position snapshot (QuickBooks)",

@@ -298,31 +298,26 @@ export async function aggregateDailySales(date: Date): Promise<{
  * Run the nightly aggregation job
  */
 async function runNightlyAggregation(): Promise<void> {
-  console.log(`[Daily Sales] Running nightly aggregation`);
+  console.log(`[Daily Sales] Running nightly aggregation (self-healing trailing 14 days)`);
   const startedAt = new Date();
-  
-  // Aggregate today's sales
-  const today = new Date();
-  const result = await aggregateDailySales(today);
-  
+
+  // Self-heal: recompute the trailing 14 days from CURRENT orders, not just today.
+  // Shopify orders that sync after a day's first snapshot were leaving that day
+  // stuck at $0/partial; re-aggregating the window each night corrects it.
+  const result = await backfillDailySales(14);
+
   if (result.success) {
-    console.log(`[Daily Sales] Nightly aggregation completed: ${result.date}`);
+    console.log(`[Daily Sales] Nightly aggregation completed: ${result.processed} day(s) recomputed`);
   } else {
-    console.error(`[Daily Sales] Nightly aggregation failed: ${result.error}`);
+    console.error(`[Daily Sales] Nightly aggregation had ${result.errors} error(s) across ${result.processed} day(s)`);
   }
   await recordSchedulerRun({
     schedulerId: "daily-sales",
-    schedulerName: "Daily sales aggregation",
-    status: result.success ? "success" : "failed",
+    schedulerName: "Daily sales aggregation (trailing 14d self-heal)",
+    status: result.errors === 0 ? "success" : result.processed > 0 ? "partial" : "failed",
     startedAt,
-    errorMessage: result.success ? null : result.error ?? "Daily sales aggregation failed",
-    details: {
-      date: result.date,
-      totalRevenue: result.totalRevenue,
-      totalOrders: result.totalOrders,
-      totalUnits: result.totalUnits,
-      totalRefunds: result.totalRefunds,
-    },
+    errorMessage: result.errors === 0 ? null : `${result.errors} day(s) failed to aggregate`,
+    details: { daysRecomputed: result.processed, errors: result.errors },
   }).catch((error) => {
     console.warn("[Daily Sales] Failed to record scheduler run:", error);
   });
@@ -358,10 +353,17 @@ export function initializeDailySalesScheduler(): void {
   schedulerInitialized = true;
   console.log("[Daily Sales] Initializing scheduler for Mountain Time (America/Denver)");
   console.log("[Daily Sales] Schedule: Daily at 11:59 PM MT");
-  
-  // Schedule the first run
+
+  // Boot-time self-heal: recompute the trailing 14 days from current orders so
+  // any stale $0/partial snapshots are corrected on deploy, not only at 11:59 PM.
+  // Fire-and-forget so it never blocks startup.
+  backfillDailySales(14)
+    .then((r) => console.log(`[Daily Sales] Boot self-heal: ${r.processed} day(s) recomputed, ${r.errors} error(s)`))
+    .catch((err) => console.error("[Daily Sales] Boot self-heal failed:", err?.message ?? err));
+
+  // Schedule the recurring run
   scheduleNextRun();
-  
+
   console.log("[Daily Sales] Scheduler initialized");
 }
 

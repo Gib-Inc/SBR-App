@@ -1,0 +1,130 @@
+import { describe, it, expect } from "vitest";
+import {
+  computeScenarioRunway,
+  computeRunwayForecast,
+  applyVariance,
+  type ScenarioInputs,
+} from "./runway-engine";
+
+const base: ScenarioInputs = {
+  cashOnHand: 100_000,
+  dailyFixedOverhead: 1_000,
+  dailyAdSpend: 500,
+  dailyMarginContribution: 800,
+};
+
+describe("computeScenarioRunway", () => {
+  it("computes runway days from the formula", () => {
+    // burn = 1000 + 500 - 800 = 700/day; 100000/700 = 142.85 -> floor 142
+    const r = computeScenarioRunway(base);
+    expect(r.burnRate).toBe(700);
+    expect(r.runwayDays).toBe(142);
+    expect(r.cashFlowPositive).toBe(false);
+    expect(r.gaps).toEqual([]);
+  });
+
+  it("handles zero sales (no margin contribution)", () => {
+    // burn = 1000 + 500 - 0 = 1500/day; 100000/1500 = 66.6 -> 66
+    const r = computeScenarioRunway({ ...base, dailyMarginContribution: 0 });
+    expect(r.burnRate).toBe(1500);
+    expect(r.runwayDays).toBe(66);
+  });
+
+  it("handles an extreme ad-spend spike", () => {
+    // burn = 1000 + 5000 - 800 = 5200/day; 100000/5200 = 19.2 -> 19
+    const r = computeScenarioRunway({ ...base, dailyAdSpend: 5_000 });
+    expect(r.burnRate).toBe(5200);
+    expect(r.runwayDays).toBe(19);
+  });
+
+  it("flags cash-flow positive when margin covers costs (no finite runway)", () => {
+    // burn = 1000 + 500 - 2000 = -500 -> cash-flow positive
+    const r = computeScenarioRunway({ ...base, dailyMarginContribution: 2_000 });
+    expect(r.cashFlowPositive).toBe(true);
+    expect(r.runwayDays).toBeNull();
+    expect(r.burnRate).toBe(-500);
+    expect(r.gaps).toEqual([]);
+  });
+
+  it("ANTI-HALLUCINATION: missing cash on hand => gap, null runway, no guess", () => {
+    const r = computeScenarioRunway({ ...base, cashOnHand: null });
+    expect(r.runwayDays).toBeNull();
+    expect(r.burnRate).toBeNull();
+    expect(r.gaps).toContain("Cash on Hand");
+  });
+
+  it("ANTI-HALLUCINATION: lists every missing metric", () => {
+    const r = computeScenarioRunway({
+      cashOnHand: null,
+      dailyFixedOverhead: null,
+      dailyAdSpend: 500,
+      dailyMarginContribution: null,
+    });
+    expect(r.gaps).toEqual(["Cash on Hand", "Fixed Overhead", "Sales Velocity x Net Margin"]);
+    expect(r.runwayDays).toBeNull();
+  });
+
+  it("treats NaN as a gap (never computes on it)", () => {
+    const r = computeScenarioRunway({ ...base, dailyAdSpend: Number.NaN });
+    expect(r.gaps).toContain("Variable Ad Spend");
+    expect(r.runwayDays).toBeNull();
+  });
+});
+
+describe("applyVariance (What-If)", () => {
+  it("+20% ad spend shortens runway", () => {
+    const shifted = applyVariance(base, { adSpendPct: 20 });
+    expect(shifted.dailyAdSpend).toBe(600); // 500 * 1.2
+    const r = computeScenarioRunway(shifted);
+    // burn = 1000 + 600 - 800 = 800; 100000/800 = 125
+    expect(r.runwayDays).toBe(125);
+  });
+
+  it("-15% sales velocity shortens runway (less margin inflow)", () => {
+    const shifted = applyVariance(base, { salesVelocityPct: -15 });
+    expect(shifted.dailyMarginContribution).toBe(680); // 800 * 0.85
+    const r = computeScenarioRunway(shifted);
+    // burn = 1000 + 500 - 680 = 820; 100000/820 = 121.9 -> 121
+    expect(r.runwayDays).toBe(121);
+  });
+
+  it("preserves nulls through variance (no fabrication)", () => {
+    const shifted = applyVariance({ ...base, dailyAdSpend: null }, { adSpendPct: 50 });
+    expect(shifted.dailyAdSpend).toBeNull();
+  });
+});
+
+describe("computeRunwayForecast", () => {
+  it("aggregates three scenarios and reports HEALTHY when all compute", () => {
+    const f = computeRunwayForecast({
+      conservative: { ...base, dailyAdSpend: 400 }, // burn 600 -> 166
+      realistic: base, // burn 700 -> 142
+      aggressive: { ...base, dailyAdSpend: 900 }, // burn 1100 -> 90
+      netMarginAverage: 0.42,
+    });
+    expect(f.conservativeDays).toBe(166);
+    expect(f.realisticDays).toBe(142);
+    expect(f.aggressiveDays).toBe(90);
+    expect(f.burnRate).toBe(700); // realistic headline
+    expect(f.netMarginAverage).toBe(0.42);
+    expect(f.status).toBe("HEALTHY");
+    expect(f.dataGaps).toEqual([]);
+  });
+
+  it("CALCULATION_GAPPED when any scenario is missing inputs, tagged by scenario", () => {
+    const f = computeRunwayForecast({
+      conservative: base,
+      realistic: { ...base, cashOnHand: null },
+      aggressive: base,
+    });
+    expect(f.status).toBe("CALCULATION_GAPPED");
+    expect(f.realisticDays).toBeNull();
+    expect(f.conservativeDays).toBe(142);
+    expect(f.dataGaps).toContain("Cash on Hand (realistic)");
+  });
+
+  it("null netMarginAverage stays null (not coerced)", () => {
+    const f = computeRunwayForecast({ conservative: base, realistic: base, aggressive: base });
+    expect(f.netMarginAverage).toBeNull();
+  });
+});

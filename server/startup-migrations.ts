@@ -114,6 +114,27 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "qb_financial_snapshots.captured_at_idx",
     sql: `CREATE INDEX IF NOT EXISTS qb_financial_snapshots_captured_at_idx ON qb_financial_snapshots (captured_at)`,
   },
+  // CIPH.R Phase 2 — cash runway / burn-rate forecasts.
+  {
+    name: "financial_runway_forecasts.table",
+    sql: `CREATE TABLE IF NOT EXISTS financial_runway_forecasts (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            snapshot_id varchar REFERENCES qb_financial_snapshots(id),
+            timestamp timestamp NOT NULL DEFAULT now(),
+            conservative_days integer,
+            realistic_days integer,
+            aggressive_days integer,
+            calculated_burn_rate numeric(14,2),
+            net_margin_average numeric(6,4),
+            runway_status text NOT NULL DEFAULT 'HEALTHY',
+            runway_data_gaps jsonb,
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "financial_runway_forecasts.timestamp_idx",
+    sql: `CREATE INDEX IF NOT EXISTS financial_runway_forecasts_timestamp_idx ON financial_runway_forecasts (timestamp)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

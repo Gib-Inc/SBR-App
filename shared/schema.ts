@@ -2198,6 +2198,33 @@ export const insertQbFinancialSnapshotSchema = createInsertSchema(qbFinancialSna
 export type InsertQbFinancialSnapshot = typeof qbFinancialSnapshots.$inferInsert;
 export type QbFinancialSnapshot = typeof qbFinancialSnapshots.$inferSelect;
 
+// CIPH.R Phase 2 — Cash runway / burn-rate forecasts.
+// Each row is one runway calculation over a financial snapshot, across three
+// lookback horizons (conservative 90d / realistic 30d / aggressive 7d).
+// runwayStatus: HEALTHY | CALCULATION_GAPPED | MISMATCH.
+// ANTI-HALLUCINATION: when a required input is null/DATA GAPPED the engine does
+// NOT guess — it records the missing metric in runwayDataGaps and the scenario's
+// day count stays NULL with status CALCULATION_GAPPED.
+export const financialRunwayForecasts = pgTable("financial_runway_forecasts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  snapshotId: varchar("snapshot_id").references(() => qbFinancialSnapshots.id),
+  timestamp: timestamp("timestamp").notNull().default(sql`now()`),
+  conservativeDays: integer("conservative_days"),
+  realisticDays: integer("realistic_days"),
+  aggressiveDays: integer("aggressive_days"),
+  calculatedBurnRate: numeric("calculated_burn_rate", { precision: 14, scale: 2 }), // net daily cash outflow (realistic)
+  netMarginAverage: numeric("net_margin_average", { precision: 6, scale: 4 }), // 0.42 = 42%
+  runwayStatus: text("runway_status").notNull().default("HEALTHY"), // HEALTHY | CALCULATION_GAPPED | MISMATCH
+  runwayDataGaps: jsonb("runway_data_gaps"), // string[] of missing-metric names
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  timestampIdx: index("financial_runway_forecasts_timestamp_idx").on(table.timestamp),
+}));
+
+export const insertFinancialRunwayForecastSchema = createInsertSchema(financialRunwayForecasts).omit({ id: true, createdAt: true });
+export type InsertFinancialRunwayForecast = typeof financialRunwayForecasts.$inferInsert;
+export type FinancialRunwayForecast = typeof financialRunwayForecasts.$inferSelect;
+
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
 export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {

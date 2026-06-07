@@ -3,8 +3,40 @@ import {
   mergeAdSpendByPlatform,
   computeUnifiedPerformance,
   normalizeAdPlatform,
+  proratePLMarketing,
   type UnifiedInput,
 } from "./unified-performance-service";
+
+describe("proratePLMarketing", () => {
+  it("takes a full month at face value", () => {
+    const r = proratePLMarketing([{ month: "May 2026", marketing: 31000 }], "2026-05-01", "2026-05-31");
+    expect(r.total).toBe(31000);
+    expect(r.coveredDays).toBe(31);
+    expect(r.windowDays).toBe(31);
+    expect(r.monthsUsed).toEqual(["May 2026"]);
+  });
+  it("prorates a partial month and flags days the P&L doesn't cover", () => {
+    // window May 8 – Jun 7 (31 days); only May is booked → 24/31 of May, June uncovered
+    const r = proratePLMarketing([{ month: "May 2026", marketing: 31000 }], "2026-05-08", "2026-06-07");
+    expect(r.windowDays).toBe(31);
+    expect(r.coveredDays).toBe(24);
+    expect(r.total).toBe(24000); // 31000 * 24/31
+  });
+  it("sums across two months by their in-window share", () => {
+    const r = proratePLMarketing(
+      [{ month: "May 2026", marketing: 31000 }, { month: "Jun 2026", marketing: 30000 }],
+      "2026-05-16", "2026-06-15",
+    );
+    expect(r.coveredDays).toBe(31);
+    expect(r.total).toBe(31000); // 31000*16/31 + 30000*15/30 = 16000 + 15000
+  });
+  it("never invents marketing for a month whose value is null", () => {
+    const r = proratePLMarketing([{ month: "May 2026", marketing: null }], "2026-05-01", "2026-05-31");
+    expect(r.total).toBe(0);
+    expect(r.monthsUsed).toEqual([]);
+    expect(r.coveredDays).toBe(31); // month is present (covered) but contributes nothing
+  });
+});
 
 describe("normalizeAdPlatform", () => {
   it("maps real ad platforms to canonical keys", () => {

@@ -19,6 +19,7 @@ interface SkuMargin {
 interface UnifiedView {
   success: boolean; rangeLabel: string; periodStart: string | null; periodEnd: string | null;
   totalRevenue: number | null; netRevenue: number | null; totalAdSpend: number | null; totalMarketingSpend: number | null;
+  plMarketing: number | null;
   platforms: MergedPlatform[]; blendedRoas: number | null; mer: number | null; skus: SkuMargin[];
   dataGaps: string[]; status: "OK" | "DATA_GAPPED";
 }
@@ -60,7 +61,7 @@ export function UnifiedPerformanceCard() {
         {/* Headline KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Kpi label="Blended ROAS" value={ratio(v.blendedRoas)} sub="revenue ÷ ad spend" tone={roasTone(v.blendedRoas)} />
-          <Kpi label="MER" value={ratio(v.mer)} sub="revenue ÷ marketing" tone={roasTone(v.mer)} />
+          <Kpi label="MER" value={ratio(v.mer)} sub={v.plMarketing != null ? `÷ ${money(v.plMarketing)} booked mktg` : "revenue ÷ marketing"} tone={roasTone(v.mer)} />
           <Kpi label="Total Revenue" value={money(v.totalRevenue)} sub="sales (window)" tone="" />
           <Kpi label="Total Ad Spend" value={money(v.totalAdSpend)} sub="all platforms" tone="" />
         </div>

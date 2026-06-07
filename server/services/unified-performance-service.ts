@@ -41,6 +41,7 @@ export interface UnifiedInput {
   live: Record<string, PlatformSpend>;
   uploaded: Record<string, PlatformSpend>;
   marketingExtra?: number; // non-ad marketing cost (e.g. P&L Advertising minus tracked spend); default 0
+  plMarketing?: number | null; // booked "Advertising & Marketing" for the window (for display); MER denominator
   skus: SkuInput[];
 }
 export interface SkuMargin {
@@ -55,6 +56,7 @@ export interface UnifiedView {
   rangeLabel: string; periodStart: string | null; periodEnd: string | null;
   totalRevenue: number | null; netRevenue: number | null;
   totalAdSpend: number | null; totalMarketingSpend: number | null;
+  plMarketing: number | null; // booked Advertising & Marketing (prorated to window) — MER denominator basis
   platforms: MergedPlatform[];
   blendedRoas: number | null; mer: number | null;
   skus: SkuMargin[];
@@ -81,6 +83,50 @@ export function normalizeAdPlatform(raw: string): string | null {
   if (s.includes("microsoft") || s.includes("bing")) return "MICROSOFT";
   if (s.includes("tiktok")) return "TIKTOK";
   return null; // traffic source, not a paid-ad platform
+}
+
+const MONTH_NUM: Record<string, number> = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+
+/**
+ * Prorate the booked "Advertising & Marketing" P&L expense across a date window.
+ * monthly_financials is monthly ("May 2026"); the unified view uses a rolling
+ * day window — so for each month we take the share of its marketing equal to the
+ * fraction of that month inside the window. coveredDays vs windowDays tells the
+ * caller whether the window extends past the latest booked month (e.g. the
+ * current month isn't closed yet) so MER can be flagged rather than understated.
+ * ANTI-HALLUCINATION: months with no row / null marketing contribute nothing and
+ * are NOT covered — never back-filled from another month.
+ */
+export function proratePLMarketing(
+  rows: { month: string; marketing: number | null }[],
+  start: string,
+  end: string,
+): { total: number; coveredDays: number; windowDays: number; monthsUsed: string[] } {
+  const day = 86400000;
+  const ws = Date.parse(start + "T00:00:00Z");
+  const weExcl = Date.parse(end + "T00:00:00Z") + day; // make end inclusive
+  const windowDays = Math.max(0, Math.round((weExcl - ws) / day));
+  let total = 0;
+  let coveredDays = 0;
+  const monthsUsed: string[] = [];
+  for (const r of rows || []) {
+    const m = String(r.month || "").trim().match(/^([A-Za-z]{3})[a-z]*\s+(\d{4})$/);
+    if (!m) continue;
+    const mo = MONTH_NUM[m[1].toLowerCase()];
+    if (mo == null) continue;
+    const year = Number(m[2]);
+    const mStart = Date.UTC(year, mo, 1);
+    const mEndExcl = Date.UTC(year, mo + 1, 1);
+    const daysInMonth = Math.round((mEndExcl - mStart) / day);
+    const overlap = Math.max(0, Math.min(mEndExcl, weExcl) - Math.max(mStart, ws)) / day;
+    if (overlap <= 0) continue;
+    coveredDays += overlap;
+    if (r.marketing != null) {
+      total += r.marketing * (overlap / daysInMonth);
+      monthsUsed.push(r.month);
+    }
+  }
+  return { total: r2(total), coveredDays: Math.round(coveredDays), windowDays, monthsUsed };
 }
 
 /**
@@ -171,6 +217,7 @@ export function computeUnifiedPerformance(input: UnifiedInput): UnifiedView {
     netRevenue,
     totalAdSpend,
     totalMarketingSpend,
+    plMarketing: input.plMarketing ?? null,
     platforms,
     blendedRoas,
     mer,
@@ -271,13 +318,47 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
     liveAdSpend: liveAdBySku.has(sku) ? r2(liveAdBySku.get(sku)!) : null,
   }));
 
-  return computeUnifiedPerformance({
+  // --- booked marketing (P&L "Advertising & Marketing") prorated to the window ---
+  // MER denominator = total booked marketing; marketingExtra is the part NOT
+  // already counted in tracked ad spend (untracked channels, agency fees, etc.),
+  // so adSpend + extra never double-counts. Falls back to tracked ad spend when
+  // no P&L is available.
+  let plMarketing: number | null = null;
+  let marketingExtra = 0;
+  let plCoverageNote: string | null = null;
+  try {
+    const months = await storage.getMonthlyFinancials();
+    const rows = (months as any[]).map((m) => {
+      const cats = (m.expenseCategories || {}) as Record<string, number>;
+      const v = cats["Advertising & Marketing"];
+      return { month: String(m.month), marketing: v != null ? Number(v) : null };
+    });
+    const pr = proratePLMarketing(rows, start, end);
+    if (pr.monthsUsed.length) {
+      plMarketing = pr.total;
+      const { totalAdSpend } = mergeAdSpendByPlatform(live, uploaded);
+      marketingExtra = Math.max(0, r2(pr.total - (totalAdSpend ?? 0)));
+      if (pr.coveredDays < pr.windowDays - 1) {
+        const missing = pr.windowDays - pr.coveredDays;
+        plCoverageNote = `DATA GAPPED: P&L marketing not booked for ${missing} of ${pr.windowDays} day(s) — MER may understate`;
+      }
+    }
+  } catch { /* no monthly P&L → MER falls back to ad spend */ }
+
+  const view = computeUnifiedPerformance({
     periodStart: start,
     periodEnd: end,
     rangeLabel,
     revenue: { totalSales, netSales },
     live,
     uploaded,
+    marketingExtra,
+    plMarketing,
     skus,
   });
+  if (plCoverageNote && !view.dataGaps.includes(plCoverageNote)) {
+    view.dataGaps.push(plCoverageNote);
+    view.status = "DATA_GAPPED";
+  }
+  return view;
 }

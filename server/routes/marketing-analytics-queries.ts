@@ -14,7 +14,7 @@
 import { sql } from 'drizzle-orm';
 import {
   getAdSpendCorrection,
-  getCorrectedAdSpendRange,
+  getCorrectedAdSummary,
 } from '../services/corrected-ad-spend';
 
 type DB = any;
@@ -218,27 +218,24 @@ export async function querySeasonalIntelligence(db: DB, currentYear: number, com
 }
 
 export async function queryKPIs(db: DB) {
-  // MTD ad spend from the corrected source (Windsor/upload), MTD revenue + orders
-  // from real sales. Blended ROAS = sales ÷ corrected ad spend (matches the
-  // Finances unified card); blended CPA = corrected spend ÷ orders. The old
-  // version summed inflated ad_metrics_daily and showed $0 ad revenue / N/A ROAS.
-  const today = new Date().toISOString().slice(0, 10);
-  const monthStart = today.slice(0, 7) + '-01';
-  const corrected = await getCorrectedAdSpendRange(monthStart, today);
-  const salesRes = await db.execute(sql`
-    SELECT COALESCE(SUM(total_amount), 0)::real as mtd_revenue, COUNT(*)::int as mtd_orders
+  // 30-DAY summary (NOT month-to-date). Windsor snapshots are period-level, so
+  // summing a 30-day snapshot into a short MTD window would over-count spend and
+  // crush ROAS. Using the SAME 30-day window as the "Ad Spend by Channel" card
+  // (via getCorrectedAdSummary) makes the KPI bar, the card, and the Finances
+  // unified view all show the identical spend / revenue / blended ROAS.
+  const summary = await getCorrectedAdSummary(30);
+  const ordersRes = await db.execute(sql`
+    SELECT COUNT(*)::int as orders
     FROM sales_orders
-    WHERE order_date >= date_trunc('month', current_date)
+    WHERE order_date >= current_date - make_interval(days => 30)
       AND status NOT IN ('CANCELLED', 'REFUNDED')
   `);
-  const s = rows(salesRes)[0] || { mtd_revenue: 0, mtd_orders: 0 };
-  const spend = corrected.totalAdSpend || 0;
-  const revenue = Number(s.mtd_revenue) || 0;
-  const orders = Number(s.mtd_orders) || 0;
+  const orders = Number(rows(ordersRes)[0]?.orders) || 0;
+  const spend = summary.totalAdSpend || 0;
   return {
     mtd_spend: spend,
-    mtd_revenue: revenue,
-    blended_roas: spend > 0 ? r2(revenue / spend) : null,
+    mtd_revenue: summary.totalRevenue ?? 0,
+    blended_roas: summary.blendedRoas,
     total_conversions: orders,
     avg_cpa: orders > 0 && spend > 0 ? r2(spend / orders) : null,
   };

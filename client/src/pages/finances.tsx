@@ -5,6 +5,8 @@ import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
 import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { InventoryAnticipationCard } from "@/components/inventory-anticipation-card";
+import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
+import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
 
 /**
@@ -115,6 +117,12 @@ export default function Finances() {
             <Kpi label="2026 Net Income" value={fmt(ytdNI)} sub="YTD" tone={ytdNI < 0 ? "crit" : ""} />
             <Kpi label="Total Liabilities" value={bs ? fmt(bs.totalLiabilities) : "—"} sub="all debt" tone="crit" />
           </div>
+
+          {/* Accountant's Executive Summary (ITD narrative + ratios) */}
+          <ExecutiveSummaryCard />
+
+          {/* Current-period Shopify sales snapshot */}
+          <ShopifyPeriodCard />
 
           {/* Existing live cards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -229,7 +237,7 @@ export default function Finances() {
 
           <div className="text-[11px] text-muted-foreground flex items-start gap-1">
             <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-            <span>Figures from the accountant export (P&amp;L Jan 2022–{months[months.length - 1]}; Balance Sheet {bs?.asOf}). Nothing estimated. Cash runway = cash ÷ 3-month average net loss (cash-only view; debt facilities not counted). Switches to live QuickBooks once connected. <b>Coming next:</b> sales projection off ad spend, inventory-spend anticipation, and a what-if savings playground.</span>
+            <span>Figures from the accountant export (P&amp;L Jan 2022–{months[months.length - 1]}; Balance Sheet {bs?.asOf}; Executive Summary through May 31, 2026; Shopify Jun 1-6). Nothing estimated — sources are cited per card. Cash runway = cash ÷ 3-month average net loss (cash-only view; debt facilities not counted). Switches to live QuickBooks once connected. Upload newer statements anytime via <b>Upload Financials</b>.</span>
           </div>
         </>
       )}

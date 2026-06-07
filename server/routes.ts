@@ -23377,6 +23377,26 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Finances — accountant document data (piece 4): the Executive
+  // Financial Summary (ITD narrative + ratios) and the current-period Shopify
+  // sales breakdown (Jun 1-6) with derived metrics. Static, source-cited,
+  // anti-hallucination — distinct from the live balance sheet.
+  app.get("/api/finances/documents", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { EXECUTIVE_SUMMARY, SHOPIFY_PERIOD } = await import("./data/finance-docs");
+      const { shopifyPeriodMetrics } = await import("./services/finance-docs-service");
+      res.json({
+        success: true,
+        executiveSummary: EXECUTIVE_SUMMARY,
+        shopifyPeriod: SHOPIFY_PERIOD,
+        shopifyMetrics: shopifyPeriodMetrics(),
+      });
+    } catch (error: any) {
+      console.error('[CIPH.R] Finance documents error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load finance documents' });
+    }
+  });
+
   // CIPH.R — accountant financial-document uploader.
   // parse = extract for review (no write); apply = persist confirmed figures.
   // docType: "pl_xlsx" (default) | "balance_sheet" | "bank_statement".

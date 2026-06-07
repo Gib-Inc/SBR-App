@@ -131,24 +131,34 @@ export function proratePLMarketing(
 
 /**
  * Merge live + uploaded ad spend with per-platform precedence.
- * Live wins; uploaded fills only platforms with no live row in the window.
+ * Live wins ONLY when it has non-zero spend; otherwise an uploaded snapshot
+ * fills the platform. Exactly one source per platform → never double-counted.
  */
 export function mergeAdSpendByPlatform(
   live: Record<string, PlatformSpend>,
   uploaded: Record<string, PlatformSpend>,
 ): { platforms: MergedPlatform[]; totalAdSpend: number | null } {
+  const upper = (rec: Record<string, PlatformSpend>) => {
+    const m: Record<string, PlatformSpend> = {};
+    for (const [k, v] of Object.entries(rec || {})) m[k.toUpperCase()] = v;
+    return m;
+  };
+  const L = upper(live);
+  const U = upper(uploaded);
   const out: MergedPlatform[] = [];
-  const seen = new Set<string>();
-  for (const [platform, v] of Object.entries(live || {})) {
-    const p = platform.toUpperCase();
-    seen.add(p);
-    out.push({ platform: p, spend: r2(v.spend || 0), impressions: v.impressions ?? null, clicks: v.clicks ?? null, source: "live" });
-  }
-  for (const [platform, v] of Object.entries(uploaded || {})) {
-    const p = platform.toUpperCase();
-    if (seen.has(p)) continue; // live already covers this platform — do NOT add (no double-count)
-    seen.add(p);
-    out.push({ platform: p, spend: r2(v.spend || 0), impressions: v.impressions ?? null, clicks: v.clicks ?? null, source: "uploaded" });
+  for (const p of Array.from(new Set([...Object.keys(L), ...Object.keys(U)]))) {
+    const l = L[p];
+    const u = U[p];
+    // Live wins only when it has REAL (non-zero) spend. A $0 live row (e.g.
+    // fb/ig traffic normalized to META) must not shadow a real uploaded value,
+    // or an uploaded Meta CSV would be invisible. Still exactly one source.
+    let chosen: PlatformSpend;
+    let source: "live" | "uploaded";
+    if (l && (l.spend || 0) > 0) { chosen = l; source = "live"; }
+    else if (u && (u.spend || 0) > 0) { chosen = u; source = "uploaded"; }
+    else if (l) { chosen = l; source = "live"; }
+    else { chosen = u; source = "uploaded"; }
+    out.push({ platform: p, spend: r2(chosen.spend || 0), impressions: chosen.impressions ?? null, clicks: chosen.clicks ?? null, source });
   }
   out.sort((a, b) => b.spend - a.spend);
   const totalAdSpend = out.length ? r2(out.reduce((s, p) => s + p.spend, 0)) : null;

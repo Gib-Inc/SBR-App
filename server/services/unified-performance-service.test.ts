@@ -73,6 +73,20 @@ describe("mergeAdSpendByPlatform — per-platform precedence", () => {
   it("returns null total when there is no ad data at all", () => {
     expect(mergeAdSpendByPlatform({}, {}).totalAdSpend).toBeNull();
   });
+
+  it("a $0 live row does NOT shadow a real uploaded value (uploaded fills it)", () => {
+    // Real case: fb/ig traffic normalizes to a META live row with spend 0, while
+    // an uploaded Meta CSV has the real $11,733. The upload must win.
+    const { platforms, totalAdSpend } = mergeAdSpendByPlatform(
+      { GOOGLE: { spend: 24918 }, META: { spend: 0, impressions: 0, clicks: 0 } },
+      { META: { spend: 11733.16, impressions: 1058254 } },
+    );
+    const meta = platforms.find((p) => p.platform === "META")!;
+    expect(meta.spend).toBe(11733.16);
+    expect(meta.source).toBe("uploaded");
+    expect(platforms.find((p) => p.platform === "GOOGLE")!.source).toBe("live"); // live>0 still wins
+    expect(totalAdSpend).toBe(36651.16); // 24918 + 11733.16
+  });
 });
 
 const base = (over: Partial<UnifiedInput> = {}): UnifiedInput => ({

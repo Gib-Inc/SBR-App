@@ -23397,6 +23397,22 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Unified Performance Hub — merged sales + ad performance for a window.
+  // Blended ROAS, MER, and True Net Margin per SKU, with per-platform precedence
+  // (live ad_metrics_daily wins; uploaded snapshots only fill missing platforms)
+  // and anti-hallucination DATA GAPPED markers. ?days=30 default (1..365).
+  app.get("/api/finances/unified-performance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = Math.max(1, Math.min(365, parseInt(String(req.query.days ?? "30"), 10) || 30));
+      const { getUnifiedPerformance } = await import("./services/unified-performance-service");
+      const view = await getUnifiedPerformance(days, Date.now());
+      res.json({ success: true, ...view });
+    } catch (error: any) {
+      console.error('[CIPH.R] Unified performance error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load unified performance' });
+    }
+  });
+
   // CIPH.R — Universal financial-document dropzone.
   // parse = extract for review (no write); apply = persist confirmed figures.
   // docType: "auto" (default) | "pl_xlsx" | "balance_sheet" | "bank_statement" | "ad_spend".

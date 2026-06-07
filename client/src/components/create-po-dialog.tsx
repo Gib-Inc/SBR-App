@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -120,6 +119,7 @@ export function CreatePODialog({
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [lineItemFilter, setLineItemFilter] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
   
 
@@ -577,13 +577,13 @@ export function CreatePODialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Explicit max-h (not flex-1): shadcn DialogContent carries `grid`,
-            which wins over the appended `flex flex-col` in Tailwind's CSS order,
-            so the dialog is NOT a flex container and flex-1/min-h-0 do nothing.
-            Capping the ScrollArea at 60vh makes Radix bound its viewport and
-            scroll the body, while the header and footer (Cancel / Send PO) stay
-            visible — works whether the parent resolves to grid or flex. */}
-        <ScrollArea className="max-h-[60vh] px-1">
+        {/* NATIVE overflow scroll (verified in-browser). Radix <ScrollArea>'s
+            viewport uses height:100%, which never forms a bounded scroll area in
+            this dialog — flex-1, min-h-0 AND max-h on it all no-op'd (the body
+            grew to its content and got clipped). A plain max-h + overflow-y-auto
+            div scrolls reliably and stays responsive; header + footer (Cancel /
+            Send PO) stay visible. */}
+        <div className="max-h-[60vh] overflow-y-auto px-1 pr-2">
           <div className="space-y-6 py-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -801,6 +801,16 @@ export function CreatePODialog({
                 </Dialog>
               </div>
 
+              {lineItems.length > 1 && (
+                <Input
+                  placeholder="Filter items by name or SKU…"
+                  value={lineItemFilter}
+                  onChange={(e) => setLineItemFilter(e.target.value)}
+                  className="h-8"
+                  data-testid="input-line-item-filter"
+                />
+              )}
+
               {lineItems.length === 0 ? (
                 <div className="border rounded-md p-8 text-center text-muted-foreground">
                   <Package className="h-10 w-10 mx-auto mb-2 opacity-50" />
@@ -823,7 +833,11 @@ export function CreatePODialog({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {lineItems.map((line) => {
+                      {lineItems.filter((line) => {
+                        const q = lineItemFilter.trim().toLowerCase();
+                        if (!q) return true;
+                        return (line.name || "").toLowerCase().includes(q) || (line.sku || "").toLowerCase().includes(q);
+                      }).map((line) => {
                         // Suggested 30-day re-up: enough to cover a month at
                         // current burn rate, minus what's already on hand.
                         const suggested = line.dailyUsage != null && line.currentStock != null
@@ -1034,7 +1048,7 @@ export function CreatePODialog({
               </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="gap-2">
           <Button 

@@ -13,7 +13,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Calendar } from "@/components/ui/calendar";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -451,11 +450,11 @@ export function EditPODialog({
           </div>
         ) : (
           <>
-            {/* Explicit max-h (not flex-1): DialogContent's `grid` wins over the
-                appended `flex flex-col`, so flex-1 never bounds this body. Cap at
-                60vh so Radix scrolls the body and the footer stays visible —
-                same fix as the create-PO dialog. */}
-            <ScrollArea className="max-h-[60vh] px-1">
+            {/* NATIVE overflow scroll (verified in-browser): Radix ScrollArea's
+                height:100% viewport never bounds here, so max-h on it no-op'd. A
+                plain max-h + overflow-y-auto div scrolls reliably; footer stays
+                visible. Same fix as the create-PO dialog. */}
+            <div className="max-h-[60vh] overflow-y-auto px-1 pr-2">
               <div className="space-y-6 py-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -781,7 +780,7 @@ export function EditPODialog({
                   </div>
                 )}
               </div>
-            </ScrollArea>
+            </div>
 
             <DialogFooter className="gap-2">
               <Button 

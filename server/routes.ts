@@ -23356,6 +23356,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — anticipated inventory spend (upcoming restock cost + timing).
+  app.get("/api/finances/inventory-anticipation", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getInventorySpendAnticipation } = await import("./services/inventory-spend-service");
+      const data = await getInventorySpendAnticipation();
+      res.json({ success: true, ...data });
+    } catch (error: any) {
+      console.error('[CIPH.R] Inventory anticipation error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load inventory anticipation' });
+    }
+  });
+
   // CIPH.R — accountant financial-document uploader (Monthly P&L .xlsx).
   // parse = extract for review (no write); apply = upsert confirmed months.
   app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {

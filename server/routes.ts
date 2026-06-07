@@ -23356,28 +23356,32 @@ Generate only the email body text, no subject line.`;
       ]);
       const { FINANCIAL_SEED } = await import("./data/financial-seed");
 
-      // Ad spend by channel (last 30 days). Normalize the many raw platform
-      // labels (GOOGLE/google_ads, META/FB/meta_ads, etc.) into real ad channels;
-      // skip traffic-source noise (DIRECT, NOT SET, DUCKDUCKGO, YAHOO, ...).
-      const normalize = (p: string): string | null => {
-        const s = (p || "").toLowerCase();
-        if (s.includes("google")) return "Google Ads";
-        if (s.includes("meta") || s === "fb" || s.includes("facebook")) return "Meta / Facebook";
-        if (s.includes("amazon")) return "Amazon Ads";
-        if (s.includes("pinterest")) return "Pinterest";
-        if (s.includes("microsoft") || s.includes("bing")) return "Microsoft / Bing";
-        if (s.includes("tiktok")) return "TikTok";
-        return null; // traffic source, not an ad platform
-      };
-      const channelMap: Record<string, number> = {};
+      // Ad spend by channel (last 30 days) — MERGED: live ad_metrics_daily PLUS
+      // uploaded marketing_spend_snapshots, with per-platform precedence (live with
+      // real spend wins; an upload fills a platform with no live spend). This is the
+      // same merge the Unified card uses, so an uploaded Meta CSV shows here too
+      // instead of the card contradicting itself ("Meta $0" vs the unified "$11,733").
+      const { normalizeAdPlatform, mergeAdSpendByPlatform } = await import("./services/unified-performance-service");
+      const adStart = isoDaysAgo(30);
+      const live: Record<string, { spend: number }> = {};
       for (const r of adRows) {
-        const ch = normalize((r as any).platform);
-        if (!ch) continue;
-        channelMap[ch] = (channelMap[ch] || 0) + (Number((r as any).spend) || 0);
+        const p = normalizeAdPlatform(String((r as any).platform || ""));
+        if (!p) continue; // skip traffic-source noise
+        live[p] = { spend: (live[p]?.spend || 0) + (Number((r as any).spend) || 0) };
       }
-      const adChannels = Object.entries(channelMap)
-        .map(([channel, spend]) => ({ channel, spend: Math.round(spend * 100) / 100 }))
-        .sort((a, b) => b.spend - a.spend);
+      const uploaded: Record<string, { spend: number }> = {};
+      try {
+        const upRows = await storage.getMarketingSpendSnapshotsInRange(adStart, today);
+        for (const s of upRows) {
+          const p = String((s as any).platform || "OTHER").toUpperCase();
+          uploaded[p] = { spend: (uploaded[p]?.spend || 0) + (Number((s as any).spend) || 0) };
+        }
+      } catch { /* no uploaded snapshots */ }
+      const DISPLAY: Record<string, string> = { GOOGLE: "Google Ads", META: "Meta / Facebook", AMAZON: "Amazon Ads", PINTEREST: "Pinterest", MICROSOFT: "Microsoft / Bing", TIKTOK: "TikTok" };
+      const { platforms: mergedAd } = mergeAdSpendByPlatform(live, uploaded);
+      const adChannels = mergedAd
+        .filter((p) => p.spend > 0)
+        .map((p) => ({ channel: DISPLAY[p.platform] || p.platform, spend: p.spend, source: p.source }));
 
       // Prefer an uploaded balance sheet (stored in the latest snapshot's
       // raw.balanceSheet, incl. named loans) over the static seed. Anti-

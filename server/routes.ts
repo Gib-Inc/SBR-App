@@ -23370,15 +23370,17 @@ Generate only the email body text, no subject line.`;
         live[p] = { spend: (live[p]?.spend || 0) + (Number((r as any).spend) || 0) };
       }
       const uploaded: Record<string, { spend: number }> = {};
+      const windsorSpend: Record<string, { spend: number }> = {};
       try {
         const upRows = await storage.getMarketingSpendSnapshotsInRange(adStart, today);
         for (const s of upRows) {
           const p = String((s as any).platform || "OTHER").toUpperCase();
-          uploaded[p] = { spend: (uploaded[p]?.spend || 0) + (Number((s as any).spend) || 0) };
+          const bucket = String((s as any).source || "").toLowerCase().startsWith("windsor") ? windsorSpend : uploaded;
+          bucket[p] = { spend: (bucket[p]?.spend || 0) + (Number((s as any).spend) || 0) };
         }
-      } catch { /* no uploaded snapshots */ }
+      } catch { /* no snapshots */ }
       const DISPLAY: Record<string, string> = { GOOGLE: "Google Ads", META: "Meta / Facebook", AMAZON: "Amazon Ads", PINTEREST: "Pinterest", MICROSOFT: "Microsoft / Bing", TIKTOK: "TikTok" };
-      const { platforms: mergedAd } = mergeAdSpendByPlatform(live, uploaded);
+      const { platforms: mergedAd } = mergeAdSpendByPlatform(live, uploaded, windsorSpend);
       const adChannels = mergedAd
         .filter((p) => p.spend > 0)
         .map((p) => ({ channel: DISPLAY[p.platform] || p.platform, spend: p.spend, source: p.source }));
@@ -23528,7 +23530,11 @@ Generate only the email body text, no subject line.`;
       const f = req.body?.fields ?? req.body;
       if (!f || f.spend == null) return res.status(400).json({ success: false, error: "A spend total is required to apply." });
       const gaps: string[] = Array.isArray(f.dataGaps) ? f.dataGaps : [];
-      const source = req.body?.fileName ? `upload:${req.body.fileName}` : "upload";
+      // Explicit source wins (e.g. 'windsor:google_ads' — authoritative); else
+      // tag by uploaded filename.
+      const source = (typeof req.body?.source === "string" && req.body.source.trim())
+        ? req.body.source.trim()
+        : (req.body?.fileName ? `upload:${req.body.fileName}` : "upload");
       const platform = String(f.platform || "OTHER").toUpperCase();
       const periodStart = f.periodStart || null;
       const periodEnd = f.periodEnd || null;

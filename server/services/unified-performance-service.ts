@@ -23,7 +23,7 @@
 import { storage } from "../storage";
 
 export interface PlatformSpend { spend: number; impressions?: number | null; clicks?: number | null; }
-export interface MergedPlatform { platform: string; spend: number; impressions: number | null; clicks: number | null; source: "live" | "uploaded"; }
+export interface MergedPlatform { platform: string; spend: number; impressions: number | null; clicks: number | null; source: "windsor" | "live" | "uploaded"; }
 export interface SkuInput {
   sku: string;
   name?: string | null;
@@ -40,6 +40,7 @@ export interface UnifiedInput {
   revenue: { totalSales: number | null; netSales: number | null };
   live: Record<string, PlatformSpend>;
   uploaded: Record<string, PlatformSpend>;
+  windsor?: Record<string, PlatformSpend>;
   marketingExtra?: number; // non-ad marketing cost (e.g. P&L Advertising minus tracked spend); default 0
   plMarketing?: number | null; // booked "Advertising & Marketing" for the window (for display); MER denominator
   skus: SkuInput[];
@@ -137,27 +138,34 @@ export function proratePLMarketing(
 export function mergeAdSpendByPlatform(
   live: Record<string, PlatformSpend>,
   uploaded: Record<string, PlatformSpend>,
+  windsor: Record<string, PlatformSpend> = {},
 ): { platforms: MergedPlatform[]; totalAdSpend: number | null } {
   const upper = (rec: Record<string, PlatformSpend>) => {
     const m: Record<string, PlatformSpend> = {};
     for (const [k, v] of Object.entries(rec || {})) m[k.toUpperCase()] = v;
     return m;
   };
+  const W = upper(windsor);
   const L = upper(live);
   const U = upper(uploaded);
   const out: MergedPlatform[] = [];
-  for (const p of Array.from(new Set([...Object.keys(L), ...Object.keys(U)]))) {
+  for (const p of Array.from(new Set([...Object.keys(W), ...Object.keys(L), ...Object.keys(U)]))) {
+    const w = W[p];
     const l = L[p];
     const u = U[p];
-    // Live wins only when it has REAL (non-zero) spend. A $0 live row (e.g.
-    // fb/ig traffic normalized to META) must not shadow a real uploaded value,
-    // or an uploaded Meta CSV would be invisible. Still exactly one source.
+    // SOURCE HIERARCHY: Windsor is authoritative (direct from each platform's
+    // API) and wins whenever it has real spend — the live ad_metrics_daily feed
+    // proved inflated (~2.7x on Google from double-summed dimension rows), so it
+    // sits at the bottom. Manual uploads (e.g. the Meta CSV) fill platforms
+    // Windsor doesn't cover. Exactly one source per platform.
     let chosen: PlatformSpend;
-    let source: "live" | "uploaded";
-    if (l && (l.spend || 0) > 0) { chosen = l; source = "live"; }
+    let source: "windsor" | "live" | "uploaded";
+    if (w && (w.spend || 0) > 0) { chosen = w; source = "windsor"; }
     else if (u && (u.spend || 0) > 0) { chosen = u; source = "uploaded"; }
-    else if (l) { chosen = l; source = "live"; }
-    else { chosen = u; source = "uploaded"; }
+    else if (l && (l.spend || 0) > 0) { chosen = l; source = "live"; }
+    else if (w) { chosen = w; source = "windsor"; }
+    else if (u) { chosen = u; source = "uploaded"; }
+    else { chosen = l; source = "live"; }
     out.push({ platform: p, spend: r2(chosen.spend || 0), impressions: chosen.impressions ?? null, clicks: chosen.clicks ?? null, source });
   }
   out.sort((a, b) => b.spend - a.spend);
@@ -167,7 +175,7 @@ export function mergeAdSpendByPlatform(
 
 export function computeUnifiedPerformance(input: UnifiedInput): UnifiedView {
   const dataGaps: string[] = [];
-  const { platforms, totalAdSpend } = mergeAdSpendByPlatform(input.live, input.uploaded);
+  const { platforms, totalAdSpend } = mergeAdSpendByPlatform(input.live, input.uploaded, input.windsor || {});
 
   const totalRevenue = input.revenue?.totalSales ?? null;
   const netRevenue = input.revenue?.netSales ?? null;
@@ -304,19 +312,23 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
     }
   } catch { /* no live ad data */ }
 
-  // --- ad spend (uploaded rollups, by platform) ---
+  // --- ad spend snapshots, split by source: Windsor (authoritative, source
+  // 'windsor:*') vs manual uploads (Meta CSV, etc.). Windsor outranks both the
+  // manual uploads and the inflated live feed in the merge. ---
+  const windsor: Record<string, PlatformSpend> = {};
   const uploaded: Record<string, PlatformSpend> = {};
   try {
     const snaps = await storage.getMarketingSpendSnapshotsInRange(start, end);
     for (const s of snaps as any[]) {
       const p = String(s.platform || "OTHER").toUpperCase();
-      const cur = uploaded[p] || { spend: 0, impressions: 0, clicks: 0 };
+      const bucket = String(s.source || "").toLowerCase().startsWith("windsor") ? windsor : uploaded;
+      const cur = bucket[p] || { spend: 0, impressions: 0, clicks: 0 };
       cur.spend += Number(s.spend) || 0;
       if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
       if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
-      uploaded[p] = cur;
+      bucket[p] = cur;
     }
-  } catch { /* no uploaded ad data */ }
+  } catch { /* no snapshot ad data */ }
 
   const skus: SkuInput[] = Array.from(skuAgg.entries()).map(([sku, a]) => ({
     sku,
@@ -346,7 +358,7 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
     const pr = proratePLMarketing(rows, start, end);
     if (pr.monthsUsed.length) {
       plMarketing = pr.total;
-      const { totalAdSpend } = mergeAdSpendByPlatform(live, uploaded);
+      const { totalAdSpend } = mergeAdSpendByPlatform(live, uploaded, windsor);
       marketingExtra = Math.max(0, r2(pr.total - (totalAdSpend ?? 0)));
       if (pr.coveredDays < pr.windowDays - 1) {
         const missing = pr.windowDays - pr.coveredDays;
@@ -362,6 +374,7 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
     revenue: { totalSales, netSales },
     live,
     uploaded,
+    windsor,
     marketingExtra,
     plMarketing,
     skus,

@@ -56,18 +56,19 @@ describe("normalizeAdPlatform", () => {
 });
 
 describe("mergeAdSpendByPlatform — per-platform precedence", () => {
-  it("live wins; uploaded only fills platforms with no live data (no double-count)", () => {
+  it("source hierarchy windsor > uploaded > live, one source per platform (no double-count)", () => {
     const { platforms, totalAdSpend } = mergeAdSpendByPlatform(
-      { GOOGLE: { spend: 1000, impressions: 50000, clicks: 1000 } },
-      { GOOGLE: { spend: 9999 }, META: { spend: 500, impressions: 20000, clicks: 400 } },
+      { GOOGLE: { spend: 25279 }, META: { spend: 0 } },          // live: inflated Google, $0 Meta noise
+      { META: { spend: 11733 }, GOOGLE: { spend: 9999 } },        // uploaded: manual CSVs
+      { GOOGLE: { spend: 9234 }, AMAZON: { spend: 2630 } },       // windsor: authoritative
     );
-    const google = platforms.find((p) => p.platform === "GOOGLE")!;
-    const meta = platforms.find((p) => p.platform === "META")!;
-    expect(google.spend).toBe(1000); // live, NOT the uploaded 9999
-    expect(google.source).toBe("live");
-    expect(meta.spend).toBe(500); // uploaded fills the gap
-    expect(meta.source).toBe("uploaded");
-    expect(totalAdSpend).toBe(1500); // 1000 + 500, never 1000+9999+500
+    const g = platforms.find((p) => p.platform === "GOOGLE")!;
+    expect(g.spend).toBe(9234); expect(g.source).toBe("windsor"); // windsor beats the inflated live 25279 AND uploaded 9999
+    const a = platforms.find((p) => p.platform === "AMAZON")!;
+    expect(a.spend).toBe(2630); expect(a.source).toBe("windsor"); // windsor fills (no live/upload)
+    const m = platforms.find((p) => p.platform === "META")!;
+    expect(m.spend).toBe(11733); expect(m.source).toBe("uploaded"); // no windsor/live → uploaded CSV wins
+    expect(totalAdSpend).toBe(9234 + 2630 + 11733); // exactly one source each
   });
 
   it("returns null total when there is no ad data at all", () => {

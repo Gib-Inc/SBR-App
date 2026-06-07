@@ -165,6 +165,33 @@ async function syncToDatabase(stockItems) {
   const db = new Client({ connectionString: CONFIG.databaseUrl, ssl: { rejectUnauthorized: false } });
   await db.connect();
 
+  // ── Sync-reconciliation guard (Phase 1) ──────────────────────────────────
+  // Refuse a degenerate/empty/partial payload that would silently zero sellable
+  // stock (pivot_qty). Mirrors the unit-tested assessExtensivPayload() in
+  // server/services/sync-guard.ts (the cron can't import TS). If unsafe: skip the
+  // whole write, log to data_reconciliation_log + system_logs, and exit cleanly.
+  {
+    const MAX_ZERO_PCT = 0.30, MIN_COUNT_RATIO = 0.50;
+    const inStock = (await db.query(`SELECT count(*)::int AS n FROM items WHERE pivot_qty > 0`)).rows[0]?.n || 0;
+    const lastGood = (await db.query(`SELECT count(*)::int AS n FROM items WHERE extensiv_sku IS NOT NULL`)).rows[0]?.n || 0;
+    const itemCount = stockItems.length;
+    const wouldZero = stockItems.filter((raw) => { const { available } = extractSkuAndQuantities(raw); return available == null || Number(available) === 0; }).length;
+    const wouldZeroPct = inStock > 0 ? wouldZero / inStock : 0;
+    let unsafeReason = null;
+    if (itemCount === 0) unsafeReason = 'Extensiv returned 0 items — refusing to write (would zero all stock).';
+    else if (lastGood > 0 && itemCount < lastGood * MIN_COUNT_RATIO) unsafeReason = `Extensiv returned ${itemCount} items — under 50% of expected (${lastGood}); likely a partial/failed pull. Skipping.`;
+    else if (inStock > 0 && wouldZeroPct > MAX_ZERO_PCT) unsafeReason = `${wouldZero} items (${Math.round(wouldZeroPct * 100)}% of in-stock SKUs) would drop to 0 — over the 30% guard. Empty/degraded payload. Skipping.`;
+    if (unsafeReason) {
+      console.error(`\n🛑 SYNC GUARD: ${unsafeReason}`);
+      try {
+        await db.query(`INSERT INTO data_reconciliation_log (data_type, entity_key, action, reason, source) VALUES ('sync:extensiv','Extensiv stock sync','DISREGARDED',$1,'extensiv-sync.js cron')`, [unsafeReason]);
+        await db.query(`INSERT INTO system_logs (type, severity, code, message, details) VALUES ('SYNC','ERROR','EXTENSIV_GUARD_SKIP',$1,$2)`, [unsafeReason, JSON.stringify({ itemCount, inStock, lastGood, wouldZero, wouldZeroPct })]);
+      } catch (e) { console.error('  (guard logging failed:', e.message, ')'); }
+      await db.end();
+      return { updated: 0, notMatched: 0, unmatchedSkus: [], skipped: true, reason: unsafeReason };
+    }
+  }
+
   const now = new Date().toISOString();
   let updated = 0;
   let notMatched = 0;
@@ -247,12 +274,17 @@ async function main() {
       process.exit(0);
     }
 
-    // Step 3: Update Railway database
-    const { updated, notMatched, unmatchedSkus } = await syncToDatabase(stockItems);
+    // Step 3: Update Railway database (guarded)
+    const result = await syncToDatabase(stockItems);
+    const { updated, notMatched, unmatchedSkus } = result;
 
     // Step 4: Summary
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log('─'.repeat(60));
+    if (result.skipped) {
+      console.log(`🛑 Sync SKIPPED by guard in ${elapsed}s — stock left untouched. Reason: ${result.reason}`);
+      process.exit(0);
+    }
     console.log(`✅ Sync complete in ${elapsed}s — ${updated} updated, ${notMatched} not matched`);
 
     if (unmatchedSkus.length > 0) {

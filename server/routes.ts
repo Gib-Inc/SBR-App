@@ -23586,6 +23586,36 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Sync Reconciliation — "already bitten?" diagnostic. Finished products
+  // sitting at 0 sellable stock that nonetheless SOLD in the last 30 days are the
+  // signature of a bad Extensiv sync having zeroed real stock. Read-only.
+  app.get("/api/inventory/sync-integrity", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = Math.max(1, Math.min(180, parseInt(String(req.query.days ?? "30"), 10) || 30));
+      const [items, velocity] = await Promise.all([
+        storage.getAllItems(),
+        storage.getSkuSalesVelocity(days),
+      ]);
+      const soldRecently = new Map<string, number>();
+      for (const v of velocity) if (v.unitsSold > 0) soldRecently.set(v.sku, v.unitsSold);
+      const suspects = (items as any[])
+        .filter((i) => i.type === "finished_product" && (i.pivotQty ?? 0) <= 0 && soldRecently.has(i.sku))
+        .map((i) => ({
+          sku: i.sku, name: i.name, pivotQty: i.pivotQty ?? 0, hildaleQty: i.hildaleQty ?? 0,
+          unitsSoldRecently: soldRecently.get(i.sku) || 0, extensivLastSyncAt: i.extensivLastSyncAt ?? null,
+        }))
+        .sort((a, b) => b.unitsSoldRecently - a.unitsSoldRecently);
+      res.json({
+        success: true, windowDays: days, suspectCount: suspects.length,
+        note: suspects.length ? "These finished products are at 0 sellable but sold recently — possible Extensiv zero-out. Verify against the warehouse." : "No zeroed-but-selling finished products — no sign of a bad sync.",
+        suspects,
+      });
+    } catch (error: any) {
+      console.error('[CIPH.R] Sync integrity check error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to run sync integrity check' });
+    }
+  });
+
   app.post("/api/financial-upload/apply", requireAuth, async (req: Request, res: Response) => {
     try {
       const months: any[] = Array.isArray(req.body?.months) ? req.body.months : [];

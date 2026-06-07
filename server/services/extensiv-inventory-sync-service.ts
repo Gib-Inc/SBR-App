@@ -293,6 +293,38 @@ export class ExtensivInventorySyncService {
       const extensivItems = await this.client.getAllInventory(warehouseId);
       console.log(`[ExtensivInventorySync] Fetched ${extensivItems.length} items from Extensiv`);
 
+      // ── Sync-reconciliation guard (Phase 1): refuse a degenerate/empty/partial
+      // payload that would silently zero sellable stock. ──
+      try {
+        const { assessExtensivPayload } = await import("./sync-guard");
+        const allItems = await storage.getAllItems();
+        const inStockItemCount = allItems.filter((i: any) => (i.pivotQty ?? 0) > 0).length;
+        const lastGoodItemCount = allItems.filter((i: any) => i.extensivSku).length || allItems.length;
+        const assessment = assessExtensivPayload(
+          extensivItems.map((e: any) => ({ available: e.available ?? e.quantity })),
+          { inStockItemCount, lastGoodItemCount },
+        );
+        if (!assessment.safe) {
+          console.error(`[ExtensivInventorySync] 🛑 SYNC GUARD: ${assessment.reason}`);
+          try {
+            await storage.createDataReconciliationLog([{
+              dataType: "sync:extensiv", entityKey: "Extensiv bulk inventory sync", action: "DISREGARDED",
+              field: null, oldValue: null, newValue: null, reason: assessment.reason || "degraded payload", source: "extensiv-inventory-sync-service",
+            }]);
+            await storage.createSystemLog({
+              type: "SYNC", severity: "ERROR", code: "EXTENSIV_GUARD_SKIP",
+              message: assessment.reason || "Extensiv payload looked degraded — sync skipped to protect stock.",
+              details: assessment as unknown as any,
+            } as any);
+          } catch (logErr) {
+            console.warn("[ExtensivInventorySync] guard logging failed:", logErr);
+          }
+          return { totalExtensivItems: extensivItems.length, synced: 0, skipped: extensivItems.length, unmatchedSkus: [], failed: 0, results: [], warehouseId, guardSkipped: true, guardReason: assessment.reason } as any;
+        }
+      } catch (guardErr) {
+        console.warn("[ExtensivInventorySync] guard check failed (continuing):", guardErr);
+      }
+
       const results: ExtensivSyncResult[] = [];
       const unmatchedSkus: string[] = [];
       let synced = 0;

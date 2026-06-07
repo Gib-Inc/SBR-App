@@ -23309,17 +23309,46 @@ Generate only the email body text, no subject line.`;
   // the seeded accountant export; switch to live QuickBooks once connected.
   app.get("/api/finances/overview", requireAuth, async (_req: Request, res: Response) => {
     try {
-      const [monthly, snapshot] = await Promise.all([
+      const isoDaysAgo = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+      const today = new Date().toISOString().slice(0, 10);
+      const [monthly, snapshot, adRows] = await Promise.all([
         storage.getMonthlyFinancials(),
         storage.getLatestQbFinancialSnapshot(),
+        storage.getAdMetricsInRange(isoDaysAgo(30), today),
       ]);
       const { FINANCIAL_SEED } = await import("./data/financial-seed");
+
+      // Ad spend by channel (last 30 days). Normalize the many raw platform
+      // labels (GOOGLE/google_ads, META/FB/meta_ads, etc.) into real ad channels;
+      // skip traffic-source noise (DIRECT, NOT SET, DUCKDUCKGO, YAHOO, ...).
+      const normalize = (p: string): string | null => {
+        const s = (p || "").toLowerCase();
+        if (s.includes("google")) return "Google Ads";
+        if (s.includes("meta") || s === "fb" || s.includes("facebook")) return "Meta / Facebook";
+        if (s.includes("amazon")) return "Amazon Ads";
+        if (s.includes("pinterest")) return "Pinterest";
+        if (s.includes("microsoft") || s.includes("bing")) return "Microsoft / Bing";
+        if (s.includes("tiktok")) return "TikTok";
+        return null; // traffic source, not an ad platform
+      };
+      const channelMap: Record<string, number> = {};
+      for (const r of adRows) {
+        const ch = normalize((r as any).platform);
+        if (!ch) continue;
+        channelMap[ch] = (channelMap[ch] || 0) + (Number((r as any).spend) || 0);
+      }
+      const adChannels = Object.entries(channelMap)
+        .map(([channel, spend]) => ({ channel, spend: Math.round(spend * 100) / 100 }))
+        .sort((a, b) => b.spend - a.spend);
+
       res.json({
         success: true,
         monthly,
         snapshot: snapshot ?? null,
         balanceSheet: FINANCIAL_SEED.balanceSheet,
         balanceSheetSource: "accountant_seed",
+        adChannels,
+        adChannelsWindowDays: 30,
       });
     } catch (error: any) {
       console.error('[CIPH.R] Finances overview error:', error);

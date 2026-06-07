@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
-import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark } from "lucide-react";
+import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
 
 /**
  * CIPH.R Finances tab — the financial command center.
@@ -24,7 +24,8 @@ interface BalanceSheet {
   inventory: number; creditCards: number; shortTermNotes: number; salesTaxToPay: number;
   totalLiabilities: number; totalEquity: number;
 }
-interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; }
+interface AdChannel { channel: string; spend: number; }
+interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
 
 const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
 const fmt = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString();
@@ -150,6 +151,39 @@ export default function Finances() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Ad spend by channel */}
+          {(() => {
+            const ch = data?.adChannels ?? [];
+            const totalCh = ch.reduce((s, x) => s + x.spend, 0);
+            const maxCh = ch.length ? Math.max(...ch.map((x) => x.spend)) : 1;
+            const hasMeta = ch.some((x) => /meta|facebook/i.test(x.channel) && x.spend > 0);
+            return (
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4" /> Ad Spend by Channel <span className="text-xs font-normal text-muted-foreground">· last {data?.adChannelsWindowDays ?? 30} days · {fmt(totalCh)} tracked</span></CardTitle></CardHeader>
+                <CardContent>
+                  {ch.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No ad-platform spend tracked yet.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {ch.map((x) => (
+                        <div key={x.channel} data-testid={`adch-${x.channel}`}>
+                          <div className="flex items-center justify-between text-xs"><span>{x.channel}</span><span className="tabular-nums font-medium">{fmt(x.spend)}{totalCh > 0 ? ` · ${Math.round((x.spend / totalCh) * 100)}%` : ""}</span></div>
+                          <div className="h-1.5 bg-muted rounded mt-0.5"><div className="h-1.5 rounded bg-orange-500" style={{ width: `${Math.max(2, (x.spend / maxCh) * 100)}%` }} /></div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!hasMeta && (
+                    <div className="mt-3 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1" data-testid="text-meta-gap">
+                      <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                      <span>Meta / Facebook shows <b>$0 tracked</b> — Meta Ads isn't connected, so roughly half your ad spend (per the P&amp;L) isn't attributed here. Connect Meta Ads to fill this in.</span>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {/* Debt stack */}
           {bs && (

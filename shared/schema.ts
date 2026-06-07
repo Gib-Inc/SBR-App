@@ -2264,6 +2264,41 @@ export const insertFinancialDiscrepancySchema = createInsertSchema(financialDisc
 export type InsertFinancialDiscrepancy = typeof financialDiscrepancies.$inferInsert;
 export type FinancialDiscrepancy = typeof financialDiscrepancies.$inferSelect;
 
+// CIPH.R Unified Performance Hub — period-level ad-spend rollups uploaded by
+// the operator (Meta/Google CSV/XLSX exports). This is a SEPARATE store from
+// the canonical per-day ad_metrics_daily (which the live syncs populate). The
+// UnifiedPerformanceService uses per-platform precedence — live sync wins; an
+// uploaded snapshot only fills a platform that has NO live data in the window —
+// so blended ROAS is never double-counted.
+// ANTI-HALLUCINATION: a row whose expected columns (impressions/clicks) were
+// missing is stored with status 'DATA_GAPPED' and the missing keys in dataGaps;
+// spend is required (a report with no spend column is rejected, not invented).
+export const marketingSpendSnapshots = pgTable("marketing_spend_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  platform: text("platform").notNull(), // META | GOOGLE | AMAZON | TIKTOK | MICROSOFT | PINTEREST | OTHER
+  periodStart: date("period_start"), // YYYY-MM-DD
+  periodEnd: date("period_end"),
+  spend: real("spend").notNull().default(0),
+  impressions: integer("impressions"),
+  clicks: integer("clicks"),
+  conversions: integer("conversions"),
+  revenue: real("revenue"), // platform-attributed revenue, if the report has it
+  currency: text("currency").default("USD"),
+  source: text("source"), // 'upload:<filename>'
+  status: text("status").notNull().default("OK"), // OK | DATA_GAPPED
+  dataGaps: jsonb("data_gaps"), // string[] of "DATA GAPPED: <field>"
+  raw: jsonb("raw"), // parsed summary for lineage/audit
+  capturedAt: timestamp("captured_at").notNull().default(sql`now()`),
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  platformIdx: index("marketing_spend_snapshots_platform_idx").on(table.platform),
+  periodIdx: index("marketing_spend_snapshots_period_idx").on(table.periodStart, table.periodEnd),
+}));
+
+export const insertMarketingSpendSnapshotSchema = createInsertSchema(marketingSpendSnapshots).omit({ id: true, createdAt: true });
+export type InsertMarketingSpendSnapshot = typeof marketingSpendSnapshots.$inferInsert;
+export type MarketingSpendSnapshot = typeof marketingSpendSnapshots.$inferSelect;
+
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
 export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {

@@ -101,6 +101,8 @@ import {
   type InsertMonthlyFinancial,
   type FinancialDiscrepancy,
   type InsertFinancialDiscrepancy,
+  type MarketingSpendSnapshot,
+  type InsertMarketingSpendSnapshot,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -685,6 +687,9 @@ export interface IStorage {
   upsertMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial>;
   createFinancialDiscrepancy(d: InsertFinancialDiscrepancy): Promise<FinancialDiscrepancy>;
   getFinancialDiscrepancies(): Promise<FinancialDiscrepancy[]>;
+  createMarketingSpendSnapshot(s: InsertMarketingSpendSnapshot): Promise<MarketingSpendSnapshot>;
+  getMarketingSpendSnapshots(limit?: number): Promise<MarketingSpendSnapshot[]>;
+  getMarketingSpendSnapshotsInRange(startDate: string, endDate: string): Promise<MarketingSpendSnapshot[]>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3812,6 +3817,15 @@ export class MemStorage implements IStorage {
     throw new Error('Financial discrepancies not supported in MemStorage');
   }
   async getFinancialDiscrepancies(): Promise<FinancialDiscrepancy[]> {
+    return [];
+  }
+  async createMarketingSpendSnapshot(_s: InsertMarketingSpendSnapshot): Promise<MarketingSpendSnapshot> {
+    throw new Error('Marketing spend snapshots not supported in MemStorage');
+  }
+  async getMarketingSpendSnapshots(_limit?: number): Promise<MarketingSpendSnapshot[]> {
+    return [];
+  }
+  async getMarketingSpendSnapshotsInRange(_startDate: string, _endDate: string): Promise<MarketingSpendSnapshot[]> {
     return [];
   }
 
@@ -7599,6 +7613,32 @@ export class PostgresStorage implements IStorage {
       .select()
       .from(schema.financialDiscrepancies)
       .orderBy(desc(schema.financialDiscrepancies.createdAt));
+  }
+  async createMarketingSpendSnapshot(s: InsertMarketingSpendSnapshot): Promise<MarketingSpendSnapshot> {
+    const result = await this.db.insert(schema.marketingSpendSnapshots).values(s).returning();
+    return result[0];
+  }
+  async getMarketingSpendSnapshots(limit = 100): Promise<MarketingSpendSnapshot[]> {
+    return await this.db
+      .select()
+      .from(schema.marketingSpendSnapshots)
+      .orderBy(desc(schema.marketingSpendSnapshots.capturedAt))
+      .limit(limit);
+  }
+  async getMarketingSpendSnapshotsInRange(startDate: string, endDate: string): Promise<MarketingSpendSnapshot[]> {
+    // Any snapshot whose period overlaps [startDate, endDate]. period_start/end
+    // may be null (DATA GAPPED period) — those are excluded from range queries.
+    return await this.db
+      .select()
+      .from(schema.marketingSpendSnapshots)
+      .where(
+        and(
+          isNotNull(schema.marketingSpendSnapshots.periodStart),
+          lte(schema.marketingSpendSnapshots.periodStart, endDate),
+          gte(schema.marketingSpendSnapshots.periodEnd, startDate),
+        ),
+      )
+      .orderBy(desc(schema.marketingSpendSnapshots.periodEnd));
   }
 
   async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {

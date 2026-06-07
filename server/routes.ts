@@ -23397,18 +23397,50 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // CIPH.R — accountant financial-document uploader.
+  // CIPH.R — Universal financial-document dropzone.
   // parse = extract for review (no write); apply = persist confirmed figures.
-  // docType: "pl_xlsx" (default) | "balance_sheet" | "bank_statement".
+  // docType: "auto" (default) | "pl_xlsx" | "balance_sheet" | "bank_statement" | "ad_spend".
+  //   auto          → classify by mime + spreadsheet headers, then route
   //   pl_xlsx       → xlsx P&L parser (months series)
   //   balance_sheet → Claude-vision PDF or xlsx label-scan → buckets + loans
   //   bank_statement→ Claude-vision PDF → opening/closing/deposits/withdrawals
+  //   ad_spend      → Meta/Google CSV/XLSX → period spend/impressions/clicks
   // Vision docs require the Anthropic key from Settings → LLM Configuration.
   app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded." });
-      const docType = String(req.body?.docType || "pl_xlsx");
       const mime = req.file.mimetype || "application/octet-stream";
+      const fileName = req.file.originalname || "";
+      let docType = String(req.body?.docType || "auto");
+
+      // Universal dropzone: auto-classify when no explicit docType was chosen.
+      if (docType === "auto") {
+        const isPdf = mime === "application/pdf" || /\.pdf$/i.test(fileName);
+        if (isPdf) {
+          docType = "balance_sheet"; // PDFs default to balance sheet; user can re-pick a type
+        } else {
+          const { readSpreadsheetRows, classifySpreadsheet } = await import("./services/ad-spend-parser");
+          let keys: string[] = [];
+          try { const rows = readSpreadsheetRows(req.file.buffer, fileName, mime); keys = rows.length ? Object.keys(rows[0]) : []; } catch { /* fall through */ }
+          let firstCol: string[] = [];
+          try {
+            const XLSX = await import("xlsx");
+            const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const grid = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: null }) as any[][];
+            firstCol = grid.map((r) => String((r && r[0]) ?? "")).filter(Boolean).slice(0, 80);
+          } catch { /* csv has no grid; keys-only classification */ }
+          const kind = classifySpreadsheet(keys, firstCol);
+          docType = kind === "unknown" ? "pl_xlsx" : kind;
+        }
+      }
+
+      if (docType === "ad_spend") {
+        const { parseAdSpendBuffer } = await import("./services/ad-spend-parser");
+        const result = parseAdSpendBuffer(req.file.buffer, fileName, mime);
+        if (!result.ok) return res.status(422).json({ success: false, error: result.error, dataGaps: result.dataGaps });
+        return res.json({ success: true, docType: "ad_spend", fileName, fields: result, ...result });
+      }
 
       if (docType === "balance_sheet" || docType === "bank_statement") {
         const settings = await storage.getSettings(req.session.userId!);
@@ -23418,17 +23450,45 @@ Generate only the email body text, no subject line.`;
           ? await mod.parseBalanceSheetDoc(req.file.buffer, mime, apiKey)
           : await mod.parseBankStatementDoc(req.file.buffer, mime, apiKey);
         if (!result.ok) return res.status(422).json({ success: false, error: result.error, dataGaps: result.dataGaps });
-        return res.json({ success: true, docType, fileName: req.file.originalname, ...result });
+        return res.json({ success: true, docType, fileName, ...result });
       }
 
       // default: Monthly P&L (.xlsx)
       const { parsePLWorkbook } = await import("./services/pl-xlsx-parser");
       const result = parsePLWorkbook(req.file.buffer);
       if (!result.ok) return res.status(422).json({ success: false, error: result.error });
-      res.json({ success: true, docType: "pl_xlsx", ...result, fileName: req.file.originalname });
+      res.json({ success: true, docType: "pl_xlsx", ...result, fileName });
     } catch (error: any) {
       console.error('[CIPH.R] Financial upload parse error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to parse file' });
+    }
+  });
+
+  // Apply a reviewed ad-spend report → marketing_spend_snapshots row.
+  app.post("/api/financial-upload/apply-ad-spend", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const f = req.body?.fields ?? req.body;
+      if (!f || f.spend == null) return res.status(400).json({ success: false, error: "A spend total is required to apply." });
+      const gaps: string[] = Array.isArray(f.dataGaps) ? f.dataGaps : [];
+      const snap = await storage.createMarketingSpendSnapshot({
+        platform: String(f.platform || "OTHER").toUpperCase(),
+        periodStart: f.periodStart || null,
+        periodEnd: f.periodEnd || null,
+        spend: Number(f.spend) || 0,
+        impressions: f.impressions ?? null,
+        clicks: f.clicks ?? null,
+        conversions: f.conversions ?? null,
+        revenue: f.revenue ?? null,
+        currency: f.currency || "USD",
+        source: req.body?.fileName ? `upload:${req.body.fileName}` : "upload",
+        status: gaps.length ? "DATA_GAPPED" : (f.status === "DATA_GAPPED" ? "DATA_GAPPED" : "OK"),
+        dataGaps: gaps as unknown,
+        raw: { detectedFormat: f.detectedFormat ?? null, rowCount: f.rowCount ?? null, warnings: f.warnings ?? [] } as unknown,
+      });
+      res.json({ success: true, snapshotId: snap.id, platform: snap.platform });
+    } catch (error: any) {
+      console.error('[CIPH.R] Apply ad spend error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to apply ad spend' });
     }
   });
 

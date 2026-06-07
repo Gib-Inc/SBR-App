@@ -168,6 +168,35 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             created_at timestamp NOT NULL DEFAULT now()
           )`,
   },
+  {
+    name: "marketing_spend_snapshots.table",
+    sql: `CREATE TABLE IF NOT EXISTS marketing_spend_snapshots (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            platform text NOT NULL,
+            period_start date,
+            period_end date,
+            spend real NOT NULL DEFAULT 0,
+            impressions integer,
+            clicks integer,
+            conversions integer,
+            revenue real,
+            currency text DEFAULT 'USD',
+            source text,
+            status text NOT NULL DEFAULT 'OK',
+            data_gaps jsonb,
+            raw jsonb,
+            captured_at timestamp NOT NULL DEFAULT now(),
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "marketing_spend_snapshots.platform_idx",
+    sql: `CREATE INDEX IF NOT EXISTS marketing_spend_snapshots_platform_idx ON marketing_spend_snapshots (platform)`,
+  },
+  {
+    name: "marketing_spend_snapshots.period_idx",
+    sql: `CREATE INDEX IF NOT EXISTS marketing_spend_snapshots_period_idx ON marketing_spend_snapshots (period_start, period_end)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

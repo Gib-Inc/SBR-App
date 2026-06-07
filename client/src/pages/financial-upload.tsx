@@ -70,8 +70,9 @@ export default function FinancialUpload() {
   const [reporter, setReporter] = useState("");
   const [discrepancy, setDiscrepancy] = useState("");
   const [discSent, setDiscSent] = useState(false);
+  const [recon, setRecon] = useState<{ action: string; field?: string | null; oldValue?: string | null; newValue?: string | null; reason: string }[] | null>(null);
 
-  const reset = () => { setMonths(null); setBs(null); setBank(null); setAd(null); setMeta(null); setApplied(false); };
+  const reset = () => { setMonths(null); setBs(null); setBank(null); setAd(null); setMeta(null); setApplied(false); setRecon(null); };
   const pickType = (t: DocType) => { setDocType(t); reset(); };
 
   const onFile = async (file: File) => {
@@ -101,9 +102,10 @@ export default function FinancialUpload() {
       let json: any;
       if (docType === "pl_xlsx") {
         if (!months) return;
-        json = await (await apiRequest("POST", "/api/financial-upload/apply", { months })).json();
+        json = await (await apiRequest("POST", "/api/financial-upload/apply", { months, fileName: meta?.fileName })).json();
         if (!json.success) throw new Error(json.error || "Apply failed.");
-        toast({ title: "Applied", description: `${json.applied} month(s) updated in the Finances tab.` });
+        const s = json.summary || {};
+        toast({ title: "Applied", description: `${json.applied} month(s) reconciled — ${s.UPDATED || 0} updated, ${s.ADDED || 0} added, ${s.KEPT || 0} kept.` });
       } else if (docType === "balance_sheet") {
         if (!bs) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-balance-sheet", { fields: bs, loans: bs.loans, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
@@ -113,13 +115,15 @@ export default function FinancialUpload() {
         if (!ad) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-ad-spend", { fields: ad, dataGaps: meta?.dataGaps, fileName: meta?.fileName })).json();
         if (!json.success) throw new Error(json.error || "Apply failed.");
-        toast({ title: "Applied", description: `${ad.platform} ad spend (${fmt(ad.spend)}) saved — it now feeds Unified Performance.` });
+        const verb = json.action === "DISREGARDED" ? "No change" : json.action === "SUPERSEDED" ? "Replaced" : "Added";
+        toast({ title: verb, description: json.message || `${ad.platform} ad spend (${fmt(ad.spend)}) saved.` });
       } else {
         if (!bank) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-bank-statement", { fields: bank, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
         if (!json.success) throw new Error(json.error || "Apply failed.");
         toast({ title: "Applied", description: `Cash on hand updated to ${fmt(bank.closingBalance)}.` });
       }
+      setRecon(Array.isArray(json.reconciliation) ? json.reconciliation : null);
       setApplied(true);
     } catch (e: any) {
       toast({ title: "Apply failed", description: e.message, variant: "destructive" });
@@ -290,6 +294,27 @@ export default function FinancialUpload() {
               </Button>
               {applied && <span className="text-sm text-green-600 dark:text-green-400">Updated — the Finances tab now reflects this.</span>}
             </div>
+
+            {/* Reconciliation decision log — what was added / changed / kept / disregarded */}
+            {applied && recon && recon.length > 0 && (
+              <div className="mt-3 rounded-lg border bg-muted/30 p-3" data-testid="reconciliation-report">
+                <div className="text-xs font-medium mb-1.5">Reconciliation — what changed vs. existing data</div>
+                <ul className="space-y-1">
+                  {recon.slice(0, 30).map((d, i) => {
+                    const tone = d.action === "KEPT" || d.action === "DISREGARDED" ? "text-muted-foreground"
+                      : d.action === "UPDATED" || d.action === "SUPERSEDED" ? "text-amber-600 dark:text-amber-400"
+                      : "text-green-600 dark:text-green-400";
+                    return (
+                      <li key={i} className="text-xs flex items-start gap-2">
+                        <span className={`shrink-0 font-semibold ${tone}`}>{d.action}</span>
+                        <span className="text-muted-foreground">{d.reason}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-[11px] text-muted-foreground mt-1.5">Nothing is overwritten silently: a missing value never wipes an existing one, identical re-uploads are no-ops, and superseded rows are kept for audit.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

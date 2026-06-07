@@ -2288,6 +2288,13 @@ export const marketingSpendSnapshots = pgTable("marketing_spend_snapshots", {
   status: text("status").notNull().default("OK"), // OK | DATA_GAPPED
   dataGaps: jsonb("data_gaps"), // string[] of "DATA GAPPED: <field>"
   raw: jsonb("raw"), // parsed summary for lineage/audit
+  // Reconciliation/provenance: a re-upload of the same platform+period supersedes
+  // the prior row (kept for audit, excluded from aggregation) so spend is never
+  // double-counted; an identical sourceHash is a no-op duplicate.
+  sourceHash: text("source_hash"),
+  superseded: boolean("superseded").notNull().default(false),
+  supersededAt: timestamp("superseded_at"),
+  supersededByCsv: varchar("superseded_by"),
   capturedAt: timestamp("captured_at").notNull().default(sql`now()`),
   createdAt: timestamp("created_at").notNull().default(sql`now()`),
 }, (table) => ({
@@ -2298,6 +2305,31 @@ export const marketingSpendSnapshots = pgTable("marketing_spend_snapshots", {
 export const insertMarketingSpendSnapshotSchema = createInsertSchema(marketingSpendSnapshots).omit({ id: true, createdAt: true });
 export type InsertMarketingSpendSnapshot = typeof marketingSpendSnapshots.$inferInsert;
 export type MarketingSpendSnapshot = typeof marketingSpendSnapshots.$inferSelect;
+
+// CIPH.R Data Reconciliation — a persistent decision log so data never changes
+// silently. Every ingest writes one row per decision: what was ADDED / UPDATED /
+// KEPT (incoming ignored because existing was better) / SUPERSEDED / DISREGARDED
+// (duplicate), with old→new values, the reason, and the source. This is the
+// "account each time we get new data" audit trail.
+export const dataReconciliationLog = pgTable("data_reconciliation_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  dataType: text("data_type").notNull(), // 'marketing_spend' | 'monthly_financial' | 'balance_sheet'
+  entityKey: text("entity_key").notNull(), // e.g. 'META 2026-04-27..2026-05-19' or 'May 2026'
+  action: text("action").notNull(), // ADDED | UPDATED | KEPT | SUPERSEDED | DISREGARDED
+  field: text("field"), // null for whole-record actions
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  reason: text("reason").notNull(),
+  source: text("source"), // filename / upload origin
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  createdAtIdx: index("data_reconciliation_log_created_at_idx").on(table.createdAt),
+  dataTypeIdx: index("data_reconciliation_log_data_type_idx").on(table.dataType),
+}));
+
+export const insertDataReconciliationLogSchema = createInsertSchema(dataReconciliationLog).omit({ id: true, createdAt: true });
+export type InsertDataReconciliationLog = typeof dataReconciliationLog.$inferInsert;
+export type DataReconciliationLog = typeof dataReconciliationLog.$inferSelect;
 
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions

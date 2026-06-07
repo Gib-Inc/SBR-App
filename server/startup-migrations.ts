@@ -197,6 +197,37 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "marketing_spend_snapshots.period_idx",
     sql: `CREATE INDEX IF NOT EXISTS marketing_spend_snapshots_period_idx ON marketing_spend_snapshots (period_start, period_end)`,
   },
+  {
+    name: "marketing_spend_snapshots.reconciliation_columns",
+    sql: `ALTER TABLE marketing_spend_snapshots
+            ADD COLUMN IF NOT EXISTS source_hash text,
+            ADD COLUMN IF NOT EXISTS superseded boolean NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS superseded_at timestamp,
+            ADD COLUMN IF NOT EXISTS superseded_by varchar`,
+  },
+  {
+    name: "data_reconciliation_log.table",
+    sql: `CREATE TABLE IF NOT EXISTS data_reconciliation_log (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            data_type text NOT NULL,
+            entity_key text NOT NULL,
+            action text NOT NULL,
+            field text,
+            old_value text,
+            new_value text,
+            reason text NOT NULL,
+            source text,
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "data_reconciliation_log.created_at_idx",
+    sql: `CREATE INDEX IF NOT EXISTS data_reconciliation_log_created_at_idx ON data_reconciliation_log (created_at)`,
+  },
+  {
+    name: "data_reconciliation_log.data_type_idx",
+    sql: `CREATE INDEX IF NOT EXISTS data_reconciliation_log_data_type_idx ON data_reconciliation_log (data_type)`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

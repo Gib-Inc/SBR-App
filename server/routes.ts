@@ -23524,25 +23524,61 @@ Generate only the email body text, no subject line.`;
       const f = req.body?.fields ?? req.body;
       if (!f || f.spend == null) return res.status(400).json({ success: false, error: "A spend total is required to apply." });
       const gaps: string[] = Array.isArray(f.dataGaps) ? f.dataGaps : [];
+      const source = req.body?.fileName ? `upload:${req.body.fileName}` : "upload";
+      const platform = String(f.platform || "OTHER").toUpperCase();
+      const periodStart = f.periodStart || null;
+      const periodEnd = f.periodEnd || null;
+
+      // RECONCILE against existing data before writing — never silently double-count.
+      const { hashMarketingSnapshot, reconcileMarketingSnapshot } = await import("./services/reconciliation-service");
+      const sourceHash = hashMarketingSnapshot({ platform, periodStart, periodEnd, spend: Number(f.spend) || 0, impressions: f.impressions ?? null, clicks: f.clicks ?? null });
+      const active = await storage.getActiveMarketingSpendSnapshots();
+      const rec = reconcileMarketingSnapshot(active as any, { platform, periodStart, periodEnd, spend: Number(f.spend) || 0, sourceHash });
+      const entityKey = `${platform} ${periodStart ?? "?"}..${periodEnd ?? "?"}`;
+
+      // Identical re-upload → log + no-op (don't add a duplicate row).
+      if (rec.action === "DISREGARDED") {
+        await storage.createDataReconciliationLog([{ dataType: "marketing_spend", entityKey, action: "DISREGARDED", field: null, oldValue: null, newValue: null, reason: rec.decision.reason, source }]);
+        return res.json({ success: true, action: "DISREGARDED", reconciliation: [rec.decision], message: rec.decision.reason });
+      }
+      // Corrected re-upload → supersede the prior row(s) (kept for audit).
+      if (rec.action === "SUPERSEDED" && rec.supersedeIds.length) {
+        await storage.markMarketingSpendSnapshotsSuperseded(rec.supersedeIds, source);
+      }
+
       const snap = await storage.createMarketingSpendSnapshot({
-        platform: String(f.platform || "OTHER").toUpperCase(),
-        periodStart: f.periodStart || null,
-        periodEnd: f.periodEnd || null,
+        platform, periodStart, periodEnd,
         spend: Number(f.spend) || 0,
         impressions: f.impressions ?? null,
         clicks: f.clicks ?? null,
         conversions: f.conversions ?? null,
         revenue: f.revenue ?? null,
         currency: f.currency || "USD",
-        source: req.body?.fileName ? `upload:${req.body.fileName}` : "upload",
+        source,
         status: gaps.length ? "DATA_GAPPED" : (f.status === "DATA_GAPPED" ? "DATA_GAPPED" : "OK"),
         dataGaps: gaps as unknown,
+        sourceHash,
         raw: { detectedFormat: f.detectedFormat ?? null, rowCount: f.rowCount ?? null, warnings: f.warnings ?? [] } as unknown,
       });
-      res.json({ success: true, snapshotId: snap.id, platform: snap.platform });
+      await storage.createDataReconciliationLog([{
+        dataType: "marketing_spend", entityKey, action: rec.action,
+        field: rec.decision.field ?? null, oldValue: rec.decision.oldValue ?? null, newValue: rec.decision.newValue ?? null,
+        reason: rec.decision.reason, source,
+      }]);
+      res.json({ success: true, action: rec.action, snapshotId: snap.id, platform: snap.platform, reconciliation: [rec.decision], message: rec.decision.reason });
     } catch (error: any) {
       console.error('[CIPH.R] Apply ad spend error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to apply ad spend' });
+    }
+  });
+
+  // CIPH.R — recent data-reconciliation decisions (the "what changed and why" audit).
+  app.get("/api/finances/reconciliation-log", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = Math.max(1, Math.min(500, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+      res.json({ success: true, entries: await storage.getDataReconciliationLog(limit) });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || 'Failed to load reconciliation log' });
     }
   });
 
@@ -23551,18 +23587,40 @@ Generate only the email body text, no subject line.`;
       const months: any[] = Array.isArray(req.body?.months) ? req.body.months : [];
       if (!months.length) return res.status(400).json({ success: false, error: "No months to apply." });
       const toStr = (v: any) => (v == null ? null : String(v));
+      const source = req.body?.fileName ? `upload:${req.body.fileName}` : "accountant_upload";
+      const { reconcileFields } = await import("./services/reconciliation-service");
+      const MFIELDS = ["totalIncome", "totalCogs", "grossProfit", "totalExpenses", "netOperatingIncome", "netIncome"] as const;
+
+      // RECONCILE: never let a re-uploaded month with a missing field null-overwrite
+      // a real existing value. Merge field-by-field; log every add/update/keep.
+      const existingAll = await storage.getMonthlyFinancials();
+      const byMonth = new Map(existingAll.map((r: any) => [String(r.month), r]));
+      const logEntries: any[] = [];
       let applied = 0;
       for (const m of months) {
         if (!m?.month) continue;
-        await storage.upsertMonthlyFinancial({
-          month: String(m.month),
+        const month = String(m.month);
+        const existing = byMonth.get(month) || null;
+        const incoming: any = {
           totalIncome: toStr(m.totalIncome), totalCogs: toStr(m.totalCogs), grossProfit: toStr(m.grossProfit),
           totalExpenses: toStr(m.totalExpenses), netOperatingIncome: toStr(m.netOperatingIncome), netIncome: toStr(m.netIncome),
-          expenseCategories: (m.expenseCategories ?? null) as unknown, source: "accountant_upload",
+        };
+        const { merged, decisions } = reconcileFields(existing as any, incoming, { fields: MFIELDS as unknown as string[], incomingNewer: true, labelKey: "month" });
+        // expenseCategories: keep existing when incoming is empty (anti null-wipe)
+        const incCats = m.expenseCategories ?? null;
+        const mergedCats = incCats && Object.keys(incCats).length ? incCats : (existing as any)?.expenseCategories ?? null;
+        await storage.upsertMonthlyFinancial({
+          month,
+          totalIncome: merged.totalIncome ?? null, totalCogs: merged.totalCogs ?? null, grossProfit: merged.grossProfit ?? null,
+          totalExpenses: merged.totalExpenses ?? null, netOperatingIncome: merged.netOperatingIncome ?? null, netIncome: merged.netIncome ?? null,
+          expenseCategories: mergedCats as unknown, source: "accountant_upload",
         });
+        for (const d of decisions) logEntries.push({ dataType: "monthly_financial", entityKey: month, action: d.action, field: d.field ?? null, oldValue: d.oldValue ?? null, newValue: d.newValue ?? null, reason: d.reason, source });
         applied++;
       }
-      res.json({ success: true, applied });
+      if (logEntries.length) await storage.createDataReconciliationLog(logEntries);
+      const summary = logEntries.reduce((a: any, d: any) => { a[d.action] = (a[d.action] || 0) + 1; return a; }, {});
+      res.json({ success: true, applied, reconciliation: logEntries.slice(0, 50), summary });
     } catch (error: any) {
       console.error('[CIPH.R] Financial upload apply error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to apply financials' });

@@ -103,6 +103,8 @@ import {
   type InsertFinancialDiscrepancy,
   type MarketingSpendSnapshot,
   type InsertMarketingSpendSnapshot,
+  type DataReconciliationLog,
+  type InsertDataReconciliationLog,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -690,6 +692,10 @@ export interface IStorage {
   createMarketingSpendSnapshot(s: InsertMarketingSpendSnapshot): Promise<MarketingSpendSnapshot>;
   getMarketingSpendSnapshots(limit?: number): Promise<MarketingSpendSnapshot[]>;
   getMarketingSpendSnapshotsInRange(startDate: string, endDate: string): Promise<MarketingSpendSnapshot[]>;
+  getActiveMarketingSpendSnapshots(): Promise<MarketingSpendSnapshot[]>;
+  markMarketingSpendSnapshotsSuperseded(ids: string[], by: string): Promise<void>;
+  createDataReconciliationLog(entries: InsertDataReconciliationLog[]): Promise<void>;
+  getDataReconciliationLog(limit?: number): Promise<DataReconciliationLog[]>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3826,6 +3832,18 @@ export class MemStorage implements IStorage {
     return [];
   }
   async getMarketingSpendSnapshotsInRange(_startDate: string, _endDate: string): Promise<MarketingSpendSnapshot[]> {
+    return [];
+  }
+  async getActiveMarketingSpendSnapshots(): Promise<MarketingSpendSnapshot[]> {
+    return [];
+  }
+  async markMarketingSpendSnapshotsSuperseded(_ids: string[], _by: string): Promise<void> {
+    /* no-op in MemStorage */
+  }
+  async createDataReconciliationLog(_entries: InsertDataReconciliationLog[]): Promise<void> {
+    /* no-op in MemStorage */
+  }
+  async getDataReconciliationLog(_limit?: number): Promise<DataReconciliationLog[]> {
     return [];
   }
 
@@ -7633,12 +7651,37 @@ export class PostgresStorage implements IStorage {
       .from(schema.marketingSpendSnapshots)
       .where(
         and(
+          eq(schema.marketingSpendSnapshots.superseded, false), // exclude superseded re-uploads (no double-count)
           isNotNull(schema.marketingSpendSnapshots.periodStart),
           lte(schema.marketingSpendSnapshots.periodStart, endDate),
           gte(schema.marketingSpendSnapshots.periodEnd, startDate),
         ),
       )
       .orderBy(desc(schema.marketingSpendSnapshots.periodEnd));
+  }
+  async getActiveMarketingSpendSnapshots(): Promise<MarketingSpendSnapshot[]> {
+    return await this.db
+      .select()
+      .from(schema.marketingSpendSnapshots)
+      .where(eq(schema.marketingSpendSnapshots.superseded, false))
+      .orderBy(desc(schema.marketingSpendSnapshots.capturedAt));
+  }
+  async markMarketingSpendSnapshotsSuperseded(ids: string[], by: string): Promise<void> {
+    if (!ids.length) return;
+    await this.db.update(schema.marketingSpendSnapshots)
+      .set({ superseded: true, supersededAt: new Date(), supersededByCsv: by })
+      .where(inArray(schema.marketingSpendSnapshots.id, ids));
+  }
+  async createDataReconciliationLog(entries: InsertDataReconciliationLog[]): Promise<void> {
+    if (!entries.length) return;
+    await this.db.insert(schema.dataReconciliationLog).values(entries);
+  }
+  async getDataReconciliationLog(limit = 100): Promise<DataReconciliationLog[]> {
+    return await this.db
+      .select()
+      .from(schema.dataReconciliationLog)
+      .orderBy(desc(schema.dataReconciliationLog.createdAt))
+      .limit(limit);
   }
 
   async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {

@@ -94,4 +94,38 @@ describe("parseAdSpendRows", () => {
     const r = parseAdSpendRows([], "x.csv");
     expect(r.ok).toBe(false);
   });
+
+  it("skips the Meta account-total row so spend isn't double-counted, and reads start→end period", () => {
+    // Mirrors the real Meta export: a blank-campaign total row + campaigns that sum to it.
+    const rows = [
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "", "Amount spent (USD)": "11733.16", Impressions: "1058254", "Meta leads": "0" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Keep Rolling", "Amount spent (USD)": "1031.48", Impressions: "91184" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Take Back Your Yard", "Amount spent (USD)": "3414.12", Impressions: "439507" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Reel 7", "Amount spent (USD)": "4102.77", Impressions: "343239" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Retargeting", "Amount spent (USD)": "820.66", Impressions: "38798" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "BIGFOOT REELS", "Amount spent (USD)": "1530.43", Impressions: "96046" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Oddly Satisfying", "Amount spent (USD)": "617.84", Impressions: "36701" },
+      { "Reporting starts": "2026-04-27", "Reporting ends": "2026-05-19", "Campaign name": "Reel 7", "Amount spent (USD)": "215.86", Impressions: "12779" },
+    ];
+    const r = parseAdSpendRows(rows, "Sticker-Burr-Roller-Campaigns.csv");
+    expect(r.ok).toBe(true);
+    expect(r.platform).toBe("META"); // "Meta leads" header triggers detection
+    expect(r.spend).toBe(11733.16); // total counted ONCE, not 23466.32
+    expect(r.impressions).toBe(1058254);
+    expect(r.periodStart).toBe("2026-04-27");
+    expect(r.periodEnd).toBe("2026-05-19"); // from Reporting ends, not collapsed to start
+    expect(r.rowCount).toBe(7); // 7 campaigns; total row dropped
+    expect(r.warnings.some((w) => /summary\/total|double-count/i.test(w))).toBe(true);
+  });
+
+  it("drops a labeled 'Total' row when there is no blank name", () => {
+    const rows = [
+      { Campaign: "Total", Cost: "500", Clicks: "100" },
+      { Campaign: "Brand", Cost: "300", Clicks: "60" },
+      { Campaign: "Retarget", Cost: "200", Clicks: "40" },
+    ];
+    const r = parseAdSpendRows(rows, "google-ads.csv");
+    expect(r.spend).toBe(500); // 300 + 200, not 1000
+    expect(r.rowCount).toBe(2);
+  });
 });

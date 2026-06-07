@@ -74,6 +74,14 @@ const CLICK_COLS = ["link clicks", "clicks", "clicks all"];
 const CONV_COLS = ["results", "conversions", "purchases", "conv", "website purchases"];
 const REV_COLS = ["purchase conversion value", "conversion value", "conv value", "revenue", "sales", "total conversion value", "purchases conversion value"];
 const DATE_COLS = ["day", "date", "reporting starts", "reporting ends", "week", "month", "date range"];
+const START_COLS = ["reporting starts", "start date", "day", "date", "week", "month"];
+const END_COLS = ["reporting ends", "end date"];
+const NAME_COLS = ["campaign name", "campaign", "ad set name", "adset name", "ad name", "ad group", "ad group name"];
+const isTotalName = (v: any): boolean => {
+  const s = String(v ?? "").trim();
+  if (!s) return true; // blank campaign name = Meta/Google account-total row
+  return /^(total|account total|grand total|results from \d|—)/i.test(s);
+};
 
 export function detectPlatform(keys: string[], fileName = ""): string {
   const hay = norm(fileName + " " + keys.join(" "));
@@ -141,7 +149,10 @@ export function parseAdSpendRows(rows: Record<string, any>[], fileName = ""): Ad
   const clickCol = findCol(keys, CLICK_COLS);
   const convCol = findCol(keys, CONV_COLS);
   const revCol = findCol(keys, REV_COLS);
-  const dateCol = findCol(keys, DATE_COLS);
+  const nameCol = findCol(keys, NAME_COLS);
+  const startCol = findCol(keys, START_COLS);
+  const endCol = findCol(keys, END_COLS);
+  const dateCol = startCol || findCol(keys, DATE_COLS);
 
   // currency from a "(USD)" style spend header or explicit currency column
   let currency = "USD";
@@ -150,21 +161,47 @@ export function parseAdSpendRows(rows: Record<string, any>[], fileName = ""): Ad
   const curCol = findCol(keys, ["currency"]);
   if (curCol && rows[0][curCol]) currency = String(rows[0][curCol]).trim().toUpperCase().slice(0, 3) || currency;
 
+  // Exclude summary/total rows so we never double-count. Meta/Google exports
+  // include an account-total row (blank or "Total …" campaign name) whose spend
+  // equals the sum of the individual rows — adding both would 2× the spend.
+  let dataRows = rows;
+  let droppedTotalRow = false;
+  if (nameCol) {
+    const kept = rows.filter((r) => !isTotalName(r[nameCol]));
+    if (kept.length && kept.length < rows.length) { dataRows = kept; droppedTotalRow = true; }
+  } else {
+    // No name column: if one row's spend ≈ the sum of the others, it's the total.
+    const spends = rows.map((r) => num(r[spendCol]) ?? 0);
+    const grand = spends.reduce((a, b) => a + b, 0);
+    const maxIdx = spends.indexOf(Math.max(...spends));
+    const maxVal = spends[maxIdx];
+    if (rows.length > 2 && maxVal > 0 && Math.abs(maxVal - (grand - maxVal)) <= Math.max(0.02, maxVal * 0.01)) {
+      dataRows = rows.filter((_, i) => i !== maxIdx);
+      droppedTotalRow = true;
+    }
+  }
+  if (droppedTotalRow) warnings.push("Skipped a summary/total row so spend isn't double-counted.");
+
   let spend = 0, impressions = 0, clicks = 0, conversions = 0, revenue = 0;
   let anyImpr = false, anyClick = false, anyConv = false, anyRev = false;
-  const dates: string[] = [];
-  for (const r of rows) {
+  const startDates: string[] = [];
+  const endDates: string[] = [];
+  for (const r of dataRows) {
     const sv = num(r[spendCol]); if (sv != null) spend += sv;
     if (imprCol) { const v = num(r[imprCol]); if (v != null) { impressions += v; anyImpr = true; } }
     if (clickCol) { const v = num(r[clickCol]); if (v != null) { clicks += v; anyClick = true; } }
     if (convCol) { const v = num(r[convCol]); if (v != null) { conversions += v; anyConv = true; } }
     if (revCol) { const v = num(r[revCol]); if (v != null) { revenue += v; anyRev = true; } }
-    if (dateCol) { const d = toISODate(r[dateCol]); if (d) dates.push(d); }
+    if (dateCol) { const d = toISODate(r[dateCol]); if (d) startDates.push(d); }
+    if (endCol && endCol !== dateCol) { const d = toISODate(r[endCol]); if (d) endDates.push(d); }
   }
 
-  dates.sort();
-  const periodStart = dates.length ? dates[0] : null;
-  const periodEnd = dates.length ? dates[dates.length - 1] : null;
+  startDates.sort();
+  endDates.sort();
+  // Period: prefer a distinct start col (min) + end col (max). Otherwise min/max
+  // of the single date column.
+  const periodStart = startDates.length ? startDates[0] : null;
+  const periodEnd = endDates.length ? endDates[endDates.length - 1] : (startDates.length ? startDates[startDates.length - 1] : null);
 
   if (!imprCol || !anyImpr) dataGaps.push("DATA GAPPED: impressions");
   if (!clickCol || !anyClick) dataGaps.push("DATA GAPPED: clicks");
@@ -181,11 +218,11 @@ export function parseAdSpendRows(rows: Record<string, any>[], fileName = ""): Ad
     conversions: anyConv ? conversions : null,
     revenue: anyRev ? Math.round(revenue * 100) / 100 : null,
     currency,
-    rowCount: rows.length,
+    rowCount: dataRows.length,
     dataGaps,
     status: dataGaps.length ? "DATA_GAPPED" : "OK",
     warnings,
-    detectedFormat: `${platform} ad report (${rows.length} rows)`,
+    detectedFormat: `${platform} ad report (${dataRows.length} rows)`,
   };
 }
 

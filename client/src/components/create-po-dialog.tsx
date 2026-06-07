@@ -577,7 +577,12 @@ export function CreatePODialog({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 px-1">
+        {/* min-h-0 is essential: without it this flex-1 child defaults to
+            min-height:auto and grows to fit its content, so the ScrollArea
+            viewport (h-full) never clips and the body can't scroll once enough
+            line items push it past the dialog's max-h-[90vh]. With min-h-0 the
+            body scrolls and the footer (Cancel / Send PO) stays pinned. */}
+        <ScrollArea className="flex-1 min-h-0 px-1">
           <div className="space-y-6 py-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">

@@ -23634,23 +23634,55 @@ Generate only the email body text, no subject line.`;
     try {
       const f = req.body?.fields;
       if (!f || typeof f !== "object") return res.status(400).json({ success: false, error: "No balance-sheet fields to apply." });
-      const loans = Array.isArray(req.body?.loans) ? req.body.loans : (Array.isArray(f.loans) ? f.loans : []);
       const dataGaps: string[] = Array.isArray(req.body?.dataGaps) ? req.body.dataGaps : [];
       const confidence: number | null = typeof req.body?.confidence === "number" ? req.body.confidence : null;
+      const source = req.body?.fileName ? `upload:${req.body.fileName}` : "accountant_upload";
       const toStr = (v: any) => (v == null || v === "" ? null : String(v));
-      const balanceSheet = { ...f, loans, source: "accountant_upload" };
+
+      // RECONCILE against the prior balance sheet (the last uploaded snapshot, or
+      // the seed if none) so a missing field in this upload never wipes a real
+      // existing value. Field-level merge: real new → UPDATE, null new → KEEP.
+      const { reconcileFields } = await import("./services/reconciliation-service");
+      const { FINANCIAL_SEED } = await import("./data/financial-seed");
+      const prevSnap = await storage.getLatestQbFinancialSnapshot();
+      const prevBS: any = (prevSnap as any)?.raw?.balanceSheet ?? (FINANCIAL_SEED as any).balanceSheet ?? {};
+      const BS_FIELDS = ["cash", "accountsReceivable", "accountsPayable", "inventory", "creditCards", "salesTaxToPay", "shortTermNotes", "longTermLiabilities", "totalCurrentAssets", "totalAssets", "totalLiabilities", "totalEquity"];
+      const incoming: any = {};
+      for (const k of BS_FIELDS) incoming[k] = f[k];
+      const { merged, decisions } = reconcileFields(prevBS, incoming, { fields: BS_FIELDS, incomingNewer: true });
+
+      const asOf = f.asOf || prevBS?.asOf || null;
+      const basis = f.basis || prevBS?.basis || null;
+      // loans: prefer this upload's named loans; keep prior if the upload has none.
+      const incLoans = Array.isArray(req.body?.loans) ? req.body.loans : (Array.isArray(f.loans) ? f.loans : []);
+      const loans = incLoans.length ? incLoans : (Array.isArray(prevBS?.loans) ? prevBS.loans : []);
+      if (incLoans.length && Array.isArray(prevBS?.loans) && JSON.stringify(incLoans) !== JSON.stringify(prevBS.loans)) {
+        decisions.push({ action: "UPDATED", field: "loans", reason: `loans: replaced ${prevBS.loans.length} named loan(s) with ${incLoans.length}.` });
+      } else if (!incLoans.length && Array.isArray(prevBS?.loans) && prevBS.loans.length) {
+        decisions.push({ action: "KEPT", field: "loans", reason: `loans: kept ${prevBS.loans.length} existing named loan(s); upload had none.` });
+      }
+
+      const balanceSheet = { ...merged, asOf, basis, loans, source: "accountant_upload" };
       const snap = await storage.createQbFinancialSnapshot({
         capturedAt: new Date(),
-        cashOnHand: toStr(f.cash),
-        accountsReceivable: toStr(f.accountsReceivable),
-        accountsPayable: toStr(f.accountsPayable),
-        plPeriodEnd: f.asOf ? String(f.asOf) : null,
+        cashOnHand: toStr(merged.cash),
+        accountsReceivable: toStr(merged.accountsReceivable),
+        accountsPayable: toStr(merged.accountsPayable),
+        plPeriodEnd: asOf ? String(asOf) : null,
         realmId: "accountant-upload",
         dataGaps: dataGaps as unknown,
         confidence,
         raw: { docType: "balance_sheet", balanceSheet, fileName: req.body?.fileName ?? null } as unknown,
       });
-      res.json({ success: true, snapshotId: snap.id, dataGaps, confidence });
+      const entityKey = `Balance Sheet ${asOf ?? ""}`.trim();
+      if (decisions.length) {
+        await storage.createDataReconciliationLog(decisions.map((d) => ({
+          dataType: "balance_sheet", entityKey, action: d.action, field: d.field ?? null,
+          oldValue: d.oldValue ?? null, newValue: d.newValue ?? null, reason: d.reason, source,
+        })));
+      }
+      const summary = decisions.reduce((a: any, d) => { a[d.action] = (a[d.action] || 0) + 1; return a; }, {});
+      res.json({ success: true, snapshotId: snap.id, dataGaps, confidence, reconciliation: decisions.slice(0, 50), summary });
     } catch (error: any) {
       console.error('[CIPH.R] Apply balance sheet error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to apply balance sheet' });

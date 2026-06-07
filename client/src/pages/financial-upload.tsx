@@ -110,7 +110,8 @@ export default function FinancialUpload() {
         if (!bs) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-balance-sheet", { fields: bs, loans: bs.loans, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
         if (!json.success) throw new Error(json.error || "Apply failed.");
-        toast({ title: "Applied", description: "Balance sheet is now the live position on the Finances tab." });
+        const bsS = json.summary || {};
+        toast({ title: "Applied", description: `Balance sheet reconciled — ${bsS.UPDATED || 0} updated, ${bsS.ADDED || 0} added, ${bsS.KEPT || 0} kept (nothing wiped).` });
       } else if (docType === "ad_spend") {
         if (!ad) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-ad-spend", { fields: ad, dataGaps: meta?.dataGaps, fileName: meta?.fileName })).json();

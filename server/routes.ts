@@ -23616,6 +23616,55 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Data Integrity & Sync Health — one read-only view of the whole
+  // reconciliation system: recent keep/change/add/disregard decisions, the
+  // Extensiv guard-skip alerts, the "already bitten" suspect count, and each
+  // integration's last sync. Makes the invisible visible. Honest: 'none' states,
+  // never invented.
+  app.get("/api/finances/data-health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      const [logEntries, integrations, items, velocity, sysLogs] = await Promise.all([
+        storage.getDataReconciliationLog(60).catch(() => [] as any[]),
+        storage.getAllIntegrationConfigs(userId).catch(() => [] as any[]),
+        storage.getAllItems().catch(() => [] as any[]),
+        storage.getSkuSalesVelocity(30).catch(() => [] as any[]),
+        storage.getAllSystemLogs({ type: "SYNC" }).catch(() => [] as any[]),
+      ]);
+
+      const actionCounts: Record<string, number> = {};
+      for (const e of logEntries as any[]) actionCounts[e.action] = (actionCounts[e.action] || 0) + 1;
+
+      const guardSkips = (sysLogs as any[])
+        .filter((l) => l.code === "EXTENSIV_GUARD_SKIP")
+        .slice(0, 10)
+        .map((l) => ({ message: l.message, createdAt: l.createdAt }));
+
+      const soldRecently = new Set<string>();
+      for (const v of velocity as any[]) if (v.unitsSold > 0) soldRecently.add(v.sku);
+      const suspectCount = (items as any[]).filter((i) => i.type === "finished_product" && (i.pivotQty ?? 0) <= 0 && soldRecently.has(i.sku)).length;
+
+      const syncStatus = (integrations as any[])
+        .map((c) => ({ provider: c.provider, enabled: c.isEnabled, lastSyncAt: c.lastSyncAt ?? null, lastSyncStatus: c.lastSyncStatus ?? null }))
+        .sort((a, b) => String(a.provider).localeCompare(String(b.provider)));
+
+      res.json({
+        success: true,
+        actionCounts,
+        totalDecisions: (logEntries as any[]).length,
+        recentDecisions: (logEntries as any[]).slice(0, 25).map((e) => ({
+          dataType: e.dataType, entityKey: e.entityKey, action: e.action, field: e.field ?? null, reason: e.reason, source: e.source ?? null, createdAt: e.createdAt,
+        })),
+        guardSkips,
+        suspectCount,
+        syncStatus,
+      });
+    } catch (error: any) {
+      console.error('[CIPH.R] Data health error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load data health' });
+    }
+  });
+
   app.post("/api/financial-upload/apply", requireAuth, async (req: Request, res: Response) => {
     try {
       const months: any[] = Array.isArray(req.body?.months) ? req.body.months : [];

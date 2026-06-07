@@ -8,6 +8,7 @@ import { InventoryAnticipationCard } from "@/components/inventory-anticipation-c
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
+import { DataHealthCard } from "@/components/data-health-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
 
 /**
@@ -210,6 +211,9 @@ export default function Finances() {
 
           {/* Unified Sales & Ad Performance Overview (merge engine) */}
           <UnifiedPerformanceCard />
+
+          {/* Data Integrity & Sync Health (reconciliation visibility) */}
+          <DataHealthCard />
 
           {/* Inventory spend anticipation */}
           <InventoryAnticipationCard />

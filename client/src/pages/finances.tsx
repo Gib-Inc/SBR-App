@@ -24,7 +24,7 @@ interface MonthlyRow {
   netIncome: string | null;
   expenseCategories: Record<string, number> | null;
 }
-interface LoanLine { name: string; balance: number | null; term?: string | null; }
+interface LoanLine { name: string; balance: number | null; term?: string | null; rate?: number | null; }
 interface BalanceSheet {
   asOf: string; cash: number | null; accountsReceivable: number | null; accountsPayable: number | null;
   inventory: number | null; creditCards: number | null; shortTermNotes: number | null; salesTaxToPay: number | null;
@@ -232,19 +232,34 @@ export default function Finances() {
                   <div><div className="text-xs text-muted-foreground">Total Liabilities</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalLiabilities)}</div></div>
                   <div><div className="text-xs text-muted-foreground">Total Equity</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalEquity)}</div></div>
                 </div>
-                {bs.loans && bs.loans.length > 0 && (
+                {bs.loans && bs.loans.length > 0 && (() => {
+                  const rated = bs.loans!.filter((l) => l.rate != null && (l.balance ?? 0) > 0);
+                  const wairBase = rated.reduce((s, l) => s + (l.balance ?? 0), 0);
+                  const wair = wairBase > 0 ? rated.reduce((s, l) => s + (l.balance ?? 0) * (l.rate as number), 0) / wairBase : null;
+                  const rateTone = (r?: number | null) => r == null ? "" : r >= 0.25 ? "text-red-600 dark:text-red-400" : r >= 0.12 ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+                  return (
                   <div className="mt-4">
-                    <div className="text-xs font-medium text-muted-foreground mb-1">Named loans &amp; notes ({bs.loans.length})</div>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-xs font-medium text-muted-foreground">Named loans &amp; notes ({bs.loans!.length})</div>
+                      {wair != null && (
+                        <div className="text-xs" data-testid="loan-wair">Blended rate (WAIR): <span className={`font-semibold ${rateTone(wair)}`}>{(wair * 100).toFixed(2)}%</span></div>
+                      )}
+                    </div>
                     <div className="rounded-lg border divide-y">
-                      {bs.loans.slice().sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0)).map((l, i) => (
+                      {bs.loans!.slice().sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0)).map((l, i) => (
                         <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm" data-testid={`debt-loan-${i}`}>
                           <span>{l.name}{l.term ? <span className="text-xs text-muted-foreground"> · {l.term}-term</span> : ""}</span>
-                          <span className="tabular-nums font-medium">{fmt(l.balance)}</span>
+                          <span className="flex items-center gap-2">
+                            {l.rate != null && <span className={`text-xs tabular-nums ${rateTone(l.rate)}`}>{(l.rate * 100).toFixed(2)}%</span>}
+                            <span className="tabular-nums font-medium w-20 text-right">{fmt(l.balance)}</span>
+                          </span>
                         </div>
                       ))}
                     </div>
+                    {wair != null && <p className="text-[11px] text-muted-foreground mt-1">Weighted by balance across {rated.length} rated note(s). High-rate facilities (≥25%) in red are the first to refinance/retire.</p>}
                   </div>
-                )}
+                  );
+                })()}
               </CardContent>
             </Card>
           )}

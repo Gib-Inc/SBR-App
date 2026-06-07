@@ -2,8 +2,26 @@ import { describe, it, expect } from "vitest";
 import {
   mergeAdSpendByPlatform,
   computeUnifiedPerformance,
+  normalizeAdPlatform,
   type UnifiedInput,
 } from "./unified-performance-service";
+
+describe("normalizeAdPlatform", () => {
+  it("maps real ad platforms to canonical keys", () => {
+    expect(normalizeAdPlatform("GOOGLE")).toBe("GOOGLE");
+    expect(normalizeAdPlatform("google_ads")).toBe("GOOGLE");
+    expect(normalizeAdPlatform("FB")).toBe("META");
+    expect(normalizeAdPlatform("facebook")).toBe("META");
+    expect(normalizeAdPlatform("IG")).toBe("META");
+    expect(normalizeAdPlatform("bing")).toBe("MICROSOFT");
+    expect(normalizeAdPlatform("Amazon")).toBe("AMAZON");
+  });
+  it("returns null for traffic sources (never mislabeled as ad platforms)", () => {
+    for (const t of ["DIRECT", "NOT SET", "YAHOO", "DUCKDUCKGO", "youtube.com", "reddit.com", ""]) {
+      expect(normalizeAdPlatform(t)).toBeNull();
+    }
+  });
+});
 
 describe("mergeAdSpendByPlatform — per-platform precedence", () => {
   it("live wins; uploaded only fills platforms with no live data (no double-count)", () => {

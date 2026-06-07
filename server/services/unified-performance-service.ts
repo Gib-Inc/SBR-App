@@ -65,6 +65,25 @@ export interface UnifiedView {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
+ * Map a raw ad_metrics_daily.platform value to a canonical AD platform, or null
+ * if it is a traffic source (DIRECT, NOT SET, YAHOO, DUCKDUCKGO, organic
+ * YOUTUBE/REDDIT/IG, etc.) rather than paid media. Mirrors the Finances overview
+ * normalizer so the unified view never mislabels a traffic source as an ad
+ * platform. ad_metrics_daily is polluted with analytics traffic rows (spend 0),
+ * which would otherwise show as $0 "live" platforms.
+ */
+export function normalizeAdPlatform(raw: string): string | null {
+  const s = (raw || "").toLowerCase();
+  if (s.includes("google")) return "GOOGLE";
+  if (s.includes("meta") || s === "fb" || s.includes("facebook") || s === "ig" || s.includes("instagram")) return "META";
+  if (s.includes("amazon")) return "AMAZON";
+  if (s.includes("pinterest")) return "PINTEREST";
+  if (s.includes("microsoft") || s.includes("bing")) return "MICROSOFT";
+  if (s.includes("tiktok")) return "TIKTOK";
+  return null; // traffic source, not a paid-ad platform
+}
+
+/**
  * Merge live + uploaded ad spend with per-platform precedence.
  * Live wins; uploaded fills only platforms with no live row in the window.
  */
@@ -217,7 +236,8 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
   try {
     const rows = await storage.getAdMetricsInRange(start, end);
     for (const m of rows as any[]) {
-      const p = String(m.platform || "OTHER").toUpperCase();
+      const p = normalizeAdPlatform(String(m.platform || ""));
+      if (!p) continue; // skip traffic-source rows (DIRECT, NOT SET, …) — not paid ads
       const cur = live[p] || { spend: 0, impressions: 0, clicks: 0 };
       cur.spend += Number(m.spend) || 0;
       cur.impressions = (cur.impressions || 0) + (Number(m.impressions) || 0);

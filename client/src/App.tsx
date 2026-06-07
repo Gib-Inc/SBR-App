@@ -59,6 +59,7 @@ import InHouseShipping from "@/pages/in-house-shipping";
 import Scan from "@/pages/scan";
 import SupplierIntel from "@/pages/supplier-intel";
 import AdUploadPage from "@/pages/ad-upload";
+import FinancialUpload from "@/pages/financial-upload";
 
 function UserMenu() {
   const { user, logout } = useAuth();
@@ -164,6 +165,7 @@ function AuthenticatedApp() {
                     <Route path="/log-order" component={LogOrder} />
                     <Route path="/in-house-shipping" component={InHouseShipping} />
                     <Route path="/upload" component={AdUploadPage} />
+                    <Route path="/financial-upload" component={FinancialUpload} />
                     <Route path="/app-flow" component={AppFlow} />
                     <Route path="/settings" component={Settings} />
                     <Route component={NotFound} />

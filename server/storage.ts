@@ -99,6 +99,8 @@ import {
   type InsertFinancialRunwayForecast,
   type MonthlyFinancial,
   type InsertMonthlyFinancial,
+  type FinancialDiscrepancy,
+  type InsertFinancialDiscrepancy,
   type DailySalesSnapshot,
   type InsertDailySalesSnapshot,
   type AdPlatformConfig,
@@ -680,6 +682,9 @@ export interface IStorage {
   createMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial>;
   getMonthlyFinancials(): Promise<MonthlyFinancial[]>;
   countMonthlyFinancials(): Promise<number>;
+  upsertMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial>;
+  createFinancialDiscrepancy(d: InsertFinancialDiscrepancy): Promise<FinancialDiscrepancy>;
+  getFinancialDiscrepancies(): Promise<FinancialDiscrepancy[]>;
   updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null>;
 
   // Daily Sales Snapshots (for LLM trend analysis)
@@ -3799,6 +3804,15 @@ export class MemStorage implements IStorage {
   }
   async countMonthlyFinancials(): Promise<number> {
     return 0;
+  }
+  async upsertMonthlyFinancial(_m: InsertMonthlyFinancial): Promise<MonthlyFinancial> {
+    throw new Error('Monthly financials not supported in MemStorage');
+  }
+  async createFinancialDiscrepancy(_d: InsertFinancialDiscrepancy): Promise<FinancialDiscrepancy> {
+    throw new Error('Financial discrepancies not supported in MemStorage');
+  }
+  async getFinancialDiscrepancies(): Promise<FinancialDiscrepancy[]> {
+    return [];
   }
 
   async updateQuickbooksBill(_id: string, _bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {
@@ -7566,6 +7580,25 @@ export class PostgresStorage implements IStorage {
   async countMonthlyFinancials(): Promise<number> {
     const r = await this.db.select({ c: count() }).from(schema.monthlyFinancials);
     return Number(r[0]?.c ?? 0);
+  }
+  async upsertMonthlyFinancial(m: InsertMonthlyFinancial): Promise<MonthlyFinancial> {
+    const { month, ...rest } = m;
+    const result = await this.db
+      .insert(schema.monthlyFinancials)
+      .values(m)
+      .onConflictDoUpdate({ target: schema.monthlyFinancials.month, set: rest })
+      .returning();
+    return result[0];
+  }
+  async createFinancialDiscrepancy(d: InsertFinancialDiscrepancy): Promise<FinancialDiscrepancy> {
+    const result = await this.db.insert(schema.financialDiscrepancies).values(d).returning();
+    return result[0];
+  }
+  async getFinancialDiscrepancies(): Promise<FinancialDiscrepancy[]> {
+    return await this.db
+      .select()
+      .from(schema.financialDiscrepancies)
+      .orderBy(desc(schema.financialDiscrepancies.createdAt));
   }
 
   async updateQuickbooksBill(id: string, bill: Partial<InsertQuickbooksBill>): Promise<QuickbooksBill | null> {

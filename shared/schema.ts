@@ -2248,6 +2248,22 @@ export const insertMonthlyFinancialSchema = createInsertSchema(monthlyFinancials
 export type InsertMonthlyFinancial = typeof monthlyFinancials.$inferInsert;
 export type MonthlyFinancial = typeof monthlyFinancials.$inferSelect;
 
+// CIPH.R — discrepancies the accountant reports from the upload page.
+export const financialDiscrepancies = pgTable("financial_discrepancies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reportedBy: text("reported_by"), // name/email entered by the reporter
+  documentName: text("document_name"), // file/period the note is about
+  message: text("message").notNull(),
+  status: text("status").notNull().default("OPEN"), // OPEN | RESOLVED
+  createdAt: timestamp("created_at").notNull().default(sql`now()`),
+}, (table) => ({
+  createdAtIdx: index("financial_discrepancies_created_at_idx").on(table.createdAt),
+}));
+
+export const insertFinancialDiscrepancySchema = createInsertSchema(financialDiscrepancies).omit({ id: true, createdAt: true });
+export type InsertFinancialDiscrepancy = typeof financialDiscrepancies.$inferInsert;
+export type FinancialDiscrepancy = typeof financialDiscrepancies.$inferSelect;
+
 // Daily Sales Snapshots for LLM trend analysis
 // Aggregated daily totals (not per-SKU) for answering "sales up/down X%" questions
 export const dailySalesSnapshots = pgTable("daily_sales_snapshots", {

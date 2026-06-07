@@ -156,6 +156,18 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "monthly_financials.month_idx",
     sql: `CREATE UNIQUE INDEX IF NOT EXISTS monthly_financials_month_idx ON monthly_financials (month)`,
   },
+  // CIPH.R — accountant-reported discrepancies from the upload page.
+  {
+    name: "financial_discrepancies.table",
+    sql: `CREATE TABLE IF NOT EXISTS financial_discrepancies (
+            id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+            reported_by text,
+            document_name text,
+            message text NOT NULL,
+            status text NOT NULL DEFAULT 'OPEN',
+            created_at timestamp NOT NULL DEFAULT now()
+          )`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

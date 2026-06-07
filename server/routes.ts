@@ -23356,6 +23356,69 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — accountant financial-document uploader (Monthly P&L .xlsx).
+  // parse = extract for review (no write); apply = upsert confirmed months.
+  app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded." });
+      const { parsePLWorkbook } = await import("./services/pl-xlsx-parser");
+      const result = parsePLWorkbook(req.file.buffer);
+      if (!result.ok) return res.status(422).json({ success: false, error: result.error });
+      res.json({ success: true, ...result, fileName: req.file.originalname });
+    } catch (error: any) {
+      console.error('[CIPH.R] Financial upload parse error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to parse file' });
+    }
+  });
+
+  app.post("/api/financial-upload/apply", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const months: any[] = Array.isArray(req.body?.months) ? req.body.months : [];
+      if (!months.length) return res.status(400).json({ success: false, error: "No months to apply." });
+      const toStr = (v: any) => (v == null ? null : String(v));
+      let applied = 0;
+      for (const m of months) {
+        if (!m?.month) continue;
+        await storage.upsertMonthlyFinancial({
+          month: String(m.month),
+          totalIncome: toStr(m.totalIncome), totalCogs: toStr(m.totalCogs), grossProfit: toStr(m.grossProfit),
+          totalExpenses: toStr(m.totalExpenses), netOperatingIncome: toStr(m.netOperatingIncome), netIncome: toStr(m.netIncome),
+          expenseCategories: (m.expenseCategories ?? null) as unknown, source: "accountant_upload",
+        });
+        applied++;
+      }
+      res.json({ success: true, applied });
+    } catch (error: any) {
+      console.error('[CIPH.R] Financial upload apply error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to apply financials' });
+    }
+  });
+
+  app.post("/api/financial-upload/discrepancy", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { message, reportedBy, documentName } = req.body || {};
+      if (!message || !String(message).trim()) return res.status(400).json({ success: false, error: "A message is required." });
+      const d = await storage.createFinancialDiscrepancy({
+        message: String(message).trim(),
+        reportedBy: reportedBy ? String(reportedBy) : null,
+        documentName: documentName ? String(documentName) : null,
+        status: "OPEN",
+      });
+      res.json({ success: true, discrepancy: d });
+    } catch (error: any) {
+      console.error('[CIPH.R] Discrepancy report error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to record discrepancy' });
+    }
+  });
+
+  app.get("/api/financial-upload/discrepancies", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      res.json({ success: true, discrepancies: await storage.getFinancialDiscrepancies() });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || 'Failed to load discrepancies' });
+    }
+  });
+
   // ============================================================================
   // SYSTEM LOGS (Unified logging for mismatches and external events)
   // ============================================================================

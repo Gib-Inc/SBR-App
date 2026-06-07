@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { UploadCloud, CheckCircle2, AlertTriangle, FileSpreadsheet, MessageSquareWarning, FileText, Landmark, Banknote } from "lucide-react";
+import { UploadCloud, CheckCircle2, AlertTriangle, FileSpreadsheet, MessageSquareWarning, FileText, Landmark, Banknote, Megaphone } from "lucide-react";
 
 /**
  * CIPH.R — focused financial-document uploader for the accountant.
@@ -17,7 +17,7 @@ import { UploadCloud, CheckCircle2, AlertTriangle, FileSpreadsheet, MessageSquar
  * Plus a discrepancy box to flag anything that looks off.
  */
 
-type DocType = "pl_xlsx" | "balance_sheet" | "bank_statement";
+type DocType = "pl_xlsx" | "balance_sheet" | "bank_statement" | "ad_spend";
 
 interface ParsedMonth {
   month: string;
@@ -39,6 +39,11 @@ interface BankFields {
   accountName: string | null; bankName: string | null; statementPeriodStart: string | null; statementPeriodEnd: string | null;
   openingBalance: number | null; closingBalance: number | null; totalDeposits: number | null; totalWithdrawals: number | null;
 }
+interface AdSpendFields {
+  platform: string; periodStart: string | null; periodEnd: string | null;
+  spend: number | null; impressions: number | null; clicks: number | null;
+  conversions: number | null; revenue: number | null; currency: string; rowCount: number; status: string;
+}
 
 const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
 
@@ -46,6 +51,7 @@ const DOC_TYPES: { id: DocType; label: string; icon: any; accept: string; hint: 
   { id: "pl_xlsx", label: "Monthly P&L", icon: FileSpreadsheet, accept: ".xlsx,.xls", hint: "QuickBooks Profit & Loss export (.xlsx)" },
   { id: "balance_sheet", label: "Balance Sheet", icon: Landmark, accept: ".pdf,.xlsx,.xls,image/*", hint: "PDF or .xlsx — pulls cash, debt buckets, and each named loan" },
   { id: "bank_statement", label: "Bank Statement", icon: Banknote, accept: ".pdf,image/*", hint: "PDF — pulls the ending balance to update cash on hand" },
+  { id: "ad_spend", label: "Ad Spend Report", icon: Megaphone, accept: ".csv,.xlsx,.xls", hint: "Meta/Google CSV or XLSX — spend, impressions, clicks for the period" },
 ];
 
 export default function FinancialUpload() {
@@ -58,13 +64,14 @@ export default function FinancialUpload() {
   const [months, setMonths] = useState<ParsedMonth[] | null>(null);
   const [bs, setBs] = useState<BalanceSheetFields | null>(null);
   const [bank, setBank] = useState<BankFields | null>(null);
+  const [ad, setAd] = useState<AdSpendFields | null>(null);
   const [meta, setMeta] = useState<{ fileName?: string; detectedFormat?: string; warnings?: string[]; dataGaps?: string[]; confidence?: number } | null>(null);
 
   const [reporter, setReporter] = useState("");
   const [discrepancy, setDiscrepancy] = useState("");
   const [discSent, setDiscSent] = useState(false);
 
-  const reset = () => { setMonths(null); setBs(null); setBank(null); setMeta(null); setApplied(false); };
+  const reset = () => { setMonths(null); setBs(null); setBank(null); setAd(null); setMeta(null); setApplied(false); };
   const pickType = (t: DocType) => { setDocType(t); reset(); };
 
   const onFile = async (file: File) => {
@@ -79,6 +86,7 @@ export default function FinancialUpload() {
       setMeta({ fileName: json.fileName, detectedFormat: json.detectedFormat, warnings: json.warnings, dataGaps: json.dataGaps, confidence: json.confidence });
       if (docType === "pl_xlsx") setMonths(json.months);
       else if (docType === "balance_sheet") setBs(json.fields);
+      else if (docType === "ad_spend") setAd(json.fields);
       else setBank(json.fields);
     } catch (e: any) {
       toast({ title: "Couldn't read that file", description: e.message, variant: "destructive" });
@@ -101,6 +109,11 @@ export default function FinancialUpload() {
         json = await (await apiRequest("POST", "/api/financial-upload/apply-balance-sheet", { fields: bs, loans: bs.loans, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
         if (!json.success) throw new Error(json.error || "Apply failed.");
         toast({ title: "Applied", description: "Balance sheet is now the live position on the Finances tab." });
+      } else if (docType === "ad_spend") {
+        if (!ad) return;
+        json = await (await apiRequest("POST", "/api/financial-upload/apply-ad-spend", { fields: ad, dataGaps: meta?.dataGaps, fileName: meta?.fileName })).json();
+        if (!json.success) throw new Error(json.error || "Apply failed.");
+        toast({ title: "Applied", description: `${ad.platform} ad spend (${fmt(ad.spend)}) saved — it now feeds Unified Performance.` });
       } else {
         if (!bank) return;
         json = await (await apiRequest("POST", "/api/financial-upload/apply-bank-statement", { fields: bank, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
@@ -131,7 +144,7 @@ export default function FinancialUpload() {
   };
 
   const active = DOC_TYPES.find((d) => d.id === docType)!;
-  const hasReview = (docType === "pl_xlsx" && months) || (docType === "balance_sheet" && bs) || (docType === "bank_statement" && bank);
+  const hasReview = (docType === "pl_xlsx" && months) || (docType === "balance_sheet" && bs) || (docType === "bank_statement" && bank) || (docType === "ad_spend" && ad);
 
   return (
     <div className="mx-auto max-w-3xl p-6 space-y-5">
@@ -254,6 +267,20 @@ export default function FinancialUpload() {
                 <div><div className="text-xs text-muted-foreground">Closing Balance</div><div className="font-semibold tabular-nums text-green-600 dark:text-green-400">{fmt(bank.closingBalance)}</div></div>
                 <div><div className="text-xs text-muted-foreground">Total Deposits</div><div className="font-semibold tabular-nums">{fmt(bank.totalDeposits)}</div></div>
                 <div><div className="text-xs text-muted-foreground">Total Withdrawals</div><div className="font-semibold tabular-nums">{fmt(bank.totalWithdrawals)}</div></div>
+              </div>
+            )}
+
+            {/* Ad spend review */}
+            {docType === "ad_spend" && ad && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div><div className="text-xs text-muted-foreground">Platform</div><div className="font-medium">{ad.platform}</div></div>
+                <div><div className="text-xs text-muted-foreground">Period</div><div className="font-medium">{ad.periodStart || "—"}{ad.periodEnd && ad.periodEnd !== ad.periodStart ? ` → ${ad.periodEnd}` : ""}</div></div>
+                <div><div className="text-xs text-muted-foreground">Rows parsed</div><div className="font-medium tabular-nums">{ad.rowCount}</div></div>
+                <div><div className="text-xs text-muted-foreground">Currency</div><div className="font-medium">{ad.currency}</div></div>
+                <div><div className="text-xs text-muted-foreground">Spend</div><div className="font-semibold tabular-nums text-orange-600 dark:text-orange-400">{fmt(ad.spend)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Impressions</div><div className="font-semibold tabular-nums">{ad.impressions == null ? "—" : ad.impressions.toLocaleString()}</div></div>
+                <div><div className="text-xs text-muted-foreground">Clicks</div><div className="font-semibold tabular-nums">{ad.clicks == null ? "—" : ad.clicks.toLocaleString()}</div></div>
+                <div><div className="text-xs text-muted-foreground">Platform revenue</div><div className="font-semibold tabular-nums">{fmt(ad.revenue)}</div></div>
               </div>
             )}
 

@@ -7,6 +7,7 @@ import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { InventoryAnticipationCard } from "@/components/inventory-anticipation-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
+import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
 
 /**
@@ -196,6 +197,9 @@ export default function Finances() {
               </Card>
             );
           })()}
+
+          {/* Unified Sales & Ad Performance Overview (merge engine) */}
+          <UnifiedPerformanceCard />
 
           {/* Inventory spend anticipation */}
           <InventoryAnticipationCard />

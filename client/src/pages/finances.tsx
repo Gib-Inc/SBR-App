@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
+import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
 
 /**
@@ -184,6 +185,9 @@ export default function Finances() {
               </Card>
             );
           })()}
+
+          {/* Profit & savings playground */}
+          <ProfitPlaygroundCard monthly={monthly} cash={cash} />
 
           {/* Debt stack */}
           {bs && (

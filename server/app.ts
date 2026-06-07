@@ -199,6 +199,18 @@ export default async function runApp(
     console.error("[Finances Seed] Failed to run:", err?.message ?? err);
   }
 
+  // CIPH.R — arm the daily Windsor.ai ad-spend sync (keeps Google/Amazon spend
+  // accurate from each platform's API). No-op without WINDSOR_API_KEY. Fire-and-
+  // forget so a slow Windsor call doesn't block boot.
+  void (async () => {
+    try {
+      const { startWindsorSyncScheduler } = await import("./services/windsor-sync-service");
+      startWindsorSyncScheduler();
+    } catch (err: any) {
+      console.error("[Windsor Sync] Failed to arm:", err?.message ?? err);
+    }
+  })();
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

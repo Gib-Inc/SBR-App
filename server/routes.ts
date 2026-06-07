@@ -23622,6 +23622,56 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — Windsor auto-sync status (is the daily pull configured + when it ran).
+  app.get("/api/finances/windsor-sync-status", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getWindsorSyncStatus } = await import("./services/windsor-sync-service");
+      const status = getWindsorSyncStatus();
+      res.json({
+        success: true,
+        ...status,
+        note: status.keyPresent
+          ? "WINDSOR_API_KEY is set — ad spend auto-syncs from Windsor daily."
+          : "WINDSOR_API_KEY not set. Add it in Railway → SBR-App → Variables (Windsor dashboard → API) to enable the daily ad-spend sync. Until then, ad spend stays at the last ingested values.",
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message || 'Failed to load windsor sync status' });
+    }
+  });
+
+  // CIPH.R — RCA for the ad_metrics_daily Google inflation. The live feed stores
+  // GOOGLE rows broken out by (campaign, device, country); summing ALL of them
+  // double-counts (the app showed ~$25k vs Windsor's real ~$9k). This compares
+  // the sum of ALL rows to the sum over only the '_all' aggregate rows. Read-only.
+  app.get("/api/finances/ad-metrics-audit", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = Math.max(1, Math.min(120, parseInt(String(req.query.days ?? "30"), 10) || 30));
+      const start = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+      const end = new Date().toISOString().slice(0, 10);
+      const { normalizeAdPlatform } = await import("./services/unified-performance-service");
+      const rows = (await storage.getAdMetricsInRange(start, end)) as any[];
+      const g = rows.filter((r) => normalizeAdPlatform(String(r.platform || "")) === "GOOGLE");
+      const isAll = (v: any) => v == null || v === "_all";
+      const aggRows = g.filter((r) => isAll(r.campaign) && isAll(r.device) && isAll(r.country));
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      const sumAll = r2(g.reduce((s, r) => s + (Number(r.spend) || 0), 0));
+      const sumAgg = r2(aggRows.reduce((s, r) => s + (Number(r.spend) || 0), 0));
+      const distinctDates = new Set(g.map((r) => r.date)).size;
+      const ratio = sumAgg > 0 ? r2(sumAll / sumAgg) : null;
+      res.json({
+        success: true,
+        windowDays: days,
+        google: { rowCount: g.length, distinctDates, aggregateRowCount: aggRows.length, sumAllRows: sumAll, sumAggregateOnly: sumAgg, inflationRatio: ratio },
+        conclusion: aggRows.length > 0 && ratio && ratio > 1.5
+          ? `ad_metrics_daily double-counts GOOGLE dimension rows: summing ALL rows = $${sumAll} vs the '_all' aggregate rows = $${sumAgg} (${ratio}x). The Finances overview + Unified card now prefer Windsor, so the live feed no longer drives the displayed number — but the raw table is still inflated and should be de-duped at the sync layer.`
+          : `No clear dimension-row inflation in this window (all-rows $${sumAll} vs aggregate $${sumAgg}). Windsor remains the authoritative source.`,
+      });
+    } catch (error: any) {
+      console.error('[CIPH.R] Ad metrics audit error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to run ad metrics audit' });
+    }
+  });
+
   // CIPH.R Data Integrity & Sync Health — one read-only view of the whole
   // reconciliation system: recent keep/change/add/disregard decisions, the
   // Extensiv guard-skip alerts, the "already bitten" suspect count, and each

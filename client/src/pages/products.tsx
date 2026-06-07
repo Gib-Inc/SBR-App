@@ -1492,8 +1492,13 @@ function ReorderDialog({ isOpen, onClose, item, aiRecommendations = [] }: { isOp
         // Immediately send the PO
         const sendRes = await apiRequest("POST", `/api/purchase-orders/${newPO.id}/send`, {});
         if (!sendRes.ok) {
-          const sendErr = await sendRes.json();
-          throw new Error(sendErr.error || "PO created but failed to send email. Check supplier has a valid email address.");
+          const sendErr = await sendRes.json().catch(() => ({}));
+          return {
+            ...newPO,
+            emailSent: false,
+            sendError: sendErr.error || "PO created but failed to send email. Check supplier email and email service settings.",
+            emailConfigMissing: sendErr.code === "EMAIL_NOT_CONFIGURED",
+          };
         }
         const sentPO = await sendRes.json();
         return { ...sentPO, emailSent: true };
@@ -1518,6 +1523,14 @@ function ReorderDialog({ isOpen, onClose, item, aiRecommendations = [] }: { isOp
         toast({ 
           title: "Purchase order sent!", 
           description: result.emailTo ? `Email sent to ${result.emailTo}` : "Email sent to supplier",
+        });
+      } else if (result.sendError) {
+        toast({
+          title: result.emailConfigMissing ? "Purchase order created as draft" : "Purchase order created, email failed",
+          description: result.emailConfigMissing
+            ? "Email delivery is not configured in production. Add SendGrid settings, then resend from Purchase Orders."
+            : `${result.sendError} You can resend from Purchase Orders.`,
+          variant: result.emailConfigMissing ? "default" : "destructive",
         });
       } else {
         toast({ title: "Line added to PO" });

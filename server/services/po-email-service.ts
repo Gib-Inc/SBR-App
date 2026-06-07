@@ -48,6 +48,13 @@ export class PurchaseOrderEmailService {
     if (process.env.APP_BASE_URL) {
       return process.env.APP_BASE_URL;
     }
+    const railwayDomain =
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.RAILWAY_STATIC_URL ||
+      process.env.RAILWAY_SERVICE_SBR_APP_URL;
+    if (railwayDomain) {
+      return railwayDomain.startsWith("http") ? railwayDomain : `https://${railwayDomain}`;
+    }
     return 'http://localhost:5000';
   }
 

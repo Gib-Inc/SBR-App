@@ -102,6 +102,15 @@ interface CreatePODialogProps {
   };
 }
 
+const isBeforeCalendarDay = (candidate: Date, reference: Date) => {
+  const candidateDay = new Date(candidate.getFullYear(), candidate.getMonth(), candidate.getDate()).getTime();
+  const referenceDay = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate()).getTime();
+  return candidateDay < referenceDay;
+};
+
+const isEmailConfigError = (message?: string | null) =>
+  Boolean(message && /email service not configured|sendgrid.*not configured/i.test(message));
+
 export function CreatePODialog({
   open,
   onOpenChange,
@@ -277,25 +286,32 @@ export function CreatePODialog({
     );
   }, [stockInventoryItems, productSearchQuery]);
 
+  // Lines actually being ordered — qty=0 rows are pre-populated supplier items
+  // the user chose to skip and are excluded from validation + submit payload.
+  const orderedLines = useMemo(
+    () => lineItems.filter((l) => l.qtyOrdered > 0),
+    [lineItems],
+  );
+
   const subtotal = useMemo(() => {
-    return lineItems.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
-  }, [lineItems]);
+    return orderedLines.reduce((sum, line) => sum + (line.qtyOrdered * line.unitCost), 0);
+  }, [orderedLines]);
 
   // Calculate taxes from manual line item taxAmount inputs
   const lineTaxTotal = useMemo(() => {
-    return lineItems.reduce((sum, line) => sum + (line.taxAmount || 0), 0);
-  }, [lineItems]);
+    return orderedLines.reduce((sum, line) => sum + (line.taxAmount || 0), 0);
+  }, [orderedLines]);
 
   // Calculate taxes from line item tax rates (from QuickBooks)
   const calculatedTaxFromLines = useMemo(() => {
-    return lineItems.reduce((sum, line) => {
+    return orderedLines.reduce((sum, line) => {
       if (line.taxRate && line.taxRate > 0) {
         const lineSubtotal = line.qtyOrdered * line.unitCost;
         return sum + (lineSubtotal * line.taxRate / 100);
       }
       return sum;
     }, 0);
-  }, [lineItems]);
+  }, [orderedLines]);
 
   // Use line tax amounts first, then QB calculated tax, then manual input
   const effectiveTaxes = useMemo(() => {
@@ -313,18 +329,16 @@ export function CreatePODialog({
     return subtotal + shipping + effectiveTaxes;
   }, [subtotal, shippingCost, effectiveTaxes]);
 
-  // Lines actually being ordered — qty=0 rows are pre-populated supplier items
-  // the user chose to skip and are excluded from validation + submit payload.
-  const orderedLines = useMemo(
-    () => lineItems.filter((l) => l.qtyOrdered > 0),
-    [lineItems],
-  );
+  const expectedDateBeforeOrder = useMemo(() => {
+    return Boolean(expectedDate && isBeforeCalendarDay(expectedDate, orderDate));
+  }, [expectedDate, orderDate]);
 
   const isValid = useMemo(() => {
     if (!supplierId) return false;
     if (orderedLines.length === 0) return false;
+    if (expectedDateBeforeOrder) return false;
     return orderedLines.every(line => line.unitCost > 0);
-  }, [supplierId, orderedLines]);
+  }, [supplierId, orderedLines, expectedDateBeforeOrder]);
 
   const validateForm = useCallback(() => {
     const newErrors: Record<string, string> = {};
@@ -335,6 +349,9 @@ export function CreatePODialog({
     if (orderedLines.length === 0) {
       newErrors.lineItems = "Enter a quantity for at least one item";
     }
+    if (expectedDateBeforeOrder) {
+      newErrors.expectedDate = "Expected delivery must be on or after the order date";
+    }
     const invalidCostLines = orderedLines.filter(line => line.unitCost <= 0);
     if (invalidCostLines.length > 0) {
       newErrors.lineItems = "All ordered items must have a unit cost > 0";
@@ -342,7 +359,7 @@ export function CreatePODialog({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
-  }, [supplierId, orderedLines]);
+  }, [supplierId, orderedLines, expectedDateBeforeOrder]);
 
   const createAndSendMutation = useMutation({
     mutationFn: async () => {
@@ -399,7 +416,12 @@ export function CreatePODialog({
       if (!sendRes.ok) {
         const sendError = await sendRes.json().catch(() => ({}));
         // PO was created but send failed - still return success with warning
-        return { ...createdPO, sendError: sendError.error || "Email send failed" };
+        const sendErrorMessage = sendError.error || "Email send failed";
+        return {
+          ...createdPO,
+          sendError: sendErrorMessage,
+          emailConfigMissing: sendError.code === "EMAIL_NOT_CONFIGURED" || isEmailConfigError(sendErrorMessage),
+        };
       }
       
       const sendResult = await sendRes.json();
@@ -407,10 +429,13 @@ export function CreatePODialog({
     },
     onSuccess: (result: any) => {
       if (result.sendError) {
+        const emailConfigMissing = result.emailConfigMissing || isEmailConfigError(result.sendError);
         toast({
-          title: "PO Created (Email Failed)",
-          description: `PO ${result.poNumber} was created but email failed: ${result.sendError}. You can resend from the PO details.`,
-          variant: "destructive",
+          title: emailConfigMissing ? "PO Created as Draft" : "PO Created (Email Failed)",
+          description: emailConfigMissing
+            ? `PO ${result.poNumber} was created, but email delivery is not configured in production. Add SendGrid settings, then resend from PO details.`
+            : `PO ${result.poNumber} was created but email failed: ${result.sendError}. You can resend from the PO details.`,
+          variant: emailConfigMissing ? "default" : "destructive",
         });
       } else {
         toast({
@@ -687,6 +712,11 @@ export function CreatePODialog({
                       />
                     </PopoverContent>
                   </Popover>
+                  {errors.expectedDate && (
+                    <p className="text-xs text-destructive" data-testid="error-expected-date">
+                      {errors.expectedDate}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1009,7 +1039,9 @@ export function CreatePODialog({
 
               <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Subtotal ({lineItems.length} items)</span>
+                  <span className="text-muted-foreground">
+                    Subtotal ({orderedLines.length} {orderedLines.length === 1 ? "item" : "items"})
+                  </span>
                   <span data-testid="text-subtotal">{formatCurrency(subtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -1041,8 +1073,9 @@ export function CreatePODialog({
                 <span>
                   {!supplierId ? "Please select a supplier" : 
                    lineItems.length === 0 ? "Please add at least one line item" :
-                   lineItems.some(l => l.qtyOrdered < 1) ? "All line items must have quantity > 0" :
-                   lineItems.some(l => l.unitCost <= 0) ? "All line items must have unit cost > 0" :
+                   orderedLines.length === 0 ? "Enter a quantity for at least one item" :
+                   expectedDateBeforeOrder ? "Expected delivery must be on or after the order date" :
+                   orderedLines.some(l => l.unitCost <= 0) ? "All ordered items must have unit cost > 0" :
                    "Please complete all required fields"}
                 </span>
               </div>

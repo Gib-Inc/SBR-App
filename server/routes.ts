@@ -14684,6 +14684,29 @@ Notes: ${po.notes || 'None'}
     let createdPOId: string | null = null;
     try {
       const { lines, ...poData } = req.body;
+      const rawLines = Array.isArray(lines) ? lines : [];
+      const orderableLines = rawLines
+        .map((line: any) => ({
+          ...line,
+          qtyOrdered: Number(line.qtyOrdered ?? line.quantity),
+          unitCost: Number(line.unitCost),
+          taxAmount: Number(line.taxAmount) || 0,
+        }))
+        .filter((line: any) => Number.isFinite(line.qtyOrdered) && line.qtyOrdered > 0);
+
+      if (orderableLines.length === 0) {
+        return res.status(400).json({ error: "Enter a quantity for at least one purchase order line." });
+      }
+
+      for (let i = 0; i < orderableLines.length; i++) {
+        const line = orderableLines[i];
+        if (!line.itemId) {
+          return res.status(400).json({ error: `Line ${i + 1}: Item ID is required` });
+        }
+        if (!Number.isFinite(line.unitCost) || line.unitCost <= 0) {
+          return res.status(400).json({ error: `Line ${i + 1}: Unit cost must be greater than 0` });
+        }
+      }
 
       // Auto-generate PO number if not provided
       if (!poData.poNumber) {
@@ -14709,6 +14732,18 @@ Notes: ${po.notes || 'None'}
       if (poData.expectedDate && typeof poData.expectedDate === 'string') {
         poData.expectedDate = new Date(poData.expectedDate);
       }
+      if (
+        poData.orderDate instanceof Date &&
+        poData.expectedDate instanceof Date &&
+        !Number.isNaN(poData.orderDate.getTime()) &&
+        !Number.isNaN(poData.expectedDate.getTime())
+      ) {
+        const orderDay = new Date(poData.orderDate.getFullYear(), poData.orderDate.getMonth(), poData.orderDate.getDate()).getTime();
+        const expectedDay = new Date(poData.expectedDate.getFullYear(), poData.expectedDate.getMonth(), poData.expectedDate.getDate()).getTime();
+        if (expectedDay < orderDay) {
+          return res.status(400).json({ error: "Expected delivery must be on or after the order date." });
+        }
+      }
       
       const validatedPO = insertPurchaseOrderSchema.parse(poData);
       const purchaseOrder = await storage.createPurchaseOrder(validatedPO);
@@ -14726,10 +14761,11 @@ Notes: ${po.notes || 'None'}
         stockGapPercent?: number;
       }> = [];
       
-      if (lines && Array.isArray(lines)) {
-        for (const line of lines) {
+      if (orderableLines.length > 0) {
+        for (const line of orderableLines) {
           const item = await storage.getItem(line.itemId);
           const location = item?.type === 'finished_product' ? 'PIVOT' : null;
+          const qtyOrdered = Math.floor(Number(line.qtyOrdered));
           
           // Use explicitly passed aiRecommendationId or fall back to latest recommendation
           let recommendationId = line.aiRecommendationId;
@@ -14745,8 +14781,8 @@ Notes: ${po.notes || 'None'}
                 recommendationId,
                 itemId: line.itemId,
                 sku: item?.sku || 'N/A',
-                recommendedQty: rec.recommendedQty || line.quantity,
-                orderedQty: line.quantity,
+                recommendedQty: rec.recommendedQty || qtyOrdered,
+                orderedQty: qtyOrdered,
                 riskLevel: rec.riskLevel ?? undefined,
                 daysUntilStockout: rec.daysUntilStockout ?? undefined,
                 stockGapPercent: rec.stockGapPercent ?? undefined,
@@ -14767,7 +14803,6 @@ Notes: ${po.notes || 'None'}
           
           const taxAmount = Math.round((Number(line.taxAmount) || 0) * 100) / 100;
           const unitCost = Number(line.unitCost) || 0;
-          const qtyOrdered = Number(line.quantity) || Number(line.qtyOrdered) || 1;
           const lineTotal = Math.round(qtyOrdered * unitCost * 100) / 100;
           // Per-line ETA arrives as a YYYY-MM-DD string; the line schema needs a Date.
           if (line.expectedArrivalDate && typeof line.expectedArrivalDate === 'string') {
@@ -14779,7 +14814,7 @@ Notes: ${po.notes || 'None'}
             purchaseOrderId: purchaseOrder.id,
             aiRecommendationId: recommendationId || null,
             recommendedQtyAtOrderTime: recommendedQty || null,
-            finalOrderedQty: line.quantity,
+            finalOrderedQty: qtyOrdered,
             // Ensure itemName and sku are properly set from item record
             itemName: line.itemName || item?.name || 'Unknown Item',
             sku: line.sku || item?.sku || null,
@@ -16548,10 +16583,13 @@ Notes: ${po.notes || 'None'}
           lastEmailStatus: 'FAILED',
           lastEmailError: emailResult.error || 'Unknown error',
         });
+
+        const emailNotConfigured = /email service not configured|sendgrid.*not configured/i.test(emailResult.error || "");
         
-        return res.status(400).json({ 
+        return res.status(emailNotConfigured ? 503 : 400).json({
           error: emailResult.error || "Failed to send email",
           emailStatus: 'FAILED',
+          code: emailNotConfigured ? "EMAIL_NOT_CONFIGURED" : "EMAIL_SEND_FAILED",
         });
       }
 

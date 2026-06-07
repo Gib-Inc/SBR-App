@@ -405,22 +405,19 @@ export async function handleOrderUpdated(
         payload.fulfillments
       );
       const previousStatus = existingOrder.status;
-      
-      // Status progression hierarchy (higher = more advanced)
-      const statusOrder: Record<string, number> = {
-        'DRAFT': 0,
-        'ORDERED': 1,
-        'SHIPPED': 2,
-        'DELIVERED': 3,
-        'CANCELLED': 4,  // Special case - can override anything
-        'REFUNDED': 5,   // Special case - can override anything
-      };
-      
-      // Guard against status downgrades (don't go backwards unless cancelled/refunded)
-      const previousRank = statusOrder[previousStatus] ?? 1;
-      const newRank = statusOrder[newStatus] ?? 1;
-      const shouldUpdate = newRank >= previousRank || newStatus === 'CANCELLED' || newStatus === 'REFUNDED';
-      
+
+      // Reconciliation guard: downgrade guard + newer-wins on same status, so a
+      // stale/re-delivered webhook can't overwrite fresher data. (Pure, tested:
+      // server/services/shopify-order-reconcile.ts.)
+      const { shouldApplyOrderUpdate } = await import('../services/shopify-order-reconcile');
+      const decision = shouldApplyOrderUpdate({
+        prevStatus: previousStatus,
+        newStatus,
+        prevUpdatedAt: (existingOrder as any).updatedAt ?? null,
+        incomingUpdatedAt: payload.updated_at ?? null,
+      });
+      const shouldUpdate = decision.apply;
+
       if (shouldUpdate) {
         // Extract deliveredAt from fulfillments if becoming delivered
         let deliveredAt: Date | undefined;
@@ -442,7 +439,7 @@ export async function handleOrderUpdated(
 
         console.log(`[Shopify Webhook] Updated order ${existingOrder.id} status: ${previousStatus} -> ${newStatus}`);
       } else {
-        console.log(`[Shopify Webhook] Skipped status downgrade for order ${existingOrder.id}: ${previousStatus} -> ${newStatus}`);
+        console.log(`[Shopify Webhook] Skipped order ${existingOrder.id} update — ${decision.reason}`);
       }
       
       return {

@@ -21,16 +21,18 @@ interface MonthlyRow {
   netIncome: string | null;
   expenseCategories: Record<string, number> | null;
 }
+interface LoanLine { name: string; balance: number | null; term?: string | null; }
 interface BalanceSheet {
-  asOf: string; cash: number; accountsReceivable: number; accountsPayable: number;
-  inventory: number; creditCards: number; shortTermNotes: number; salesTaxToPay: number;
-  totalLiabilities: number; totalEquity: number;
+  asOf: string; cash: number | null; accountsReceivable: number | null; accountsPayable: number | null;
+  inventory: number | null; creditCards: number | null; shortTermNotes: number | null; salesTaxToPay: number | null;
+  longTermLiabilities?: number | null; totalLiabilities: number | null; totalEquity: number | null;
+  loans?: LoanLine[]; source?: string;
 }
 interface AdChannel { channel: string; spend: number; }
-interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
+interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
 
 const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
-const fmt = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString();
+const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
 const fmtK = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v / 1000)).toLocaleString() + "K";
 const avg = (a: number[]) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 
@@ -69,7 +71,7 @@ export default function Finances() {
   const netInc = monthly.map((m) => n(m.netIncome));
   const last = monthly[monthly.length - 1];
   const burn3 = avg(netInc.slice(-3).map((x) => -x));
-  const cash = bs ? bs.cash : 0;
+  const cash = bs && bs.cash != null ? bs.cash : 0;
   const runwayMo = burn3 > 0 ? cash / burn3 : null;
   const ytdIdx = months.map((m, i) => (/2026/.test(m) ? i : -1)).filter((i) => i >= 0);
   const ytdRev = ytdIdx.reduce((s, i) => s + income[i], 0);
@@ -93,7 +95,7 @@ export default function Finances() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold flex items-center gap-2"><DollarSign className="h-5 w-5" /> Finances</h2>
-          <p className="text-xs text-muted-foreground">CIPH.R financial command center{bs ? ` · balance sheet as of ${bs.asOf}` : ""}{data?.balanceSheetSource === "accountant_seed" ? " · source: accountant export (QuickBooks live once connected)" : ""}</p>
+          <p className="text-xs text-muted-foreground">CIPH.R financial command center{bs ? ` · balance sheet as of ${bs.asOf}` : ""}{data?.balanceSheetSource === "accountant_seed" ? " · source: accountant export (QuickBooks live once connected)" : data?.balanceSheetSource === "accountant_upload" ? " · source: uploaded balance sheet" : ""}</p>
         </div>
         {bs && <Badge className={status.tone === "crit" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" : status.tone === "warn" ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" : "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"} data-testid="badge-company-health">{status.label}</Badge>}
       </div>
@@ -208,6 +210,19 @@ export default function Finances() {
                   <div><div className="text-xs text-muted-foreground">Total Liabilities</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalLiabilities)}</div></div>
                   <div><div className="text-xs text-muted-foreground">Total Equity</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(bs.totalEquity)}</div></div>
                 </div>
+                {bs.loans && bs.loans.length > 0 && (
+                  <div className="mt-4">
+                    <div className="text-xs font-medium text-muted-foreground mb-1">Named loans &amp; notes ({bs.loans.length})</div>
+                    <div className="rounded-lg border divide-y">
+                      {bs.loans.slice().sort((a, b) => (b.balance ?? 0) - (a.balance ?? 0)).map((l, i) => (
+                        <div key={i} className="flex items-center justify-between px-3 py-1.5 text-sm" data-testid={`debt-loan-${i}`}>
+                          <span>{l.name}{l.term ? <span className="text-xs text-muted-foreground"> · {l.term}-term</span> : ""}</span>
+                          <span className="tabular-nums font-medium">{fmt(l.balance)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

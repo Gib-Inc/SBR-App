@@ -23341,12 +23341,21 @@ Generate only the email body text, no subject line.`;
         .map(([channel, spend]) => ({ channel, spend: Math.round(spend * 100) / 100 }))
         .sort((a, b) => b.spend - a.spend);
 
+      // Prefer an uploaded balance sheet (stored in the latest snapshot's
+      // raw.balanceSheet, incl. named loans) over the static seed. Anti-
+      // hallucination: only switch sources when real fields came through.
+      const uploadedBS: any = (snapshot as any)?.raw?.balanceSheet ?? null;
+      const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
+      const balanceSheet = useUploaded ? uploadedBS : FINANCIAL_SEED.balanceSheet;
+      const balanceSheetSource = useUploaded ? (uploadedBS.source || "accountant_upload") : "accountant_seed";
+
       res.json({
         success: true,
         monthly,
         snapshot: snapshot ?? null,
-        balanceSheet: FINANCIAL_SEED.balanceSheet,
-        balanceSheetSource: "accountant_seed",
+        balanceSheet,
+        balanceSheetSource,
+        balanceSheetDataGaps: useUploaded ? ((snapshot as any)?.dataGaps ?? []) : [],
         adChannels,
         adChannelsWindowDays: 30,
       });
@@ -23368,15 +23377,35 @@ Generate only the email body text, no subject line.`;
     }
   });
 
-  // CIPH.R — accountant financial-document uploader (Monthly P&L .xlsx).
-  // parse = extract for review (no write); apply = upsert confirmed months.
+  // CIPH.R — accountant financial-document uploader.
+  // parse = extract for review (no write); apply = persist confirmed figures.
+  // docType: "pl_xlsx" (default) | "balance_sheet" | "bank_statement".
+  //   pl_xlsx       → xlsx P&L parser (months series)
+  //   balance_sheet → Claude-vision PDF or xlsx label-scan → buckets + loans
+  //   bank_statement→ Claude-vision PDF → opening/closing/deposits/withdrawals
+  // Vision docs require the Anthropic key from Settings → LLM Configuration.
   app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
     try {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded." });
+      const docType = String(req.body?.docType || "pl_xlsx");
+      const mime = req.file.mimetype || "application/octet-stream";
+
+      if (docType === "balance_sheet" || docType === "bank_statement") {
+        const settings = await storage.getSettings(req.session.userId!);
+        const apiKey = settings?.llmApiKey?.trim() || "";
+        const mod = await import("./services/financial-doc-parser");
+        const result = docType === "balance_sheet"
+          ? await mod.parseBalanceSheetDoc(req.file.buffer, mime, apiKey)
+          : await mod.parseBankStatementDoc(req.file.buffer, mime, apiKey);
+        if (!result.ok) return res.status(422).json({ success: false, error: result.error, dataGaps: result.dataGaps });
+        return res.json({ success: true, docType, fileName: req.file.originalname, ...result });
+      }
+
+      // default: Monthly P&L (.xlsx)
       const { parsePLWorkbook } = await import("./services/pl-xlsx-parser");
       const result = parsePLWorkbook(req.file.buffer);
       if (!result.ok) return res.status(422).json({ success: false, error: result.error });
-      res.json({ success: true, ...result, fileName: req.file.originalname });
+      res.json({ success: true, docType: "pl_xlsx", ...result, fileName: req.file.originalname });
     } catch (error: any) {
       console.error('[CIPH.R] Financial upload parse error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to parse file' });
@@ -23403,6 +23432,68 @@ Generate only the email body text, no subject line.`;
     } catch (error: any) {
       console.error('[CIPH.R] Financial upload apply error:', error);
       res.status(500).json({ success: false, error: error.message || 'Failed to apply financials' });
+    }
+  });
+
+  // Apply a reviewed Balance Sheet → write a new qb_financial_snapshots row.
+  // The full balance-sheet object (buckets + named loans) lives in raw.balanceSheet;
+  // the overview reads it as the live position, falling back to the seed otherwise.
+  app.post("/api/financial-upload/apply-balance-sheet", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const f = req.body?.fields;
+      if (!f || typeof f !== "object") return res.status(400).json({ success: false, error: "No balance-sheet fields to apply." });
+      const loans = Array.isArray(req.body?.loans) ? req.body.loans : (Array.isArray(f.loans) ? f.loans : []);
+      const dataGaps: string[] = Array.isArray(req.body?.dataGaps) ? req.body.dataGaps : [];
+      const confidence: number | null = typeof req.body?.confidence === "number" ? req.body.confidence : null;
+      const toStr = (v: any) => (v == null || v === "" ? null : String(v));
+      const balanceSheet = { ...f, loans, source: "accountant_upload" };
+      const snap = await storage.createQbFinancialSnapshot({
+        capturedAt: new Date(),
+        cashOnHand: toStr(f.cash),
+        accountsReceivable: toStr(f.accountsReceivable),
+        accountsPayable: toStr(f.accountsPayable),
+        plPeriodEnd: f.asOf ? String(f.asOf) : null,
+        realmId: "accountant-upload",
+        dataGaps: dataGaps as unknown,
+        confidence,
+        raw: { docType: "balance_sheet", balanceSheet, fileName: req.body?.fileName ?? null } as unknown,
+      });
+      res.json({ success: true, snapshotId: snap.id, dataGaps, confidence });
+    } catch (error: any) {
+      console.error('[CIPH.R] Apply balance sheet error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to apply balance sheet' });
+    }
+  });
+
+  // Apply a reviewed bank statement → new snapshot with cash = closing balance.
+  // Carries forward the prior balance-sheet position + AR/AP so a cash update
+  // doesn't wipe the rest of the books; records the statement in raw.bankStatement.
+  app.post("/api/financial-upload/apply-bank-statement", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const f = req.body?.fields;
+      if (!f || f.closingBalance == null) return res.status(400).json({ success: false, error: "A closing balance is required to apply." });
+      const prev = await storage.getLatestQbFinancialSnapshot();
+      const prevRaw: any = prev?.raw ?? {};
+      const prevBS: any = prevRaw?.balanceSheet ?? null;
+      const closing = String(f.closingBalance);
+      const carriedBS = prevBS
+        ? { ...prevBS, cash: f.closingBalance, asOf: f.statementPeriodEnd || prevBS.asOf }
+        : null;
+      const snap = await storage.createQbFinancialSnapshot({
+        capturedAt: new Date(),
+        cashOnHand: closing,
+        accountsReceivable: prev?.accountsReceivable ?? null,
+        accountsPayable: prev?.accountsPayable ?? null,
+        plPeriodEnd: f.statementPeriodEnd ? String(f.statementPeriodEnd) : null,
+        realmId: "accountant-upload",
+        dataGaps: (Array.isArray(req.body?.dataGaps) ? req.body.dataGaps : []) as unknown,
+        confidence: typeof req.body?.confidence === "number" ? req.body.confidence : null,
+        raw: { docType: "bank_statement", bankStatement: f, balanceSheet: carriedBS, fileName: req.body?.fileName ?? null } as unknown,
+      });
+      res.json({ success: true, snapshotId: snap.id, cashOnHand: closing });
+    } catch (error: any) {
+      console.error('[CIPH.R] Apply bank statement error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to apply bank statement' });
     }
   });
 

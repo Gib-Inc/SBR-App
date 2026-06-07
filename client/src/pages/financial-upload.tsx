@@ -5,14 +5,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { UploadCloud, CheckCircle2, AlertTriangle, FileSpreadsheet, MessageSquareWarning } from "lucide-react";
+import { UploadCloud, CheckCircle2, AlertTriangle, FileSpreadsheet, MessageSquareWarning, FileText, Landmark, Banknote } from "lucide-react";
 
 /**
  * CIPH.R — focused financial-document uploader for the accountant.
- * Upload a Monthly P&L (.xlsx) → review the extracted figures → apply to the app
- * (review-then-apply, so a misparse can't silently overwrite the books).
+ * Pick a document type, upload it, REVIEW the extracted figures, then apply.
+ * Review-then-apply so a misparse can't silently overwrite the books.
+ *  - Monthly P&L (.xlsx)      → months series
+ *  - Balance Sheet (PDF/.xlsx)→ buckets + named loans (Claude vision on PDF)
+ *  - Bank statement (PDF)     → opening/closing/deposits/withdrawals → cash
  * Plus a discrepancy box to flag anything that looks off.
  */
+
+type DocType = "pl_xlsx" | "balance_sheet" | "bank_statement";
 
 interface ParsedMonth {
   month: string;
@@ -22,30 +27,59 @@ interface ParsedMonth {
   netIncome: number | null;
   expenseCategories: Record<string, number>;
 }
+interface LoanLine { name: string; balance: number | null; term: string | null; }
+interface BalanceSheetFields {
+  asOf: string | null; basis: string | null; cash: number | null; accountsReceivable: number | null;
+  inventory: number | null; totalCurrentAssets: number | null; totalAssets: number | null;
+  accountsPayable: number | null; creditCards: number | null; salesTaxToPay: number | null;
+  shortTermNotes: number | null; longTermLiabilities: number | null; totalLiabilities: number | null;
+  totalEquity: number | null; loans: LoanLine[];
+}
+interface BankFields {
+  accountName: string | null; bankName: string | null; statementPeriodStart: string | null; statementPeriodEnd: string | null;
+  openingBalance: number | null; closingBalance: number | null; totalDeposits: number | null; totalWithdrawals: number | null;
+}
 
-const fmt = (v: number | null) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
+const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
+
+const DOC_TYPES: { id: DocType; label: string; icon: any; accept: string; hint: string }[] = [
+  { id: "pl_xlsx", label: "Monthly P&L", icon: FileSpreadsheet, accept: ".xlsx,.xls", hint: "QuickBooks Profit & Loss export (.xlsx)" },
+  { id: "balance_sheet", label: "Balance Sheet", icon: Landmark, accept: ".pdf,.xlsx,.xls,image/*", hint: "PDF or .xlsx — pulls cash, debt buckets, and each named loan" },
+  { id: "bank_statement", label: "Bank Statement", icon: Banknote, accept: ".pdf,image/*", hint: "PDF — pulls the ending balance to update cash on hand" },
+];
 
 export default function FinancialUpload() {
   const { toast } = useToast();
+  const [docType, setDocType] = useState<DocType>("pl_xlsx");
   const [parsing, setParsing] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [parsed, setParsed] = useState<ParsedMonth[] | null>(null);
-  const [meta, setMeta] = useState<{ fileName?: string; detectedFormat?: string; warnings?: string[] } | null>(null);
   const [applied, setApplied] = useState(false);
+
+  const [months, setMonths] = useState<ParsedMonth[] | null>(null);
+  const [bs, setBs] = useState<BalanceSheetFields | null>(null);
+  const [bank, setBank] = useState<BankFields | null>(null);
+  const [meta, setMeta] = useState<{ fileName?: string; detectedFormat?: string; warnings?: string[]; dataGaps?: string[]; confidence?: number } | null>(null);
+
   const [reporter, setReporter] = useState("");
   const [discrepancy, setDiscrepancy] = useState("");
   const [discSent, setDiscSent] = useState(false);
 
+  const reset = () => { setMonths(null); setBs(null); setBank(null); setMeta(null); setApplied(false); };
+  const pickType = (t: DocType) => { setDocType(t); reset(); };
+
   const onFile = async (file: File) => {
-    setParsing(true); setParsed(null); setApplied(false); setMeta(null);
+    setParsing(true); reset();
     try {
       const fd = new FormData();
       fd.append("file", file);
+      fd.append("docType", docType);
       const res = await fetch("/api/financial-upload/parse", { method: "POST", body: fd, credentials: "include" });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Could not parse the file.");
-      setParsed(json.months);
-      setMeta({ fileName: json.fileName, detectedFormat: json.detectedFormat, warnings: json.warnings });
+      setMeta({ fileName: json.fileName, detectedFormat: json.detectedFormat, warnings: json.warnings, dataGaps: json.dataGaps, confidence: json.confidence });
+      if (docType === "pl_xlsx") setMonths(json.months);
+      else if (docType === "balance_sheet") setBs(json.fields);
+      else setBank(json.fields);
     } catch (e: any) {
       toast({ title: "Couldn't read that file", description: e.message, variant: "destructive" });
     } finally {
@@ -54,14 +88,26 @@ export default function FinancialUpload() {
   };
 
   const apply = async () => {
-    if (!parsed) return;
     setApplying(true);
     try {
-      const res = await apiRequest("POST", "/api/financial-upload/apply", { months: parsed });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || "Apply failed.");
+      let json: any;
+      if (docType === "pl_xlsx") {
+        if (!months) return;
+        json = await (await apiRequest("POST", "/api/financial-upload/apply", { months })).json();
+        if (!json.success) throw new Error(json.error || "Apply failed.");
+        toast({ title: "Applied", description: `${json.applied} month(s) updated in the Finances tab.` });
+      } else if (docType === "balance_sheet") {
+        if (!bs) return;
+        json = await (await apiRequest("POST", "/api/financial-upload/apply-balance-sheet", { fields: bs, loans: bs.loans, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
+        if (!json.success) throw new Error(json.error || "Apply failed.");
+        toast({ title: "Applied", description: "Balance sheet is now the live position on the Finances tab." });
+      } else {
+        if (!bank) return;
+        json = await (await apiRequest("POST", "/api/financial-upload/apply-bank-statement", { fields: bank, dataGaps: meta?.dataGaps, confidence: meta?.confidence, fileName: meta?.fileName })).json();
+        if (!json.success) throw new Error(json.error || "Apply failed.");
+        toast({ title: "Applied", description: `Cash on hand updated to ${fmt(bank.closingBalance)}.` });
+      }
       setApplied(true);
-      toast({ title: "Applied", description: `${json.applied} month(s) updated in the Finances tab.` });
     } catch (e: any) {
       toast({ title: "Apply failed", description: e.message, variant: "destructive" });
     } finally {
@@ -84,58 +130,138 @@ export default function FinancialUpload() {
     }
   };
 
+  const active = DOC_TYPES.find((d) => d.id === docType)!;
+  const hasReview = (docType === "pl_xlsx" && months) || (docType === "balance_sheet" && bs) || (docType === "bank_statement" && bank);
+
   return (
     <div className="mx-auto max-w-3xl p-6 space-y-5">
       <div>
-        <h1 className="text-xl font-semibold flex items-center gap-2"><FileSpreadsheet className="h-5 w-5" /> Financial Documents</h1>
-        <p className="text-sm text-muted-foreground">Upload the monthly Profit &amp; Loss (.xlsx). You'll review the figures before anything updates.</p>
+        <h1 className="text-xl font-semibold flex items-center gap-2"><FileText className="h-5 w-5" /> Financial Documents</h1>
+        <p className="text-sm text-muted-foreground">Choose a document type, upload it, and review the figures before anything updates.</p>
+      </div>
+
+      {/* Doc-type selector */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {DOC_TYPES.map((d) => {
+          const Icon = d.icon;
+          const sel = d.id === docType;
+          return (
+            <button key={d.id} onClick={() => pickType(d.id)} data-testid={`doctype-${d.id}`}
+              className={`text-left rounded-lg border p-3 transition ${sel ? "border-primary ring-1 ring-primary bg-primary/5" : "hover:bg-muted/40"}`}>
+              <div className="flex items-center gap-2 font-medium text-sm"><Icon className="h-4 w-4" /> {d.label}</div>
+              <div className="text-xs text-muted-foreground mt-1">{d.hint}</div>
+            </button>
+          );
+        })}
       </div>
 
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><UploadCloud className="h-4 w-4" /> 1 · Upload Monthly P&amp;L (.xlsx)</CardTitle></CardHeader>
+        <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><UploadCloud className="h-4 w-4" /> 1 · Upload {active.label}</CardTitle></CardHeader>
         <CardContent>
           <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-lg p-8 cursor-pointer hover:bg-muted/40" data-testid="dropzone-financial">
             <UploadCloud className="h-7 w-7 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">{parsing ? "Reading…" : "Click to choose a .xlsx file"}</span>
-            <input type="file" accept=".xlsx,.xls" className="hidden" disabled={parsing}
+            <span className="text-sm text-muted-foreground">{parsing ? "Reading…" : `Click to choose a file (${active.accept.replace(/image\/\*/, "image")})`}</span>
+            <input type="file" accept={active.accept} className="hidden" disabled={parsing}
               onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.currentTarget.value = ""; }} data-testid="input-financial-file" />
           </label>
+          {docType !== "pl_xlsx" && <p className="text-[11px] text-muted-foreground mt-2">PDFs are read with Claude vision. Anything it can't find is flagged DATA GAPPED — never guessed.</p>}
         </CardContent>
       </Card>
 
-      {parsed && (
+      {hasReview && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">2 · Review {meta?.fileName ? `— ${meta.fileName}` : ""}</CardTitle>
-            {meta?.detectedFormat && <p className="text-xs text-muted-foreground">Detected format: {meta.detectedFormat} · {parsed.length} month(s)</p>}
+            <p className="text-xs text-muted-foreground">
+              {meta?.detectedFormat ? `Detected: ${meta.detectedFormat}` : ""}
+              {docType === "pl_xlsx" && months ? ` · ${months.length} month(s)` : ""}
+              {meta?.confidence != null ? ` · confidence ${meta.confidence}%` : ""}
+            </p>
           </CardHeader>
           <CardContent>
             {meta?.warnings && meta.warnings.length > 0 && (
               <div className="mb-3 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1"><AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /><span>{meta.warnings.join(" · ")}</span></div>
             )}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead><tr className="text-xs text-muted-foreground text-right">
-                  <th className="text-left py-1">Month</th><th className="py-1">Revenue</th><th className="py-1">Gross Profit</th><th className="py-1">Expenses</th><th className="py-1">Net Income</th>
-                </tr></thead>
-                <tbody>
-                  {parsed.map((m) => (
-                    <tr key={m.month} className="border-t text-right" data-testid={`review-${m.month}`}>
-                      <td className="text-left py-1 font-medium">{m.month}</td>
-                      <td className="tabular-nums">{fmt(m.totalIncome)}</td>
-                      <td className="tabular-nums">{fmt(m.grossProfit)}</td>
-                      <td className="tabular-nums">{fmt(m.totalExpenses)}</td>
-                      <td className={`tabular-nums ${m.netIncome != null && m.netIncome < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(m.netIncome)}</td>
-                    </tr>
+            {meta?.dataGaps && meta.dataGaps.length > 0 && (
+              <div className="mb-3 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1" data-testid="data-gaps">
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /><span>{meta.dataGaps.length} field(s) not found — left blank, not estimated: {meta.dataGaps.map((g) => g.replace("DATA GAPPED: ", "")).join(", ")}</span>
+              </div>
+            )}
+
+            {/* P&L review */}
+            {docType === "pl_xlsx" && months && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-xs text-muted-foreground text-right">
+                    <th className="text-left py-1">Month</th><th className="py-1">Revenue</th><th className="py-1">Gross Profit</th><th className="py-1">Expenses</th><th className="py-1">Net Income</th>
+                  </tr></thead>
+                  <tbody>
+                    {months.map((m) => (
+                      <tr key={m.month} className="border-t text-right" data-testid={`review-${m.month}`}>
+                        <td className="text-left py-1 font-medium">{m.month}</td>
+                        <td className="tabular-nums">{fmt(m.totalIncome)}</td>
+                        <td className="tabular-nums">{fmt(m.grossProfit)}</td>
+                        <td className="tabular-nums">{fmt(m.totalExpenses)}</td>
+                        <td className={`tabular-nums ${m.netIncome != null && m.netIncome < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(m.netIncome)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Balance sheet review */}
+            {docType === "balance_sheet" && bs && (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                  {([
+                    ["Cash", bs.cash], ["Accounts Receivable", bs.accountsReceivable], ["Inventory", bs.inventory], ["Accounts Payable", bs.accountsPayable],
+                    ["Credit Cards", bs.creditCards], ["Short-Term Notes", bs.shortTermNotes], ["Long-Term Liabilities", bs.longTermLiabilities], ["Sales Tax Owed", bs.salesTaxToPay],
+                    ["Total Liabilities", bs.totalLiabilities], ["Total Equity", bs.totalEquity],
+                  ] as [string, number | null][]).map(([label, v]) => (
+                    <div key={label}><div className="text-xs text-muted-foreground">{label}</div><div className="font-semibold tabular-nums">{fmt(v)}</div></div>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </div>
+                {bs.asOf && <p className="text-xs text-muted-foreground mt-2">As of {bs.asOf}{bs.basis ? ` · ${bs.basis} basis` : ""}</p>}
+                {bs.loans && bs.loans.length > 0 && (
+                  <div className="mt-4">
+                    <div className="text-xs font-medium text-muted-foreground mb-1">Named loans / notes ({bs.loans.length})</div>
+                    <table className="w-full text-sm">
+                      <tbody>
+                        {bs.loans.map((l, i) => (
+                          <tr key={i} className="border-t" data-testid={`loan-${i}`}>
+                            <td className="py-1">{l.name}{l.term ? <span className="text-xs text-muted-foreground"> · {l.term}-term</span> : ""}</td>
+                            <td className="py-1 text-right tabular-nums font-medium">{fmt(l.balance)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Bank statement review */}
+            {docType === "bank_statement" && bank && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                {([
+                  ["Bank", bank.bankName as any], ["Account", bank.accountName as any],
+                  ["Period start", bank.statementPeriodStart as any], ["Period end", bank.statementPeriodEnd as any],
+                ] as [string, string | null][]).map(([label, v]) => (
+                  <div key={label}><div className="text-xs text-muted-foreground">{label}</div><div className="font-medium">{v || "—"}</div></div>
+                ))}
+                <div><div className="text-xs text-muted-foreground">Opening Balance</div><div className="font-semibold tabular-nums">{fmt(bank.openingBalance)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Closing Balance</div><div className="font-semibold tabular-nums text-green-600 dark:text-green-400">{fmt(bank.closingBalance)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Total Deposits</div><div className="font-semibold tabular-nums">{fmt(bank.totalDeposits)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Total Withdrawals</div><div className="font-semibold tabular-nums">{fmt(bank.totalWithdrawals)}</div></div>
+              </div>
+            )}
+
             <div className="mt-4 flex items-center gap-3">
               <Button onClick={apply} disabled={applying || applied} data-testid="button-apply-financials">
-                {applied ? <><CheckCircle2 className="h-4 w-4 mr-1" /> Applied</> : applying ? "Applying…" : "Apply to Finances tab"}
+                {applied ? <><CheckCircle2 className="h-4 w-4 mr-1" /> Applied</> : applying ? "Applying…" : `Apply to Finances tab`}
               </Button>
-              {applied && <span className="text-sm text-green-600 dark:text-green-400">Updated — the Finances tab now reflects these numbers.</span>}
+              {applied && <span className="text-sm text-green-600 dark:text-green-400">Updated — the Finances tab now reflects this.</span>}
             </div>
           </CardContent>
         </Card>

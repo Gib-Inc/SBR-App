@@ -20,10 +20,10 @@ export function KPISummaryBar() {
 
   const kpis = [
     { label: 'MTD Ad Spend', value: fmt(data?.mtd_spend ?? null), icon: DollarSign, color: 'text-red-600' },
-    { label: 'MTD Ad Revenue', value: fmt(data?.mtd_revenue ?? null), icon: TrendingUp, color: 'text-green-600' },
+    { label: 'MTD Revenue', value: fmt(data?.mtd_revenue ?? null), icon: TrendingUp, color: 'text-green-600' },
     { label: 'Blended ROAS', value: data?.blended_roas ? `${data.blended_roas.toFixed(1)}x` : 'N/A', icon: Target, color: 'text-violet-600' },
-    { label: 'Conversions', value: data?.total_conversions?.toLocaleString() ?? '0', icon: Users, color: 'text-blue-600' },
-    { label: 'Avg CPA', value: data?.avg_cpa ? `$${data.avg_cpa.toFixed(2)}` : 'N/A', icon: DollarSign, color: 'text-amber-600' },
+    { label: 'Orders', value: data?.total_conversions?.toLocaleString() ?? '0', icon: Users, color: 'text-blue-600' },
+    { label: 'Cost / Order', value: data?.avg_cpa ? `$${data.avg_cpa.toFixed(2)}` : 'N/A', icon: DollarSign, color: 'text-amber-600' },
   ];
 
   return (

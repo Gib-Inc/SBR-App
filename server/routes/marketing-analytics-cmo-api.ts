@@ -23,6 +23,7 @@ import {
   queryBomCompleteness, queryCampaignBreakdown, queryDeviceBreakdown, queryAdGeoPerformance,
 } from './marketing-analytics-queries-v2';
 import { runWindsorSync, getWindsorApiKey } from '../services/windsor-ingestion-service';
+import { getCorrectedAdSummary } from '../services/corrected-ad-spend';
 import { WeeklyDigestService } from '../services/weekly-digest-service';
 import { seedHistoricalSales, queryFullYearComparison, queryFullCMOHistory } from './historical-sales-seed';
 import { seedZoKpiData } from './zo-kpi-seed';
@@ -316,6 +317,10 @@ export function registerMarketingAnalyticsCmoRoutes(app: express.Application) {
   app.get('/api/marketing-analytics/cmo/revenue-target', requireAuth, handle(() => queryRevenueTarget(getDb())));
   app.get('/api/marketing-analytics/cmo/breakeven-roas', requireAuth, handle((req) => queryBreakevenRoas(getDb(), parseDays(req)).then(products => ({ products }))));
   app.get('/api/marketing-analytics/cmo/channel-matrix', requireAuth, handle((req) => queryChannelMatrix(getDb(), parseDays(req)).then(channels => ({ channels }))));
+  // Corrected ad-spend summary (single source of truth — identical to the Finances
+  // "Ad Spend by Channel"): per-platform spend with source badges, total spend,
+  // window sales revenue, and sales-based blended ROAS. Backs the Ad Spend card.
+  app.get('/api/marketing-analytics/cmo/ad-spend-summary', requireAuth, handle((req) => getCorrectedAdSummary(parseDays(req))));
   app.get('/api/marketing-analytics/cmo/customer-split', requireAuth, handle((req) => queryCustomerSplit(getDb(), parseDays(req))));
   app.get('/api/marketing-analytics/cmo/geographic', requireAuth, handle((req) => queryGeographic(getDb(), parseDays(req)).then(states => ({ states }))));
   app.get('/api/marketing-analytics/cmo/creative-fatigue', requireAuth, handle((req) => queryCreativeFatigue(getDb(), parseDays(req) > 90 ? parseDays(req) : 90).then(creatives => ({ creatives }))));

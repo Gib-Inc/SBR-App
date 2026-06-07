@@ -9,7 +9,8 @@ import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
-import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone } from "lucide-react";
+import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight } from "lucide-react";
+import { Link } from "wouter";
 
 /**
  * CIPH.R Finances tab — the financial command center.
@@ -174,7 +175,12 @@ export default function Finances() {
             const metaCh = ch.find((x) => /meta|facebook/i.test(x.channel) && x.spend > 0);
             return (
               <Card>
-                <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4" /> Ad Spend by Channel <span className="text-xs font-normal text-muted-foreground">· last {data?.adChannelsWindowDays ?? 30} days · {fmt(totalCh)} tracked</span></CardTitle></CardHeader>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4" /> Ad Spend by Channel <span className="text-xs font-normal text-muted-foreground">· last {data?.adChannelsWindowDays ?? 30} days · {fmt(totalCh)} tracked</span></CardTitle>
+                    <Link href="/marketing-analytics" className="text-xs text-primary hover:underline flex items-center gap-1 whitespace-nowrap shrink-0" data-testid="link-ad-analytics">Full ad analytics <ArrowRight className="h-3 w-3" /></Link>
+                  </div>
+                </CardHeader>
                 <CardContent>
                   {ch.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No ad-platform spend tracked yet.</p>

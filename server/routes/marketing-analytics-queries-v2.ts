@@ -5,9 +5,14 @@
  */
 
 import { sql } from 'drizzle-orm';
+import {
+  getAdSpendCorrection,
+  getCorrectedMonthlyAdSpend,
+} from '../services/corrected-ad-spend';
 
 type DB = any;
 const rows = (r: any) => r.rows || r;
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 const MONTHLY_TARGET = 375000; // $4.5M / 12
 
@@ -93,6 +98,9 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
     ORDER BY ad.spend DESC NULLS LAST
   `);
 
+  // Per-SKU spend has no platform dimension → scale by the corrected window's
+  // global factor, then recompute actual ROAS off the corrected spend.
+  const { correctSpend } = await getAdSpendCorrection(days);
   return rows(result).map((r: any) => {
     let cogs = r.bom_cogs;
     let costSource: string;
@@ -104,6 +112,9 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
     }
     const margin = r.price - cogs;
     const breakevenRoas = margin > 0 ? r.price / margin : null;
+    const spend = r.spend != null ? correctSpend(null, Number(r.spend)) : 0;
+    const revenue = Number(r.revenue) || 0;
+    const actualRoas = spend > 0 && revenue > 0 ? r2(revenue / spend) : null;
     return {
       sku: r.sku,
       name: r.name,
@@ -111,10 +122,10 @@ export async function queryBreakevenRoas(db: DB, days: number, fallbackMargin = 
       cogs,
       costSource,
       breakevenRoas,
-      actualRoas: r.actual_roas,
-      spend: r.spend || 0,
-      revenue: r.revenue || 0,
-      belowBreakeven: r.actual_roas != null && breakevenRoas != null && r.actual_roas < breakevenRoas,
+      actualRoas,
+      spend,
+      revenue,
+      belowBreakeven: actualRoas != null && breakevenRoas != null && actualRoas < breakevenRoas,
     };
   });
 }
@@ -140,7 +151,20 @@ export async function queryCampaignBreakdown(db: DB, days: number, platform?: st
     ORDER BY spend DESC
     LIMIT 50
   `);
-  return rows(result);
+  // Scale each campaign's spend by its platform's correction factor so campaigns
+  // reconcile to the corrected platform total; recompute ROAS/CPC off it.
+  const { correctSpend } = await getAdSpendCorrection(days);
+  return rows(result).map((r: any) => {
+    const spend = correctSpend(r.platform, Number(r.spend) || 0);
+    const revenue = Number(r.revenue) || 0;
+    const clicks = Number(r.clicks) || 0;
+    return {
+      ...r,
+      spend,
+      roas: spend > 0 && revenue > 0 ? r2(revenue / spend) : null,
+      cpc: clicks > 0 ? r2(spend / clicks) : null,
+    };
+  });
 }
 
 // ── Device efficiency ──
@@ -160,7 +184,18 @@ export async function queryDeviceBreakdown(db: DB, days: number) {
     HAVING SUM(spend) > 0
     ORDER BY spend DESC
   `);
-  return rows(result);
+  const { correctSpend } = await getAdSpendCorrection(days);
+  return rows(result).map((r: any) => {
+    const spend = correctSpend(r.platform, Number(r.spend) || 0);
+    const revenue = Number(r.revenue) || 0;
+    const clicks = Number(r.clicks) || 0;
+    return {
+      ...r,
+      spend,
+      roas: spend > 0 && revenue > 0 ? r2(revenue / spend) : null,
+      cpc: clicks > 0 ? r2(spend / clicks) : null,
+    };
+  });
 }
 
 // ── Geo performance ──
@@ -192,34 +227,55 @@ export async function queryAdGeoPerformance(db: DB, days: number) {
   `);
 
   const salesMap = new Map((rows(salesGeo) as any[]).map(r => [r.country, r]));
-  return rows(adGeo).map((a: any) => ({
-    country: a.country,
-    adSpend: a.ad_spend,
-    adRevenue: a.ad_revenue,
-    conversions: a.conversions,
-    roas: a.roas,
-    salesRevenue: salesMap.get(a.country)?.sales_revenue ?? 0,
-    salesOrders: salesMap.get(a.country)?.orders ?? 0,
-  }));
+  const { correctSpend } = await getAdSpendCorrection(days);
+  return rows(adGeo).map((a: any) => {
+    const adSpend = correctSpend(null, Number(a.ad_spend) || 0);
+    const adRevenue = Number(a.ad_revenue) || 0;
+    return {
+      country: a.country,
+      adSpend,
+      adRevenue,
+      conversions: a.conversions,
+      roas: adSpend > 0 && adRevenue > 0 ? r2(adRevenue / adSpend) : null,
+      salesRevenue: salesMap.get(a.country)?.sales_revenue ?? 0,
+      salesOrders: salesMap.get(a.country)?.orders ?? 0,
+    };
+  });
 }
 
 export async function queryChannelMatrix(db: DB, days: number) {
-  const result = await db.execute(sql`
-    SELECT platform,
-           SUM(spend)::real as spend,
-           SUM(revenue)::real as revenue,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
+  // Spend + platform set come from the corrected source (Windsor > upload >
+  // deduped live), so this is identical to the Finances "Ad Spend by Channel"
+  // and includes upload-only platforms like Meta. Attributed revenue (if any)
+  // comes from ad_metrics_daily for the quadrant heuristic only.
+  const raw = await db.execute(sql`
+    SELECT platform, SUM(revenue)::real as revenue
     FROM ad_metrics_daily
     WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY platform
   `);
-  const data = rows(result);
-  const spends = data.map((d: any) => d.spend).sort((a: number, b: number) => a - b);
+  const revByPlatform = new Map<string, number>();
+  for (const r of rows(raw)) {
+    const p = String(r.platform || '').toUpperCase();
+    revByPlatform.set(p, (revByPlatform.get(p) || 0) + (Number(r.revenue) || 0));
+  }
+  const { corrected } = await getAdSpendCorrection(days);
+  const data = corrected.platforms.map((p) => {
+    const revenue = revByPlatform.get(p.platform) || 0;
+    return {
+      platform: p.platform,
+      source: p.source,
+      spend: p.spend,
+      revenue,
+      roas: p.spend > 0 && revenue > 0 ? r2(revenue / p.spend) : null,
+    };
+  });
+
+  const spends = data.map((d) => d.spend).sort((a, b) => a - b);
   const medianSpend = spends.length ? spends[Math.floor(spends.length / 2)] : 0;
   const roasThreshold = 1.0;
-
-  return data.map((d: any) => {
-    const highRoas = d.roas >= roasThreshold;
+  return data.map((d) => {
+    const highRoas = (d.roas ?? 0) >= roasThreshold;
     const highSpend = d.spend >= medianSpend;
     let quadrant: string;
     if (highRoas && highSpend) quadrant = 'scale';
@@ -467,21 +523,47 @@ export async function queryMonthlySales(db: DB, months: number = 12) {
 }
 
 export async function queryMonthlyAdSpend(db: DB, months: number = 12) {
+  // Spend per (month, platform) comes from the corrected monthly snapshots
+  // (Windsor monthly figures), NOT the inflated ad_metrics_daily. Attributed
+  // revenue/conversions/clicks are joined from ad_metrics_daily for shape.
   const result = await db.execute(sql`
     SELECT date_trunc('month', date)::date::text as month,
            platform,
-           SUM(spend)::real as spend,
            SUM(revenue)::real as revenue,
            SUM(conversions)::int as conversions,
-           SUM(clicks)::int as clicks,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas,
-           CASE WHEN SUM(conversions) > 0 THEN (SUM(spend) / SUM(conversions))::real ELSE NULL END as cpa
+           SUM(clicks)::int as clicks
     FROM ad_metrics_daily
     WHERE date >= current_date - make_interval(months => ${months})
     GROUP BY date_trunc('month', date), platform
-    ORDER BY month, spend DESC
   `);
-  return rows(result);
+  const rawMap = new Map<string, any>();
+  for (const r of rows(result)) {
+    const month = String(r.month).slice(0, 7);
+    const p = String(r.platform || '').toUpperCase();
+    rawMap.set(`${month}|${p}`, r);
+  }
+  const monthly = await getCorrectedMonthlyAdSpend();
+  const out: any[] = [];
+  for (const [month, mp] of Array.from(monthly.entries())) {
+    for (const [platform, spend] of Object.entries(mp.byPlatform)) {
+      const r = rawMap.get(`${month}|${platform}`) || {};
+      const revenue = Number(r.revenue) || 0;
+      const conversions = Number(r.conversions) || 0;
+      const clicks = Number(r.clicks) || 0;
+      out.push({
+        month: `${month}-01`,
+        platform,
+        spend,
+        revenue,
+        conversions,
+        clicks,
+        roas: spend > 0 && revenue > 0 ? r2(revenue / spend) : null,
+        cpa: conversions > 0 ? r2(spend / conversions) : null,
+      });
+    }
+  }
+  out.sort((a, b) => (a.month === b.month ? b.spend - a.spend : a.month < b.month ? -1 : 1));
+  return out;
 }
 
 export async function queryMonthlyBlended(db: DB, months: number = 12) {
@@ -495,9 +577,9 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     GROUP BY date_trunc('month', order_date)
     ORDER BY month
   `);
-  const ads = await db.execute(sql`
+  // Attributed ad revenue / conversions by month for shape (NOT spend).
+  const adsRaw = await db.execute(sql`
     SELECT date_trunc('month', date)::date::text as month,
-           SUM(spend)::real as total_spend,
            SUM(revenue)::real as ad_revenue,
            SUM(conversions)::int as total_conversions
     FROM ad_metrics_daily
@@ -506,38 +588,43 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
     ORDER BY month
   `);
   // Historical ad spend (QuickBooks) keyed to month-start, used as a fallback
-  // for months that have no live ad_metrics_daily rows yet — keeps the blended
-  // ROAS / CAC series continuous back through the QuickBooks history instead of
-  // dropping to zero before the platforms were connected.
+  // for months with no corrected snapshot yet — keeps the blended ROAS / CAC
+  // series continuous back through the QuickBooks history.
   const hist = await db.execute(sql`
     SELECT make_date(year, month, 1)::text as month, COALESCE(ad_spend, 0)::real as ad_spend
     FROM historical_monthly_sales
   `);
 
+  // Corrected monthly ad spend (Windsor snapshots) — the authoritative series.
+  const monthly = await getCorrectedMonthlyAdSpend();
+  const correctedSpendMap = new Map<string, number>();
+  for (const [m, mp] of Array.from(monthly.entries())) correctedSpendMap.set(`${m}-01`, mp.total);
+
   const salesMap = new Map((rows(sales) as any[]).map(r => [r.month, r]));
-  const adsMap = new Map((rows(ads) as any[]).map(r => [r.month, r]));
+  const adsRevMap = new Map((rows(adsRaw) as any[]).map(r => [r.month, r]));
   const histMap = new Map((rows(hist) as any[]).map(r => [r.month, r.ad_spend]));
-  const allMonths = new Set([...salesMap.keys(), ...adsMap.keys()]);
+  const allMonths = new Set([...salesMap.keys(), ...correctedSpendMap.keys(), ...adsRevMap.keys()]);
 
   return Array.from(allMonths).sort().map(month => {
     const s = salesMap.get(month) || { total_revenue: 0, new_customers: 0 };
-    const a = adsMap.get(month) || { total_spend: 0, ad_revenue: 0, total_conversions: 0 };
-    // Use live spend if present, else fall back to the QuickBooks total.
-    const liveSpend = a.total_spend || 0;
-    const adSpend = liveSpend > 0 ? liveSpend : (histMap.get(month) || 0);
-    const spendSource = liveSpend > 0 ? 'live' : (histMap.has(month) ? 'historical' : 'none');
+    const a = adsRevMap.get(month) || { ad_revenue: 0, total_conversions: 0 };
+    // Corrected snapshot spend if present, else fall back to the QuickBooks total.
+    const correctedSpend = correctedSpendMap.get(month) || 0;
+    const adSpend = correctedSpend > 0 ? correctedSpend : (histMap.get(month) || 0);
+    const spendSource = correctedSpend > 0 ? 'corrected' : (histMap.has(month) ? 'historical' : 'none');
+    const adRevenue = Number(a.ad_revenue) || 0;
     return {
       month,
       totalRevenue: s.total_revenue,
       adSpend,
-      adRevenue: a.ad_revenue,
+      adRevenue,
       spendSource,
-      blendedRoas: adSpend > 0 ? s.total_revenue / adSpend : null,
-      adRoas: liveSpend > 0 ? a.ad_revenue / liveSpend : null,
-      cac: s.new_customers > 0 && adSpend > 0 ? adSpend / s.new_customers : null,
+      blendedRoas: adSpend > 0 ? r2(s.total_revenue / adSpend) : null,
+      adRoas: correctedSpend > 0 && adRevenue > 0 ? r2(adRevenue / correctedSpend) : null,
+      cac: s.new_customers > 0 && adSpend > 0 ? r2(adSpend / s.new_customers) : null,
       newCustomers: s.new_customers,
       conversions: a.total_conversions,
-      spendToRevenueRatio: s.total_revenue > 0 ? (adSpend / s.total_revenue * 100) : null,
+      spendToRevenueRatio: s.total_revenue > 0 ? r2(adSpend / s.total_revenue * 100) : null,
     };
   });
 }
@@ -681,14 +768,9 @@ export async function queryLtvCac(db: DB, months: number = 18) {
     ORDER BY year, month
   `);
 
-  // 2. Ad spend per month from the live fact table.
-  const liveSpend = await db.execute(sql`
-    SELECT EXTRACT(YEAR FROM date)::int as year,
-           EXTRACT(MONTH FROM date)::int as month,
-           COALESCE(SUM(spend), 0)::real as ad_spend
-    FROM ad_metrics_daily
-    GROUP BY EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date)
-  `);
+  // 2. Corrected ad spend per month from the snapshot source (Windsor > upload),
+  //    NOT the inflated ad_metrics_daily — so CAC is accurate.
+  const monthly = await getCorrectedMonthlyAdSpend();
 
   // 3. Historical ad spend fallback (pre-platform-connection months).
   const histSpend = await db.execute(sql`
@@ -697,7 +779,11 @@ export async function queryLtvCac(db: DB, months: number = 18) {
   `);
 
   const liveMap = new Map<string, number>();
-  for (const r of rows(liveSpend)) liveMap.set(`${r.year}-${r.month}`, r.ad_spend);
+  for (const [m, mp] of Array.from(monthly.entries())) {
+    const year = parseInt(m.slice(0, 4), 10);
+    const month = parseInt(m.slice(5, 7), 10); // strips leading zero → matches cohort key
+    liveMap.set(`${year}-${month}`, mp.total);
+  }
   const histMap = new Map<string, number>();
   for (const r of rows(histSpend)) histMap.set(`${r.year}-${r.month}`, r.ad_spend);
 
@@ -782,6 +868,7 @@ export async function queryBomCompleteness(db: DB, days: number = 30) {
     ORDER BY ad.spend DESC NULLS LAST, i.selling_price DESC
   `);
 
+  const { correctSpend } = await getAdSpendCorrection(days);
   const items = rows(result).map((r: any) => {
     const hasBom = r.component_count > 0;
     const costComplete = hasBom && r.missing_cost_count === 0;
@@ -797,7 +884,7 @@ export async function queryBomCompleteness(db: DB, days: number = 30) {
       missingCostCount: r.missing_cost_count,
       cogs: costComplete ? r.cogs : null,
       missingComponents: r.missing_components || [],
-      adSpend: r.ad_spend,
+      adSpend: correctSpend(null, Number(r.ad_spend) || 0),
       status,
     };
   });

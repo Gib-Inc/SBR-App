@@ -2,11 +2,24 @@
  * Marketing Analytics — SQL query builders
  * Raw Drizzle queries for analytics aggregations.
  * One function per dashboard view.
+ *
+ * AD SPEND IS CORRECTED AT READ TIME. `ad_metrics_daily` holds overlapping
+ * marginal breakdown rows (per-SKU AND per-campaign×device×country) so a naive
+ * SUM(spend) multi-counts (~3.65x on Google). Every ad-spend figure below is
+ * reconciled to the authoritative source-hierarchy total (Windsor > upload >
+ * deduped live) via server/services/corrected-ad-spend — the SAME numbers the
+ * Finances page shows, so the two pages can never disagree again.
  */
 
 import { sql } from 'drizzle-orm';
+import {
+  getAdSpendCorrection,
+  getCorrectedAdSpendRange,
+} from '../services/corrected-ad-spend';
 
 type DB = any;
+const rows = (r: any) => r.rows || r;
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export async function querySpendPacing(db: DB, days: number) {
   const result = await db.execute(sql`
@@ -21,25 +34,58 @@ export async function querySpendPacing(db: DB, days: number) {
     GROUP BY date
     ORDER BY date
   `);
-  return result.rows || result;
+  // Scale the daily spend so the series sums to the corrected window total
+  // (kills the double-count; keeps the day-to-day pacing shape).
+  const { globalFactor } = await getAdSpendCorrection(days);
+  return rows(result).map((r: any) => ({ ...r, spend: r2((Number(r.spend) || 0) * globalFactor) }));
 }
 
 export async function queryChannelMix(db: DB, days: number) {
+  // Raw per-platform secondary metrics (revenue/conversions/clicks) for shape…
   const result = await db.execute(sql`
     SELECT platform,
-           SUM(spend)::real as spend,
            SUM(revenue)::real as revenue,
            SUM(conversions)::int as conversions,
            SUM(clicks)::int as clicks,
-           SUM(impressions)::int as impressions,
-           CASE WHEN SUM(conversions) > 0 THEN (SUM(spend) / SUM(conversions))::real ELSE NULL END as cpa,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as roas
+           SUM(impressions)::int as impressions
     FROM ad_metrics_daily
     WHERE date >= current_date - make_interval(days => ${days})
     GROUP BY platform
-    ORDER BY spend DESC
   `);
-  return result.rows || result;
+  const rawByPlatform = new Map<string, any>();
+  for (const r of rows(result)) {
+    const p = String(r.platform || '').toUpperCase();
+    const prev = rawByPlatform.get(p) || { revenue: 0, conversions: 0, clicks: 0, impressions: 0 };
+    rawByPlatform.set(p, {
+      revenue: prev.revenue + (Number(r.revenue) || 0),
+      conversions: prev.conversions + (Number(r.conversions) || 0),
+      clicks: prev.clicks + (Number(r.clicks) || 0),
+      impressions: prev.impressions + (Number(r.impressions) || 0),
+    });
+  }
+  // …but SPEND + the platform set come from the corrected source (so Meta from an
+  // upload appears, and Google/Amazon are deduped to Windsor).
+  const { corrected } = await getAdSpendCorrection(days);
+  return corrected.platforms
+    .map((p) => {
+      const r = rawByPlatform.get(p.platform) || { revenue: 0, conversions: 0, clicks: 0, impressions: 0 };
+      const spend = p.spend;
+      const revenue = Number(r.revenue) || 0;
+      return {
+        platform: p.platform,
+        source: p.source,
+        spend,
+        revenue,
+        conversions: r.conversions,
+        clicks: r.clicks,
+        impressions: r.impressions,
+        cpa: r.conversions > 0 ? r2(spend / r.conversions) : null,
+        // per-platform ROAS only when we have attributed revenue for that platform;
+        // otherwise null (honest — blended ROAS is shown at the card level).
+        roas: spend > 0 && revenue > 0 ? r2(revenue / spend) : null,
+      };
+    })
+    .sort((a, b) => b.spend - a.spend);
 }
 
 export async function queryProductPerformance(db: DB, days: number) {
@@ -51,17 +97,32 @@ export async function queryProductPerformance(db: DB, days: number) {
            SUM(amd.spend)::real as spend,
            SUM(amd.revenue)::real as revenue,
            SUM(amd.conversions)::int as conversions,
-           CASE WHEN SUM(amd.spend) > 0 THEN (SUM(amd.revenue) / SUM(amd.spend))::real ELSE NULL END as roas,
-           CASE WHEN SUM(amd.conversions) > 0
-             THEN (COALESCE(i.available_for_sale_qty, 0) / (SUM(amd.conversions)::real / ${days}))::real
-             ELSE NULL END as days_of_stock
+           SUM(amd.conversions)::int as raw_conversions
     FROM ad_metrics_daily amd
     LEFT JOIN items i ON i.sku = amd.sku
     WHERE amd.date >= current_date - make_interval(days => ${days})
     GROUP BY amd.sku, i.name, i.available_for_sale_qty, i.hildale_qty
     ORDER BY spend DESC
   `);
-  return result.rows || result;
+  // Scale per-SKU spend to the corrected window total (SKU rows carry no platform,
+  // so the global factor applies), then recompute ROAS / days-of-stock.
+  const { globalFactor } = await getAdSpendCorrection(days);
+  return rows(result).map((r: any) => {
+    const spend = r2((Number(r.spend) || 0) * globalFactor);
+    const revenue = Number(r.revenue) || 0;
+    const conv = Number(r.conversions) || 0;
+    return {
+      sku: r.sku,
+      name: r.name,
+      available_qty: r.available_qty,
+      hildale_qty: r.hildale_qty,
+      spend,
+      revenue,
+      conversions: conv,
+      roas: spend > 0 && revenue > 0 ? r2(revenue / spend) : null,
+      days_of_stock: conv > 0 ? r2((Number(r.available_qty) || 0) / (conv / days)) : null,
+    };
+  });
 }
 
 export async function queryCreativeIntelligence(db: DB, days: number) {
@@ -140,22 +201,45 @@ export async function querySeasonalIntelligence(db: DB, currentYear: number, com
     ORDER BY week_num
   `);
 
+  // Conversion/CTR rates are ratios (unaffected by the spend double-count). The
+  // weekly spend column is scaled to this year's corrected run-rate so it lines
+  // up with every other spend figure on the page.
+  let factor = 1;
+  try {
+    const { corrected } = await getAdSpendCorrection(365);
+    const rawYtd = rows(convTrends).reduce((s: number, r: any) => s + (Number(r.spend) || 0), 0);
+    if (rawYtd > 0 && corrected.totalAdSpend != null) factor = (corrected.totalAdSpend || 0) / rawYtd;
+  } catch { /* leave unscaled */ }
+
   return {
-    yoy: yoy.rows || yoy,
-    conversionTrends: convTrends.rows || convTrends,
+    yoy: rows(yoy),
+    conversionTrends: rows(convTrends).map((r: any) => ({ ...r, spend: r2((Number(r.spend) || 0) * factor) })),
   };
 }
 
 export async function queryKPIs(db: DB) {
-  const result = await db.execute(sql`
-    SELECT SUM(spend)::real as mtd_spend,
-           SUM(revenue)::real as mtd_revenue,
-           CASE WHEN SUM(spend) > 0 THEN (SUM(revenue) / SUM(spend))::real ELSE NULL END as blended_roas,
-           SUM(conversions)::int as total_conversions,
-           CASE WHEN SUM(conversions) > 0 THEN (SUM(spend) / SUM(conversions))::real ELSE NULL END as avg_cpa
-    FROM ad_metrics_daily
-    WHERE date >= date_trunc('month', current_date)
+  // MTD ad spend from the corrected source (Windsor/upload), MTD revenue + orders
+  // from real sales. Blended ROAS = sales ÷ corrected ad spend (matches the
+  // Finances unified card); blended CPA = corrected spend ÷ orders. The old
+  // version summed inflated ad_metrics_daily and showed $0 ad revenue / N/A ROAS.
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = today.slice(0, 7) + '-01';
+  const corrected = await getCorrectedAdSpendRange(monthStart, today);
+  const salesRes = await db.execute(sql`
+    SELECT COALESCE(SUM(total_amount), 0)::real as mtd_revenue, COUNT(*)::int as mtd_orders
+    FROM sales_orders
+    WHERE order_date >= date_trunc('month', current_date)
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
   `);
-  const row = (result.rows || result)[0];
-  return row || { mtd_spend: 0, mtd_revenue: 0, blended_roas: null, total_conversions: 0, avg_cpa: null };
+  const s = rows(salesRes)[0] || { mtd_revenue: 0, mtd_orders: 0 };
+  const spend = corrected.totalAdSpend || 0;
+  const revenue = Number(s.mtd_revenue) || 0;
+  const orders = Number(s.mtd_orders) || 0;
+  return {
+    mtd_spend: spend,
+    mtd_revenue: revenue,
+    blended_roas: spend > 0 ? r2(revenue / spend) : null,
+    total_conversions: orders,
+    avg_cpa: orders > 0 && spend > 0 ? r2(spend / orders) : null,
+  };
 }

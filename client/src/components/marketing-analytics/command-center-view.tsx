@@ -9,7 +9,7 @@ import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { RevenueTargetGauge } from './revenue-target-gauge';
 import { NextBestActionView } from './next-best-action-view';
 import { WastedSpendView } from './wasted-spend-view';
-import type { GeoState, RevenueTarget, ChannelMatrixItem } from './types';
+import type { GeoState, RevenueTarget } from './types';
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString('en-US')}`;
 
@@ -163,13 +163,31 @@ function CustomerInsight({ days }: { days: number }) {
   );
 }
 
-function WindsorAdSpendCard({ days }: { days: number }) {
+interface AdSpendSummary {
+  platforms: Array<{ platform: string; spend: number; source: 'windsor' | 'uploaded' | 'live' }>;
+  totalAdSpend: number | null;
+  totalRevenue: number | null;
+  blendedRoas: number | null;
+  windowDays: number;
+}
+
+const PLATFORM_LABEL: Record<string, string> = {
+  GOOGLE: 'Google Ads', META: 'Meta / Facebook', AMAZON: 'Amazon Ads',
+  PINTEREST: 'Pinterest', MICROSOFT: 'Microsoft / Bing', TIKTOK: 'TikTok',
+};
+const SOURCE_BADGE: Record<string, { label: string; cls: string }> = {
+  windsor: { label: 'Windsor', cls: 'text-emerald-700 border-emerald-300' },
+  uploaded: { label: 'upload', cls: 'text-amber-700 border-amber-300' },
+  live: { label: 'live', cls: 'text-muted-foreground' },
+};
+
+function AdSpendByChannelCard({ days }: { days: number }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery<{ channels: ChannelMatrixItem[] }>({
-    queryKey: ['/api/marketing-analytics/cmo/channel-matrix', { days }],
+  const { data, isLoading } = useQuery<AdSpendSummary>({
+    queryKey: ['/api/marketing-analytics/cmo/ad-spend-summary', { days }],
     queryFn: async () => {
-      const res = await fetch(`/api/marketing-analytics/cmo/channel-matrix?days=${days}`, { credentials: 'include' });
+      const res = await fetch(`/api/marketing-analytics/cmo/ad-spend-summary?days=${days}`, { credentials: 'include' });
       return res.json();
     },
   });
@@ -180,7 +198,9 @@ function WindsorAdSpendCard({ days }: { days: number }) {
       return r.json();
     },
     onSuccess: (d: any) => {
+      qc.invalidateQueries({ queryKey: ['/api/marketing-analytics/cmo/ad-spend-summary'] });
       qc.invalidateQueries({ queryKey: ['/api/marketing-analytics/cmo/channel-matrix'] });
+      qc.invalidateQueries({ queryKey: ['/api/marketing-analytics/kpis'] });
       if (d.rowsUpserted > 0) {
         toast({ title: 'Windsor sync complete', description: `${d.rowsUpserted} rows across ${Object.keys(d.platforms || {}).join(', ') || 'no platforms'}` });
       } else {
@@ -190,17 +210,18 @@ function WindsorAdSpendCard({ days }: { days: number }) {
     onError: (e: any) => toast({ title: 'Windsor sync failed', description: e.message, variant: 'destructive' }),
   });
 
-  const channels = data?.channels ?? [];
-  const totalSpend = channels.reduce((s, c) => s + c.spend, 0);
-  const totalRevenue = channels.reduce((s, c) => s + c.revenue, 0);
-  const blendedRoas = totalSpend > 0 ? totalRevenue / totalSpend : null;
+  const platforms = (data?.platforms ?? []).filter((p) => p.spend > 0);
+  const totalSpend = data?.totalAdSpend ?? 0;
+  const totalRevenue = data?.totalRevenue ?? null;
+  const blendedRoas = data?.blendedRoas ?? null;
+  const hasUpload = platforms.some((p) => p.source === 'uploaded');
 
   return (
     <Card>
       <CardHeader className="pb-1">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm flex items-center gap-1">
-            <Megaphone className="h-3.5 w-3.5" /> Windsor Ad Spend ({days}d)
+            <Megaphone className="h-3.5 w-3.5" /> Ad Spend by Channel ({days}d)
           </CardTitle>
           <Button
             variant="ghost"
@@ -217,8 +238,8 @@ function WindsorAdSpendCard({ days }: { days: number }) {
       <CardContent>
         {isLoading ? (
           <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin" /></div>
-        ) : channels.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-3">No ad data yet. Hit "Sync Windsor" to pull.</p>
+        ) : platforms.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-3">No ad spend tracked in this window. Hit "Sync Windsor" to pull.</p>
         ) : (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -227,35 +248,38 @@ function WindsorAdSpendCard({ days }: { days: number }) {
                 <div className="text-lg font-bold">{fmt(totalSpend)}</div>
               </div>
               <div className="text-right">
-                <div className="text-xs text-muted-foreground">Total Revenue</div>
-                <div className="text-lg font-bold">{fmt(totalRevenue)}</div>
+                <div className="text-xs text-muted-foreground">Revenue</div>
+                <div className="text-lg font-bold">{totalRevenue != null ? fmt(totalRevenue) : '—'}</div>
               </div>
-              {blendedRoas != null && (
-                <div className="text-right">
-                  <div className="text-xs text-muted-foreground">Blended ROAS</div>
-                  <div className={`text-lg font-bold ${blendedRoas >= 1 ? 'text-green-600' : 'text-red-600'}`}>
-                    {blendedRoas.toFixed(1)}x
-                  </div>
+              <div className="text-right">
+                <div className="text-xs text-muted-foreground">Blended ROAS</div>
+                <div className={`text-lg font-bold ${blendedRoas != null && blendedRoas >= 1 ? 'text-green-600' : 'text-foreground'}`}>
+                  {blendedRoas != null ? `${blendedRoas.toFixed(1)}x` : 'N/A'}
                 </div>
-              )}
+              </div>
             </div>
             <div className="space-y-1">
-              {channels.map((c) => (
-                <div key={c.platform} className="flex items-center justify-between text-sm border-b last:border-0 py-1">
-                  <span className="font-medium">{c.platform}</span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-muted-foreground">{fmt(c.spend)}</span>
-                    <span>{fmt(c.revenue)}</span>
-                    <Badge
-                      variant="outline"
-                      className={`text-xs w-14 justify-center ${(c.roas ?? 0) >= 1 ? 'text-green-700' : 'text-red-700'}`}
-                    >
-                      {c.roas != null ? `${c.roas.toFixed(1)}x` : 'N/A'}
-                    </Badge>
+              {platforms.map((p) => {
+                const badge = SOURCE_BADGE[p.source] || SOURCE_BADGE.live;
+                const pct = totalSpend > 0 ? Math.round((p.spend / totalSpend) * 100) : 0;
+                return (
+                  <div key={p.platform} className="flex items-center justify-between text-sm border-b last:border-0 py-1">
+                    <span className="font-medium">{PLATFORM_LABEL[p.platform] || p.platform}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground w-8 text-right">{pct}%</span>
+                      <span className="font-medium w-20 text-right">{fmt(p.spend)}</span>
+                      <Badge variant="outline" className={`text-[10px] w-16 justify-center ${badge.cls}`}>
+                        {badge.label}
+                      </Badge>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Source of truth: Windsor (authoritative) &gt; uploaded CSV &gt; live. Matches the Finances unified view.
+              {hasUpload && ' Upload-tagged platforms are from a manual CSV — connect them in Windsor for daily auto-sync.'}
+            </p>
           </div>
         )}
       </CardContent>
@@ -312,7 +336,7 @@ export function CommandCenterView({ days }: { days: number }) {
           <TopProducts days={days} />
         </div>
         <div className="space-y-4">
-          <WindsorAdSpendCard days={days} />
+          <AdSpendByChannelCard days={days} />
           <WastedSpendView days={days} compact />
           <TopStates days={days} />
           <CustomerInsight days={days} />

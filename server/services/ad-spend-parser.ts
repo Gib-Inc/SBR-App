@@ -91,6 +91,11 @@ export function detectPlatform(keys: string[], fileName = ""): string {
   if (hay.includes("tiktok")) return "TIKTOK";
   if (hay.includes("microsoft") || hay.includes("bing")) return "MICROSOFT";
   if (hay.includes("pinterest")) return "PINTEREST";
+  // Signature columns — Meta/Google exports often have a generic filename
+  // ("SBR-Daily-Spend.csv") but unmistakable headers. Tag by those so the spend
+  // lands in the right platform bucket instead of OTHER.
+  if (hay.includes("amountspentusd") || hay.includes("adsetbudget") || hay.includes("resultindicator") || hay.includes("reportingstarts")) return "META";
+  if (hay.includes("costmicros") || hay.includes("adgroup") || (hay.includes("impressions") && hay.includes("searchimprshare"))) return "GOOGLE";
   return "OTHER";
 }
 

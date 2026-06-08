@@ -123,6 +123,94 @@ export function computeConfidence(snap: Record<string, unknown>): number {
   return Math.round((populated / CORE_FINANCIAL_FIELDS.length) * 100);
 }
 
+export interface QbBalanceSheet {
+  totalAssets: number | null;
+  totalCurrentAssets: number | null;
+  totalLiabilities: number | null;
+  totalCurrentLiabilities: number | null;
+  totalEquity: number | null;
+}
+
+/**
+ * Extract the position totals from a QuickBooks BalanceSheet report. Same nested
+ * Rows tree as the P&L; summary rows carry a `group` and/or a label in the first
+ * ColData cell. We collect totals by both, then derive Total Liabilities from
+ * Liabilities-and-Equity minus Equity when QB doesn't emit it directly. Missing
+ * values stay null — never guessed.
+ */
+export function parseBalanceSheet(report: any): QbBalanceSheet {
+  const byKey: Record<string, number> = {};
+  const norm = (s: any) => String(s ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const toNum = (raw: any): number => (raw == null || raw === "" ? NaN : Number(String(raw).replace(/[$,]/g, "")));
+  const visit = (rows: any[]) => {
+    for (const row of rows || []) {
+      const cd = row?.Summary?.ColData;
+      if (Array.isArray(cd) && cd.length) {
+        const n = toNum(cd[cd.length - 1]?.value);
+        if (!Number.isNaN(n)) {
+          const label = norm(cd[0]?.value);
+          if (label) byKey[label] = n;
+          if (row?.group) byKey[norm(row.group)] = n;
+        }
+      }
+      if (row?.Rows?.Row) visit(row.Rows.Row);
+    }
+  };
+  visit(report?.Rows?.Row || []);
+  const pick = (...keys: string[]): number | null => {
+    for (const k of keys) { const nk = norm(k); if (nk in byKey) return byKey[nk]; }
+    return null;
+  };
+  let totalLiabilities = pick("TotalLiabilities", "Total Liabilities");
+  const liabAndEquity = pick("TotalLiabilitiesAndEquity", "Total Liabilities and Equity");
+  const totalEquity = pick("TotalEquity", "Total Equity", "TotalStockholdersEquity");
+  if (totalLiabilities == null && liabAndEquity != null && totalEquity != null) {
+    totalLiabilities = Math.round((liabAndEquity - totalEquity) * 100) / 100;
+  }
+  return {
+    totalAssets: pick("TotalAssets", "Total Assets"),
+    totalCurrentAssets: pick("TotalCurrentAssets", "Total Current Assets"),
+    totalLiabilities,
+    totalCurrentLiabilities: pick("TotalCurrentLiabilities", "Total Current Liabilities"),
+    totalEquity,
+  };
+}
+
+export interface BillDue {
+  vendor: string;
+  amount: number;
+  dueDate: string | null;
+  daysOverdue: number;
+  docNumber: string | null;
+}
+
+/** Turn open QuickBooks bills into a ranked "what to pay" list — overdue first,
+ *  then largest. Top 25. Pure (no IO). */
+export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date()): BillDue[] {
+  if (!openBills) return [];
+  const day = 86400000;
+  return openBills
+    .map((b) => {
+      const amount = Math.round((Number(b?.Balance) || 0) * 100) / 100;
+      const dueDate = b?.DueDate || null;
+      let daysOverdue = 0;
+      if (dueDate) {
+        const due = Date.parse(String(dueDate) + "T00:00:00Z");
+        if (!Number.isNaN(due)) daysOverdue = Math.max(0, Math.floor((asOf.getTime() - due) / day));
+      }
+      return {
+        vendor: String(b?.VendorRef?.name || b?.VendorRef?.value || "Unknown vendor"),
+        amount,
+        dueDate,
+        daysOverdue,
+        docNumber: b?.DocNumber ? String(b.DocNumber) : null,
+      };
+    })
+    .filter((b) => b.amount > 0)
+    .sort((a, b) => b.daysOverdue - a.daysOverdue || b.amount - a.amount)
+    .slice(0, 25);
+}
+
 const toNumericString = (n: number | null): string | null => (n == null ? null : round2(n).toFixed(2));
 
 /**
@@ -182,6 +270,15 @@ export async function captureFinancialSnapshot(
     totalIncome: pl.totalIncome,
   });
 
+  // Full live balance-sheet totals + a ranked "bills to pay" list. Stored under
+  // raw.qbBalanceSheet (NOT raw.balanceSheet, which is reserved for the uploaded
+  // accountant BS with named-loan rates) so the two never collide.
+  const qbBalanceSheet = raw.bsReport != null ? parseBalanceSheet(raw.bsReport) : null;
+  if (raw.bsReport != null && qbBalanceSheet?.totalLiabilities == null && qbBalanceSheet?.totalAssets == null) {
+    gaps.push("DATA GAPPED: Balance Sheet totals (unrecognized report layout)");
+  }
+  const billsDue = buildBillsDue(raw.openBills);
+
   const toInsert: InsertQbFinancialSnapshot = {
     capturedAt: new Date(),
     cashOnHand: toNumericString(cashOnHand),
@@ -198,7 +295,7 @@ export async function captureFinancialSnapshot(
     realmId: raw.realmId,
     dataGaps: (gaps as unknown) ?? null,
     confidence,
-    raw: null,
+    raw: { qbBalanceSheet, billsDue } as any,
   };
 
   const saved = await storage.createQbFinancialSnapshot(toInsert);

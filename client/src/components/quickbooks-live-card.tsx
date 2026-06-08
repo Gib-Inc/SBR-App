@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw, Loader2, Landmark, ArrowDownCircle, ArrowUpCircle, Cloud } from "lucide-react";
 
 interface AgingBuckets { current?: number; d1_30?: number; d31_60?: number; d61_90?: number; d90_plus?: number; }
+export interface QbBalanceSheet { totalAssets: number | null; totalCurrentAssets: number | null; totalLiabilities: number | null; totalCurrentLiabilities: number | null; totalEquity: number | null; }
+export interface BillDue { vendor: string; amount: number; dueDate: string | null; daysOverdue: number; docNumber: string | null; }
 export interface QbLive {
   capturedAt: string;
   cashOnHand: number | null;
@@ -21,6 +23,8 @@ export interface QbLive {
   plPeriodEnd: string | null;
   confidence: number | null;
   dataGaps: string[];
+  balanceSheet?: QbBalanceSheet | null;
+  billsDue?: BillDue[];
 }
 
 const fmt = (v: number | null | undefined) =>
@@ -64,7 +68,7 @@ function AgingRow({ buckets, overdueTone }: { buckets: AgingBuckets | null; over
   );
 }
 
-export function QuickBooksLiveCard({ qbLive }: { qbLive: QbLive | null }) {
+export function QuickBooksLiveCard({ qbLive, netCashPosition }: { qbLive: QbLive | null; netCashPosition?: number | null }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const refresh = useMutation({
@@ -129,6 +133,49 @@ export function QuickBooksLiveCard({ qbLive }: { qbLive: QbLive | null }) {
             <div><div className="text-muted-foreground">Gross Profit</div><div className="font-semibold tabular-nums">{fmt(qbLive.grossProfit)}</div></div>
             <div><div className="text-muted-foreground">Operating Exp.</div><div className="font-semibold tabular-nums">{fmt(qbLive.operatingExpenses)}</div></div>
             <div><div className="text-muted-foreground">Net Income (30d)</div><div className={`font-semibold tabular-nums ${qbLive.netIncome != null && qbLive.netIncome < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(qbLive.netIncome)}</div></div>
+          </div>
+        )}
+
+        {/* Live balance-sheet totals + net cash position */}
+        {qbLive && (qbLive.balanceSheet || netCashPosition != null) && (
+          <div className="mt-3 pt-3 border-t">
+            <div className="text-xs font-medium text-muted-foreground mb-1.5">Balance Sheet (live)</div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+              <div><div className="text-muted-foreground">Total Assets</div><div className="font-semibold tabular-nums">{fmt(qbLive.balanceSheet?.totalAssets)}</div></div>
+              <div><div className="text-muted-foreground">Current Assets</div><div className="font-semibold tabular-nums">{fmt(qbLive.balanceSheet?.totalCurrentAssets)}</div></div>
+              <div><div className="text-muted-foreground">Total Liabilities</div><div className="font-semibold tabular-nums text-red-600 dark:text-red-400">{fmt(qbLive.balanceSheet?.totalLiabilities)}</div></div>
+              <div><div className="text-muted-foreground">Equity</div><div className={`font-semibold tabular-nums ${(qbLive.balanceSheet?.totalEquity ?? 0) < 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(qbLive.balanceSheet?.totalEquity)}</div></div>
+              <div><div className="text-muted-foreground">Net Cash Position</div><div className={`font-semibold tabular-nums ${(netCashPosition ?? 0) < 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>{fmt(netCashPosition)}</div></div>
+            </div>
+            <div className="text-[11px] text-muted-foreground mt-1">Net cash position = cash + receivables − bills due (what cash would be if everything outstanding settled).</div>
+          </div>
+        )}
+
+        {/* Bills to pay — ranked, overdue first */}
+        {qbLive?.billsDue && qbLive.billsDue.length > 0 && (
+          <div className="mt-3 pt-3 border-t">
+            <div className="text-xs font-medium text-muted-foreground mb-1.5">Bills to pay · {qbLive.billsDue.length} open</div>
+            <div className="max-h-56 overflow-y-auto rounded border">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/50"><tr className="text-left">
+                  <th className="px-2 py-1 font-medium">Vendor</th>
+                  <th className="px-2 py-1 font-medium">Due</th>
+                  <th className="px-2 py-1 font-medium text-right">Amount</th>
+                </tr></thead>
+                <tbody>
+                  {qbLive.billsDue.map((b, i) => (
+                    <tr key={i} className="border-t" data-testid={`bill-due-${i}`}>
+                      <td className="px-2 py-1 truncate max-w-[180px]" title={b.vendor}>{b.vendor}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        {b.dueDate || "—"}
+                        {b.daysOverdue > 0 && <span className="ml-1 text-[10px] text-red-600 dark:text-red-400">{b.daysOverdue}d late</span>}
+                      </td>
+                      <td className={`px-2 py-1 text-right tabular-nums font-medium ${b.daysOverdue > 0 ? "text-red-600 dark:text-red-400" : ""}`}>{fmt(b.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </CardContent>

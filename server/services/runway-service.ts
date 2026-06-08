@@ -43,7 +43,9 @@ export interface RunwayComputation {
  * client-side What-If slider) without writing a row on every page load.
  */
 export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayComputation; error?: string }> {
-  const snap = await storage.getLatestQbFinancialSnapshot();
+  // Prefer the latest LIVE QuickBooks capture (real cash + 30-day OpEx); fall back
+  // to the most recent snapshot of any kind if no live capture exists yet.
+  const snap = (await storage.getLatestQbLiveSnapshot()) ?? (await storage.getLatestQbFinancialSnapshot());
   if (!snap) {
     return { ok: false, error: "No financial snapshot yet — connect QuickBooks and capture one first." };
   }

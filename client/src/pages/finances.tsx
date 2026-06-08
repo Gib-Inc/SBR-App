@@ -35,7 +35,7 @@ interface BalanceSheet {
   loans?: LoanLine[]; source?: string;
 }
 interface AdChannel { channel: string; spend: number; source?: "live" | "uploaded"; }
-interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
+interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; netCashPosition?: number | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
 
 const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
 const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
@@ -128,7 +128,7 @@ export default function Finances() {
           </div>
 
           {/* Live from QuickBooks — real-time cash, receivables, bills due (+ aging) */}
-          <QuickBooksLiveCard qbLive={data?.qbLive ?? null} />
+          <QuickBooksLiveCard qbLive={data?.qbLive ?? null} netCashPosition={data?.netCashPosition ?? null} />
 
           {/* Accountant's Executive Summary (ITD narrative + ratios) */}
           <ExecutiveSummaryCard />

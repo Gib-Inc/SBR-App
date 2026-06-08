@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bucketAging, parseProfitAndLoss, computeConfidence } from "./qb-financial-service";
+import { bucketAging, parseProfitAndLoss, computeConfidence, parseBalanceSheet, buildBillsDue } from "./qb-financial-service";
 
 describe("bucketAging", () => {
   const asOf = new Date("2026-06-06T12:00:00");
@@ -125,5 +125,60 @@ describe("computeConfidence", () => {
 
   it("treats null/undefined as not populated", () => {
     expect(computeConfidence({ cashOnHand: null, accountsReceivable: undefined })).toBe(0);
+  });
+});
+
+describe("parseBalanceSheet", () => {
+  // QB BalanceSheet report shape: nested Rows, summary rows carry group + ColData.
+  const report = {
+    Rows: { Row: [
+      { group: "TotalCurrentAssets", Summary: { ColData: [{ value: "Total Current Assets" }, { value: "250,330.55" }] } },
+      { group: "TotalAssets", Summary: { ColData: [{ value: "Total Assets" }, { value: "360,451.23" }] } },
+      { group: "TotalCurrentLiabilities", Summary: { ColData: [{ value: "Total Current Liabilities" }, { value: "1,001,782" }] } },
+      { Summary: { ColData: [{ value: "Total Equity" }, { value: "-907,465.34" }] } }, // no group, label only
+      { group: "TotalLiabilitiesAndEquity", Summary: { ColData: [{ value: "TOTAL LIABILITIES AND EQUITY" }, { value: "360,451.23" }] } },
+    ] },
+  };
+
+  it("extracts the headline totals (incl. $ and commas)", () => {
+    const bs = parseBalanceSheet(report);
+    expect(bs.totalAssets).toBe(360451.23);
+    expect(bs.totalCurrentAssets).toBe(250330.55);
+    expect(bs.totalEquity).toBe(-907465.34); // picked up by label even without a group
+  });
+
+  it("derives Total Liabilities from Liabilities+Equity − Equity when absent", () => {
+    const bs = parseBalanceSheet(report);
+    // 360,451.23 − (−907,465.34) = 1,267,916.57
+    expect(bs.totalLiabilities).toBeCloseTo(1267916.57, 2);
+  });
+
+  it("returns nulls (never guesses) for an unrecognized report", () => {
+    expect(parseBalanceSheet({})).toEqual({ totalAssets: null, totalCurrentAssets: null, totalLiabilities: null, totalCurrentLiabilities: null, totalEquity: null });
+  });
+});
+
+describe("buildBillsDue", () => {
+  const asOf = new Date("2026-06-08T12:00:00Z");
+
+  it("ranks overdue first then largest, with vendor + days late", () => {
+    const out = buildBillsDue([
+      { Balance: 715, DueDate: "2026-05-20", VendorRef: { name: "FX Industries" }, DocNumber: "B-1" },     // 19d late
+      { Balance: 9451, DueDate: "2026-04-01", VendorRef: { name: "Liston Metalworks" } },                   // ~68d late
+      { Balance: 26964.64, DueDate: "2026-06-30", VendorRef: { value: "42" } },                              // not due yet
+      { Balance: 0, DueDate: "2026-01-01", VendorRef: { name: "Zero" } },                                    // dropped (0 balance)
+    ], asOf);
+    expect(out).toHaveLength(3);
+    expect(out[0].vendor).toBe("Liston Metalworks"); // most overdue
+    expect(out[0].daysOverdue).toBeGreaterThan(60);
+    expect(out[2].daysOverdue).toBe(0);              // future-dated bill, not late
+    expect(out[2].vendor).toBe("42");                // falls back to VendorRef.value
+  });
+
+  it("handles null bills and missing due dates", () => {
+    expect(buildBillsDue(null)).toEqual([]);
+    const out = buildBillsDue([{ Balance: 100 }], asOf);
+    expect(out[0].daysOverdue).toBe(0);
+    expect(out[0].vendor).toBe("Unknown vendor");
   });
 });

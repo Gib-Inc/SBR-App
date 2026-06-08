@@ -23413,7 +23413,15 @@ Generate only the email body text, no subject line.`;
         plPeriodEnd: (qbLive as any).plPeriodEnd ?? null,
         confidence: (qbLive as any).confidence ?? null,
         dataGaps: (qbLive as any).dataGaps ?? [],
+        balanceSheet: ((qbLive as any).raw)?.qbBalanceSheet ?? null, // live BS totals
+        billsDue: ((qbLive as any).raw)?.billsDue ?? [],             // ranked "what to pay"
       } : null;
+
+      // Net cash position = live cash + receivables − payables (what cash would be
+      // if everything outstanding settled). A blunt but honest liquidity read.
+      const netCashPosition = (qbLiveOut && qbLiveOut.cashOnHand != null)
+        ? Math.round(((qbLiveOut.cashOnHand) + (qbLiveOut.accountsReceivable || 0) - (qbLiveOut.accountsPayable || 0)) * 100) / 100
+        : null;
 
       // Live QB cash is the freshest cash-on-hand — overlay it onto the balance
       // sheet's cash so the headline reflects reality, not a stale upload.
@@ -23429,6 +23437,7 @@ Generate only the email body text, no subject line.`;
         balanceSheetSource,
         balanceSheetDataGaps: useUploaded ? ((bsSnapshot as any)?.dataGaps ?? []) : [],
         qbLive: qbLiveOut,
+        netCashPosition,
         adChannels,
         adChannelsWindowDays: 30,
       });

@@ -158,6 +158,9 @@ interface QBOpenDoc {
   Balance?: number;
   DueDate?: string;
   TxnDate?: string;
+  DocNumber?: string;
+  VendorRef?: { value: string; name?: string };
+  CustomerRef?: { value: string; name?: string };
 }
 
 export interface QBFinancialRaw {
@@ -165,6 +168,7 @@ export interface QBFinancialRaw {
   openInvoices: QBOpenDoc[] | null;
   openBills: QBOpenDoc[] | null;
   plReport: any | null;
+  bsReport: any | null;
   plPeriodStart: string | null;
   plPeriodEnd: string | null;
   realmId: string | null;
@@ -455,11 +459,23 @@ export class QuickBooksClient {
       errors.push(`DATA GAPPED: P&L summary — ${e?.message ?? e}`);
     }
 
+    // Balance Sheet (as of today) — total assets / liabilities / equity + current
+    // splits. Gives the full live financial position, not just cash/AR/AP.
+    let bsReport: any | null = null;
+    try {
+      bsReport = await this.apiRequest<any>(
+        `/reports/BalanceSheet?end_date=${plPeriodEnd}&accounting_method=Accrual`,
+      );
+    } catch (e: any) {
+      errors.push(`DATA GAPPED: Balance Sheet — ${e?.message ?? e}`);
+    }
+
     return {
       bankAccounts,
       openInvoices,
       openBills,
       plReport,
+      bsReport,
       plPeriodStart,
       plPeriodEnd,
       realmId: this.auth.realmId,

@@ -31,6 +31,7 @@ import { SupplierCommunications } from "@/components/supplier-communications";
 import { SupplierForecast } from "@/components/supplier-forecast";
 import { SupplierTimeline } from "@/components/supplier-timeline";
 import { SupplierReliability } from "@/components/supplier-reliability";
+import { SupplierCatalog } from "@/components/supplier-catalog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Supplier } from "@shared/schema";
@@ -193,8 +194,9 @@ export function EditSupplierDialog({
             const isStrategic = (supplier as any).tier === "strategic";
             return (
               <Tabs defaultValue="details" className="w-full">
-                <TabsList className={`grid w-full ${isStrategic ? "max-w-2xl grid-cols-4" : "max-w-sm grid-cols-3"}`}>
+                <TabsList className={`grid w-full ${isStrategic ? "max-w-3xl grid-cols-5" : "max-w-md grid-cols-4"}`}>
                   <TabsTrigger value="details" data-testid="tab-supplier-details">Details</TabsTrigger>
+                  <TabsTrigger value="catalog" data-testid="tab-supplier-catalog">Catalog</TabsTrigger>
                   <TabsTrigger value="performance" data-testid="tab-supplier-performance">Performance</TabsTrigger>
                   {isStrategic && (
                     <TabsTrigger value="forecast" data-testid="tab-supplier-forecast">Forecast</TabsTrigger>
@@ -203,6 +205,9 @@ export function EditSupplierDialog({
                     Communications
                   </TabsTrigger>
                 </TabsList>
+                <TabsContent value="catalog" className="mt-4 max-h-[60vh] overflow-y-auto">
+                  <SupplierCatalog supplierId={supplier.id} supplierName={supplier.name} />
+                </TabsContent>
                 <TabsContent value="performance" className="mt-4 max-h-[60vh] overflow-y-auto space-y-4">
                   <SupplierReliability supplierId={supplier.id} />
                   <SupplierPerformance supplierId={supplier.id} />

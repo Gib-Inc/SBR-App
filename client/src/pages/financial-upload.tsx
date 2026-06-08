@@ -56,7 +56,14 @@ const DOC_TYPES: { id: DocType; label: string; icon: any; accept: string; hint: 
 
 export default function FinancialUpload() {
   const { toast } = useToast();
-  const [docType, setDocType] = useState<DocType>("pl_xlsx");
+  const [docType, setDocType] = useState<DocType>(() => {
+    // Allow deep-linking to a type, e.g. /financial-upload?type=ad_spend from Ad Analytics.
+    try {
+      const t = new URLSearchParams(window.location.search).get("type");
+      if (t && ["pl_xlsx", "balance_sheet", "bank_statement", "ad_spend"].includes(t)) return t as DocType;
+    } catch { /* no window/search */ }
+    return "pl_xlsx";
+  });
   const [parsing, setParsing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -176,8 +183,8 @@ export default function FinancialUpload() {
   return (
     <div className="mx-auto max-w-3xl p-6 space-y-5">
       <div>
-        <h1 className="text-xl font-semibold flex items-center gap-2"><FileText className="h-5 w-5" /> Financial Documents</h1>
-        <p className="text-sm text-muted-foreground">Choose a document type, upload it, and review the figures before anything updates.</p>
+        <h1 className="text-xl font-semibold flex items-center gap-2"><FileText className="h-5 w-5" /> Financial &amp; Ad Documents</h1>
+        <p className="text-sm text-muted-foreground">P&amp;L, balance sheet, bank statement, or ad report (Meta / Google / Amazon). It auto-detects the type and accepts any format — you review before anything updates.</p>
       </div>
 
       {/* Doc-type selector */}

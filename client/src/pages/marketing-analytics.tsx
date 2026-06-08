@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, UploadCloud } from 'lucide-react';
+import { Link } from 'wouter';
 import { KPISummaryBar } from '@/components/marketing-analytics/kpi-summary-bar';
 import { CommandCenterView } from '@/components/marketing-analytics/command-center-view';
 import { SpendPacingView } from '@/components/marketing-analytics/spend-pacing-view';
@@ -38,15 +39,20 @@ export default function MarketingAnalytics() {
             Command center, ad performance, customer intelligence, product ROAS.
           </p>
         </div>
-        <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v))}>
-          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="7">Last 7 days</SelectItem>
-            <SelectItem value="14">Last 14 days</SelectItem>
-            <SelectItem value="30">Last 30 days</SelectItem>
-            <SelectItem value="90">Last 90 days</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2 shrink-0">
+          <Link href="/financial-upload?type=ad_spend" className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium hover:bg-muted whitespace-nowrap" data-testid="link-upload-ad">
+            <UploadCloud className="h-3.5 w-3.5" /> Upload ad report
+          </Link>
+          <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v))}>
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7">Last 7 days</SelectItem>
+              <SelectItem value="14">Last 14 days</SelectItem>
+              <SelectItem value="30">Last 30 days</SelectItem>
+              <SelectItem value="90">Last 90 days</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <KPISummaryBar />

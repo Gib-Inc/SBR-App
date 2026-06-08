@@ -48,6 +48,19 @@ export class PurchaseOrderEmailService {
     return (process.env.SENDGRID_REPLY_TO || "").trim();
   }
 
+  // Accountant / internal copies on every PO. Set PO_CC_EMAILS to a comma- or
+  // semicolon-separated list (e.g. "rck1967@hotmail.com"). De-duped, and any
+  // address equal to the supplier recipient is dropped (SendGrid rejects a CC
+  // that duplicates the To recipient).
+  private getCcEmails(recipientEmail: string): string[] {
+    const raw = (process.env.PO_CC_EMAILS || "")
+      .split(/[,;]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const to = (recipientEmail || "").toLowerCase();
+    return Array.from(new Set(raw)).filter((e) => e.toLowerCase() !== to);
+  }
+
   private generateAckToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
@@ -137,6 +150,7 @@ export class PurchaseOrderEmailService {
           name: this.getFromName(),
         },
         ...(this.getReplyToEmail() ? { replyTo: this.getReplyToEmail() } : {}),
+        ...(this.getCcEmails(recipientEmail).length ? { cc: this.getCcEmails(recipientEmail) } : {}),
         subject,
         text,
         html,

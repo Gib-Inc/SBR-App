@@ -204,3 +204,31 @@ export async function captureFinancialSnapshot(
   const saved = await storage.createQbFinancialSnapshot(toInsert);
   return { ok: true, snapshot: saved };
 }
+
+let qbFinancialArmed = false;
+
+/**
+ * Arm the daily live-QuickBooks financial capture. Fires ~30s after boot, then
+ * every 24h. No-ops gracefully when QuickBooks isn't connected (captureFinancial
+ * Snapshot returns ok:false). Idempotent via the `armed` guard. Fire-and-forget
+ * from startup so a slow QB call never blocks listen().
+ */
+export function startQbFinancialScheduler(): void {
+  if (qbFinancialArmed) return;
+  qbFinancialArmed = true;
+  const run = async () => {
+    try {
+      const r = await captureFinancialSnapshot("system");
+      if (r.ok) {
+        console.log(`[QB Financials] Daily snapshot captured (cash=${r.snapshot?.cashOnHand ?? "—"}, confidence=${r.snapshot?.confidence ?? "—"}).`);
+      } else {
+        console.log(`[QB Financials] Daily snapshot skipped: ${r.error}`);
+      }
+    } catch (err: any) {
+      console.error("[QB Financials] Scheduler run failed:", err?.message ?? err);
+    }
+  };
+  setTimeout(() => { void run(); }, 30_000); // initial run after boot settles
+  const t = setInterval(() => { void run(); }, 24 * 60 * 60 * 1000);
+  if (typeof (t as any)?.unref === "function") (t as any).unref();
+}

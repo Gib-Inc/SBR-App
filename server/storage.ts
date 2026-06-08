@@ -676,6 +676,8 @@ export interface IStorage {
   // CIPH.R Phase 1 — financial-position snapshots
   createQbFinancialSnapshot(snapshot: InsertQbFinancialSnapshot): Promise<QbFinancialSnapshot>;
   getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined>;
+  getLatestQbLiveSnapshot(): Promise<QbFinancialSnapshot | undefined>;
+  getLatestQbBalanceSheetSnapshot(): Promise<QbFinancialSnapshot | undefined>;
   getQbFinancialSnapshots(limit?: number): Promise<QbFinancialSnapshot[]>;
   // CIPH.R Phase 2 — runway forecasts + ad-spend window query
   getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
@@ -3790,6 +3792,12 @@ export class MemStorage implements IStorage {
     throw new Error('QuickBooks not supported in MemStorage');
   }
   async getLatestQbFinancialSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    return undefined;
+  }
+  async getLatestQbLiveSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    return undefined;
+  }
+  async getLatestQbBalanceSheetSnapshot(): Promise<QbFinancialSnapshot | undefined> {
     return undefined;
   }
   async getQbFinancialSnapshots(_limit?: number): Promise<QbFinancialSnapshot[]> {
@@ -7566,6 +7574,28 @@ export class PostgresStorage implements IStorage {
     const result = await this.db
       .select()
       .from(schema.qbFinancialSnapshots)
+      .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
+      .limit(1);
+    return result[0];
+  }
+  // Latest LIVE QuickBooks capture (cash/AR/AP/P&L populated). Filtered on
+  // cash_on_hand so a periodic uploaded-balance-sheet snapshot doesn't shadow it.
+  async getLatestQbLiveSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    const result = await this.db
+      .select()
+      .from(schema.qbFinancialSnapshots)
+      .where(isNotNull(schema.qbFinancialSnapshots.cashOnHand))
+      .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
+      .limit(1);
+    return result[0];
+  }
+  // Latest snapshot carrying an uploaded balance sheet (raw.balanceSheet). Kept
+  // separate so scheduling daily live captures never buries the accountant's BS.
+  async getLatestQbBalanceSheetSnapshot(): Promise<QbFinancialSnapshot | undefined> {
+    const result = await this.db
+      .select()
+      .from(schema.qbFinancialSnapshots)
+      .where(drizzleSql`${schema.qbFinancialSnapshots.raw} -> 'balanceSheet' IS NOT NULL`)
       .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
       .limit(1);
     return result[0];

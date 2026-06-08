@@ -211,6 +211,17 @@ export default async function runApp(
     }
   })();
 
+  // CIPH.R — arm the daily live-QuickBooks financial capture (cash on hand, A/R +
+  // aging, A/P + aging, P&L). No-op until QuickBooks is connected. Fire-and-forget.
+  void (async () => {
+    try {
+      const { startQbFinancialScheduler } = await import("./services/qb-financial-service");
+      startQbFinancialScheduler();
+    } catch (err: any) {
+      console.error("[QB Financials] Failed to arm:", err?.message ?? err);
+    }
+  })();
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

@@ -23349,9 +23349,10 @@ Generate only the email body text, no subject line.`;
     try {
       const isoDaysAgo = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
       const today = new Date().toISOString().slice(0, 10);
-      const [monthly, snapshot, adRows] = await Promise.all([
+      const [monthly, bsSnapshot, qbLive, adRows] = await Promise.all([
         storage.getMonthlyFinancials(),
-        storage.getLatestQbFinancialSnapshot(),
+        storage.getLatestQbBalanceSheetSnapshot(), // uploaded accountant BS (loans/equity)
+        storage.getLatestQbLiveSnapshot(),         // live QB capture (cash/AR/AP/P&L)
         storage.getAdMetricsInRange(isoDaysAgo(30), today),
       ]);
       const { FINANCIAL_SEED } = await import("./data/financial-seed");
@@ -23388,18 +23389,46 @@ Generate only the email body text, no subject line.`;
       // Prefer an uploaded balance sheet (stored in the latest snapshot's
       // raw.balanceSheet, incl. named loans) over the static seed. Anti-
       // hallucination: only switch sources when real fields came through.
-      const uploadedBS: any = (snapshot as any)?.raw?.balanceSheet ?? null;
+      const uploadedBS: any = (bsSnapshot as any)?.raw?.balanceSheet ?? null;
       const useUploaded = uploadedBS && (uploadedBS.totalLiabilities != null || uploadedBS.cash != null);
-      const balanceSheet = useUploaded ? uploadedBS : FINANCIAL_SEED.balanceSheet;
+      let balanceSheet = useUploaded ? uploadedBS : FINANCIAL_SEED.balanceSheet;
       const balanceSheetSource = useUploaded ? (uploadedBS.source || "accountant_upload") : "accountant_seed";
+
+      // Live QuickBooks position (cash on hand, A/R + aging, A/P + aging, P&L) from
+      // the most recent daily capture — the real-time operational layer on top of
+      // the (less frequent) accountant balance sheet.
+      const num = (v: any) => (v == null ? null : Number(v));
+      const qbLiveOut = qbLive ? {
+        capturedAt: (qbLive as any).capturedAt,
+        cashOnHand: num((qbLive as any).cashOnHand),
+        accountsReceivable: num((qbLive as any).accountsReceivable),
+        accountsPayable: num((qbLive as any).accountsPayable),
+        arAging: (qbLive as any).arAging ?? null,
+        apAging: (qbLive as any).apAging ?? null,
+        netIncome: num((qbLive as any).netIncome),
+        grossProfit: num((qbLive as any).grossProfit),
+        totalIncome: num((qbLive as any).totalIncome),
+        operatingExpenses: num((qbLive as any).operatingExpenses),
+        plPeriodStart: (qbLive as any).plPeriodStart ?? null,
+        plPeriodEnd: (qbLive as any).plPeriodEnd ?? null,
+        confidence: (qbLive as any).confidence ?? null,
+        dataGaps: (qbLive as any).dataGaps ?? [],
+      } : null;
+
+      // Live QB cash is the freshest cash-on-hand — overlay it onto the balance
+      // sheet's cash so the headline reflects reality, not a stale upload.
+      if (qbLiveOut?.cashOnHand != null) {
+        balanceSheet = { ...balanceSheet, cash: qbLiveOut.cashOnHand };
+      }
 
       res.json({
         success: true,
         monthly,
-        snapshot: snapshot ?? null,
+        snapshot: bsSnapshot ?? null,
         balanceSheet,
         balanceSheetSource,
-        balanceSheetDataGaps: useUploaded ? ((snapshot as any)?.dataGaps ?? []) : [],
+        balanceSheetDataGaps: useUploaded ? ((bsSnapshot as any)?.dataGaps ?? []) : [],
+        qbLive: qbLiveOut,
         adChannels,
         adChannelsWindowDays: 30,
       });

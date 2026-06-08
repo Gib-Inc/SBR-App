@@ -9,6 +9,7 @@ import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
+import { QuickBooksLiveCard, type QbLive } from "@/components/quickbooks-live-card";
 import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight, UploadCloud } from "lucide-react";
 import { Link } from "wouter";
 
@@ -34,7 +35,7 @@ interface BalanceSheet {
   loans?: LoanLine[]; source?: string;
 }
 interface AdChannel { channel: string; spend: number; source?: "live" | "uploaded"; }
-interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
+interface Overview { success: boolean; monthly: MonthlyRow[]; balanceSheet?: BalanceSheet; balanceSheetSource?: string; balanceSheetDataGaps?: string[]; qbLive?: QbLive | null; adChannels?: AdChannel[]; adChannelsWindowDays?: number; }
 
 const n = (v: string | number | null | undefined) => (v == null ? 0 : Number(v));
 const fmt = (v: number | null | undefined) => (v == null ? "—" : (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString());
@@ -125,6 +126,9 @@ export default function Finances() {
             <Kpi label="2026 Net Income" value={fmt(ytdNI)} sub="YTD" tone={ytdNI < 0 ? "crit" : ""} />
             <Kpi label="Total Liabilities" value={bs ? fmt(bs.totalLiabilities) : "—"} sub="all debt" tone="crit" />
           </div>
+
+          {/* Live from QuickBooks — real-time cash, receivables, bills due (+ aging) */}
+          <QuickBooksLiveCard qbLive={data?.qbLive ?? null} />
 
           {/* Accountant's Executive Summary (ITD narrative + ratios) */}
           <ExecutiveSummaryCard />

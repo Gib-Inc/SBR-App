@@ -22,7 +22,6 @@ import { LtvCacView } from '@/components/marketing-analytics/ltv-cac-view';
 import { CustomerCohortsView } from '@/components/marketing-analytics/customer-cohorts-view';
 import { BomCompletenessView } from '@/components/marketing-analytics/bom-completeness-view';
 import { ChannelDeepDiveView } from '@/components/marketing-analytics/channel-deep-dive-view';
-import { AdDataUpload } from '@/components/marketing-analytics/ad-data-upload';
 
 export default function MarketingAnalytics() {
   const [days, setDays] = useState(30);
@@ -83,7 +82,7 @@ export default function MarketingAnalytics() {
         <TabsContent value="history"><CMOHistoryView /></TabsContent>
         <TabsContent value="spend"><SpendPacingView days={days} /></TabsContent>
         <TabsContent value="channels"><ChannelMixView days={days} /></TabsContent>
-        <TabsContent value="deep-dive"><div className="space-y-4"><AdDataUpload /><ChannelDeepDiveView days={days} /></div></TabsContent>
+        <TabsContent value="deep-dive"><ChannelDeepDiveView days={days} /></TabsContent>
         <TabsContent value="breakeven"><div className="space-y-4"><BreakevenRoasView days={days} /><BomCompletenessView days={days} /></div></TabsContent>
         <TabsContent value="customers"><div className="space-y-4"><CustomerCohortsView /><CustomerSplitView days={days} /></div></TabsContent>
         <TabsContent value="ltvcac"><LtvCacView /></TabsContent>

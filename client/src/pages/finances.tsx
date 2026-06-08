@@ -9,7 +9,7 @@ import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
-import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight } from "lucide-react";
+import { DollarSign, TrendingDown, AlertTriangle, Wallet, Landmark, Megaphone, ArrowRight, UploadCloud } from "lucide-react";
 import { Link } from "wouter";
 
 /**
@@ -102,7 +102,12 @@ export default function Finances() {
           <h2 className="text-lg font-semibold flex items-center gap-2"><DollarSign className="h-5 w-5" /> Finances</h2>
           <p className="text-xs text-muted-foreground">CIPH.R financial command center{bs ? ` · balance sheet as of ${bs.asOf}` : ""}{data?.balanceSheetSource === "accountant_seed" ? " · source: accountant export (QuickBooks live once connected)" : data?.balanceSheetSource === "accountant_upload" ? " · source: uploaded balance sheet" : ""}</p>
         </div>
-        {bs && <Badge className={status.tone === "crit" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" : status.tone === "warn" ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" : "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"} data-testid="badge-company-health">{status.label}</Badge>}
+        <div className="flex items-center gap-2 shrink-0">
+          <Link href="/financial-upload" className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 whitespace-nowrap" data-testid="link-upload-financials">
+            <UploadCloud className="h-3.5 w-3.5" /> Upload a document
+          </Link>
+          {bs && <Badge className={status.tone === "crit" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" : status.tone === "warn" ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200" : "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"} data-testid="badge-company-health">{status.label}</Badge>}
+        </div>
       </div>
 
       {isLoading ? (

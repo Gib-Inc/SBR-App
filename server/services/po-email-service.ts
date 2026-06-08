@@ -40,6 +40,14 @@ export class PurchaseOrderEmailService {
     return process.env.SENDGRID_FROM_EMAIL || "";
   }
 
+  // Where supplier replies should land. When POs send from a domain identity
+  // (e.g. purchasing@stickerburrroller.com) that has no real inbox, set
+  // SENDGRID_REPLY_TO to a monitored address (e.g. a Gmail) so replies aren't
+  // lost. Defaults to the From address when unset.
+  private getReplyToEmail(): string {
+    return (process.env.SENDGRID_REPLY_TO || "").trim();
+  }
+
   private generateAckToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
@@ -122,12 +130,13 @@ export class PurchaseOrderEmailService {
 
       sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 
-      const msg = {
+      const msg: any = {
         to: recipientEmail,
         from: {
           email: this.getFromEmail(),
           name: this.getFromName(),
         },
+        ...(this.getReplyToEmail() ? { replyTo: this.getReplyToEmail() } : {}),
         subject,
         text,
         html,

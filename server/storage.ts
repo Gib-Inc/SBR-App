@@ -8617,9 +8617,14 @@ export class PostgresStorage implements IStorage {
   }
 
   async getInventorySnapshot(_params?: { date?: string }): Promise<any[]> {
-    // Both warehouses are sourced live from the items table:
-    //   - Pyvott qty  = items.extensiv_on_hand_snapshot (written by Extensiv sync)
+    // Both warehouses are sourced live from the items table, for ALL finished
+    // products — NOT just Extensiv-mapped ones. The old `extensiv_sku IS NOT NULL`
+    // filter silently dropped finished goods that lacked an extensiv_sku, so they
+    // showed 0 (or vanished) even when they had real Hildale stock.
+    //   - Pyvott qty  = items.pivot_qty (authoritative Extensiv mirror; matches the
+    //                   physical 3PL count more closely than extensiv_on_hand_snapshot)
     //   - Hildale qty = items.hildale_qty (written by manual count sheet uploads)
+    //   - FX qty      = items.fx_in_process_qty (units being built at FX Industries)
     // SKU normalization: Extensiv auto-created items have sku like "SKU: #101-PSH-M1";
     // we strip the "SKU: " prefix so the UI's group-by-SKU merges rows across warehouses.
     const result: any = await this.db.execute(drizzleSql`
@@ -8628,11 +8633,11 @@ export class PostgresStorage implements IStorage {
         'Pyvott' AS location,
         REGEXP_REPLACE(sku, '^SKU:\\s*', '') AS sku,
         name,
-        COALESCE(extensiv_on_hand_snapshot, 0) AS qty,
-        GREATEST(COALESCE(extensiv_on_hand_snapshot, 0) - COALESCE(available_for_sale_qty, 0), 0) AS promised,
-        'extensiv_live' AS source
+        COALESCE(pivot_qty, 0) AS qty,
+        GREATEST(COALESCE(pivot_qty, 0) - COALESCE(available_for_sale_qty, 0), 0) AS promised,
+        'pivot_qty' AS source
       FROM items
-      WHERE extensiv_sku IS NOT NULL
+      WHERE type = 'finished_product'
       UNION ALL
       SELECT
         CURRENT_DATE::text AS snapshot_date,
@@ -8643,7 +8648,7 @@ export class PostgresStorage implements IStorage {
         0 AS promised,
         'hildale_qty' AS source
       FROM items
-      WHERE extensiv_sku IS NOT NULL
+      WHERE type = 'finished_product'
       UNION ALL
       SELECT
         CURRENT_DATE::text AS snapshot_date,

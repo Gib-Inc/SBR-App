@@ -555,12 +555,33 @@ function ItemTableRow({
             </Button>
           </div>
         ) : (
-          <div
-            className={`cursor-pointer rounded px-2 py-1 hover-elevate ${item.reorderPriority === "core_build" ? "font-semibold" : ""}`}
-            onClick={() => startEdit("name", item.name)}
-            data-testid={`text-item-name-${item.id}`}
-          >
-            {item.name}
+          <div className="space-y-0.5">
+            <div
+              className={`cursor-pointer rounded px-2 py-1 hover-elevate ${item.reorderPriority === "core_build" ? "font-semibold" : ""}`}
+              onClick={() => startEdit("name", item.name)}
+              data-testid={`text-item-name-${item.id}`}
+            >
+              {item.name}
+            </div>
+            {item.type === "finished_product" && (() => {
+              const h = item.hildaleQty ?? 0;
+              const p = item.pivotQty ?? 0;
+              const fx = item.fxInProcessQty ?? 0;
+              const onHand = h + p + fx;
+              return (
+                <div
+                  className="px-2 text-xs text-muted-foreground"
+                  data-testid={`text-item-onhand-${item.id}`}
+                >
+                  <span className={onHand > 0 ? "font-semibold text-foreground" : "font-semibold text-amber-600 dark:text-amber-400"}>
+                    {onHand.toLocaleString()}
+                  </span>{" on hand"}
+                  <span className="text-muted-foreground/70">
+                    {" · Hildale "}{h.toLocaleString()}{" · Pyvott "}{p.toLocaleString()}{fx > 0 ? ` · FX ${fx.toLocaleString()}` : ""}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         )}
       </td>
@@ -2855,6 +2876,14 @@ export default function BOM() {
                         }`}
                       >
                         {group.label} · {group.items.length} item{group.items.length === 1 ? "" : "s"}
+                        {(() => {
+                          const units = group.items.reduce(
+                            (s: number, it: any) =>
+                              s + (it.hildaleQty ?? 0) + (it.pivotQty ?? 0) + (it.fxInProcessQty ?? 0),
+                            0,
+                          );
+                          return units > 0 ? ` · ${units.toLocaleString()} units on hand` : "";
+                        })()}
                       </td>
                     </tr>
                     {group.items.map((item: any) => (

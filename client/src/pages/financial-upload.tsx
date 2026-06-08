@@ -65,6 +65,8 @@ export default function FinancialUpload() {
   const [bs, setBs] = useState<BalanceSheetFields | null>(null);
   const [bank, setBank] = useState<BankFields | null>(null);
   const [ad, setAd] = useState<AdSpendFields | null>(null);
+  const [generic, setGeneric] = useState<{ columns: string[]; rows: Record<string, any>[]; totalRows: number } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null); // friendly "accepted" + what we auto-corrected
   const [meta, setMeta] = useState<{ fileName?: string; detectedFormat?: string; warnings?: string[]; dataGaps?: string[]; confidence?: number } | null>(null);
 
   const [reporter, setReporter] = useState("");
@@ -72,7 +74,7 @@ export default function FinancialUpload() {
   const [discSent, setDiscSent] = useState(false);
   const [recon, setRecon] = useState<{ action: string; field?: string | null; oldValue?: string | null; newValue?: string | null; reason: string }[] | null>(null);
 
-  const reset = () => { setMonths(null); setBs(null); setBank(null); setAd(null); setMeta(null); setApplied(false); setRecon(null); };
+  const reset = () => { setMonths(null); setBs(null); setBank(null); setAd(null); setGeneric(null); setNotice(null); setMeta(null); setApplied(false); setRecon(null); };
   const pickType = (t: DocType) => { setDocType(t); reset(); };
 
   const onFile = async (file: File) => {
@@ -83,14 +85,34 @@ export default function FinancialUpload() {
       fd.append("docType", docType);
       const res = await fetch("/api/financial-upload/parse", { method: "POST", body: fd, credentials: "include" });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Could not parse the file.");
+      // The server accepts every document (success:true). A hard failure only
+      // happens on a true network/server fault — otherwise we always render.
+      if (!json || json.success === false) throw new Error(json?.error || "Upload failed — please retry.");
+
+      // The server is authoritative about the type: it may have auto-detected the
+      // real one (a wrong pick still works) or fallen back to a generic preview.
+      const serverType: DocType | "generic" = json.docType || docType;
+      if (serverType !== docType && ["pl_xlsx", "balance_sheet", "bank_statement", "ad_spend"].includes(serverType)) {
+        setDocType(serverType as DocType); // reflect the corrected type in the selector
+      }
+
       setMeta({ fileName: json.fileName, detectedFormat: json.detectedFormat, warnings: json.warnings, dataGaps: json.dataGaps, confidence: json.confidence });
-      if (docType === "pl_xlsx") setMonths(json.months);
-      else if (docType === "balance_sheet") setBs(json.fields);
-      else if (docType === "ad_spend") setAd(json.fields);
-      else setBank(json.fields);
+      const adj = Array.isArray(json.adjustments) && json.adjustments.length
+        ? ` Auto-corrected: ${json.adjustments.join("; ")}.` : "";
+      setNotice((json.message || "Accepted.") + adj);
+
+      if (serverType === "pl_xlsx") setMonths(json.months || []);
+      else if (serverType === "balance_sheet") setBs(json.fields || null);
+      else if (serverType === "ad_spend") setAd(json.fields || null);
+      else if (serverType === "bank_statement") setBank(json.fields || null);
+      else setGeneric(json.preview || { columns: [], rows: [], totalRows: 0 });
+
+      toast({
+        title: json.reclassified ? "Accepted — auto-detected the type" : "Accepted",
+        description: json.message || undefined,
+      });
     } catch (e: any) {
-      toast({ title: "Couldn't read that file", description: e.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
     } finally {
       setParsing(false);
     }
@@ -149,7 +171,7 @@ export default function FinancialUpload() {
   };
 
   const active = DOC_TYPES.find((d) => d.id === docType)!;
-  const hasReview = (docType === "pl_xlsx" && months) || (docType === "balance_sheet" && bs) || (docType === "bank_statement" && bank) || (docType === "ad_spend" && ad);
+  const hasReview = !!((docType === "pl_xlsx" && months) || (docType === "balance_sheet" && bs) || (docType === "bank_statement" && bank) || (docType === "ad_spend" && ad) || generic);
 
   return (
     <div className="mx-auto max-w-3xl p-6 space-y-5">
@@ -197,6 +219,11 @@ export default function FinancialUpload() {
             </p>
           </CardHeader>
           <CardContent>
+            {notice && (
+              <div className="mb-3 text-xs rounded-md border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 px-2.5 py-2 flex items-start gap-1.5" data-testid="accept-notice">
+                <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" /><span>{notice}</span>
+              </div>
+            )}
             {meta?.warnings && meta.warnings.length > 0 && (
               <div className="mb-3 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1"><AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /><span>{meta.warnings.join(" · ")}</span></div>
             )}
@@ -289,12 +316,45 @@ export default function FinancialUpload() {
               </div>
             )}
 
-            <div className="mt-4 flex items-center gap-3">
-              <Button onClick={apply} disabled={applying || applied} data-testid="button-apply-financials">
-                {applied ? <><CheckCircle2 className="h-4 w-4 mr-1" /> Applied</> : applying ? "Applying…" : `Apply to Finances tab`}
-              </Button>
-              {applied && <span className="text-sm text-green-600 dark:text-green-400">Updated — the Finances tab now reflects this.</span>}
-            </div>
+            {/* Generic accept — we read the file but couldn't map it to a known
+                type. Show the table so nothing is lost; the user can re-pick a
+                type above to map it into the books. */}
+            {generic && (
+              <div data-testid="generic-preview">
+                {generic.columns.length > 0 ? (
+                  <>
+                    <div className="overflow-x-auto rounded border">
+                      <table className="w-full text-xs">
+                        <thead><tr className="bg-muted/50 text-left">
+                          {generic.columns.map((c) => <th key={c} className="px-2 py-1 font-medium whitespace-nowrap">{c}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {generic.rows.slice(0, 25).map((r, i) => (
+                            <tr key={i} className="border-t">
+                              {generic.columns.map((c) => <td key={c} className="px-2 py-1 whitespace-nowrap tabular-nums">{r[c] == null ? "" : String(r[c])}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-2">
+                      Showing {Math.min(25, generic.rows.length)} of {generic.totalRows} row(s). We accepted this file but couldn't match it to a known financial format. If it's a P&L, balance sheet, bank statement, or ad report, pick that type above and re-upload to map it in — otherwise it's recorded here for review.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Accepted. There's nothing to preview for this file type — use a document type above, or "Report a discrepancy" to flag it for the team.</p>
+                )}
+              </div>
+            )}
+
+            {!generic && (
+              <div className="mt-4 flex items-center gap-3">
+                <Button onClick={apply} disabled={applying || applied} data-testid="button-apply-financials">
+                  {applied ? <><CheckCircle2 className="h-4 w-4 mr-1" /> Applied</> : applying ? "Applying…" : `Apply to Finances tab`}
+                </Button>
+                {applied && <span className="text-sm text-green-600 dark:text-green-400">Updated — the Finances tab now reflects this.</span>}
+              </div>
+            )}
 
             {/* Reconciliation decision log — what was added / changed / kept / disregarded */}
             {applied && recon && recon.length > 0 && (

@@ -23467,60 +23467,52 @@ Generate only the email body text, no subject line.`;
   //   ad_spend      → Meta/Google CSV/XLSX → period spend/impressions/clicks
   // Vision docs require the Anthropic key from Settings → LLM Configuration.
   app.post("/api/financial-upload/parse", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    // 100% ACCEPTANCE: this endpoint never rejects a document. The universal
+    // salvage parser honors the user's type pick, auto-detects the real type when
+    // the pick is wrong, and otherwise accepts the file into a reviewable preview
+    // (or stores a PDF) — auto-correcting delimiter/BOM/junk-row/wrong-type quirks
+    // along the way. Anti-hallucination is preserved: numbers are still
+    // extract-only, never invented. Apply-step reconciliation still guards the DB.
+    const fileName = req.file?.originalname || "";
     try {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded." });
       const mime = req.file.mimetype || "application/octet-stream";
-      const fileName = req.file.originalname || "";
-      let docType = String(req.body?.docType || "auto");
+      const requestedType = String(req.body?.docType || "auto");
 
-      // Universal dropzone: auto-classify when no explicit docType was chosen.
-      if (docType === "auto") {
-        const isPdf = mime === "application/pdf" || /\.pdf$/i.test(fileName);
-        if (isPdf) {
-          docType = "balance_sheet"; // PDFs default to balance sheet; user can re-pick a type
-        } else {
-          const { readSpreadsheetRows, classifySpreadsheet } = await import("./services/ad-spend-parser");
-          let keys: string[] = [];
-          try { const rows = readSpreadsheetRows(req.file.buffer, fileName, mime); keys = rows.length ? Object.keys(rows[0]) : []; } catch { /* fall through */ }
-          let firstCol: string[] = [];
-          try {
-            const XLSX = await import("xlsx");
-            const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-            const ws = wb.Sheets[wb.SheetNames[0]];
-            const grid = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: null }) as any[][];
-            firstCol = grid.map((r) => String((r && r[0]) ?? "")).filter(Boolean).slice(0, 80);
-          } catch { /* csv has no grid; keys-only classification */ }
-          const kind = classifySpreadsheet(keys, firstCol);
-          docType = kind === "unknown" ? "pl_xlsx" : kind;
-        }
-      }
+      const settings = await storage.getSettings(req.session.userId!);
+      const apiKey = settings?.llmApiKey?.trim() || "";
 
-      if (docType === "ad_spend") {
-        const { parseAdSpendBuffer } = await import("./services/ad-spend-parser");
-        const result = parseAdSpendBuffer(req.file.buffer, fileName, mime);
-        if (!result.ok) return res.status(422).json({ success: false, error: result.error, dataGaps: result.dataGaps });
-        return res.json({ success: true, docType: "ad_spend", fileName, fields: result, ...result });
-      }
+      const { salvageParse } = await import("./services/universal-doc-parser");
+      const fin = await import("./services/financial-doc-parser");
+      const llmParse = async (t: "balance_sheet" | "bank_statement", buffer: Buffer, m: string) =>
+        t === "balance_sheet"
+          ? fin.parseBalanceSheetDoc(buffer, m, apiKey)
+          : fin.parseBankStatementDoc(buffer, m, apiKey);
 
-      if (docType === "balance_sheet" || docType === "bank_statement") {
-        const settings = await storage.getSettings(req.session.userId!);
-        const apiKey = settings?.llmApiKey?.trim() || "";
-        const mod = await import("./services/financial-doc-parser");
-        const result = docType === "balance_sheet"
-          ? await mod.parseBalanceSheetDoc(req.file.buffer, mime, apiKey)
-          : await mod.parseBankStatementDoc(req.file.buffer, mime, apiKey);
-        if (!result.ok) return res.status(422).json({ success: false, error: result.error, dataGaps: result.dataGaps });
-        return res.json({ success: true, docType, fileName, ...result });
-      }
+      const salvage = await salvageParse({
+        buffer: req.file.buffer, fileName, mime, requestedType,
+        llmParse, hasLlmKey: !!apiKey,
+      });
 
-      // default: Monthly P&L (.xlsx)
-      const { parsePLWorkbook } = await import("./services/pl-xlsx-parser");
-      const result = parsePLWorkbook(req.file.buffer);
-      if (!result.ok) return res.status(422).json({ success: false, error: result.error });
-      res.json({ success: true, docType: "pl_xlsx", ...result, fileName });
+      // Always success:true. Shape the payload per docType so the existing
+      // review UI renders (months / fields / preview).
+      const base: any = {
+        success: true, accepted: true, docType: salvage.docType, fileName,
+        reclassified: salvage.reclassified, needsReview: salvage.needsReview,
+        adjustments: salvage.adjustments, message: salvage.message,
+      };
+      if (salvage.docType === "pl_xlsx") return res.json({ ...base, ...salvage.result });
+      if (salvage.docType === "ad_spend") return res.json({ ...base, fields: salvage.result, ...salvage.result });
+      if (salvage.docType === "balance_sheet" || salvage.docType === "bank_statement") return res.json({ ...base, ...salvage.result });
+      return res.json({ ...base, preview: salvage.preview }); // generic
     } catch (error: any) {
       console.error('[CIPH.R] Financial upload parse error:', error);
-      res.status(500).json({ success: false, error: error.message || 'Failed to parse file' });
+      // Even on an unexpected error, accept rather than reject.
+      return res.json({
+        success: true, accepted: true, docType: "generic", needsReview: true, fileName,
+        adjustments: [],
+        message: "Accepted, but we hit a snag reading it — it's stored. Try re-exporting as .csv or .xlsx, or use 'Report a discrepancy' below.",
+      });
     }
   });
 

@@ -34,6 +34,23 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE items ADD COLUMN IF NOT EXISTS wac_unit_cost real`,
   },
 
+  // Forecast self-tuning loop (FinOps Pillar 4): one row per predicted day.
+  // Nightly job grades predicted-vs-actual and stores the bias-correction
+  // factor that tunes the next prediction + the runway revenue inputs.
+  {
+    name: "forecast_predictions.table",
+    sql: `CREATE TABLE IF NOT EXISTS forecast_predictions (
+            target_date date PRIMARY KEY,
+            metric text NOT NULL DEFAULT 'daily_net_revenue',
+            predicted real NOT NULL,
+            raw_predicted real,
+            correction_factor_used real,
+            actual real,
+            actualized_at timestamptz,
+            created_at timestamptz NOT NULL DEFAULT now()
+          )`,
+  },
+
   // Supplier Intel snapshot — single latest row (id=1). Stores the computed
   // stockout/PO-needs payload so the page renders live data refreshed daily
   // at 6 AM MT (and on demand) instead of the old hardcoded constants.

@@ -228,6 +228,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     sourceOfTruth: "app_settings:system_integrity_latest + data_reconciliation_log + scheduler:system-integrity",
     alertOnStale: true,
   },
+  {
+    id: "forecast-tuning",
+    name: "Forecast self-tuning",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Nightly at 12:15 AM MT",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "forecast_predictions + app_settings:forecast_accuracy_latest + scheduler:forecast-tuning",
+    alertOnStale: true,
+  },
 ];
 
 let monitorInitialized = false;
@@ -385,6 +396,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["system-integrity"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const forecastTuning = await import("./forecast-tuning-scheduler");
+    const status = forecastTuning.getForecastTuningSchedulerStatus();
+    statuses["forecast-tuning"] = {
+      initialized: status.initialized,
+      nextRunAt: status.nextRunAt ? status.nextRunAt.toISOString() : null,
+      notes: [`Timezone: ${status.timezone}`],
+    };
+  } catch (error: any) {
+    statuses["forecast-tuning"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   return statuses;

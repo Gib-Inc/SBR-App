@@ -24679,6 +24679,27 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Forecast self-tuning (FinOps Pillar 4) ────────────────────────────────
+  app.get("/api/finances/forecast-accuracy", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getForecastAccuracyStatus } = await import("./services/forecast-tuning-service");
+      res.json(await getForecastAccuracyStatus());
+    } catch (error: any) {
+      console.error('[Forecast Tuning] status error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch forecast accuracy' });
+    }
+  });
+
+  app.post("/api/finances/forecast-accuracy/run", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { runNightlyForecastTuning } = await import("./services/forecast-tuning-service");
+      res.json({ success: true, result: await runNightlyForecastTuning() });
+    } catch (error: any) {
+      console.error('[Forecast Tuning] run error:', error);
+      res.status(500).json({ error: error.message || 'Failed to run forecast tuning' });
+    }
+  });
+
   // ─── Inventory asset valuation (FinOps Pillar 2) ────────────────────────────
   // Total inventory value at weighted-average cost: components at currentStock,
   // finished goods at physical on-hand (hildale + pivot). Falls back to
@@ -25734,6 +25755,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] System Integrity Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize System Integrity Scheduler:", error);
+  });
+
+  import("./services/forecast-tuning-scheduler").then(({ initializeForecastTuningScheduler }) => {
+    initializeForecastTuningScheduler();
+    console.log("[Server] Forecast Tuning Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Forecast Tuning Scheduler:", error);
   });
 
   import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {

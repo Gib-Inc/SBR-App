@@ -35,6 +35,8 @@ export interface RunwayComputation {
   scenarioInputs: Record<ScenarioKey, ScenarioInputs>;
   snapshotId: string | null;
   netMargin: number | null;
+  /** Pillar 4 self-tuning multiplier applied to revenue inputs (1 = untuned). */
+  biasCorrectionFactor?: number;
 }
 
 /**
@@ -58,6 +60,14 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
   const netMargin =
     grossProfit != null && totalIncome != null && totalIncome !== 0 ? grossProfit / totalIncome : null;
 
+  // Forecast self-tuning factor (1.0 when untuned). Resolved once per compute
+  // so all three scenarios use the same correction.
+  let biasFactor = 1;
+  try {
+    const { getBiasCorrectionFactor } = await import("./forecast-tuning-service");
+    biasFactor = await getBiasCorrectionFactor();
+  } catch { /* untuned */ }
+
   const buildScenario = async (windowDays: number): Promise<ScenarioInputs> => {
     const start = isoDaysAgo(windowDays);
     const end = isoToday();
@@ -68,7 +78,11 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
 
     const salesRows = await storage.getDailySalesSnapshotsInRange(start, end);
     const totalNetRevenue = salesRows.reduce((s, r) => s + (Number(r.netRevenue) || 0), 0);
-    const avgDailyRevenue = totalNetRevenue / windowDays;
+    // Pillar 4 self-tuning: the nightly predicted-vs-actual grader stores a
+    // dampened, clamped bias-correction factor (1.0 when untuned). Applying it
+    // here means the cash-flow projection inherits every accuracy lesson the
+    // model learned — the "gets smarter every day" loop, bounded to ±30%.
+    const avgDailyRevenue = (totalNetRevenue / windowDays) * biasFactor;
     const dailyMarginContribution = netMargin != null ? round2(avgDailyRevenue * netMargin) : null;
 
     return { cashOnHand, dailyFixedOverhead, dailyAdSpend, dailyMarginContribution };
@@ -87,7 +101,7 @@ export async function computeRunway(): Promise<{ ok: boolean; data?: RunwayCompu
     netMarginAverage: netMargin,
   });
 
-  return { ok: true, data: { forecast, scenarioInputs, snapshotId: snap.id, netMargin } };
+  return { ok: true, data: { forecast, scenarioInputs, snapshotId: snap.id, netMargin, biasCorrectionFactor: biasFactor } };
 }
 
 /** Compute + persist a forecast row (used by the daily scheduler). */

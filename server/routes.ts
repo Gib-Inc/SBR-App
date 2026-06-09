@@ -24679,6 +24679,48 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Inventory asset valuation (FinOps Pillar 2) ────────────────────────────
+  // Total inventory value at weighted-average cost: components at currentStock,
+  // finished goods at physical on-hand (hildale + pivot). Falls back to
+  // default_purchase_cost when an item has no WAC yet; items with stock but NO
+  // cost at all are surfaced as valuation gaps (they understate the asset).
+  app.get("/api/finances/inventory-valuation", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const r: any = await db.execute(sql`
+        WITH valued AS (
+          SELECT sku, name, type,
+            CASE WHEN type = 'finished_product'
+                 THEN coalesce(hildale_qty,0) + coalesce(pivot_qty,0)
+                 ELSE coalesce(current_stock,0) END AS qty,
+            coalesce(wac_unit_cost, default_purchase_cost) AS unit_cost
+          FROM items
+        )
+        SELECT
+          round(sum(qty * coalesce(unit_cost,0))::numeric, 2) AS total_value,
+          round(sum(qty * coalesce(unit_cost,0)) FILTER (WHERE type='finished_product')::numeric, 2) AS finished_value,
+          round(sum(qty * coalesce(unit_cost,0)) FILTER (WHERE type<>'finished_product')::numeric, 2) AS component_value,
+          count(*) FILTER (WHERE qty > 0 AND unit_cost IS NULL) AS uncosted_items_with_stock,
+          coalesce(json_agg(json_build_object('sku', sku, 'name', name, 'qty', qty)
+            ORDER BY qty DESC) FILTER (WHERE qty > 0 AND unit_cost IS NULL), '[]'::json) AS valuation_gaps
+        FROM valued`);
+      const row = (r.rows ?? r ?? [])[0] ?? {};
+      res.json({
+        computedAt: new Date().toISOString(),
+        totalValue: Number(row.total_value ?? 0),
+        finishedValue: Number(row.finished_value ?? 0),
+        componentValue: Number(row.component_value ?? 0),
+        uncostedItemsWithStock: Number(row.uncosted_items_with_stock ?? 0),
+        valuationGaps: row.valuation_gaps ?? [],
+        basis: "WAC (fallback: default purchase cost); finished = hildale+pivot, components = currentStock",
+      });
+    } catch (error: any) {
+      console.error('[Inventory Valuation] error:', error);
+      res.status(500).json({ error: error.message || 'Failed to compute inventory valuation' });
+    }
+  });
+
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
     try {

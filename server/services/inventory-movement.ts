@@ -2,6 +2,7 @@ import type { IStorage } from "../storage";
 import type { Item } from "@shared/schema";
 import { AuditLogger, type AuditSource, type AuditEventType as AuditEventTypeBase } from "./audit-logger";
 import { wsInventoryService } from "./websocket-inventory";
+import { weightedAverageCost, buildUnitCost } from "./inventory-costing-service";
 
 /**
  * INVENTORY MOVEMENT PATTERN DOCUMENTATION
@@ -107,6 +108,10 @@ export interface InventoryMovementParams {
   quantity: number;
   location?: "HILDALE" | "PIVOT" | "N/A";
   source: string;
+  // Cost per unit for WAC maintenance. Optional override: PURCHASE_ORDER_RECEIVED
+  // resolves it from the PO line (via poId) when absent; PRODUCTION_COMPLETED
+  // computes it from the BOM components' WAC when absent.
+  unitCost?: number;
   orderId?: string;
   returnId?: string;
   poId?: string;
@@ -181,6 +186,7 @@ export class InventoryMovement {
         pivotQty?: number;
         availableForSaleQty?: number;
         currentStock?: number;
+        wacUnitCost?: number;
         forecastDirty?: boolean;
       } = {};
       let quantityDelta = 0;
@@ -375,6 +381,77 @@ export class InventoryMovement {
             updates.currentStock = Math.max(0, beforeState.currentStock + params.quantity);
           }
           break;
+      }
+
+      // ── Weighted-average cost maintenance (FinOps Pillar 2) ──────────────
+      // Costing is additive metadata: it augments the SAME single-row update
+      // as the quantity change (atomic per item) and a costing failure must
+      // never block the stock movement itself — hence the isolated try/catch.
+      try {
+        if (params.eventType === "PURCHASE_ORDER_RECEIVED" && !isFinished && params.quantity > 0) {
+          // Receipt cost: explicit override → PO line unit cost → default cost.
+          let receiptCost = params.unitCost;
+          if (receiptCost == null && params.poId) {
+            const lines = await this.storage.getPurchaseOrderLinesByPOId(params.poId).catch(() => []);
+            const line: any = (lines || []).find((l: any) => l.itemId === params.itemId);
+            if (line && Number(line.unitCost) > 0) receiptCost = Number(line.unitCost);
+          }
+          if (receiptCost == null && (item as any).defaultPurchaseCost != null) {
+            receiptCost = Number((item as any).defaultPurchaseCost);
+          }
+          if (receiptCost != null && receiptCost >= 0) {
+            const priorWac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost ?? receiptCost;
+            updates.wacUnitCost = weightedAverageCost(
+              beforeState.currentStock, Number(priorWac) || 0, params.quantity, receiptCost,
+            );
+          }
+        } else if (params.eventType === "PRODUCTION_COMPLETED" && isFinished && params.quantity > 0) {
+          // Build-order cost transition: per-unit build cost = Σ component WAC ×
+          // qty-per-unit (incl. wastage), rolled into the finished good's WAC
+          // against its physical on-hand (hildale + pivot).
+          let perUnitBuildCost = params.unitCost;
+          if (perUnitBuildCost == null) {
+            const bom = await this.storage.getBillOfMaterialsByProductId(params.itemId).catch(() => []);
+            if (bom && bom.length) {
+              const comps: { qtyPerUnit: number; unitCost: number }[] = [];
+              for (const b of bom as any[]) {
+                const comp: any = await this.storage.getItem(b.componentId).catch(() => undefined);
+                const compCost = comp?.wacUnitCost ?? comp?.defaultPurchaseCost;
+                if (comp && compCost != null) {
+                  const qtyPer = Number(b.quantityRequired || 0) * (1 + (Number(b.wastagePercent) || 0) / 100);
+                  comps.push({ qtyPerUnit: qtyPer, unitCost: Number(compCost) });
+                }
+              }
+              if (comps.length) perUnitBuildCost = buildUnitCost(comps);
+            }
+          }
+          if (perUnitBuildCost != null && perUnitBuildCost > 0) {
+            const physicalOnHand = beforeState.hildaleQty + beforeState.pivotQty;
+            const priorWac = (item as any).wacUnitCost ?? 0;
+            updates.wacUnitCost = weightedAverageCost(
+              physicalOnHand, Number(priorWac) || 0, params.quantity, perUnitBuildCost,
+            );
+          }
+        } else if (params.eventType === "MANUAL_COUNT" && quantityDelta !== 0) {
+          // Zero-drift audit: a manual recount moves the inventory asset value
+          // by qtyDelta × WAC. Flag the $ variance in the reconciliation ledger.
+          const wac = (item as any).wacUnitCost ?? (item as any).defaultPurchaseCost;
+          if (wac != null && Number(wac) > 0) {
+            const valueDelta = Math.round(quantityDelta * Number(wac) * 100) / 100;
+            await this.storage.createDataReconciliationLog([{
+              dataType: "inventory_valuation",
+              entityKey: item.sku,
+              action: quantityDelta < 0 ? "SHRINKAGE" : "OVERAGE",
+              field: "asset_value",
+              oldValue: null,
+              newValue: String(valueDelta),
+              reason: `Manual count moved ${item.sku} by ${quantityDelta} unit(s) × $${Number(wac).toFixed(2)} WAC = $${valueDelta} balance-sheet adjustment.`,
+              source: params.source || "manual-count",
+            }]).catch(() => {});
+          }
+        }
+      } catch (costingError: any) {
+        console.warn(`[InventoryMovement] WAC maintenance skipped for ${item.sku}: ${costingError?.message ?? costingError}`);
       }
 
       if (Object.keys(updates).length > 0) {

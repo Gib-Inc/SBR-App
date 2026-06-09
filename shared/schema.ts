@@ -118,6 +118,7 @@ export const items = pgTable("items", {
   forecastData: jsonb("forecast_data"), // Stores last generated forecast (ReorderRecommendation)
   // Purchase cost fields for auto-suggest feature
   defaultPurchaseCost: real("default_purchase_cost"), // Default cost when creating PO lines (can be auto-scraped)
+  wacUnitCost: real("wac_unit_cost"), // Weighted-average cost/unit — maintained by InventoryMovement (PO receipts blend component cost; production blends finished build cost)
   currency: text("currency").default("USD"), // Currency for defaultPurchaseCost
   supplierProductUrl: text("supplier_product_url"), // URL to supplier's product page for price scraping
   costSource: text("cost_source").default("MANUAL"), // 'MANUAL' | 'AUTO_SCRAPED' | 'API'

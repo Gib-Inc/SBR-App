@@ -27,6 +27,13 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE purchase_order_lines ADD COLUMN IF NOT EXISTS internal_barcode text`,
   },
 
+  // Weighted-average cost per unit — Pillar 2 of the FinOps engine. Maintained
+  // by InventoryMovement on component PO receipts and finished-goods builds.
+  {
+    name: "items.wac_unit_cost",
+    sql: `ALTER TABLE items ADD COLUMN IF NOT EXISTS wac_unit_cost real`,
+  },
+
   // Supplier Intel snapshot — single latest row (id=1). Stores the computed
   // stockout/PO-needs payload so the page renders live data refreshed daily
   // at 6 AM MT (and on demand) instead of the old hardcoded constants.

@@ -49,6 +49,24 @@ class FakeStorage {
     return next;
   }
 
+  // Costing surfaces (FinOps Pillar 2). Tests seed these directly.
+  poLines: any[] = [];
+  bom: any[] = [];
+  reconLogs: any[] = [];
+
+  async getPurchaseOrderLinesByPOId(_poId: string): Promise<any[]> {
+    return this.poLines;
+  }
+
+  async getBillOfMaterialsByProductId(_finishedProductId: string): Promise<any[]> {
+    return this.bom;
+  }
+
+  async createDataReconciliationLog(rows: any[]): Promise<any[]> {
+    this.reconLogs.push(...rows);
+    return rows;
+  }
+
   // Convenience for assertions
   get(id: string): Item {
     const item = this.items.get(id);
@@ -326,5 +344,67 @@ describe("invariants", () => {
     const res = await engine.apply({ eventType: "SALES_ORDER_CREATED", itemId: "NOPE", quantity: 1, source: "USER" });
     expect(res.success).toBe(false);
     expect(res.error).toContain("not found");
+  });
+});
+
+// ─── FinOps Pillar 2: WAC maintenance inside the gateway ─────────────────────
+describe("weighted-average cost maintenance", () => {
+  it("PO receipt blends component WAC from the PO line cost (atomic with stock)", async () => {
+    storage.seed({ id: "C1", sku: "COMP-1", type: "component", currentStock: 100, wacUnitCost: 2 } as any);
+    storage.poLines = [{ itemId: "C1", unitCost: 4 }];
+    const res = await engine.apply({
+      eventType: "PURCHASE_ORDER_RECEIVED", itemId: "C1", quantity: 100, source: "TEST", poId: "PO1",
+    });
+    expect(res.success).toBe(true);
+    const item: any = storage.get("C1");
+    expect(item.currentStock).toBe(200);
+    expect(item.wacUnitCost).toBe(3); // (100*2 + 100*4) / 200
+  });
+
+  it("first receipt adopts the explicit unitCost override", async () => {
+    storage.seed({ id: "C2", sku: "COMP-2", type: "component", currentStock: 0 } as any);
+    const res = await engine.apply({
+      eventType: "PURCHASE_ORDER_RECEIVED", itemId: "C2", quantity: 480, source: "TEST", unitCost: 8.65,
+    });
+    expect(res.success).toBe(true);
+    expect((storage.get("C2") as any).wacUnitCost).toBe(8.65);
+  });
+
+  it("production completion rolls BOM build cost into the finished good's WAC", async () => {
+    storage.seed({ id: "FG9", sku: "FG-9", type: "finished_product", hildaleQty: 10, pivotQty: 0, wacUnitCost: 50 } as any);
+    storage.seed({ id: "C3", sku: "COMP-3", type: "component", currentStock: 500, wacUnitCost: 60 } as any);
+    storage.bom = [{ componentId: "C3", quantityRequired: 1, wastagePercent: 0 }];
+    const res = await engine.apply({
+      eventType: "PRODUCTION_COMPLETED", itemId: "FG9", quantity: 10, source: "TEST", location: "HILDALE",
+    });
+    expect(res.success).toBe(true);
+    const fg: any = storage.get("FG9");
+    expect(fg.hildaleQty).toBe(20);
+    expect(fg.wacUnitCost).toBe(55); // (10*50 + 10*60) / 20
+  });
+
+  it("a costing failure never blocks the stock movement", async () => {
+    storage.seed({ id: "C4", sku: "COMP-4", type: "component", currentStock: 10 } as any);
+    (storage as any).getPurchaseOrderLinesByPOId = async () => { throw new Error("po lookup down"); };
+    const res = await engine.apply({
+      eventType: "PURCHASE_ORDER_RECEIVED", itemId: "C4", quantity: 5, source: "TEST", poId: "PO-X",
+    });
+    expect(res.success).toBe(true);
+    const item: any = storage.get("C4");
+    expect(item.currentStock).toBe(15); // stock moved
+    expect(item.wacUnitCost == null).toBe(true); // costing skipped, not fatal
+  });
+
+  it("manual count flags the balance-sheet $ variance in the reconciliation ledger", async () => {
+    storage.seed({ id: "C5", sku: "COMP-5", type: "component", currentStock: 100, wacUnitCost: 3 } as any);
+    const res = await engine.apply({
+      eventType: "MANUAL_COUNT", itemId: "C5", quantity: -5, source: "TEST", location: "N/A",
+    });
+    expect(res.success).toBe(true);
+    expect((storage.get("C5") as any).currentStock).toBe(95);
+    expect(storage.reconLogs).toHaveLength(1);
+    expect(storage.reconLogs[0].action).toBe("SHRINKAGE");
+    expect(storage.reconLogs[0].newValue).toBe("-15"); // -5 × $3 WAC
+    expect(storage.reconLogs[0].dataType).toBe("inventory_valuation");
   });
 });

@@ -173,8 +173,8 @@ export class InventoryRecommendationBatch {
       const skuContexts = await this.buildSKUContexts(items, settings);
 
       // Prepare LLM prompt and call
-      const llmProvider = (settings?.llmProvider || "chatgpt") as LLMProvider;
-      const apiKey = settings?.llmApiKey;
+      const apiKey = settings?.llmApiKey || process.env.ANTHROPIC_API_KEY;
+      const llmProvider = (settings?.llmProvider || (process.env.ANTHROPIC_API_KEY ? "claude" : "chatgpt")) as LLMProvider;
       const recommendations = await this.callLLMForRecommendations(
         skuContexts,
         llmProvider,
@@ -877,9 +877,9 @@ Respond with JSON in this exact format:
       try {
         const defaultUserId = "default";
         const settings = await this.storage.getSettings(defaultUserId);
-        const llmProvider = (settings?.llmProvider || "chatgpt") as LLMProvider;
-        const apiKey = settings?.llmApiKey;
-        
+        const apiKey = settings?.llmApiKey || process.env.ANTHROPIC_API_KEY;
+        const llmProvider = (settings?.llmProvider || (process.env.ANTHROPIC_API_KEY ? "claude" : "chatgpt")) as LLMProvider;
+
         if (apiKey) {
           const priceResult = await LLMService.extractPriceFromUrl(
             item.supplierProductUrl,

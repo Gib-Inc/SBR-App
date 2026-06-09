@@ -10,9 +10,11 @@ const CLAUDE_MODEL_FAST = "claude-haiku-4-5-20251001";
  * No env var fallback - Settings UI is the single source of truth
  */
 function getAnthropicClient(apiKeyOverride?: string): Anthropic {
-  const apiKey = apiKeyOverride?.trim();
+  // Fall back to the ANTHROPIC_API_KEY env so a single Railway variable unlocks
+  // every AI path, even when the Settings table has no row.
+  const apiKey = apiKeyOverride?.trim() || process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error("No Anthropic API key configured. Add your key in Settings → LLM Configuration.");
+    throw new Error("No Anthropic API key configured. Add your key in Settings → LLM Configuration (or set ANTHROPIC_API_KEY).");
   }
   return new Anthropic({ apiKey });
 }

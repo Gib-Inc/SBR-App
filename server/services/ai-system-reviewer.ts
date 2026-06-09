@@ -138,8 +138,8 @@ class AISystemReviewerService {
 
       // Get LLM settings from user-specific settings if userId provided
       const settings = options?.userId ? await storage.getSettings(options.userId) : undefined;
-      const llmProvider = (options?.provider || settings?.llmProvider || 'chatgpt') as LLMProvider;
-      const apiKey = options?.apiKey || settings?.llmApiKey;
+      const apiKey = options?.apiKey || settings?.llmApiKey || process.env.ANTHROPIC_API_KEY;
+      const llmProvider = (options?.provider || settings?.llmProvider || (process.env.ANTHROPIC_API_KEY ? 'claude' : 'chatgpt')) as LLMProvider;
       const customEndpoint = options?.customEndpoint || settings?.llmCustomEndpoint || undefined;
 
       if (!apiKey) {

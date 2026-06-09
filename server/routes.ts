@@ -24654,6 +24654,31 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Supplier Intel (live stockout / PO-needs snapshot) ─────────────────────
+  // Reads the latest computed snapshot (refreshed daily at 6 AM MT + on demand).
+  app.get("/api/supplier-intel", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestSupplierIntelSnapshot } = await import("./services/supplier-intel-service");
+      const { getSupplierIntelSchedulerStatus } = await import("./services/supplier-intel-scheduler");
+      const snapshot = await getLatestSupplierIntelSnapshot();
+      res.json({ snapshot, scheduler: getSupplierIntelSchedulerStatus() });
+    } catch (error: any) {
+      console.error('[Supplier Intel] Error fetching snapshot:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch supplier intel snapshot' });
+    }
+  });
+
+  app.post("/api/supplier-intel/refresh", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { refreshSupplierIntelSnapshot } = await import("./services/supplier-intel-service");
+      const snapshot = await refreshSupplierIntelSnapshot("MANUAL");
+      res.json({ success: true, snapshot });
+    } catch (error: any) {
+      console.error('[Supplier Intel] Error refreshing snapshot:', error);
+      res.status(500).json({ error: error.message || 'Failed to refresh supplier intel snapshot' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -25581,6 +25606,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Daily Sales Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Daily Sales Scheduler:", error);
+  });
+
+  import("./services/supplier-intel-scheduler").then(({ initializeSupplierIntelScheduler }) => {
+    initializeSupplierIntelScheduler();
+    console.log("[Server] Supplier Intel Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Supplier Intel Scheduler:", error);
   });
 
   import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {

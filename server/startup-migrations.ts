@@ -27,6 +27,19 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE purchase_order_lines ADD COLUMN IF NOT EXISTS internal_barcode text`,
   },
 
+  // Supplier Intel snapshot — single latest row (id=1). Stores the computed
+  // stockout/PO-needs payload so the page renders live data refreshed daily
+  // at 6 AM MT (and on demand) instead of the old hardcoded constants.
+  {
+    name: "supplier_intel_snapshot.table",
+    sql: `CREATE TABLE IF NOT EXISTS supplier_intel_snapshot (
+            id integer PRIMARY KEY,
+            computed_at timestamptz NOT NULL,
+            trigger text,
+            payload jsonb NOT NULL
+          )`,
+  },
+
   // --- Drift back-fill (2026-06-05 full schema-vs-DB audit) ---------------
   // These objects exist in shared/schema.ts but never reached the live DB
   // because drizzle-kit push is skipped at build time (no DATABASE_URL). Found

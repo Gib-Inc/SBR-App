@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 // ─── TODAY'S DATE ─────────────────────────────────────────────────────────────
-const TODAY = new Date("2026-04-11");
+// Anchored to the live snapshot's computed-at date inside SupplierIntel() on
+// every render. Defaults to the real current date so nothing is ever frozen.
+let TODAY = new Date();
 
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
@@ -50,8 +52,11 @@ interface InventoryItem {
   shopifyPct: number;
 }
 
-// ─── DATA ───────────────────────────────────────────────────────────────────────
-const SUPPLIERS: Supplier[] = [
+// ─── DATA (fallback only) ─────────────────────────────────────────────────────
+// These are seeded with reference data but are REPLACED at render time by the
+// live snapshot from /api/supplier-intel (see SupplierIntel()). They stay as a
+// fallback so the page renders something if the API is briefly unavailable.
+let SUPPLIERS: Supplier[] = [
   {
     id: "fx-industries",
     name: "FX Industries",
@@ -135,7 +140,7 @@ const SUPPLIERS: Supplier[] = [
   },
 ];
 
-const INVENTORY: InventoryItem[] = [
+let INVENTORY: InventoryItem[] = [
   { sku: "SBRClassic1.0", name: "Push 1.0 Classic", available: 74, projVelocity: 168, status: "CRITICAL", q2Need: 2182, gap: 2108, supplierCost: 44.00, supplierId: "fx-industries", amazonPct: 68, shopifyPct: 32 },
   { sku: "SBRExtrawide2.0", name: "Push 2.0 Extra Wide", available: 138, projVelocity: 142, status: "CRITICAL", q2Need: 1851, gap: 1713, supplierCost: 59.00, supplierId: "fx-industries", amazonPct: 73, shopifyPct: 27 },
   { sku: "702-CMB-2", name: "Combo 2.0", available: 10, projVelocity: 15, status: "CRITICAL", q2Need: 195, gap: 185, supplierCost: 103.00, supplierId: "fx-industries", amazonPct: 0, shopifyPct: 100 },
@@ -487,6 +492,35 @@ function RecentCommunicationsCard() {
 export default function SupplierIntel() {
   const [tab, setTab] = useState("today");
   const [openSup, setOpenSup] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const qc = useQueryClient();
+
+  // Live snapshot (refreshed daily at 6 AM MT + on demand). Assigning the
+  // module-level fallbacks here means all downstream math runs on current data.
+  const { data: intel } = useQuery<any>({ queryKey: ["/api/supplier-intel"] });
+  const snap = intel?.snapshot;
+  if (snap) {
+    if (snap.today) TODAY = new Date(snap.today);
+    if (Array.isArray(snap.suppliers)) SUPPLIERS = snap.suppliers;
+    if (Array.isArray(snap.inventory)) INVENTORY = snap.inventory;
+  }
+  const lastUpdated = snap?.computedAt ? new Date(snap.computedAt) : null;
+
+  const refreshNow = async () => {
+    setRefreshing(true);
+    try {
+      await fetch("/api/supplier-intel/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      await qc.invalidateQueries({ queryKey: ["/api/supplier-intel"] });
+    } catch (e) {
+      console.error("Supplier intel refresh failed", e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const criticals = INVENTORY.filter(i => i.status === "CRITICAL");
   const actionItems = INVENTORY.filter(i => (["CRITICAL","REORDER","ORDER_SOON"] as string[]).includes(i.status));
@@ -494,9 +528,9 @@ export default function SupplierIntel() {
 
   const hotSuppliers = new Set(criticals.map(i => i.supplierId));
 
-  const earliestStockout = criticals
-    .map(i => getStockoutDate(i))
-    .sort((a,b) => a.getTime() - b.getTime())[0];
+  const firstCritical = [...criticals].sort((a, b) => getStockoutDate(a).getTime() - getStockoutDate(b).getTime())[0];
+  const earliestStockout = firstCritical ? getStockoutDate(firstCritical) : undefined;
+  const firstCriticalSupplier = firstCritical ? SUPPLIERS.find(s => s.id === firstCritical.supplierId) : undefined;
 
   return (
     <>
@@ -507,8 +541,31 @@ export default function SupplierIntel() {
           {/* HEADER */}
           <div className="si-hdr">
             <div className="si-hdr-accent" />
-            <div className="si-hdr-title">SBR Operations</div>
-            <div className="si-hdr-sub">INVENTORY INTELLIGENCE · {formatDate(TODAY).toUpperCase()}</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+              <div>
+                <div className="si-hdr-title">SBR Operations</div>
+                <div className="si-hdr-sub">
+                  INVENTORY INTELLIGENCE · {formatDate(TODAY).toUpperCase()}
+                  {lastUpdated && (
+                    <> · UPDATED {lastUpdated.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).toUpperCase()}</>
+                  )}
+                  {!snap && " · LOADING…"}
+                </div>
+              </div>
+              <button
+                onClick={refreshNow}
+                disabled={refreshing}
+                data-testid="button-refresh-supplier-intel"
+                style={{
+                  fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: 0.5,
+                  color: refreshing ? "#3d4f62" : "#e85d04", background: "rgba(232,93,4,0.08)",
+                  border: "1px solid rgba(232,93,4,0.25)", borderRadius: 4, padding: "6px 10px",
+                  cursor: refreshing ? "default" : "pointer", whiteSpace: "nowrap", flexShrink: 0,
+                }}
+              >
+                {refreshing ? "REFRESHING…" : "↻ REFRESH NOW"}
+              </button>
+            </div>
           </div>
 
           {/* ALERT */}
@@ -516,9 +573,11 @@ export default function SupplierIntel() {
             <div className="si-alert-strip">
               <div className="si-alert-dot" />
               <div className="si-alert-msg">
-                <strong>{criticals.length} products run out before {formatDate(addDays(TODAY, 14))}.</strong>
-                {" "}First stockout: Push 1.0 on <strong>{formatDate(earliestStockout)}</strong>.
-                A PO to FX Industries is already overdue.
+                <strong>{criticals.length} {criticals.length === 1 ? "product runs" : "products run"} out before {formatDate(addDays(TODAY, 14))}.</strong>
+                {firstCritical && earliestStockout && (
+                  <>{" "}First stockout: {firstCritical.name} on <strong>{formatDate(earliestStockout)}</strong>.
+                  {firstCriticalSupplier && <> A PO to {firstCriticalSupplier.name} ({firstCriticalSupplier.leadTimeDays}-day lead) is the priority.</>}</>
+                )}
               </div>
             </div>
           )}

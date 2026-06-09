@@ -195,6 +195,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     sourceOfTruth: "scheduler:reorder-watcher health row + audit logs",
     alertOnStale: true,
   },
+  {
+    id: "supplier-intel",
+    name: "Supplier intel snapshot",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Daily at 6:00 AM MT",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "supplier_intel_snapshot + scheduler:supplier-intel health row",
+    alertOnStale: true,
+  },
 ];
 
 let monitorInitialized = false;
@@ -316,6 +327,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["reorder-watcher"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const supplierIntel = await import("./supplier-intel-scheduler");
+    const status = supplierIntel.getSupplierIntelSchedulerStatus();
+    statuses["supplier-intel"] = {
+      initialized: status.initialized,
+      nextRunAt: status.nextRunAt ? status.nextRunAt.toISOString() : null,
+      notes: [`Timezone: ${status.timezone}`],
+    };
+  } catch (error: any) {
+    statuses["supplier-intel"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   return statuses;

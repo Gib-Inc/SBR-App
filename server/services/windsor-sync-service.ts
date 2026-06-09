@@ -88,14 +88,27 @@ export async function runWindsorSync(): Promise<{ ran: boolean; reason?: string;
   try {
     const g = await fetchWindsor("google_ads", ["date", "spend", "clicks", "impressions"], apiKey);
     results.push(await ingestPlatform("GOOGLE", "windsor:google_ads", aggregateWindsorRows(g, ["spend"]), nowIso));
-    // Amazon spend is split across 3 reports (Sponsored Products/Display/Brands).
-    const [sp, sd, sb] = await Promise.all([
+    // Amazon spend is split across 4 reports (Sponsored Products / Display /
+    // Brands non-video / Brands VIDEO). The video table was missed until the
+    // 2026-06-09 integration audit — it carries ~24% of Amazon spend (~$955/30d
+    // verified against Windsor raw data), so omitting it under-reported AMAZON.
+    const [sp, sd, sb, sbv] = await Promise.all([
       fetchWindsor("amazon_ads", ["date", "sponsored_products_campaign__spend"], apiKey).catch(() => [] as WindsorRow[]),
       fetchWindsor("amazon_ads", ["date", "sponsored_display_campaign__cost"], apiKey).catch(() => [] as WindsorRow[]),
       fetchWindsor("amazon_ads", ["date", "sponsored_brands_campaign_non_video__cost"], apiKey).catch(() => [] as WindsorRow[]),
+      fetchWindsor("amazon_ads", ["date", "sponsored_brands_campaign_video__cost"], apiKey).catch(() => [] as WindsorRow[]),
     ]);
-    const amz = aggregateWindsorRows([...sp, ...sd, ...sb], ["sponsored_products_campaign__spend", "sponsored_display_campaign__cost", "sponsored_brands_campaign_non_video__cost"]);
+    const amz = aggregateWindsorRows([...sp, ...sd, ...sb, ...sbv], ["sponsored_products_campaign__spend", "sponsored_display_campaign__cost", "sponsored_brands_campaign_non_video__cost", "sponsored_brands_campaign_video__cost"]);
     results.push(await ingestPlatform("AMAZON", "windsor:amazon_ads", amz, nowIso));
+    // Pinterest is connected in Windsor (account "Inspired Tool Design, LLC").
+    // Currently $0 spend, but syncing it now means the moment campaigns start
+    // the spend flows in automatically (ingestPlatform skips zero-spend cleanly).
+    try {
+      const p = await fetchWindsor("pinterest", ["date", "spend", "clicks", "impressions"], apiKey);
+      results.push(await ingestPlatform("PINTEREST", "windsor:pinterest", aggregateWindsorRows(p, ["spend"]), nowIso));
+    } catch (e: any) {
+      results.push({ platform: "PINTEREST", action: "SKIPPED", reason: e?.message ?? "fetch failed" });
+    }
     lastRun = { at: nowIso, ran: true, keyPresent: true, results };
     console.log("[Windsor Sync] Synced:", JSON.stringify(results));
     return { ran: true, results };

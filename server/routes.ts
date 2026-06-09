@@ -24728,6 +24728,22 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Automated resolver for app-vs-Extensiv SKU drift: re-syncs stale items,
+  // explains drift covered by open orders, auto-corrects bounded residuals via
+  // InventoryMovement, and logs every decision to data_reconciliation_log.
+  // ?apply=false runs it as a dry-run (decisions logged as PROPOSED only).
+  app.post("/api/system-integrity/resolve-inventory", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { resolveInventoryDrift } = await import("./services/inventory-drift-resolver");
+      const apply = String(req.query.apply ?? "true") !== "false";
+      const result = await resolveInventoryDrift({ apply, userId: (req.session as any)?.userId });
+      res.json({ success: true, result });
+    } catch (error: any) {
+      console.error('[System Integrity] resolve-inventory error:', error);
+      res.status(500).json({ error: error.message || 'Failed to resolve inventory drift' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {

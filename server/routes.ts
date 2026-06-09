@@ -24706,6 +24706,28 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── System integrity (FinOps Pillar 1 — cross-stream self-healing) ─────────
+  app.post("/api/system-integrity/check", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { runSystemIntegrityCheck } = await import("./services/system-integrity-service");
+      const report = await runSystemIntegrityCheck();
+      res.json({ success: true, report });
+    } catch (error: any) {
+      console.error('[System Integrity] check error:', error);
+      res.status(500).json({ error: error.message || 'Failed to run integrity check' });
+    }
+  });
+
+  app.get("/api/system-integrity", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestIntegrityReport } = await import("./services/system-integrity-service");
+      res.json({ report: await getLatestIntegrityReport() });
+    } catch (error: any) {
+      console.error('[System Integrity] latest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch integrity report' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -25647,6 +25669,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Marketing Analytics Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Marketing Analytics Scheduler:", error);
+  });
+
+  import("./services/system-integrity-scheduler").then(({ initializeSystemIntegrityScheduler }) => {
+    initializeSystemIntegrityScheduler();
+    console.log("[Server] System Integrity Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize System Integrity Scheduler:", error);
   });
 
   import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {

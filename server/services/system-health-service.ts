@@ -217,6 +217,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     sourceOfTruth: "marketing_recommendations + scheduler:marketing-analytics health row",
     alertOnStale: true,
   },
+  {
+    id: "system-integrity",
+    name: "System integrity sweep",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Every 6 hours",
+    expectedIntervalMinutes: 6 * 60,
+    staleAfterMinutes: 12 * 60,
+    sourceOfTruth: "app_settings:system_integrity_latest + data_reconciliation_log + scheduler:system-integrity",
+    alertOnStale: true,
+  },
 ];
 
 let monitorInitialized = false;
@@ -362,6 +373,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["marketing-analytics"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const systemIntegrity = await import("./system-integrity-scheduler");
+    const status = systemIntegrity.getSystemIntegritySchedulerStatus();
+    statuses["system-integrity"] = {
+      initialized: status.initialized,
+      nextRunAt: null,
+      notes: [`Every ${status.intervalHours}h`, status.lastRunAt ? `Last sweep: ${status.lastRunAt.toISOString()}` : "No sweep yet"],
+    };
+  } catch (error: any) {
+    statuses["system-integrity"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   return statuses;

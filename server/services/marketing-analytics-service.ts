@@ -519,5 +519,29 @@ export async function getCampaignPerformance(days = 30): Promise<{
   }
   campaigns.sort((a, b) => b.spend - a.spend);
   if (!campaigns.length) notes.push("No paid-platform campaign rows in ad_metrics_daily for this window.");
+
+  // Attribution sanity guard: when the platform's own conversion tracking
+  // attributes almost no revenue against real spend (e.g. Google reporting
+  // ~0x while blended reality is ~9x), per-campaign Pause/Kill calls would be
+  // actively harmful. Gate every campaign until tracking is fixed.
+  const totSpend = campaigns.reduce((s, c) => s + c.spend, 0);
+  const totRev = campaigns.reduce((s, c) => s + c.revenue, 0);
+  if (isAttributionBroken(totSpend, totRev)) {
+    const g = `Platform conversion tracking is under-reporting: attributed ROAS ${(totRev / Math.max(1, totSpend)).toFixed(2)}x overall vs ~8-10x blended reality. Fix conversion tracking before acting on per-campaign calls.`;
+    notes.push(g);
+    for (const c of campaigns) {
+      if (!c.gaps.includes(g)) c.gaps.push(g);
+      c.directive = applyDataQualityGate(c.directive, c.gaps, true);
+    }
+  }
   return { windowDays: days, campaigns, notes };
+}
+
+/**
+ * Pure: platform-attributed revenue is implausibly low against spend —
+ * conversion tracking is broken, not the campaigns. Threshold 0.5x with a
+ * $100 spend floor so tiny windows don't trip it.
+ */
+export function isAttributionBroken(totalSpend: number, totalAttributedRevenue: number): boolean {
+  return totalSpend > 100 && totalAttributedRevenue / totalSpend < 0.5;
 }

@@ -7,6 +7,7 @@ import {
   analyzePlatforms,
   applyDataQualityGate,
   isImplausibleBlendedRoas,
+  isAttributionBroken,
   IMPLAUSIBLE_BLENDED_ROAS,
   ROAS_TARGET,
   ROAS_ESCALATE,
@@ -205,5 +206,17 @@ describe("guardrail constants stay locked to SBR policy", () => {
     expect(ROAS_PAUSE).toBe(3);
     expect(SEPTEMBER_RULE_DAYS).toBe(5);
     expect(IMPLAUSIBLE_BLENDED_ROAS).toBe(20);
+  });
+});
+
+describe("isAttributionBroken (per-campaign Pause/Kill safety)", () => {
+  it("flags broken tracking when attributed revenue is near zero against real spend", () => {
+    expect(isAttributionBroken(17000, 900)).toBe(true); // ~0.05x attributed
+  });
+  it("does not flag healthy attribution", () => {
+    expect(isAttributionBroken(10000, 60000)).toBe(false); // 6x
+  });
+  it("ignores tiny spend windows", () => {
+    expect(isAttributionBroken(50, 0)).toBe(false);
   });
 });

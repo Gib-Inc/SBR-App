@@ -294,3 +294,114 @@ export function analyzePlatforms(
     (a, b) => sev[a.severity] - sev[b.severity] || a.metrics.roas - b.metrics.roas,
   );
 }
+
+// ─── Data-quality gate (Pillar 3 ⇄ Pillar 1) ─────────────────────────────────
+/**
+ * Never tell Matt to move budget on numbers we don't trust. When the ad-spend
+ * feed is gapped, downgrade a confident SCALE/CUT directive to a "reconcile
+ * first" HOLD, preserving what the raw call would have been for transparency.
+ * Pure — unit tested.
+ */
+export function applyDataQualityGate(d: Directive, dataGaps: string[], gapped: boolean): Directive {
+  if (!gapped && dataGaps.length === 0) return d;
+  return {
+    ...d,
+    action: "HOLD",
+    magnitudePct: 0,
+    severity: "warn",
+    headline: `Hold ${d.platform} — ad-spend data is incomplete; reconcile before moving budget.`,
+    reason: `Computed ROAS ${d.metrics.roas.toFixed(1)}x, but the ad-spend feed is gapped (${dataGaps.slice(0, 3).join("; ") || "missing/low platform spend"}). The raw call would have been "${d.action}". Reconcile ad spend (Windsor/uploads) before acting.`,
+  };
+}
+
+// ─── Live wiring (I/O; pure core above stays import-free + testable) ──────────
+export interface BlendedAnalysis {
+  generatedAt: string;
+  windowDays: number;
+  blendedRoas7d: number;
+  blendedRoas30d: number;
+  adSpend7d: number;
+  adSpend30d: number;
+  revenue7d: number;
+  revenue30d: number;
+  directive: Directive;
+  dataConfident: boolean;
+  dataGaps: string[];
+}
+
+/**
+ * Compute the blended daily directive from the TRUSTED unified ad-spend
+ * aggregator (windsor > uploaded > live, no double-count) + real daily revenue,
+ * gate it on data quality, and persist to marketing_recommendations.
+ */
+export async function runMarketingAnalysis(opts?: {
+  grossMarginPct?: number;
+  createdBy?: string;
+}): Promise<BlendedAnalysis> {
+  const { getUnifiedPerformance } = await import("./unified-performance-service");
+  const v7 = await getUnifiedPerformance(7);
+  const v30 = await getUnifiedPerformance(30);
+
+  const adSpend7d = v7.totalAdSpend ?? 0;
+  const adSpend30d = v30.totalAdSpend ?? 0;
+  const revenue7d = v7.totalRevenue ?? 0;
+  const revenue30d = v30.totalRevenue ?? 0;
+  const avgDailySpend = adSpend30d > 0 ? adSpend30d / 30 : 0;
+
+  // Real daily revenue → daily blended-ROAS series (spend smoothed to the
+  // 30-day average because trusted spend is period-aggregate, not daily). This
+  // gives the moving averages + September-Rule streak honest day-to-day variation.
+  let dailyRoas: number[] = [];
+  try {
+    const { storage } = await import("../storage");
+    const end = new Date();
+    const start = new Date(end.getTime() - 30 * 86400000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const sales = await storage.getDailySalesSnapshotsInRange(iso(start), iso(end));
+    dailyRoas = (sales || [])
+      .sort((a: any, b: any) => String(a.date).localeCompare(String(b.date)))
+      .map((s: any) => (avgDailySpend > 0 ? round2((s.totalRevenue ?? 0) / avgDailySpend) : 0));
+  } catch {
+    /* aggregate-only fallback below */
+  }
+
+  const today = computeAdMetrics({
+    spend: adSpend7d,
+    revenue: revenue7d,
+    grossMarginPct: opts?.grossMarginPct,
+  });
+  const series = dailyRoas.length ? [...dailyRoas, today.roas] : [today.roas];
+
+  let directive = generateDirective({ platform: "BLENDED", roasSeries: series, today });
+  const dataGaps = Array.from(new Set([...(v7.dataGaps || []), ...(v30.dataGaps || [])]));
+  const gapped = v30.status === "DATA_GAPPED" || v7.status === "DATA_GAPPED" || adSpend30d <= 0;
+  directive = applyDataQualityGate(directive, dataGaps, gapped);
+
+  const result: BlendedAnalysis = {
+    generatedAt: new Date().toISOString(),
+    windowDays: 30,
+    blendedRoas7d: round2(today.roas),
+    blendedRoas30d: adSpend30d > 0 ? round2(revenue30d / adSpend30d) : 0,
+    adSpend7d,
+    adSpend30d,
+    revenue7d,
+    revenue30d,
+    directive,
+    dataConfident: !gapped && dataGaps.length === 0,
+    dataGaps,
+  };
+
+  try {
+    const { db } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+    await db.execute(sql`
+      INSERT INTO marketing_recommendations (generated_at, recommendations, input_snapshot, model, created_by)
+      VALUES (now(), ${JSON.stringify([directive])}::jsonb, ${JSON.stringify(result)}::jsonb,
+              'finops-marketing-analytics-v1', ${opts?.createdBy ?? "system"})
+    `);
+  } catch (e: any) {
+    console.warn("[MarketingAnalytics] persist failed:", e?.message ?? e);
+  }
+
+  return result;
+}

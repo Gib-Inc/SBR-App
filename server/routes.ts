@@ -24679,6 +24679,33 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
+  app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { runMarketingAnalysis } = await import("./services/marketing-analytics-service");
+      const analysis = await runMarketingAnalysis({ createdBy: "manual" });
+      res.json({ success: true, analysis });
+    } catch (error: any) {
+      console.error('[Marketing Analytics] analyze error:', error);
+      res.status(500).json({ error: error.message || 'Failed to run marketing analysis' });
+    }
+  });
+
+  app.get("/api/marketing/analysis", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const r: any = await db.execute(sql`
+        SELECT input_snapshot, generated_at FROM marketing_recommendations
+        WHERE model = 'finops-marketing-analytics-v1' ORDER BY generated_at DESC LIMIT 1`);
+      const rows = r.rows ?? r ?? [];
+      res.json({ analysis: rows[0]?.input_snapshot ?? null, generatedAt: rows[0]?.generated_at ?? null });
+    } catch (error: any) {
+      console.error('[Marketing Analytics] latest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch marketing analysis' });
+    }
+  });
+
   // Pull inventory FROM Shopify to update hildaleQty and pivotQty (multi-location)
   app.post("/api/shopify/pull-inventory", requireAuth, async (req: Request, res: Response) => {
     try {

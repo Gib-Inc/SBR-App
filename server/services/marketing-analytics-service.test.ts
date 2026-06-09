@@ -5,6 +5,7 @@ import {
   consecutiveDaysBelow,
   generateDirective,
   analyzePlatforms,
+  applyDataQualityGate,
   ROAS_TARGET,
   ROAS_ESCALATE,
   ROAS_PAUSE,
@@ -154,6 +155,33 @@ describe("analyzePlatforms", () => {
     const out = analyzePlatforms(series);
     expect(out[0].platform).toBe("META"); // critical pause before google scale
     expect(out[0].severity).toBe("critical");
+  });
+});
+
+describe("applyDataQualityGate (never act on untrusted spend)", () => {
+  const scaleDirective = generateDirective({
+    platform: "BLENDED",
+    roasSeries: [12],
+    today: computeAdMetrics({ spend: 1000, revenue: 12000 }),
+  });
+
+  it("passes the directive through untouched when data is clean", () => {
+    const out = applyDataQualityGate(scaleDirective, [], false);
+    expect(out.action).toBe("SCALE");
+    expect(out).toEqual(scaleDirective);
+  });
+
+  it("downgrades a SCALE to a HOLD when spend data is gapped", () => {
+    const out = applyDataQualityGate(scaleDirective, ["GOOGLE spend missing"], true);
+    expect(out.action).toBe("HOLD");
+    expect(out.severity).toBe("warn");
+    expect(out.reason).toContain("SCALE"); // preserves what the raw call would have been
+    expect(out.reason).toMatch(/reconcile/i);
+  });
+
+  it("gates on dataGaps even when the gapped flag is false", () => {
+    const out = applyDataQualityGate(scaleDirective, ["META uploaded snapshot stale"], false);
+    expect(out.action).toBe("HOLD");
   });
 });
 

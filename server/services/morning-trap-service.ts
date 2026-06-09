@@ -300,6 +300,58 @@ export class MorningTrapService {
    * Pull MTD Google Ads campaign data
    */
   private static async pullGoogleAdsData(userId: string): Promise<GoogleAdsTrapData> {
+    // Prefer the live Google Ads API; if it isn't connected (or errors), fall
+    // back to ingested spend snapshots (Windsor/uploads) so the briefing shows
+    // a real MTD number instead of N/A.
+    try {
+      return await this.pullGoogleAdsLive(userId);
+    } catch (liveError: any) {
+      const fallback = await this.googleAdsFromSnapshots();
+      if (fallback) {
+        console.log(`[Morning Trap] Google Ads live unavailable (${liveError?.message}); using ingested spend snapshots`);
+        return fallback;
+      }
+      throw liveError;
+    }
+  }
+
+  /** MTD Google spend from stored marketing_spend_snapshots (Windsor / uploads). */
+  private static async googleAdsFromSnapshots(): Promise<GoogleAdsTrapData | null> {
+    const now = new Date();
+    const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const endStr = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+    let google: any[] = [];
+    try {
+      const snaps = await storage.getMarketingSpendSnapshotsInRange(startOfMonth, endStr);
+      google = (snaps || []).filter((s) => String(s.platform || '').toUpperCase() === 'GOOGLE');
+    } catch {
+      return null;
+    }
+    if (!google.length) {
+      // Period boundaries may not align to MTD — use the most recent Google snapshot.
+      try {
+        const recent = await storage.getMarketingSpendSnapshots(50);
+        google = (recent || [])
+          .filter((s) => String(s.platform || '').toUpperCase() === 'GOOGLE' && !(s as any).superseded)
+          .slice(0, 1);
+      } catch { /* ignore */ }
+    }
+    if (!google.length) return null;
+    const sum = (f: (s: any) => number) => google.reduce((a, s) => a + (Number(f(s)) || 0), 0);
+    const totalSpend = sum((s) => s.spend);
+    const totalRevenue = sum((s) => s.revenue);
+    return {
+      totalSpend,
+      totalRevenue,
+      totalConversions: sum((s) => s.conversions),
+      totalClicks: sum((s) => s.clicks),
+      totalImpressions: sum((s) => s.impressions),
+      roas: totalSpend > 0 && totalRevenue > 0 ? totalRevenue / totalSpend : 0,
+      campaigns: [],
+    };
+  }
+
+  private static async pullGoogleAdsLive(userId: string): Promise<GoogleAdsTrapData> {
     // Initialize the Google Ads service
     const config = await storage.getIntegrationConfig(userId, 'GOOGLE_ADS');
     if (!config?.isEnabled) {
@@ -457,10 +509,13 @@ export class MorningTrapService {
   private static async generateBriefing(userId: string, dataPayload: string): Promise<string> {
     // Get API key from settings
     const settingsRow = await storage.getSettings(userId);
-    const apiKey = settingsRow?.llmApiKey;
+    // Prefer the per-account key from Settings; fall back to the app's
+    // ANTHROPIC_API_KEY env (same key the AI batch uses) so the briefing
+    // generates out of the box instead of failing on an empty Settings row.
+    const apiKey = settingsRow?.llmApiKey || process.env.ANTHROPIC_API_KEY;
 
     if (!apiKey) {
-      throw new Error('No Anthropic API key configured. Add your key in Settings > LLM Configuration. Route to Matt.');
+      throw new Error('No Anthropic API key configured. Add your key in Settings > LLM Configuration (or set ANTHROPIC_API_KEY). Route to Matt.');
     }
 
     const client = new Anthropic({ apiKey });

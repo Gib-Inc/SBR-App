@@ -407,7 +407,45 @@ export function initializeShopifyReconciliationScheduler(): void {
  */
 export async function triggerManualReconciliation(): Promise<ReconciliationResult> {
   console.log("[Shopify Reconciliation] Manual trigger requested");
-  return await runReconciliation("MANUAL");
+  const startedAt = new Date();
+  let result: ReconciliationResult;
+  try {
+    result = await runReconciliation("MANUAL");
+  } catch (error: any) {
+    // Record the failed manual run so the Health monitor reflects it
+    await recordSchedulerRun({
+      schedulerId: "shopify-reconciliation",
+      schedulerName: "Shopify reconciliation",
+      status: "failed",
+      startedAt,
+      errorMessage: error?.message ?? String(error),
+      details: { trigger: "manual" },
+    }).catch((recordError) => {
+      console.warn("[Shopify Reconciliation] Failed to record manual run:", recordError);
+    });
+    throw error;
+  }
+  // A manual run is a real run — report it to Health so the "Late"/drift
+  // status clears, exactly like the scheduled Tue/Thu path does.
+  await recordSchedulerRun({
+    schedulerId: "shopify-reconciliation",
+    schedulerName: "Shopify reconciliation",
+    status: result.success ? "success" : "failed",
+    startedAt,
+    errorMessage: result.success ? null : result.errors.slice(0, 3).join("; ") || "Shopify reconciliation failed",
+    details: {
+      trigger: "manual",
+      ordersProcessed: result.ordersProcessed,
+      ordersCreated: result.ordersCreated,
+      ordersUpdated: result.ordersUpdated,
+      ordersSkipped: result.ordersSkipped,
+      ghlSynced: result.ghlSynced,
+      errorCount: result.errors.length,
+    },
+  }).catch((recordError) => {
+    console.warn("[Shopify Reconciliation] Failed to record manual run:", recordError);
+  });
+  return result;
 }
 
 /**

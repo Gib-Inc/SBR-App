@@ -1036,6 +1036,125 @@ export default function Marketing() {
 
 // ── ROAS Guardian Tab ──
 
+// ── Daily Directive Panel (FinOps recommendation engine) ──
+// Surfaces the blended guardrail directive (8x target / 5x escalate / 3x pause
+// + September Rule) and per-campaign calls. When data quality blocks a
+// confident Scale/Kill, the EXACT missing fields are stated inline.
+function DailyDirectivePanel() {
+  const queryClient = useQueryClient();
+  const { data: analysisData } = useQuery<any>({ queryKey: ["/api/marketing/analysis"] });
+  const { data: campaignData } = useQuery<any>({ queryKey: ["/api/marketing/campaign-performance"] });
+  const refreshMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/marketing/analyze", {});
+      return res.json();
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/marketing/analysis"] }),
+  });
+
+  const a = analysisData?.analysis;
+  const d = a?.directive;
+  const campaigns: any[] = campaignData?.campaigns ?? [];
+
+  const actionBadge = (action: string, severity?: string) => {
+    const cls =
+      severity === "critical" ? "bg-destructive/10 text-destructive border-destructive/30"
+      : severity === "warn" ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30"
+      : action === "SCALE" ? "bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30"
+      : "bg-muted text-muted-foreground border-muted-foreground/20";
+    return <Badge variant="outline" className={cls}>{action}</Badge>;
+  };
+
+  return (
+    <Card data-testid="card-daily-directive">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <CardTitle>Today's Directive</CardTitle>
+            <CardDescription>
+              Guardrails: scale ≥8x · escalate &lt;5x · pause &lt;3x · September Rule blocks scale-ups after 5 straight days under target
+            </CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => refreshMut.mutate()} disabled={refreshMut.isPending}>
+            {refreshMut.isPending ? "Analyzing…" : "↻ Re-analyze"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!d ? (
+          <div className="text-sm text-muted-foreground">No analysis yet — hit Re-analyze to generate today's directive.</div>
+        ) : (
+          <>
+            <div className="flex items-start gap-3">
+              {actionBadge(d.action, d.severity)}
+              <div className="flex-1">
+                <div className="font-semibold">{d.headline}</div>
+                <div className="text-sm text-muted-foreground mt-0.5">{d.reason}</div>
+                <div className="text-xs text-muted-foreground mt-1.5">
+                  Blended ROAS {a.blendedRoas7d?.toFixed?.(1) ?? a.blendedRoas7d}x (7d) · {a.blendedRoas30d?.toFixed?.(1) ?? a.blendedRoas30d}x (30d) ·
+                  spend ${Math.round(a.adSpend30d ?? 0).toLocaleString()} / revenue ${Math.round(a.revenue30d ?? 0).toLocaleString()} (30d)
+                </div>
+              </div>
+            </div>
+            {Array.isArray(a.dataGaps) && a.dataGaps.length > 0 && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3" data-testid="directive-data-gaps">
+                <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                  Missing data blocking a confident Scale/Kill call:
+                </div>
+                <ul className="mt-1 text-xs text-amber-700/90 dark:text-amber-400/90 list-disc pl-4 space-y-0.5">
+                  {a.dataGaps.map((g: string, i: number) => <li key={i}>{g}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        {campaigns.length > 0 && (
+          <div>
+            <div className="text-sm font-medium mb-2">Per-campaign calls (last {campaignData.windowDays}d, live feed)</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="py-1.5 pr-2">Campaign</th>
+                    <th className="py-1.5 text-right">Spend</th>
+                    <th className="py-1.5 text-right">Revenue</th>
+                    <th className="py-1.5 text-right">ROAS</th>
+                    <th className="py-1.5 text-right">CAC</th>
+                    <th className="py-1.5 text-right">Contrib. Margin</th>
+                    <th className="py-1.5 text-right">Call</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {campaigns.slice(0, 12).map((c: any) => (
+                    <tr key={`${c.platform}-${c.campaign}`} className="border-b last:border-0 align-top">
+                      <td className="py-1.5 pr-2">
+                        <div className="font-medium truncate max-w-[260px]" title={c.campaign}>{c.campaign}</div>
+                        <div className="text-xs text-muted-foreground">{c.platform}</div>
+                        {c.gaps?.length > 0 && (
+                          <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5" title={c.gaps.join(" ")}>
+                            ⚠ {c.gaps[0]}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-1.5 text-right">${Math.round(c.spend).toLocaleString()}</td>
+                      <td className="py-1.5 text-right">${Math.round(c.revenue).toLocaleString()}</td>
+                      <td className="py-1.5 text-right">{(c.roas ?? 0).toFixed(1)}x</td>
+                      <td className="py-1.5 text-right">{c.cac != null ? `$${c.cac.toFixed(0)}` : "—"}</td>
+                      <td className="py-1.5 text-right">${Math.round(c.contributionMargin).toLocaleString()}</td>
+                      <td className="py-1.5 text-right">{actionBadge(c.directive?.action ?? "—", c.directive?.severity)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface RoasRow {
   sku: string;
   channel: string;
@@ -1167,6 +1286,7 @@ function RoasGuardianTab() {
 
   return (
     <div className="space-y-4 mt-4">
+      <DailyDirectivePanel />
       <div className="flex gap-4 items-end flex-wrap">
         <div>
           <Label htmlFor="roas-start">Start Date</Label>

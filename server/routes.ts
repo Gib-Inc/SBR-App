@@ -24754,6 +24754,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Per-campaign daily economics (Spend/Revenue/ROAS/CAC/Contribution Margin)
+  // with a guardrail directive per campaign and explicit data-gap reasons.
+  app.get("/api/marketing/campaign-performance", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const days = Math.min(90, Math.max(7, parseInt(String(req.query.days)) || 30));
+      const { getCampaignPerformance } = await import("./services/marketing-analytics-service");
+      res.json(await getCampaignPerformance(days));
+    } catch (error: any) {
+      console.error('[Marketing Analytics] campaign-performance error:', error);
+      res.status(500).json({ error: error.message || 'Failed to compute campaign performance' });
+    }
+  });
+
   app.get("/api/marketing/analysis", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

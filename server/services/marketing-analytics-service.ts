@@ -426,3 +426,95 @@ export async function runMarketingAnalysis(opts?: {
 
   return result;
 }
+
+// ─── Per-campaign daily breakdown (UI reporting layer) ───────────────────────
+export interface CampaignPerformanceRow {
+  platform: string;
+  campaign: string;
+  spend: number;
+  revenue: number;
+  roas: number;
+  cac: number | null; // spend / conversions (conversion-proxy for new customers)
+  contributionMargin: number;
+  conversions: number;
+  clicks: number;
+  days: number;
+  directive: Directive;
+  gaps: string[]; // per-campaign reasons a Scale/Kill call is limited
+}
+
+/**
+ * Campaign-level economics over a window, from the live ad_metrics_daily feed
+ * (paid platforms only — traffic-source pollution filtered out via
+ * normalizeAdPlatform). Each campaign gets its own guardrail directive, and
+ * any metric that can't be trusted carries an explicit gap reason so the UI
+ * can state exactly what's blocking a confident Scale/Kill call.
+ */
+export async function getCampaignPerformance(days = 30): Promise<{
+  windowDays: number;
+  campaigns: CampaignPerformanceRow[];
+  notes: string[];
+}> {
+  const { db } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const { normalizeAdPlatform } = await import("./unified-performance-service");
+  const notes: string[] = [];
+
+  const r: any = await db.execute(sql`
+    SELECT platform, coalesce(campaign, '(no campaign)') AS campaign, date,
+           sum(coalesce(spend,0)) AS spend, sum(coalesce(revenue,0)) AS revenue,
+           sum(coalesce(clicks,0)) AS clicks, sum(coalesce(conversions,0)) AS conversions
+    FROM ad_metrics_daily
+    WHERE date >= CURRENT_DATE - ${days}
+    GROUP BY platform, coalesce(campaign, '(no campaign)'), date`);
+  const rows: any[] = r.rows ?? r ?? [];
+
+  type Agg = { spend: number; revenue: number; clicks: number; conversions: number; daily: Map<string, { spend: number; revenue: number }> };
+  const byCampaign = new Map<string, Agg>();
+  for (const row of rows) {
+    const canonical = normalizeAdPlatform(String(row.platform ?? ""));
+    if (!canonical) continue; // traffic source, not a paid platform
+    const key = `${canonical}::${row.campaign}`;
+    const agg = byCampaign.get(key) ?? { spend: 0, revenue: 0, clicks: 0, conversions: 0, daily: new Map() };
+    agg.spend += Number(row.spend) || 0;
+    agg.revenue += Number(row.revenue) || 0;
+    agg.clicks += Number(row.clicks) || 0;
+    agg.conversions += Number(row.conversions) || 0;
+    const d = String(row.date);
+    const day = agg.daily.get(d) ?? { spend: 0, revenue: 0 };
+    day.spend += Number(row.spend) || 0;
+    day.revenue += Number(row.revenue) || 0;
+    agg.daily.set(d, day);
+    byCampaign.set(key, agg);
+  }
+
+  const campaigns: CampaignPerformanceRow[] = [];
+  for (const [key, agg] of Array.from(byCampaign.entries())) {
+    if (agg.spend <= 0) continue;
+    const [platform, campaign] = key.split("::");
+    const metrics = computeAdMetrics({
+      spend: agg.spend,
+      revenue: agg.revenue,
+      newCustomers: agg.conversions > 0 ? agg.conversions : null,
+    });
+    const roasSeries = Array.from(agg.daily.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, v]) => (v.spend > 0 ? round2(v.revenue / v.spend) : 0));
+    const directive = generateDirective({ platform: `${platform} · ${campaign}`, roasSeries, today: metrics });
+
+    const gaps: string[] = [];
+    if (agg.revenue <= 0) gaps.push("No attributed revenue in this feed — ROAS reads 0; verify attribution before a Kill call.");
+    if (agg.conversions <= 0) gaps.push("No conversions recorded — CAC unknown.");
+    campaigns.push({
+      platform, campaign,
+      spend: round2(agg.spend), revenue: round2(agg.revenue),
+      roas: metrics.roas, cac: metrics.cac, contributionMargin: metrics.contributionMargin,
+      conversions: agg.conversions, clicks: agg.clicks, days: agg.daily.size,
+      directive: gaps.length ? applyDataQualityGate(directive, gaps, true) : directive,
+      gaps,
+    });
+  }
+  campaigns.sort((a, b) => b.spend - a.spend);
+  if (!campaigns.length) notes.push("No paid-platform campaign rows in ad_metrics_daily for this window.");
+  return { windowDays: days, campaigns, notes };
+}

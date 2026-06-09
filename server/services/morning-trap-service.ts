@@ -337,15 +337,20 @@ export class MorningTrapService {
       } catch { /* ignore */ }
     }
     if (!google.length) return null;
-    const sum = (f: (s: any) => number) => google.reduce((a, s) => a + (Number(f(s)) || 0), 0);
-    const totalSpend = sum((s) => s.spend);
-    const totalRevenue = sum((s) => s.revenue);
+    // Rolling-window snapshots can overlap (e.g. two "last 30 days" ingestions
+    // taken on different days), so summing them would double-count. Use the
+    // single most-recent snapshot by period end instead.
+    const best = [...google].sort((a, b) =>
+      String(b.periodEnd ?? '').localeCompare(String(a.periodEnd ?? '')))[0];
+    const n = (v: any) => Number(v) || 0;
+    const totalSpend = n(best.spend);
+    const totalRevenue = n(best.revenue);
     return {
       totalSpend,
       totalRevenue,
-      totalConversions: sum((s) => s.conversions),
-      totalClicks: sum((s) => s.clicks),
-      totalImpressions: sum((s) => s.impressions),
+      totalConversions: n(best.conversions),
+      totalClicks: n(best.clicks),
+      totalImpressions: n(best.impressions),
       roas: totalSpend > 0 && totalRevenue > 0 ? totalRevenue / totalSpend : 0,
       campaigns: [],
     };

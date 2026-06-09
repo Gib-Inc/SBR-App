@@ -24,6 +24,11 @@ export const ROAS_TARGET = 8; // blended target — scale above this
 export const ROAS_ESCALATE = 5; // below → escalate / budget review
 export const ROAS_PAUSE = 3; // below → pause
 export const SEPTEMBER_RULE_DAYS = 5; // consecutive days < target that block scale-ups
+/** Blended ROAS above this is almost always under-reported spend, not a real return. */
+export const IMPLAUSIBLE_BLENDED_ROAS = 20; // SBR's historical band is ~8-10x
+export function isImplausibleBlendedRoas(roas: number): boolean {
+  return roas > IMPLAUSIBLE_BLENDED_ROAS;
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export interface PlatformDay {
@@ -373,15 +378,28 @@ export async function runMarketingAnalysis(opts?: {
   const series = dailyRoas.length ? [...dailyRoas, today.roas] : [today.roas];
 
   let directive = generateDirective({ platform: "BLENDED", roasSeries: series, today });
+  const blendedRoas30d = adSpend30d > 0 ? round2(revenue30d / adSpend30d) : 0;
   const dataGaps = Array.from(new Set([...(v7.dataGaps || []), ...(v30.dataGaps || [])]));
-  const gapped = v30.status === "DATA_GAPPED" || v7.status === "DATA_GAPPED" || adSpend30d <= 0;
+  // A blended ROAS far above SBR's historical ~8-10x band almost always means
+  // ad spend is under-reported (a missing platform/feed), not a real return —
+  // treat it as a data gap so we never tell Matt to scale on phantom returns.
+  if (isImplausibleBlendedRoas(blendedRoas30d)) {
+    dataGaps.push(
+      `Blended ROAS ${blendedRoas30d.toFixed(1)}x exceeds the ${IMPLAUSIBLE_BLENDED_ROAS}x plausibility ceiling — ad spend is likely under-reported`,
+    );
+  }
+  const gapped =
+    v30.status === "DATA_GAPPED" ||
+    v7.status === "DATA_GAPPED" ||
+    adSpend30d <= 0 ||
+    isImplausibleBlendedRoas(blendedRoas30d);
   directive = applyDataQualityGate(directive, dataGaps, gapped);
 
   const result: BlendedAnalysis = {
     generatedAt: new Date().toISOString(),
     windowDays: 30,
     blendedRoas7d: round2(today.roas),
-    blendedRoas30d: adSpend30d > 0 ? round2(revenue30d / adSpend30d) : 0,
+    blendedRoas30d,
     adSpend7d,
     adSpend30d,
     revenue7d,

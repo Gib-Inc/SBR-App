@@ -6,6 +6,8 @@ import {
   generateDirective,
   analyzePlatforms,
   applyDataQualityGate,
+  isImplausibleBlendedRoas,
+  IMPLAUSIBLE_BLENDED_ROAS,
   ROAS_TARGET,
   ROAS_ESCALATE,
   ROAS_PAUSE,
@@ -185,11 +187,23 @@ describe("applyDataQualityGate (never act on untrusted spend)", () => {
   });
 });
 
+describe("isImplausibleBlendedRoas (catches under-reported spend)", () => {
+  it("flags ROAS above the plausibility ceiling", () => {
+    expect(isImplausibleBlendedRoas(32)).toBe(true); // 387k rev / 12k spend
+    expect(isImplausibleBlendedRoas(IMPLAUSIBLE_BLENDED_ROAS + 0.1)).toBe(true);
+  });
+  it("accepts ROAS within SBR's realistic band", () => {
+    expect(isImplausibleBlendedRoas(10)).toBe(false);
+    expect(isImplausibleBlendedRoas(IMPLAUSIBLE_BLENDED_ROAS)).toBe(false);
+  });
+});
+
 describe("guardrail constants stay locked to SBR policy", () => {
   it("matches the non-negotiable ROAS floors", () => {
     expect(ROAS_TARGET).toBe(8);
     expect(ROAS_ESCALATE).toBe(5);
     expect(ROAS_PAUSE).toBe(3);
     expect(SEPTEMBER_RULE_DAYS).toBe(5);
+    expect(IMPLAUSIBLE_BLENDED_ROAS).toBe(20);
   });
 });

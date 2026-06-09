@@ -187,6 +187,31 @@ export async function computeSupplierIntelSnapshot(trigger: string): Promise<Sup
     if (n) velByNorm.set(n, (velByNorm.get(n) ?? 0) + (v.unitsSold ?? 0));
   }
 
+  // 2b. Editable supplier catalog: the designated supplier_items row per item
+  //     supplies the unit cost (and lead time). Editing a price on the Suppliers
+  //     screen flows straight into the PO math here. Falls back to the curated
+  //     reference values below when an item isn't mapped in the catalog.
+  const catByNorm = new Map<string, { price: number | null; leadTime: number | null; supplierName: string }>();
+  try {
+    const catRes: any = await db.execute(sql`
+      SELECT i.sku AS item_sku, si.price, si.lead_time_days, s.name AS supplier_name
+      FROM supplier_items si
+      JOIN items i ON i.id = si.item_id
+      JOIN suppliers s ON s.id = si.supplier_id
+      WHERE si.is_designated_supplier = true
+    `);
+    for (const r of (catRes.rows ?? catRes ?? [])) {
+      const n = norm(r.item_sku);
+      if (n) catByNorm.set(n, {
+        price: r.price != null ? Number(r.price) : null,
+        leadTime: r.lead_time_days != null ? Number(r.lead_time_days) : null,
+        supplierName: r.supplier_name,
+      });
+    }
+  } catch (e: any) {
+    notes.push(`Supplier catalog unavailable — using reference costs: ${e?.message ?? e}`);
+  }
+
   // 3. Compute each curated product from live inputs
   const inventory: IntelProduct[] = PRODUCTS.map((p) => {
     const item = itemByNorm.get(norm(p.liveSku));
@@ -200,13 +225,15 @@ export async function computeSupplierIntelSnapshot(trigger: string): Promise<Sup
     for (const k of Array.from(skuKeys)) unitsSold90 += velByNorm.get(k) ?? 0;
     const velocityKnown = unitsSold90 > 0;
 
+    const cat = catByNorm.get(norm(p.liveSku));
+    const unitCost = cat?.price != null ? cat.price : p.unitCost;
+    const leadTime = cat?.leadTime != null ? cat.leadTime : leadTimeFor(p.supplierId);
     const dailyVel = unitsSold90 / COVERAGE_DAYS;
     const weeklyVel = dailyVel * 7;
-    const leadTime = leadTimeFor(p.supplierId);
     const reorderPoint = Math.ceil(dailyVel * leadTime + weeklyVel);
     const need = Math.ceil(dailyVel * COVERAGE_DAYS);
     const gap = Math.max(0, need - available);
-    const poValue = gap > 0 ? gap * p.unitCost : 0;
+    const poValue = gap > 0 ? gap * unitCost : 0;
 
     let runsOutISO: string | null = null;
     let daysToStockout = Infinity;
@@ -225,7 +252,7 @@ export async function computeSupplierIntelSnapshot(trigger: string): Promise<Sup
     return {
       sku: p.liveSku, name: p.name, available,
       projVelocity: Math.round(weeklyVel), status, q2Need: need, gap,
-      supplierCost: p.unitCost, supplierId: p.supplierId,
+      supplierCost: unitCost, supplierId: p.supplierId,
       amazonPct: 0, shopifyPct: 0,
       runsOutISO, reorderPoint, poValue, velocityKnown,
     };

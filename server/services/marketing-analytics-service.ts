@@ -344,8 +344,11 @@ export async function runMarketingAnalysis(opts?: {
   createdBy?: string;
 }): Promise<BlendedAnalysis> {
   const { getUnifiedPerformance } = await import("./unified-performance-service");
-  const v7 = await getUnifiedPerformance(7);
-  const v30 = await getUnifiedPerformance(30);
+  // getUnifiedPerformance defaults nowMs to epoch 0 (deterministic for tests) —
+  // callers MUST pass the real clock or the window lands in 1970.
+  const nowMs = Date.now();
+  const v7 = await getUnifiedPerformance(7, nowMs);
+  const v30 = await getUnifiedPerformance(30, nowMs);
 
   const adSpend7d = v7.totalAdSpend ?? 0;
   const adSpend30d = v30.totalAdSpend ?? 0;

@@ -91,6 +91,25 @@ The resolver (`POST /api/system-integrity/resolve-inventory`):
 and the source for this section's live numbers. The integrity sweep (every 6h)
 re-detects anything that drifts again.
 
+**Live run (2026-06-09, post-deploy — 20 flagged, down from 26):**
+
+| Status | SKUs | Detail |
+|---|---|---|
+| CORRECTED (2) | #305-REP-M2 (afs 35→15) · SBR-PB-BIGFOOT (afs 26→36) | Applied via MANUAL_COUNT, ≤25-unit cap |
+| EXPLAINED (3) | SBR-PUSH-1.0 · SBR-Extrawide2.0 · #303.2-REP-M1 | Open unshipped orders fully account for the gap |
+| PROPOSED (5) | #302-REP-M1 (250→138) · #304-REP-M2 (153→89) · #1202-REP-M2 (396→291) · #1004-REP-M1 (50→14) · SBR-PB-ORIG (53→22) | Corrections exceed the auto-cap — awaiting one-click human approval |
+| SYNC_FAILED (10) | #701/#702/#703/#704-CMB, #RF-1041/#RF-1241/#RF-141/#RF-241, #1003-REP-M1, #1203-REP-M2 | Exact point of failure: **"SKU not found in Extensiv customer 109"** — these items are unmapped in the 3PL (combos/refurbs are largely Hildale-only). Two also carry a polluted `extensiv_sku` value with a literal `"SKU: "` prefix that can never match — data fix: strip the prefix / populate `extensiv_sku`. |
+
+## 6. Live Verification (post-deploy, 2026-06-09)
+
+| Check | Result |
+|---|---|
+| Windsor 4-table Amazon sync | ✅ New snapshot **$4,165.17** (was $3,162 / $2,677), priors auto-superseded — video-table leak recovered in prod |
+| Inventory valuation @ WAC | ✅ **$248,649.45** total (finished $164,410.17 + components $84,239.28), **0 uncosted stocked items** |
+| Forecast self-tuning seed | ✅ First prediction written: 2026-06-10 daily net revenue **$27,725** (7d avg, factor 1.0 — grading begins after tonight's actualization) |
+| Blended directive | ✅ 9.55x blended ROAS on $49.8K/30d trusted spend; data-gated HOLD listing exact gaps |
+| Drift resolver | ✅ Per-SKU ledger above |
+
 ## 5. Residual Risks / Operator Actions
 1. **Meta in Windsor** — connect via Windsor dashboard OAuth (Matt). Until then Meta arrives via manual uploads only.
 2. **WAC cold start** — costs populate as receipts/builds flow; until then valuation falls back to `default_purchase_cost`, and `inventory-valuation` lists uncosted stocked items explicitly.

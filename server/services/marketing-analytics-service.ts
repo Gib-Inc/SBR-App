@@ -460,12 +460,15 @@ export async function getCampaignPerformance(days = 30): Promise<{
   const { normalizeAdPlatform } = await import("./unified-performance-service");
   const notes: string[] = [];
 
+  // Pass an explicit ISO date — a parameterized integer in `CURRENT_DATE - $1`
+  // reaches Postgres as `date >= integer` and errors.
+  const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const r: any = await db.execute(sql`
     SELECT platform, coalesce(campaign, '(no campaign)') AS campaign, date,
            sum(coalesce(spend,0)) AS spend, sum(coalesce(revenue,0)) AS revenue,
            sum(coalesce(clicks,0)) AS clicks, sum(coalesce(conversions,0)) AS conversions
     FROM ad_metrics_daily
-    WHERE date >= CURRENT_DATE - ${days}
+    WHERE date >= ${since}::date
     GROUP BY platform, coalesce(campaign, '(no campaign)'), date`);
   const rows: any[] = r.rows ?? r ?? [];
 

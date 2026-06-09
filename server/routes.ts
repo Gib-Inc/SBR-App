@@ -25642,6 +25642,13 @@ Generate only the email body text, no subject line.`;
     console.error("[Server] Failed to initialize Supplier Intel Scheduler:", error);
   });
 
+  import("./services/marketing-analytics-scheduler").then(({ initializeMarketingAnalyticsScheduler }) => {
+    initializeMarketingAnalyticsScheduler();
+    console.log("[Server] Marketing Analytics Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Marketing Analytics Scheduler:", error);
+  });
+
   import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {
     initializeReorderWatcher();
     console.log("[Server] Reorder Watcher initialized");

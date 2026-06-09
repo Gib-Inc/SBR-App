@@ -206,6 +206,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     sourceOfTruth: "supplier_intel_snapshot + scheduler:supplier-intel health row",
     alertOnStale: true,
   },
+  {
+    id: "marketing-analytics",
+    name: "Marketing analytics directive",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Daily at 6:30 AM MT",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "marketing_recommendations + scheduler:marketing-analytics health row",
+    alertOnStale: true,
+  },
 ];
 
 let monitorInitialized = false;
@@ -339,6 +350,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["supplier-intel"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const marketingAnalytics = await import("./marketing-analytics-scheduler");
+    const status = marketingAnalytics.getMarketingAnalyticsSchedulerStatus();
+    statuses["marketing-analytics"] = {
+      initialized: status.initialized,
+      nextRunAt: status.nextRunAt ? status.nextRunAt.toISOString() : null,
+      notes: [`Timezone: ${status.timezone}`],
+    };
+  } catch (error: any) {
+    statuses["marketing-analytics"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   return statuses;

@@ -8541,7 +8541,10 @@ export class PostgresStorage implements IStorage {
   async getLatestMorningTrapRun(userId: string): Promise<MorningTrapRun | undefined> {
     const result = await this.db.select().from(schema.morningTrapRuns)
       .where(eq(schema.morningTrapRuns.userId, userId))
-      .orderBy(desc(schema.morningTrapRuns.runDate))
+      // runDate is a date (no time), so several runs share a day. Tie-break on
+      // createdAt so the most recently saved run wins instead of an arbitrary
+      // same-day row (which left a stale briefing/spend showing on the page).
+      .orderBy(desc(schema.morningTrapRuns.runDate), desc(schema.morningTrapRuns.createdAt))
       .limit(1);
     return result[0];
   }

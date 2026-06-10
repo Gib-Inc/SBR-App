@@ -145,6 +145,41 @@ export async function runWindsorSync(): Promise<{ ran: boolean; reason?: string;
     } catch (e: any) {
       results.push({ platform: "GOOGLE_CAMPAIGNS", action: "SKIPPED", reason: e?.message ?? "fetch failed" });
     }
+    // Campaign-level AMAZON Sponsored Products daily (cost, conversions, and
+    // 14-day attributed sales — Amazon's own attribution). Same '_windsor'
+    // convention; gives the per-campaign table real Amazon ROAS (e.g. the Auto
+    // campaign at ~9x, brand-defense KWs at 20x+) alongside Google.
+    try {
+      const rows = await fetchWindsor(
+        "amazon_ads",
+        ["date", "sponsored_products_campaign__campaign", "sponsored_products_campaign__cost", "sponsored_products_campaign__attributedsales14d", "sponsored_products_campaign__attributedconversions14d"],
+        apiKey,
+      );
+      let upserts = 0;
+      for (const row of rows as any[]) {
+        const campaign = row?.sponsored_products_campaign__campaign;
+        if (!row?.date || !campaign) continue;
+        const spend = Number(row.sponsored_products_campaign__cost) || 0;
+        const revenue = Number(row.sponsored_products_campaign__attributedsales14d) || 0;
+        if (spend <= 0 && revenue <= 0) continue;
+        await storage.upsertAdMetricsDaily({
+          platform: "AMAZON",
+          sku: "_windsor",
+          date: String(row.date),
+          campaign: String(campaign),
+          impressions: 0,
+          clicks: 0,
+          spend,
+          conversions: Math.round(Number(row.sponsored_products_campaign__attributedconversions14d) || 0),
+          revenue,
+          currency: "USD",
+        } as any);
+        upserts++;
+      }
+      results.push({ platform: "AMAZON_CAMPAIGNS", action: "UPSERTED", rows: upserts });
+    } catch (e: any) {
+      results.push({ platform: "AMAZON_CAMPAIGNS", action: "SKIPPED", reason: e?.message ?? "fetch failed" });
+    }
     lastRun = { at: nowIso, ran: true, keyPresent: true, results };
     console.log("[Windsor Sync] Synced:", JSON.stringify(results));
     return { ran: true, results };

@@ -109,6 +109,42 @@ export async function runWindsorSync(): Promise<{ ran: boolean; reason?: string;
     } catch (e: any) {
       results.push({ platform: "PINTEREST", action: "SKIPPED", reason: e?.message ?? "fetch failed" });
     }
+    // Campaign-level Google daily (spend, conversions, conversion VALUE) — the
+    // automated replacement for Zo's manual KPI tracker. Validated 2026-06-09
+    // against her sheet to the cent (e.g. Pull-Behind Original $551.02 /
+    // $2,316.70 exact). sku '_windsor' keeps these rows distinct from the live
+    // shopping-feed SKU rows; revenue = Google-attributed conversion_value, so
+    // per-campaign ROAS in the app is finally real.
+    try {
+      const rows = await fetchWindsor(
+        "google_ads",
+        ["date", "campaign", "spend", "clicks", "impressions", "conversions", "conversion_value"],
+        apiKey,
+      );
+      let upserts = 0;
+      for (const row of rows as any[]) {
+        if (!row?.date || !row?.campaign) continue;
+        const spend = Number(row.spend) || 0;
+        const revenue = Number(row.conversion_value) || 0;
+        if (spend <= 0 && revenue <= 0) continue;
+        await storage.upsertAdMetricsDaily({
+          platform: "GOOGLE",
+          sku: "_windsor",
+          date: String(row.date),
+          campaign: String(row.campaign),
+          impressions: Math.round(Number(row.impressions) || 0),
+          clicks: Math.round(Number(row.clicks) || 0),
+          spend,
+          conversions: Math.round(Number(row.conversions) || 0),
+          revenue,
+          currency: "USD",
+        } as any);
+        upserts++;
+      }
+      results.push({ platform: "GOOGLE_CAMPAIGNS", action: "UPSERTED", rows: upserts });
+    } catch (e: any) {
+      results.push({ platform: "GOOGLE_CAMPAIGNS", action: "SKIPPED", reason: e?.message ?? "fetch failed" });
+    }
     lastRun = { at: nowIso, ran: true, keyPresent: true, results };
     console.log("[Windsor Sync] Synced:", JSON.stringify(results));
     return { ran: true, results };

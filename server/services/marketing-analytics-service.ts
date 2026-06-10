@@ -461,16 +461,32 @@ export async function getCampaignPerformance(days = 30): Promise<{
   const notes: string[] = [];
 
   // Pass an explicit ISO date — a parameterized integer in `CURRENT_DATE - $1`
-  // reaches Postgres as `date >= integer` and errors.
+  // reaches Postgres as `date >= integer` and errors. '_all' rows are platform
+  // aggregates (they duplicate the per-campaign rows) — excluded.
   const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const r: any = await db.execute(sql`
     SELECT platform, coalesce(campaign, '(no campaign)') AS campaign, date,
+           bool_or(sku = '_windsor') AS is_windsor,
            sum(coalesce(spend,0)) AS spend, sum(coalesce(revenue,0)) AS revenue,
            sum(coalesce(clicks,0)) AS clicks, sum(coalesce(conversions,0)) AS conversions
     FROM ad_metrics_daily
-    WHERE date >= ${since}::date
-    GROUP BY platform, coalesce(campaign, '(no campaign)'), date`);
-  const rows: any[] = r.rows ?? r ?? [];
+    WHERE date >= ${since}::date AND coalesce(campaign,'') <> '_all'
+    GROUP BY platform, coalesce(campaign, '(no campaign)'), date, (sku = '_windsor')`);
+  let rows: any[] = r.rows ?? r ?? [];
+
+  // SOURCE PREFERENCE: Windsor campaign rows carry Google's real attributed
+  // conversion value (validated against Zo's tracker to the cent); the live
+  // feed's revenue column is broken for Google. Per canonical platform, when
+  // Windsor rows exist in the window they are authoritative — drop the rest
+  // so spend is never double-counted.
+  const windsorPlatforms = new Set(
+    rows.filter((x) => x.is_windsor).map((x) => normalizeAdPlatform(String(x.platform ?? ""))).filter(Boolean) as string[],
+  );
+  rows = rows.filter((x) => {
+    const canonical = normalizeAdPlatform(String(x.platform ?? ""));
+    if (!canonical || !windsorPlatforms.has(canonical)) return true;
+    return Boolean(x.is_windsor);
+  });
 
   type Agg = { spend: number; revenue: number; clicks: number; conversions: number; daily: Map<string, { spend: number; revenue: number }> };
   const byCampaign = new Map<string, Agg>();

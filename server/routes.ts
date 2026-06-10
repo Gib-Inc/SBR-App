@@ -24812,11 +24812,35 @@ Generate only the email body text, no subject line.`;
     try {
       const { resolveInventoryDrift } = await import("./services/inventory-drift-resolver");
       const apply = String(req.query.apply ?? "true") !== "false";
-      const result = await resolveInventoryDrift({ apply, userId: (req.session as any)?.userId });
+      const sku = req.query.sku ? String(req.query.sku) : undefined;
+      // Per-SKU approvals (the FinOps page button) raise the cap so a human-
+      // approved PROPOSED correction actually applies; bulk runs stay bounded.
+      const maxAutoCorrect = req.query.maxAutoCorrect
+        ? Math.min(10000, Math.max(1, parseInt(String(req.query.maxAutoCorrect)) || 25))
+        : (sku ? 10000 : undefined);
+      const result = await resolveInventoryDrift({ apply, sku, maxAutoCorrect, userId: (req.session as any)?.userId });
       res.json({ success: true, result });
     } catch (error: any) {
       console.error('[System Integrity] resolve-inventory error:', error);
       res.status(500).json({ error: error.message || 'Failed to resolve inventory drift' });
+    }
+  });
+
+  // Latest drift-resolution status per SKU (the resolver's active ledger).
+  app.get("/api/system-integrity/drift-ledger", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { sql } = await import("drizzle-orm");
+      const r: any = await db.execute(sql`
+        SELECT DISTINCT ON (entity_key)
+               entity_key AS sku, action, old_value, new_value, reason, created_at
+        FROM data_reconciliation_log
+        WHERE data_type = 'inventory_drift'
+        ORDER BY entity_key, created_at DESC`);
+      res.json({ ledger: r.rows ?? r ?? [] });
+    } catch (error: any) {
+      console.error('[System Integrity] drift-ledger error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch drift ledger' });
     }
   });
 

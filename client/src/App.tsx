@@ -38,6 +38,7 @@ import POAcknowledge from "@/pages/po-acknowledge";
 import Reports from "@/pages/reports";
 import Finances from "@/pages/finances";
 import Health from "@/pages/health";
+import FinOps from "@/pages/finops";
 import ReorderAlerts from "@/pages/reorder-alerts";
 import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
@@ -139,6 +140,7 @@ function AuthenticatedApp() {
                     <Route path="/" component={Reports} />
                     <Route path="/finances" component={Finances} />
                     <Route path="/health" component={Health} />
+                    <Route path="/finops" component={FinOps} />
                     <Route path="/reorder-alerts" component={ReorderAlerts} />
                     <Route path="/products" component={Products} />
                     <Route path="/production" component={Production} />

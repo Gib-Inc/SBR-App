@@ -94,6 +94,7 @@ async function openUnshippedBySku(): Promise<Map<string, number>> {
 export async function resolveInventoryDrift(opts?: {
   apply?: boolean; // actually write CORRECTED decisions (default true — bounded by maxAutoCorrect)
   maxAutoCorrect?: number; // cap on auto-applied |correction| (default 25 units)
+  sku?: string; // resolve a single SKU (used by the FinOps page's per-SKU Approve button)
   userId?: string;
 }): Promise<ResolveResult> {
   const apply = opts?.apply ?? true;
@@ -105,7 +106,9 @@ export async function resolveInventoryDrift(opts?: {
 
   const { runDriftReport } = await import("./inventory-drift-service");
   const report: any = await runDriftReport();
-  const flagged: any[] = report.flaggedItems ?? [];
+  const flagged: any[] = (report.flaggedItems ?? []).filter(
+    (f: any) => !opts?.sku || f.sku === opts.sku,
+  );
   out.flagged = flagged.length;
   if (!flagged.length) return out;
 

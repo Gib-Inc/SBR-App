@@ -647,7 +647,7 @@ export default function SupplierIntel() {
             {tab === "suppliers" && (
               <>
                 <div className="si-sec-hdr">
-                  {[...hotSuppliers].length} suppliers have critical items waiting
+                  {hotSuppliers.size} suppliers have critical items waiting
                 </div>
                 {SUPPLIERS.map(sup => {
                   const isOpen = openSup === sup.id;

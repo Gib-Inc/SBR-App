@@ -24744,9 +24744,21 @@ Generate only the email body text, no subject line.`;
 
   // ─── Marketing analytics — blended ad directive (FinOps Pillar 3) ───────────
   app.post("/api/marketing/analyze", requireAuth, async (_req: Request, res: Response) => {
+    const startedAt = new Date();
     try {
       const { runMarketingAnalysis } = await import("./services/marketing-analytics-service");
       const analysis = await runMarketingAnalysis({ createdBy: "manual" });
+      // A manual run is a real run — report it to Health so the scheduler row
+      // shows a status instead of "unknown" before the first scheduled fire.
+      import("./services/scheduler-run-recorder").then(({ recordSchedulerRun }) =>
+        recordSchedulerRun({
+          schedulerId: "marketing-analytics",
+          schedulerName: "Marketing analytics directive",
+          status: "success",
+          startedAt,
+          errorMessage: null,
+          details: { trigger: "manual", action: analysis.directive.action, dataConfident: analysis.dataConfident },
+        })).catch(() => {});
       res.json({ success: true, analysis });
     } catch (error: any) {
       console.error('[Marketing Analytics] analyze error:', error);

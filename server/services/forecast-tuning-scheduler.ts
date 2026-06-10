@@ -71,10 +71,23 @@ export function initializeForecastTuningScheduler(): void {
   console.log("[Forecast Tuning] Initializing — nightly 12:15 AM MT (after the daily-sales rollup)");
   scheduleNext();
   // Seed the loop on startup so the first prediction exists tonight rather
-  // than waiting a full cycle. Fire-and-forget; never blocks boot.
+  // than waiting a full cycle. Fire-and-forget; never blocks boot. Records to
+  // Health so the scheduler row shows a status before the first 12:15 AM fire.
   setTimeout(() => {
-    runNightlyForecastTuning().catch((e) =>
-      console.warn("[Forecast Tuning] startup seed failed:", e?.message ?? e));
+    const startedAt = new Date();
+    runNightlyForecastTuning()
+      .then((r) =>
+        recordSchedulerRun({
+          schedulerId: "forecast-tuning",
+          schedulerName: "Forecast self-tuning",
+          status: "success",
+          startedAt,
+          errorMessage: null,
+          details: { trigger: "startup-seed", actualized: r.actualized, factor: r.factor },
+        }).catch(() => {}),
+      )
+      .catch((e) =>
+        console.warn("[Forecast Tuning] startup seed failed:", e?.message ?? e));
   }, 90_000);
 }
 

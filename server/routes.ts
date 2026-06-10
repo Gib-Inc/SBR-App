@@ -24766,6 +24766,78 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Manual Meta tracker ingest (Meta flagged the Windsor OAuth; spend is
+  // posted manually for now). Paste → preview → ingest through the SAME
+  // reconciliation path as every other spend source.
+  app.post("/api/marketing/meta-manual/parse", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { parseMetaTracker } = await import("./services/meta-tracker-parser");
+      res.json(parseMetaTracker(String(req.body?.text ?? "")));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || 'Failed to parse tracker' });
+    }
+  });
+
+  app.post("/api/marketing/meta-manual/ingest", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { parseMetaTracker } = await import("./services/meta-tracker-parser");
+      const { hashMarketingSnapshot } = await import("./services/reconciliation-service");
+      const parsed = parseMetaTracker(String(req.body?.text ?? ""));
+      if (!parsed.ok || !parsed.periodStart || !parsed.periodEnd) {
+        return res.status(400).json({ error: "Nothing parseable in the paste", warnings: parsed.warnings });
+      }
+
+      // Supersede ANY active META snapshot overlapping this period — re-pasting
+      // the growing monthly tracker must replace, never double-count.
+      const active = await storage.getActiveMarketingSpendSnapshots();
+      const overlapping = (active as any[]).filter((s) =>
+        String(s.platform || "").toUpperCase() === "META" &&
+        s.periodStart && s.periodEnd &&
+        s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!,
+      );
+      if (overlapping.length) {
+        await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), "manual:meta-tracker");
+      }
+
+      const sourceHash = hashMarketingSnapshot({
+        platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
+        spend: parsed.totalSpend, impressions: null, clicks: null,
+      });
+      await storage.createMarketingSpendSnapshot({
+        platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
+        spend: parsed.totalSpend, conversions: parsed.totalPurchases, revenue: parsed.totalConversionValue,
+        currency: "USD", source: "manual:meta-tracker", status: "OK", sourceHash,
+        raw: { days: parsed.days.length, campaign: parsed.campaign, ingestedVia: "meta-manual" } as unknown,
+      } as any);
+
+      // Daily campaign rows so Meta shows on the per-campaign directive board
+      // with real attributed revenue (sku '_manual' = authoritative-manual).
+      for (const d of parsed.days) {
+        await storage.upsertAdMetricsDaily({
+          platform: "META", sku: "_manual", date: d.date, campaign: parsed.campaign,
+          impressions: 0, clicks: 0, spend: d.spend,
+          conversions: d.purchases, revenue: d.conversionValue, currency: "USD",
+        } as any);
+      }
+
+      const entityKey = `META ${parsed.periodStart}..${parsed.periodEnd}`;
+      await storage.createDataReconciliationLog([{
+        dataType: "marketing_spend", entityKey,
+        action: overlapping.length ? "SUPERSEDED" : "ADDED",
+        field: "spend",
+        oldValue: overlapping.length ? String(overlapping.reduce((s: number, x: any) => s + (Number(x.spend) || 0), 0)) : null,
+        newValue: String(parsed.totalSpend),
+        reason: `Manual Meta tracker ingest: ${parsed.days.length} day(s), ${parsed.totalPurchases} purchases, $${parsed.totalConversionValue} attributed (${parsed.roas}x). Campaign: ${parsed.campaign}.${overlapping.length ? ` Replaced ${overlapping.length} overlapping period(s).` : ""}`,
+        source: "manual:meta-tracker",
+      }]).catch(() => {});
+
+      res.json({ success: true, ingested: { ...parsed, superseded: overlapping.length } });
+    } catch (error: any) {
+      console.error('[Meta Manual] ingest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to ingest tracker' });
+    }
+  });
+
   // Per-campaign daily economics (Spend/Revenue/ROAS/CAC/Contribution Margin)
   // with a guardrail directive per campaign and explicit data-gap reasons.
   app.get("/api/marketing/campaign-performance", requireAuth, async (req: Request, res: Response) => {

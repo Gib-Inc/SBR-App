@@ -466,26 +466,27 @@ export async function getCampaignPerformance(days = 30): Promise<{
   const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
   const r: any = await db.execute(sql`
     SELECT platform, coalesce(campaign, '(no campaign)') AS campaign, date,
-           bool_or(sku = '_windsor') AS is_windsor,
+           bool_or(sku IN ('_windsor', '_manual')) AS is_authoritative,
            sum(coalesce(spend,0)) AS spend, sum(coalesce(revenue,0)) AS revenue,
            sum(coalesce(clicks,0)) AS clicks, sum(coalesce(conversions,0)) AS conversions
     FROM ad_metrics_daily
     WHERE date >= ${since}::date AND coalesce(campaign,'') <> '_all'
-    GROUP BY platform, coalesce(campaign, '(no campaign)'), date, (sku = '_windsor')`);
+    GROUP BY platform, coalesce(campaign, '(no campaign)'), date, (sku IN ('_windsor', '_manual'))`);
   let rows: any[] = r.rows ?? r ?? [];
 
-  // SOURCE PREFERENCE: Windsor campaign rows carry Google's real attributed
-  // conversion value (validated against Zo's tracker to the cent); the live
-  // feed's revenue column is broken for Google. Per canonical platform, when
-  // Windsor rows exist in the window they are authoritative — drop the rest
-  // so spend is never double-counted.
-  const windsorPlatforms = new Set(
-    rows.filter((x) => x.is_windsor).map((x) => normalizeAdPlatform(String(x.platform ?? ""))).filter(Boolean) as string[],
+  // SOURCE PREFERENCE: '_windsor' rows carry each platform's real attributed
+  // conversion value (validated against the analyst tracker to the cent), and
+  // '_manual' rows are the hand-posted Meta tracker (Meta blocked the Windsor
+  // OAuth). Per canonical platform, when authoritative rows exist in the
+  // window they win — the polluted live feed is dropped so spend is never
+  // double-counted.
+  const authoritativePlatforms = new Set(
+    rows.filter((x) => x.is_authoritative).map((x) => normalizeAdPlatform(String(x.platform ?? ""))).filter(Boolean) as string[],
   );
   rows = rows.filter((x) => {
     const canonical = normalizeAdPlatform(String(x.platform ?? ""));
-    if (!canonical || !windsorPlatforms.has(canonical)) return true;
-    return Boolean(x.is_windsor);
+    if (!canonical || !authoritativePlatforms.has(canonical)) return true;
+    return Boolean(x.is_authoritative);
   });
 
   type Agg = { spend: number; revenue: number; clicks: number; conversions: number; daily: Map<string, { spend: number; revenue: number }> };

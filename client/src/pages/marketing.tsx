@@ -1155,6 +1155,79 @@ function DailyDirectivePanel() {
   );
 }
 
+// ── Manual Meta tracker paste (Meta blocked the Windsor OAuth) ──
+function MetaManualCard() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState<any>(null);
+
+  const parseMut = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/marketing/meta-manual/parse", { text })).json(),
+    onSuccess: (p: any) => {
+      setPreview(p);
+      if (!p.ok) toast({ title: "Nothing parseable", description: p.warnings?.[0], variant: "destructive" });
+    },
+  });
+  const ingestMut = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/marketing/meta-manual/ingest", { text });
+      if (!res.ok) throw new Error((await res.json()).error || "Ingest failed");
+      return res.json();
+    },
+    onSuccess: (d: any) => {
+      const i = d.ingested;
+      toast({ title: "Meta spend ingested", description: `${i.periodStart} → ${i.periodEnd}: $${i.totalSpend.toLocaleString()} · ${i.totalPurchases} purchases · ${i.roas}x${i.superseded ? ` (replaced ${i.superseded} prior period${i.superseded === 1 ? "" : "s"})` : ""}` });
+      setText(""); setPreview(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/marketing/analysis"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/marketing/campaign-performance"] });
+    },
+    onError: (e: any) => toast({ title: "Ingest failed", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card data-testid="card-meta-manual">
+      <CardHeader className="pb-3">
+        <CardTitle>Log Meta Spend (manual)</CardTitle>
+        <CardDescription>
+          Paste the Facebook Ads tracker straight from the sheet (daily rows included). Totals, weekly rows, and empty days are handled automatically; re-pasting a period replaces it — never double-counts.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Textarea
+          value={text}
+          onChange={(e) => { setText(e.target.value); setPreview(null); }}
+          placeholder={"Paste the tracker block here…\nMonday, June 1\t$305.98\t4\t$986.05\t…"}
+          rows={5}
+          className="font-mono text-xs"
+          data-testid="textarea-meta-tracker"
+        />
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => parseMut.mutate()} disabled={!text.trim() || parseMut.isPending}>
+            {parseMut.isPending ? "Parsing…" : "Preview"}
+          </Button>
+          {preview?.ok && (
+            <Button size="sm" onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending} data-testid="button-meta-ingest">
+              {ingestMut.isPending ? "Ingesting…" : `Ingest ${preview.periodStart} → ${preview.periodEnd}`}
+            </Button>
+          )}
+        </div>
+        {preview?.ok && (
+          <div className="rounded-md border p-3 text-sm space-y-1">
+            <div className="font-medium">{preview.campaign}</div>
+            <div className="text-muted-foreground">
+              {preview.days.length} day(s) · ${preview.totalSpend.toLocaleString()} spend · {preview.totalPurchases} purchases · ${preview.totalConversionValue.toLocaleString()} attributed · <span className="font-medium text-foreground">{preview.roas}x ROAS</span>
+            </div>
+            {preview.warnings?.length > 0 && (
+              <div className="text-xs text-amber-700 dark:text-amber-400">⚠ {preview.warnings.join(" · ")}</div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface RoasRow {
   sku: string;
   channel: string;
@@ -1287,6 +1360,7 @@ function RoasGuardianTab() {
   return (
     <div className="space-y-4 mt-4">
       <DailyDirectivePanel />
+      <MetaManualCard />
       <div className="flex gap-4 items-end flex-wrap">
         <div>
           <Label htmlFor="roas-start">Start Date</Label>

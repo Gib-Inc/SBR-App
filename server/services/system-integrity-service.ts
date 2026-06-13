@@ -252,14 +252,22 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
 export async function resolveSalesDuplicates(): Promise<{ rowsRemoved: number; linesRemoved: number }> {
   const { db } = await import("../db");
   const { sql } = await import("drizzle-orm");
-  // Channel-agnostic on external_order_id (canonical identity). Keep the richest
-  // row: prefer one with an order_name, then SHOPIFY, then most-recent.
+  // Two arms, matching the sweep's detection so nothing is detected-but-unfixable:
+  //  (1) channel-agnostic external_order_id dups — keep the SHOPIFY row first
+  //      (the canonical original; the relabeled twin is dropped), then the one
+  //      with an order_name, then most-recent;
+  //  (2) Shopify rows with NULL external id sharing an order_name.
   const dupSelect = sql`
     SELECT id FROM (
       SELECT id, row_number() OVER (PARTITION BY external_order_id
-        ORDER BY (order_name IS NOT NULL) DESC, (channel = 'SHOPIFY') DESC,
+        ORDER BY (channel = 'SHOPIFY') DESC, (order_name IS NOT NULL) DESC,
                  updated_at DESC NULLS LAST, id ASC) rn
       FROM sales_orders WHERE external_order_id IS NOT NULL
+      UNION ALL
+      SELECT id, row_number() OVER (PARTITION BY order_name
+        ORDER BY updated_at DESC NULLS LAST, id ASC) rn
+      FROM sales_orders
+      WHERE external_order_id IS NULL AND order_name IS NOT NULL AND channel = 'SHOPIFY'
     ) t WHERE rn > 1`;
   const delLines: any = await db.execute(sql`DELETE FROM sales_order_lines WHERE sales_order_id IN (${dupSelect}) RETURNING id`);
   const delOrders: any = await db.execute(sql`DELETE FROM sales_orders WHERE id IN (${dupSelect}) RETURNING id`);

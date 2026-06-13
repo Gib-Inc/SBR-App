@@ -198,3 +198,28 @@ describe("collapseOverlappingSnapshots (ad-spend overlap dedup — the 6.5x bug)
     expect(collapseOverlappingSnapshots(mixed).map((k) => k.periodEnd).sort()).toEqual(["2026-03-31", "2026-06-07"]);
   });
 });
+
+describe("collapseOverlappingSnapshots — code-review edge cases", () => {
+  it("keeps both windows that merely touch at one boundary date (no spend loss)", () => {
+    const backToBack = [
+      { periodStart: "2026-04-01", periodEnd: "2026-04-30", spend: 5000 },
+      { periodStart: "2026-04-30", periodEnd: "2026-05-31", spend: 8000 },
+    ];
+    expect(collapseOverlappingSnapshots(backToBack)).toHaveLength(2);
+  });
+  it("keeps (does not wildcard-suppress) snapshots with a null/empty period", () => {
+    const withNull = [
+      { periodStart: "2026-05-08", periodEnd: "2026-06-07", spend: 70 },
+      { periodStart: null, periodEnd: null, spend: 12 },
+    ];
+    const kept = collapseOverlappingSnapshots(withNull as any);
+    expect(kept).toHaveLength(2);
+  });
+  it("still collapses real multi-day-overlapping rolling windows", () => {
+    const rolling = [
+      { periodStart: "2026-05-08", periodEnd: "2026-06-07", spend: 11 },
+      { periodStart: "2026-05-09", periodEnd: "2026-06-08", spend: 12 },
+    ];
+    expect(collapseOverlappingSnapshots(rolling)).toHaveLength(1);
+  });
+});

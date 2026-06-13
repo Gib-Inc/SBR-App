@@ -75,18 +75,25 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
  * 2026-06 ~6.5x bug). Pure — unit tested.
  */
 export function collapseOverlappingSnapshots<T extends { periodStart?: string | null; periodEnd?: string | null }>(snaps: T[]): T[] {
-  const sorted = [...snaps].sort((a, b) =>
-    String(b.periodEnd ?? "").localeCompare(String(a.periodEnd ?? "")));
+  // Snapshots without a usable period can't be overlap-compared — keep them
+  // as-is rather than letting an empty-string period act as a wildcard.
+  const withPeriod = snaps.filter((s) => s.periodStart && s.periodEnd);
+  const withoutPeriod = snaps.filter((s) => !(s.periodStart && s.periodEnd));
+  const sorted = [...withPeriod].sort((a, b) =>
+    String(b.periodEnd).localeCompare(String(a.periodEnd)));
   const kept: T[] = [];
   for (const s of sorted) {
-    const ps = String(s.periodStart ?? "");
-    const pe = String(s.periodEnd ?? "");
+    const ps = String(s.periodStart);
+    const pe = String(s.periodEnd);
+    // STRICT overlap: two windows that merely touch at a single boundary date
+    // (A.end == B.start) are NOT overlapping — keep both (back-to-back uploads).
+    // Windsor's rolling windows overlap by ~29 days so they still collapse.
     const overlapsKept = kept.some(
-      (k) => String(k.periodStart ?? "") <= pe && String(k.periodEnd ?? "") >= ps,
+      (k) => String(k.periodStart) < pe && String(k.periodEnd) > ps,
     );
     if (!overlapsKept) kept.push(s);
   }
-  return kept;
+  return [...kept, ...withoutPeriod];
 }
 
 /**

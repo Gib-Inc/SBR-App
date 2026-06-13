@@ -50,10 +50,13 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
             ON sales_orders (external_order_id)
             WHERE external_order_id IS NOT NULL`,
   },
-  {
-    name: "sales_orders.drop_channel_extid",
-    sql: `DROP INDEX IF EXISTS ux_sales_orders_channel_extid`,
-  },
+  // NOTE: the prior (channel, external_order_id) index is deliberately NOT
+  // dropped here. The migration runner isolates each entry's failure, so a DROP
+  // in a separate entry would run even if the CREATE above failed (e.g. residual
+  // dupes on some DB), leaving NO unique guard. The new external-id-alone index
+  // is strictly stronger and subsumes the old one, so leaving the old one in
+  // place is harmless redundancy. Prod's old index was dropped manually after a
+  // verified clean de-dup; a fresh DB simply keeps both.
 
   // Forecast self-tuning loop (FinOps Pillar 4): one row per predicted day.
   // Nightly job grades predicted-vs-actual and stores the bias-correction

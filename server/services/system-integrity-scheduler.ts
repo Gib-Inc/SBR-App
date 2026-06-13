@@ -2,7 +2,9 @@
  * System Integrity Scheduler — the continuous self-healing loop (Pillar 1).
  * Runs the cross-stream integrity sweep every 6 hours (and ~1 min after
  * startup), persisting the report and reporting to the Health monitor. A DRIFT
- * result is recorded as a failed run so it lights up Health as an alert.
+ * result is recorded as a "partial" run — a visible warning that still advances
+ * last_success_at (so it is not mistaken for a crash); only a thrown exception
+ * records as "failed".
  */
 import { runSystemIntegrityCheck } from "./system-integrity-service";
 import { recordSchedulerRun } from "./scheduler-run-recorder";
@@ -20,13 +22,13 @@ async function runOnce(): Promise<void> {
     await recordSchedulerRun({
       schedulerId: "system-integrity",
       schedulerName: "System integrity sweep",
-      // Completing the sweep is a SUCCESS even when it FINDS drift. Mapping
+      // Completing the sweep is NOT a crash even when it FINDS drift. Mapping
       // DRIFT→"failed" left last_success_at permanently NULL, pinned the
-      // consecutive-failure counter, and would have masked a genuine future
-      // crash (audit H5). DRIFT is surfaced via errorMessage on a successful run
-      // + app_settings/data_reconciliation_log; "failed" is reserved for a
-      // thrown exception (the catch block below).
-      status: "success",
+      // consecutive-failure counter, and masked a genuine future crash (H5). But
+      // "success" renders the Health card green and hides the drift, so DRIFT
+      // records as "partial": advances last_success_at (no false crash) yet
+      // stays a visible WARNING. Clean = "success"; a thrown exception = "failed".
+      status: report.status === "DRIFT" ? "partial" : "success",
       startedAt,
       errorMessage:
         report.status === "DRIFT"

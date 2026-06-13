@@ -65,6 +65,24 @@ export function rollupIntegrity(streams: StreamResult[]): {
 }
 
 // ─── Orchestrator (I/O) ──────────────────────────────────────────────────────
+/**
+ * Pure: is a day's revenue implausibly far from the trailing-median day? Catches
+ * the 2026-06 10x sales inflation (and any future magnitude drift). Ignores
+ * low-volume baselines (floor) so a quiet stretch doesn't false-positive. Tested.
+ */
+export function salesMagnitudeAnomaly(
+  dayRevenue: number,
+  medianRevenue: number,
+  opts?: { highMult?: number; lowMult?: number; floor?: number },
+): { anomalous: boolean; ratio: number } {
+  const highMult = opts?.highMult ?? 4;
+  const lowMult = opts?.lowMult ?? 0.2;
+  const floor = opts?.floor ?? 1500;
+  if (medianRevenue < floor || dayRevenue < 0) return { anomalous: false, ratio: 0 };
+  const ratio = medianRevenue > 0 ? Math.round((dayRevenue / medianRevenue) * 100) / 100 : 0;
+  return { anomalous: ratio >= highMult || (dayRevenue > 0 && ratio <= lowMult), ratio };
+}
+
 export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
   const streams: StreamResult[] = [];
   const notes: string[] = [];
@@ -130,6 +148,60 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
     notes.push(`financial check failed: ${e?.message ?? e}`);
   }
 
+  // 4. SALES — duplicate orders (the 2026-06 10x inflation signal) + daily
+  //    revenue magnitude vs the trailing-30d median (catches non-dup inflation).
+  try {
+    const { db } = await import("../db");
+    const { sql } = await import("drizzle-orm");
+    const dupRes: any = await db.execute(sql`
+      SELECT count(*)::int AS dup_groups, coalesce(sum(c - 1),0)::int AS extra_rows
+      FROM (
+        SELECT count(*) AS c FROM sales_orders
+        WHERE external_order_id IS NOT NULL AND order_date >= CURRENT_DATE - 7
+        GROUP BY channel, external_order_id HAVING count(*) > 1
+      ) t`);
+    const dupGroups = Number((dupRes.rows ?? dupRes ?? [])[0]?.dup_groups ?? 0);
+    const extraRows = Number((dupRes.rows ?? dupRes ?? [])[0]?.extra_rows ?? 0);
+
+    const magRes: any = await db.execute(sql`
+      WITH daily AS (
+        SELECT date(order_date) d, sum(coalesce(total_amount,0)) rev
+        FROM sales_orders
+        WHERE order_date >= CURRENT_DATE - 31 AND order_date < CURRENT_DATE
+          AND upper(coalesce(status,'')) NOT IN ('CANCELLED','REFUNDED')
+        GROUP BY 1)
+      SELECT (SELECT rev FROM daily WHERE d = CURRENT_DATE - 1) AS yesterday,
+             (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY rev) FROM daily) AS median`);
+    const mrow = (magRes.rows ?? magRes ?? [])[0] ?? {};
+    const yesterday = Number(mrow.yesterday ?? 0);
+    const median = Number(mrow.median ?? 0);
+    const mag = salesMagnitudeAnomaly(yesterday, median);
+
+    const anomalies = dupGroups + (mag.anomalous ? 1 : 0);
+    const offenders: Array<{ key: string; detail: string }> = [];
+    if (dupGroups > 0)
+      offenders.push({ key: "duplicate-orders", detail: `${dupGroups} order(s) duplicated (${extraRows} extra rows) in the last 7 days` });
+    if (mag.anomalous)
+      offenders.push({ key: "revenue-magnitude", detail: `Yesterday $${Math.round(yesterday).toLocaleString()} is ${mag.ratio}x the 30-day median $${Math.round(median).toLocaleString()}` });
+
+    streams.push({
+      stream: "sales",
+      // ANY duplicate corrupts revenue reporting → hard DRIFT immediately.
+      status: dupGroups > 0 ? "DRIFT" : classifyStream(anomalies, { warnAt: 1, driftAt: 2 }),
+      anomalies,
+      checked: 7,
+      summary:
+        dupGroups > 0
+          ? `${dupGroups} duplicated order(s) detected (${extraRows} extra rows) — sales inflated. Run POST /api/system-integrity/resolve-sales.`
+          : mag.anomalous
+            ? `Yesterday's revenue is ${mag.ratio}x the 30-day median — investigate before trusting sales reports.`
+            : `No duplicate orders; daily revenue within normal range of the 30-day median.`,
+      worstOffenders: offenders,
+    });
+  } catch (e: any) {
+    notes.push(`sales check failed: ${e?.message ?? e}`);
+  }
+
   const { status, totalAnomalies } = rollupIntegrity(streams);
   const report: IntegrityReport = {
     generatedAt: new Date().toISOString(),
@@ -159,6 +231,34 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
   }
 
   return report;
+}
+
+/**
+ * Self-heal: remove duplicate (channel, external_order_id) orders, keeping the
+ * most-recently-updated canonical row. The partial unique index normally
+ * prevents these, so this is a one-shot cleanup tool / safety net.
+ */
+export async function resolveSalesDuplicates(): Promise<{ rowsRemoved: number; linesRemoved: number }> {
+  const { db } = await import("../db");
+  const { sql } = await import("drizzle-orm");
+  const dupSelect = sql`
+    SELECT id FROM (
+      SELECT id, row_number() OVER (PARTITION BY channel, external_order_id
+        ORDER BY updated_at DESC NULLS LAST, created_at ASC NULLS LAST, id ASC) rn
+      FROM sales_orders WHERE external_order_id IS NOT NULL
+    ) t WHERE rn > 1`;
+  const delLines: any = await db.execute(sql`DELETE FROM sales_order_lines WHERE sales_order_id IN (${dupSelect}) RETURNING id`);
+  const delOrders: any = await db.execute(sql`DELETE FROM sales_orders WHERE id IN (${dupSelect}) RETURNING id`);
+  const linesRemoved = (delLines.rows ?? delLines ?? []).length;
+  const rowsRemoved = (delOrders.rows ?? delOrders ?? []).length;
+  if (rowsRemoved > 0) {
+    await db.execute(sql`
+      INSERT INTO data_reconciliation_log (data_type, entity_key, action, reason, source, created_at)
+      VALUES ('sales_dedup', 'sales_orders', 'CORRECTED',
+              ${`Removed ${rowsRemoved} duplicate order row(s) + ${linesRemoved} line(s); kept canonical per (channel, external_order_id).`},
+              'system-integrity-service', now())`).catch(() => {});
+  }
+  return { rowsRemoved, linesRemoved };
 }
 
 export async function getLatestIntegrityReport(): Promise<IntegrityReport | null> {

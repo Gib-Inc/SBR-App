@@ -24910,6 +24910,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Self-heal duplicate sales orders (the 2026-06 10x-inflation cleanup).
+  app.post("/api/system-integrity/resolve-sales", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { resolveSalesDuplicates } = await import("./services/system-integrity-service");
+      const result = await resolveSalesDuplicates();
+      res.json({ success: true, result });
+    } catch (error: any) {
+      console.error('[System Integrity] resolve-sales error:', error);
+      res.status(500).json({ error: error.message || 'Failed to resolve duplicate sales orders' });
+    }
+  });
+
   // Latest drift-resolution status per SKU (the resolver's active ledger).
   app.get("/api/system-integrity/drift-ledger", requireAuth, async (_req: Request, res: Response) => {
     try {

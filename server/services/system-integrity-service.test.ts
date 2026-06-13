@@ -60,3 +60,25 @@ describe("rollupIntegrity", () => {
     expect(out.totalAnomalies).toBe(0);
   });
 });
+
+import { salesMagnitudeAnomaly } from "./system-integrity-service";
+
+describe("salesMagnitudeAnomaly (catches the 10x sales inflation)", () => {
+  it("flags a day running far above the median (the incident)", () => {
+    const r = salesMagnitudeAnomaly(110000, 11000); // ~10x
+    expect(r.anomalous).toBe(true);
+    expect(r.ratio).toBe(10);
+  });
+  it("accepts a normal day near the median", () => {
+    expect(salesMagnitudeAnomaly(12500, 11000).anomalous).toBe(false);
+  });
+  it("flags a near-total collapse vs the median", () => {
+    expect(salesMagnitudeAnomaly(500, 11000).anomalous).toBe(true); // ~0.05x
+  });
+  it("ignores low-volume baselines (no false positive in a quiet stretch)", () => {
+    expect(salesMagnitudeAnomaly(6000, 800).anomalous).toBe(false); // median below floor
+  });
+  it("does not flag a zero-revenue day as a low-ratio anomaly", () => {
+    expect(salesMagnitudeAnomaly(0, 11000).anomalous).toBe(false);
+  });
+});

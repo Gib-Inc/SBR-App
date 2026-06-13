@@ -6792,9 +6792,31 @@ export class PostgresStorage implements IStorage {
       isHistorical: isTerminal ? true : (insertOrder.isHistorical ?? false),
       archivedAt: isTerminal ? new Date() : (insertOrder.archivedAt ?? null),
     };
-    
-    const results = await this.db.insert(schema.salesOrders).values(orderToInsert).returning();
-    return results[0];
+
+    try {
+      const results = await this.db.insert(schema.salesOrders).values(orderToInsert).returning();
+      return results[0];
+    } catch (e: any) {
+      // Idempotency net for the (channel, external_order_id) partial unique
+      // index. A duplicate re-import (the cause of the 2026-06 10x sales
+      // inflation) now UPDATES the canonical order instead of cloning it,
+      // even if the caller's check-then-insert raced or missed. 23505 =
+      // Postgres unique_violation.
+      if (e?.code === "23505" && orderToInsert.externalOrderId) {
+        const existing = await this.getSalesOrderByExternalIdOnly(orderToInsert.externalOrderId);
+        if (existing) {
+          const updated = await this.updateSalesOrder(existing.id, {
+            status: orderToInsert.status,
+            totalAmount: orderToInsert.totalAmount,
+            totalRefundAmount: orderToInsert.totalRefundAmount,
+            customerName: orderToInsert.customerName,
+            orderName: orderToInsert.orderName,
+          });
+          return updated ?? existing;
+        }
+      }
+      throw e;
+    }
   }
 
   async updateSalesOrder(id: string, updates: Partial<InsertSalesOrder>): Promise<SalesOrder | undefined> {

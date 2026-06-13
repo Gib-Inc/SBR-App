@@ -34,6 +34,20 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE items ADD COLUMN IF NOT EXISTS wac_unit_cost real`,
   },
 
+  // Duplicate-order guard. The 2026-06 incident: a re-running Shopify sync
+  // cloned each order ~10x, inflating reported sales 10x. This partial unique
+  // index makes a duplicate (channel, external_order_id) physically impossible;
+  // createSalesOrder upserts on conflict. Manual orders (null external id) are
+  // unaffected by the partial predicate. Idempotent; prod was de-duped manually
+  // before this landed, so it is a no-op there. If a future DB still has dupes
+  // this entry errors and is skipped (runner isolates failures) until cleaned.
+  {
+    name: "sales_orders.ux_channel_extid",
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_orders_channel_extid
+            ON sales_orders (channel, external_order_id)
+            WHERE external_order_id IS NOT NULL`,
+  },
+
   // Forecast self-tuning loop (FinOps Pillar 4): one row per predicted day.
   // Nightly job grades predicted-vs-actual and stores the bias-correction
   // factor that tunes the next prediction + the runway revenue inputs.

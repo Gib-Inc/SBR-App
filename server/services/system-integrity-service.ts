@@ -153,12 +153,20 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
   try {
     const { db } = await import("../db");
     const { sql } = await import("drizzle-orm");
+    // Canonical identity (channel-aware): Shopify keys on order_name (the same
+    // order is sometimes re-imported under different external ids); other
+    // channels key on external id (Amazon names aren't unique). Catches both the
+    // external-id clones and the same-order-under-two-external-ids case.
     const dupRes: any = await db.execute(sql`
       SELECT count(*)::int AS dup_groups, coalesce(sum(c - 1),0)::int AS extra_rows
       FROM (
         SELECT count(*) AS c FROM sales_orders
-        WHERE external_order_id IS NOT NULL AND order_date >= CURRENT_DATE - 7
-        GROUP BY channel, external_order_id HAVING count(*) > 1
+        WHERE order_date >= CURRENT_DATE - 7
+          AND (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
+                    ELSE coalesce(external_order_id, order_name) END) IS NOT NULL
+        GROUP BY channel, (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
+                                ELSE coalesce(external_order_id, order_name) END)
+        HAVING count(*) > 1
       ) t`);
     const dupGroups = Number((dupRes.rows ?? dupRes ?? [])[0]?.dup_groups ?? 0);
     const extraRows = Number((dupRes.rows ?? dupRes ?? [])[0]?.extra_rows ?? 0);
@@ -243,9 +251,13 @@ export async function resolveSalesDuplicates(): Promise<{ rowsRemoved: number; l
   const { sql } = await import("drizzle-orm");
   const dupSelect = sql`
     SELECT id FROM (
-      SELECT id, row_number() OVER (PARTITION BY channel, external_order_id
+      SELECT id, row_number() OVER (PARTITION BY channel,
+          (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
+                ELSE coalesce(external_order_id, order_name) END)
         ORDER BY updated_at DESC NULLS LAST, created_at ASC NULLS LAST, id ASC) rn
-      FROM sales_orders WHERE external_order_id IS NOT NULL
+      FROM sales_orders
+      WHERE (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
+                  ELSE coalesce(external_order_id, order_name) END) IS NOT NULL
     ) t WHERE rn > 1`;
   const delLines: any = await db.execute(sql`DELETE FROM sales_order_lines WHERE sales_order_id IN (${dupSelect}) RETURNING id`);
   const delOrders: any = await db.execute(sql`DELETE FROM sales_orders WHERE id IN (${dupSelect}) RETURNING id`);

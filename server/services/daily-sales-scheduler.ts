@@ -18,6 +18,41 @@ function getMountainDateString(date: Date): string {
 }
 
 /**
+ * Stable identity for a sales order — collapses the SAME physical order that
+ * multiple import paths cloned (Shopify: same order_name under different
+ * external ids; otherwise external id; otherwise row id). Pure, unit tested.
+ */
+export function orderIdentityKey(order: {
+  channel?: string | null; orderName?: string | null; externalOrderId?: string | null; id?: string;
+}): string {
+  const ch = (order.channel || "").toUpperCase();
+  // Shopify order names (#NNNNN) are the reliable unique identity (the same
+  // order is sometimes imported under different external ids). Amazon names are
+  // NOT unique, so for non-Shopify channels external id is authoritative —
+  // using the name there would merge distinct orders.
+  const idPart = ch === "SHOPIFY"
+    ? (order.orderName || order.externalOrderId || order.id || "")
+    : (order.externalOrderId || order.orderName || order.id || "");
+  return `${ch}|${idPart}`;
+}
+
+/** Keep one row per physical order (defends revenue totals against duplicate
+ *  rows even before the DB constraint catches them). Pure, unit tested. */
+export function dedupeOrdersByIdentity<T extends {
+  channel?: string | null; orderName?: string | null; externalOrderId?: string | null; id?: string;
+}>(orders: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const o of orders) {
+    const k = orderIdentityKey(o);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(o);
+  }
+  return out;
+}
+
+/**
  * Get the start and end timestamps for a Mountain Time date
  * Returns UTC timestamps that represent midnight to 11:59:59 PM in MT
  * 
@@ -124,12 +159,18 @@ export async function aggregateDailySales(date: Date): Promise<{
     // Get proper UTC bounds for this Mountain Time day
     const { startOfDay, endOfDay } = getMountainDayBounds(dateStr);
     
-    // Fetch all sales orders for this day
+    // Attribute orders to this MT day by calendar-date EQUALITY (the bounds
+    // helper's DST binary-search spanned ~2 days and doubled every figure — the
+    // 2026-06 sales-inflation incident), then DEDUPE same-physical-order rows
+    // that multiple import paths cloned under different external ids.
     const allSalesOrders = await storage.getAllSalesOrders();
-    const ordersForDay = allSalesOrders.filter(order => {
-      const orderDate = new Date(order.orderDate);
-      return orderDate >= startOfDay && orderDate <= endOfDay;
-    });
+    const ordersForDay = dedupeOrdersByIdentity(
+      allSalesOrders.filter(
+        (order) =>
+          order.orderDate != null &&
+          getMountainDateString(new Date(order.orderDate)) === dateStr,
+      ),
+    );
     
     // Aggregate metrics
     let totalRevenue = 0;
@@ -172,8 +213,8 @@ export async function aggregateDailySales(date: Date): Promise<{
     const returnsForDay = allReturns.filter(ret => {
       // Count returns that were refunded on this day
       if (!ret.refundedAt) return false;
-      const refundedDate = new Date(ret.refundedAt);
-      return refundedDate >= startOfDay && refundedDate <= endOfDay;
+      // Same date-equality basis as orders (avoid the ~2-day bounds bug).
+      return getMountainDateString(new Date(ret.refundedAt)) === dateStr;
     });
     
     // Calculate actual refund amounts from return items (unitPrice * qtyReceived/qtyApproved/qtyRequested)

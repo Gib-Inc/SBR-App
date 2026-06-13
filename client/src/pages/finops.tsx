@@ -312,6 +312,64 @@ function DirectiveSummaryCard() {
   );
 }
 
+function DailyCompanyReportCard() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data } = useQuery<any>({ queryKey: ["/api/daily-company-report"] });
+  const report = data?.report;
+  const run = useMutation({
+    mutationFn: async () => (await apiRequest("POST", "/api/daily-company-report/run?skipRefresh=true", {})).json(),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/daily-company-report"] }); toast({ title: "Daily report refreshed" }); },
+    onError: (e: any) => toast({ title: "Run failed", description: e.message, variant: "destructive" }),
+  });
+  return (
+    <Card data-testid="card-daily-company-report">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              Daily Company Report {report && statusBadge(report.status)}
+            </CardTitle>
+            <CardDescription>
+              6:45 AM MT: refreshes feeds, cross-checks Shopify ↔ app ↔ QuickBooks sales, runs every drift check, snapshots financials + inventory.
+            </CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => run.mutate()} disabled={run.isPending}>
+            {run.isPending ? "Running…" : "↻ Run now"}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!report ? (
+          <div className="text-sm text-muted-foreground">No report yet — runs at 6:45 AM, or hit Run now.</div>
+        ) : (
+          <>
+            <div className="text-sm font-medium">{report.headline}</div>
+            {report.sales?.crossCheck && (
+              <div className="text-xs text-muted-foreground">Sales cross-check ({report.forDate}): {report.sales.crossCheck}</div>
+            )}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div><div className="font-semibold">{report.financials?.blendedRoas != null ? `${Number(report.financials.blendedRoas).toFixed(1)}x` : "—"}</div><div className="text-xs text-muted-foreground">Blended ROAS</div></div>
+              <div><div className="font-semibold">{report.financials?.adSpend30d != null ? `$${Math.round(report.financials.adSpend30d).toLocaleString()}` : "—"}</div><div className="text-xs text-muted-foreground">Ad spend (30d)</div></div>
+              <div><div className="font-semibold">{report.inventory?.assetValueAtWac != null ? `$${Math.round(report.inventory.assetValueAtWac).toLocaleString()}` : "—"}</div><div className="text-xs text-muted-foreground">Inventory @ WAC</div></div>
+              <div><div className="font-semibold">{report.freshness?.staleCount ?? 0}</div><div className="text-xs text-muted-foreground">Stale feeds</div></div>
+            </div>
+            {report.anomalies?.length > 0 && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                <div className="text-sm font-medium text-amber-700 dark:text-amber-400">{report.anomalies.length} item(s) flagged:</div>
+                <ul className="mt-1 text-xs text-amber-700/90 dark:text-amber-400/90 list-disc pl-4 space-y-0.5">
+                  {report.anomalies.slice(0, 8).map((a: string, i: number) => <li key={i}>{a}</li>)}
+                </ul>
+              </div>
+            )}
+            <div className="text-xs text-muted-foreground">Generated {report.generatedAt ? new Date(report.generatedAt).toLocaleString() : "—"}</div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function FinOps() {
   return (
     <div className="container mx-auto p-6 space-y-4">
@@ -321,6 +379,7 @@ export default function FinOps() {
           Self-healing integrity, real inventory valuation, self-tuning forecasts, and the daily ad directive — all monitored on <Link href="/health" className="text-primary underline underline-offset-2">Health</Link>.
         </p>
       </div>
+      <DailyCompanyReportCard />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <IntegrityCard />
         <DirectiveSummaryCard />

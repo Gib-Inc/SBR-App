@@ -239,6 +239,17 @@ const SCHEDULERS: SchedulerDefinition[] = [
     sourceOfTruth: "forecast_predictions + app_settings:forecast_accuracy_latest + scheduler:forecast-tuning",
     alertOnStale: true,
   },
+  {
+    id: "daily-company-report",
+    name: "Daily company report",
+    owner: "SBR-App process",
+    kind: "in-process",
+    cadence: "Daily at 6:45 AM MT",
+    expectedIntervalMinutes: 24 * 60,
+    staleAfterMinutes: 48 * 60,
+    sourceOfTruth: "app_settings:daily_company_report_latest + data_reconciliation_log + scheduler:daily-company-report",
+    alertOnStale: true,
+  },
 ];
 
 let monitorInitialized = false;
@@ -408,6 +419,18 @@ async function getRuntimeStatuses(): Promise<Record<string, { initialized: boole
     };
   } catch (error: any) {
     statuses["forecast-tuning"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
+  }
+
+  try {
+    const dcr = await import("./daily-company-report-scheduler");
+    const status = dcr.getDailyCompanyReportSchedulerStatus();
+    statuses["daily-company-report"] = {
+      initialized: status.initialized,
+      nextRunAt: status.nextRunAt ? status.nextRunAt.toISOString() : null,
+      notes: [`Timezone: ${status.timezone}`],
+    };
+  } catch (error: any) {
+    statuses["daily-company-report"] = { initialized: null, nextRunAt: null, notes: [`Runtime status unavailable: ${error.message}`] };
   }
 
   return statuses;

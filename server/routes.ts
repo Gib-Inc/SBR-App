@@ -24910,6 +24910,28 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // ─── Daily Company Report (the consolidated morning "company brain") ────────
+  app.get("/api/daily-company-report", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestDailyCompanyReport } = await import("./services/daily-company-report-service");
+      res.json({ report: await getLatestDailyCompanyReport() });
+    } catch (error: any) {
+      console.error('[Daily Company Report] latest error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch daily company report' });
+    }
+  });
+  app.post("/api/daily-company-report/run", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runDailyCompanyReport } = await import("./services/daily-company-report-service");
+      // ?skipRefresh=true to run the checks without re-triggering the live syncs.
+      const skipRefresh = String(req.query.skipRefresh ?? "") === "true";
+      res.json({ success: true, report: await runDailyCompanyReport({ skipRefresh }) });
+    } catch (error: any) {
+      console.error('[Daily Company Report] run error:', error);
+      res.status(500).json({ error: error.message || 'Failed to run daily company report' });
+    }
+  });
+
   // Self-heal duplicate sales orders (the 2026-06 10x-inflation cleanup).
   app.post("/api/system-integrity/resolve-sales", requireAuth, async (_req: Request, res: Response) => {
     try {
@@ -25895,6 +25917,13 @@ Generate only the email body text, no subject line.`;
     console.log("[Server] Forecast Tuning Scheduler initialized");
   }).catch((error) => {
     console.error("[Server] Failed to initialize Forecast Tuning Scheduler:", error);
+  });
+
+  import("./services/daily-company-report-scheduler").then(({ initializeDailyCompanyReportScheduler }) => {
+    initializeDailyCompanyReportScheduler();
+    console.log("[Server] Daily Company Report Scheduler initialized");
+  }).catch((error) => {
+    console.error("[Server] Failed to initialize Daily Company Report Scheduler:", error);
   });
 
   import("./services/reorder-watcher").then(({ initializeReorderWatcher }) => {

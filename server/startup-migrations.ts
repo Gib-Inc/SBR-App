@@ -34,18 +34,25 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE items ADD COLUMN IF NOT EXISTS wac_unit_cost real`,
   },
 
-  // Duplicate-order guard. The 2026-06 incident: a re-running Shopify sync
-  // cloned each order ~10x, inflating reported sales 10x. This partial unique
-  // index makes a duplicate (channel, external_order_id) physically impossible;
-  // createSalesOrder upserts on conflict. Manual orders (null external id) are
-  // unaffected by the partial predicate. Idempotent; prod was de-duped manually
-  // before this landed, so it is a no-op there. If a future DB still has dupes
-  // this entry errors and is skipped (runner isolates failures) until cleaned.
+  // Duplicate-order guard. 2026-06 incidents: (1) a re-running sync cloned each
+  // order ~10x; (2) the SAME Shopify order was stored under two channels
+  // (SHOPIFY + a relabeled AMAZON twin), $27k double-counted. external_order_id
+  // (the Shopify order id, also used for Codisto Amazon-bridge orders) is the
+  // canonical PHYSICAL identity, so the unique index is on external_order_id
+  // ALONE (channel-agnostic) — a channel-scoped index let the twins through.
+  // createSalesOrder's recovery looks up by external id alone and updates the
+  // existing row on 23505. Manual/legacy orders (null external id) are
+  // unaffected by the partial predicate. Idempotent; prod was de-duped before
+  // this landed.
   {
-    name: "sales_orders.ux_channel_extid",
-    sql: `CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_orders_channel_extid
-            ON sales_orders (channel, external_order_id)
+    name: "sales_orders.ux_extid",
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_orders_extid
+            ON sales_orders (external_order_id)
             WHERE external_order_id IS NOT NULL`,
+  },
+  {
+    name: "sales_orders.drop_channel_extid",
+    sql: `DROP INDEX IF EXISTS ux_sales_orders_channel_extid`,
   },
 
   // Forecast self-tuning loop (FinOps Pillar 4): one row per predicted day.

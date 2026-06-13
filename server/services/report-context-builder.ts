@@ -107,21 +107,22 @@ export async function buildReportContext(asOfDate: Date = new Date()): Promise<R
  * Aggregates today, last 7 days, and last 30 days
  */
 async function buildSalesReport(asOfDate: Date): Promise<SalesReport> {
-  const today = new Date(asOfDate);
-  today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split('T')[0];
-  
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-  
-  const weekAgo = new Date(today);
-  weekAgo.setDate(weekAgo.getDate() - 6);
-  const weekAgoStr = weekAgo.toISOString().split('T')[0];
-  
-  const monthAgo = new Date(today);
-  monthAgo.setDate(monthAgo.getDate() - 29);
-  const monthAgoStr = monthAgo.toISOString().split('T')[0];
+  // daily_sales_snapshots are keyed by MOUNTAIN-TIME calendar date (the
+  // scheduler writes getMountainDateString). Anchoring on UTC here dropped a
+  // full day every evening MT — "today" looked up tomorrow's (empty) row and the
+  // 7-day window missed a day, understating sales fed to the inventory LLM by
+  // ~33% (audit H1). Compute all keys in America/Denver.
+  const todayStr = asOfDate.toLocaleDateString('en-CA', { timeZone: 'America/Denver' });
+  // Calendar arithmetic on noon-UTC of the MT date — safe for ±day math (no DST drift on the date part).
+  const anchor = new Date(`${todayStr}T12:00:00Z`);
+  const addDays = (n: number): string => {
+    const d = new Date(anchor);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().split('T')[0];
+  };
+  const tomorrowStr = addDays(1);
+  const weekAgoStr = addDays(-6);
+  const monthAgoStr = addDays(-29);
   
   const [todaySnapshot, weekSnapshots, monthSnapshots] = await Promise.all([
     storage.getDailySalesSnapshot(todayStr),

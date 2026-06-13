@@ -81,7 +81,10 @@ async function openUnshippedBySku(): Promise<Map<string, number>> {
     SELECT sol.sku, sum(greatest(coalesce(sol.qty_ordered,0) - coalesce(sol.qty_shipped,0), 0))::int AS open
     FROM sales_order_lines sol
     JOIN sales_orders so ON so.id = sol.sales_order_id
-    WHERE upper(coalesce(so.status,'')) NOT IN ('FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
+    -- SHIPPED excluded: qty_shipped is not populated on shipped lines, so without
+    -- this every shipped-not-delivered unit counts as "open" and pushes afs
+    -- corrections too low (audit H3).
+    WHERE upper(coalesce(so.status,'')) NOT IN ('SHIPPED','FULFILLED','CANCELLED','DELIVERED','REFUNDED','PENDING_REFUND')
     GROUP BY sol.sku`);
   const map = new Map<string, number>();
   for (const r of (res.rows ?? res ?? [])) {

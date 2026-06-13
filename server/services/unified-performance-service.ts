@@ -68,6 +68,28 @@ export interface UnifiedView {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
+ * Collapse OVERLAPPING ad-spend snapshots, keeping the latest period_end among
+ * any overlapping set; genuinely distinct (non-overlapping) periods are all
+ * kept. Windsor emits a fresh rolling-30d window daily that never exact-matches
+ * the prior period, so without this they accumulate and inflate spend (the
+ * 2026-06 ~6.5x bug). Pure — unit tested.
+ */
+export function collapseOverlappingSnapshots<T extends { periodStart?: string | null; periodEnd?: string | null }>(snaps: T[]): T[] {
+  const sorted = [...snaps].sort((a, b) =>
+    String(b.periodEnd ?? "").localeCompare(String(a.periodEnd ?? "")));
+  const kept: T[] = [];
+  for (const s of sorted) {
+    const ps = String(s.periodStart ?? "");
+    const pe = String(s.periodEnd ?? "");
+    const overlapsKept = kept.some(
+      (k) => String(k.periodStart ?? "") <= pe && String(k.periodEnd ?? "") >= ps,
+    );
+    if (!overlapsKept) kept.push(s);
+  }
+  return kept;
+}
+
+/**
  * Map a raw ad_metrics_daily.platform value to a canonical AD platform, or null
  * if it is a traffic source (DIRECT, NOT SET, YAHOO, DUCKDUCKGO, organic
  * YOUTUBE/REDDIT/IG, etc.) rather than paid media. Mirrors the Finances overview
@@ -319,13 +341,30 @@ export async function getUnifiedPerformance(days = 30, nowMs?: number): Promise<
   const uploaded: Record<string, PlatformSpend> = {};
   try {
     const snaps = await storage.getMarketingSpendSnapshotsInRange(start, end);
+    // Group by (source-bucket, platform) and COLLAPSE overlapping snapshots
+    // before summing. Windsor emits a new rolling-30d window every day that
+    // never exact-period-matches the prior (so reconcile never supersedes it),
+    // and they accumulate — summing all 7 active GOOGLE rolling windows inflated
+    // spend ~6.5x ($70,994 vs the correct ~$10,868) and collapsed blended ROAS
+    // below the pause floor, tripping false September-Rule directives (2026-06).
+    const groups = new Map<string, any[]>();
     for (const s of snaps as any[]) {
       const p = String(s.platform || "OTHER").toUpperCase();
-      const bucket = String(s.source || "").toLowerCase().startsWith("windsor") ? windsor : uploaded;
+      const src = String(s.source || "").toLowerCase().startsWith("windsor") ? "windsor" : "uploaded";
+      const key = `${src}|${p}`;
+      const arr = groups.get(key) ?? [];
+      arr.push(s);
+      groups.set(key, arr);
+    }
+    for (const [key, group] of Array.from(groups.entries())) {
+      const [src, p] = key.split("|");
+      const bucket = src === "windsor" ? windsor : uploaded;
       const cur = bucket[p] || { spend: 0, impressions: 0, clicks: 0 };
-      cur.spend += Number(s.spend) || 0;
-      if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
-      if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
+      for (const s of collapseOverlappingSnapshots(group)) {
+        cur.spend += Number(s.spend) || 0;
+        if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
+        if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
+      }
       bucket[p] = cur;
     }
   } catch { /* no snapshot ad data */ }

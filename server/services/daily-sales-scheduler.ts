@@ -25,15 +25,14 @@ function getMountainDateString(date: Date): string {
 export function orderIdentityKey(order: {
   channel?: string | null; orderName?: string | null; externalOrderId?: string | null; id?: string;
 }): string {
+  // external_order_id is the canonical PHYSICAL identity and is CHANNEL-AGNOSTIC:
+  // the same Shopify order is sometimes stored under two channels (a relabeled
+  // AMAZON twin + the SHOPIFY original), so keying on (channel, id) let the
+  // 2026-06 $27k twins survive. Key on the external id alone when present; only
+  // fall back to channel+order_name for rows with no external id.
+  if (order.externalOrderId) return `EXT|${order.externalOrderId}`;
   const ch = (order.channel || "").toUpperCase();
-  // Shopify order names (#NNNNN) are the reliable unique identity (the same
-  // order is sometimes imported under different external ids). Amazon names are
-  // NOT unique, so for non-Shopify channels external id is authoritative —
-  // using the name there would merge distinct orders.
-  const idPart = ch === "SHOPIFY"
-    ? (order.orderName || order.externalOrderId || order.id || "")
-    : (order.externalOrderId || order.orderName || order.id || "");
-  return `${ch}|${idPart}`;
+  return `${ch}|${order.orderName || order.id || ""}`;
 }
 
 /** Keep one row per physical order (defends revenue totals against duplicate

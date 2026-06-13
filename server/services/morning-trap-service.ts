@@ -473,8 +473,16 @@ export class MorningTrapService {
     payload += '=== GOOGLE ADS MTD ===\n';
     if (googleAdsData) {
       payload += `Total spend: $${googleAdsData.totalSpend.toFixed(2)}\n`;
-      payload += `Total sales (conv value): $${googleAdsData.totalRevenue.toFixed(2)}\n`;
-      payload += `Overall ROAS: ${googleAdsData.roas.toFixed(1)}:1\n`;
+      // Windsor does NOT populate Google conversion value, so revenue==0 with
+      // spend>0 is a MISSING ATTRIBUTION FIELD, not zero sales. Presenting it as
+      // "$0 / ROAS 0:1" made the LLM emit a false "TOTAL CONVERSION TRACKING
+      // FAILURE" SMS daily (2026-06). Gate it as a data gap.
+      if (googleAdsData.totalSpend > 0 && googleAdsData.totalRevenue <= 0) {
+        payload += `Total sales (conv value): NOT ATTRIBUTED IN FEED — Google conversion value is not populated in the Windsor ad-spend feed, so platform-side Google sales/ROAS are UNAVAILABLE. This is a DATA GAP, not zero sales. Do NOT report "$0 sales", "ROAS 0:1", "zero conversions", or "conversion tracking failure" for Google — actual revenue is in SHOPIFY MTD below. Google's attributed revenue must come from a separate source (Windsor conversion_value / GA4) before any Google ROAS can be stated.\n`;
+      } else {
+        payload += `Total sales (conv value): $${googleAdsData.totalRevenue.toFixed(2)}\n`;
+        payload += `Overall ROAS: ${googleAdsData.roas.toFixed(1)}:1\n`;
+      }
       payload += `Total conversions: ${googleAdsData.totalConversions.toFixed(0)}\n`;
       payload += `Total clicks: ${googleAdsData.totalClicks}\n`;
       payload += `Total impressions: ${googleAdsData.totalImpressions}\n`;

@@ -2,40 +2,41 @@ import { describe, it, expect } from "vitest";
 import { orderIdentityKey, dedupeOrdersByIdentity } from "./daily-sales-scheduler";
 
 describe("orderIdentityKey", () => {
-  it("uses order_name for Shopify (collapses the same order under different external ids)", () => {
-    const a = orderIdentityKey({ channel: "SHOPIFY", orderName: "#15812", externalOrderId: "6568555544715" });
-    const b = orderIdentityKey({ channel: "SHOPIFY", orderName: "#15812", externalOrderId: "gid://shopify/Order/6568555544715" });
-    expect(a).toBe(b); // same physical order despite different external ids
+  it("keys on external_order_id alone (channel-agnostic) — collapses cross-channel twins", () => {
+    const shopify = orderIdentityKey({ channel: "SHOPIFY", orderName: "#15614", externalOrderId: "6543528427659" });
+    const amazonTwin = orderIdentityKey({ channel: "AMAZON", orderName: null, externalOrderId: "6543528427659" });
+    expect(shopify).toBe(amazonTwin); // same physical order, different channel labels
+    expect(shopify).toBe("EXT|6543528427659");
   });
-  it("falls back to external id when no order_name (Amazon)", () => {
-    expect(orderIdentityKey({ channel: "AMAZON", externalOrderId: "111-222" })).toBe("AMAZON|111-222");
+  it("treats different external ids as different orders", () => {
+    expect(orderIdentityKey({ channel: "SHOPIFY", externalOrderId: "111" }))
+      .not.toBe(orderIdentityKey({ channel: "SHOPIFY", externalOrderId: "222" }));
   });
-  it("is channel-scoped", () => {
-    expect(orderIdentityKey({ channel: "SHOPIFY", orderName: "#1" }))
-      .not.toBe(orderIdentityKey({ channel: "AMAZON", orderName: "#1" }));
+  it("falls back to channel+order_name only when there is no external id", () => {
+    expect(orderIdentityKey({ channel: "DIRECT", orderName: "MANUAL-1" })).toBe("DIRECT|MANUAL-1");
   });
 });
 
 describe("dedupeOrdersByIdentity", () => {
-  it("collapses duplicate rows of the same physical order, keeping one", () => {
+  it("collapses a cross-channel twin pair to one row", () => {
     const orders = [
-      { id: "a", channel: "SHOPIFY", orderName: "#15812", externalOrderId: "111", totalAmount: 322.97 },
-      { id: "b", channel: "SHOPIFY", orderName: "#15812", externalOrderId: "222", totalAmount: 322.97 },
-      { id: "c", channel: "SHOPIFY", orderName: "#15813", externalOrderId: "333", totalAmount: 100 },
+      { id: "a", channel: "SHOPIFY", orderName: "#15614", externalOrderId: "6543528427659", totalAmount: 295.45 },
+      { id: "b", channel: "AMAZON", orderName: null, externalOrderId: "6543528427659", totalAmount: 295.45 },
+      { id: "c", channel: "SHOPIFY", orderName: "#15615", externalOrderId: "6543528427660", totalAmount: 100 },
     ];
     const out = dedupeOrdersByIdentity(orders);
     expect(out).toHaveLength(2);
-    expect(out.map((o) => o.orderName).sort()).toEqual(["#15812", "#15813"]);
+    expect(out.map((o) => o.externalOrderId).sort()).toEqual(["6543528427659", "6543528427660"]);
   });
 
-  it("revenue summed over deduped orders equals the true total, not the inflated one", () => {
-    // the incident shape: one $322.97 order cloned 10x
-    const clones = Array.from({ length: 10 }, (_, i) => ({
-      id: `r${i}`, channel: "SHOPIFY", orderName: "#15812", externalOrderId: `e${i}`, totalAmount: 322.97,
-    }));
-    const naive = clones.reduce((s, o) => s + o.totalAmount, 0);
-    const deduped = dedupeOrdersByIdentity(clones).reduce((s, o) => s + o.totalAmount, 0);
-    expect(Math.round(naive)).toBe(3230); // 10x inflation
+  it("revenue summed over deduped twins equals the true total, not the double-count", () => {
+    const twins = [
+      { id: "a", channel: "SHOPIFY", externalOrderId: "999", totalAmount: 322.97 },
+      { id: "b", channel: "AMAZON", externalOrderId: "999", totalAmount: 322.97 },
+    ];
+    const naive = twins.reduce((s, o) => s + o.totalAmount, 0);
+    const deduped = dedupeOrdersByIdentity(twins).reduce((s, o) => s + o.totalAmount, 0);
+    expect(naive).toBe(645.94); // double-counted
     expect(deduped).toBe(322.97); // correct
   });
 

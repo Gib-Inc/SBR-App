@@ -153,20 +153,23 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
   try {
     const { db } = await import("../db");
     const { sql } = await import("drizzle-orm");
-    // Canonical identity (channel-aware): Shopify keys on order_name (the same
-    // order is sometimes re-imported under different external ids); other
-    // channels key on external id (Amazon names aren't unique). Catches both the
-    // external-id clones and the same-order-under-two-external-ids case.
+    // Duplicate detection is CHANNEL-AGNOSTIC on external_order_id (the canonical
+    // physical identity). A channel-scoped check let the 2026-06 cross-channel
+    // twins ($27k, same Shopify order stored as SHOPIFY + a relabeled AMAZON
+    // row) slip through. Two arms: (1) any external id appearing >1× regardless
+    // of channel; (2) Shopify orders sharing an order_name with NULL external id
+    // (they escape the unique index).
     const dupRes: any = await db.execute(sql`
       SELECT count(*)::int AS dup_groups, coalesce(sum(c - 1),0)::int AS extra_rows
       FROM (
         SELECT count(*) AS c FROM sales_orders
-        WHERE order_date >= CURRENT_DATE - 7
-          AND (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
-                    ELSE coalesce(external_order_id, order_name) END) IS NOT NULL
-        GROUP BY channel, (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
-                                ELSE coalesce(external_order_id, order_name) END)
-        HAVING count(*) > 1
+        WHERE external_order_id IS NOT NULL AND order_date >= CURRENT_DATE - 7
+        GROUP BY external_order_id HAVING count(*) > 1
+        UNION ALL
+        SELECT count(*) AS c FROM sales_orders
+        WHERE external_order_id IS NULL AND order_name IS NOT NULL AND channel = 'SHOPIFY'
+          AND order_date >= CURRENT_DATE - 7
+        GROUP BY order_name HAVING count(*) > 1
       ) t`);
     const dupGroups = Number((dupRes.rows ?? dupRes ?? [])[0]?.dup_groups ?? 0);
     const extraRows = Number((dupRes.rows ?? dupRes ?? [])[0]?.extra_rows ?? 0);
@@ -249,15 +252,14 @@ export async function runSystemIntegrityCheck(): Promise<IntegrityReport> {
 export async function resolveSalesDuplicates(): Promise<{ rowsRemoved: number; linesRemoved: number }> {
   const { db } = await import("../db");
   const { sql } = await import("drizzle-orm");
+  // Channel-agnostic on external_order_id (canonical identity). Keep the richest
+  // row: prefer one with an order_name, then SHOPIFY, then most-recent.
   const dupSelect = sql`
     SELECT id FROM (
-      SELECT id, row_number() OVER (PARTITION BY channel,
-          (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
-                ELSE coalesce(external_order_id, order_name) END)
-        ORDER BY updated_at DESC NULLS LAST, created_at ASC NULLS LAST, id ASC) rn
-      FROM sales_orders
-      WHERE (CASE WHEN channel='SHOPIFY' THEN coalesce(order_name, external_order_id)
-                  ELSE coalesce(external_order_id, order_name) END) IS NOT NULL
+      SELECT id, row_number() OVER (PARTITION BY external_order_id
+        ORDER BY (order_name IS NOT NULL) DESC, (channel = 'SHOPIFY') DESC,
+                 updated_at DESC NULLS LAST, id ASC) rn
+      FROM sales_orders WHERE external_order_id IS NOT NULL
     ) t WHERE rn > 1`;
   const delLines: any = await db.execute(sql`DELETE FROM sales_order_lines WHERE sales_order_id IN (${dupSelect}) RETURNING id`);
   const delOrders: any = await db.execute(sql`DELETE FROM sales_orders WHERE id IN (${dupSelect}) RETURNING id`);

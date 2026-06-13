@@ -170,3 +170,31 @@ describe("computeUnifiedPerformance", () => {
     expect(a.trueNetMargin).toBe(15000 - 3000 - 200 - 1500);
   });
 });
+
+import { collapseOverlappingSnapshots } from "./unified-performance-service";
+describe("collapseOverlappingSnapshots (ad-spend overlap dedup — the 6.5x bug)", () => {
+  it("collapses overlapping rolling-30d windows to the single latest", () => {
+    const rolling = Array.from({ length: 7 }, (_, i) => ({
+      periodStart: `2026-05-0${i + 1}`, periodEnd: `2026-06-0${i + 1}`, spend: 10000 + i,
+    }));
+    const kept = collapseOverlappingSnapshots(rolling);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].periodEnd).toBe("2026-06-07");
+  });
+  it("keeps genuinely distinct non-overlapping periods (manual uploads)", () => {
+    const distinct = [
+      { periodStart: "2026-04-27", periodEnd: "2026-05-19", spend: 11733 },
+      { periodStart: "2026-05-26", periodEnd: "2026-05-31", spend: 1770 },
+      { periodStart: "2026-06-01", periodEnd: "2026-06-09", spend: 2651 },
+    ];
+    expect(collapseOverlappingSnapshots(distinct)).toHaveLength(3);
+  });
+  it("mixes correctly: drops the earlier overlapper, keeps the distinct one", () => {
+    const mixed = [
+      { periodStart: "2026-05-08", periodEnd: "2026-06-07", spend: 70 },
+      { periodStart: "2026-05-01", periodEnd: "2026-05-31", spend: 50 },
+      { periodStart: "2026-03-01", periodEnd: "2026-03-31", spend: 30 },
+    ];
+    expect(collapseOverlappingSnapshots(mixed).map((k) => k.periodEnd).sort()).toEqual(["2026-03-31", "2026-06-07"]);
+  });
+});

@@ -20,12 +20,17 @@ async function runOnce(): Promise<void> {
     await recordSchedulerRun({
       schedulerId: "system-integrity",
       schedulerName: "System integrity sweep",
-      // DRIFT surfaces on Health as an alert; OK/WARN are healthy runs.
-      status: report.status === "DRIFT" ? "failed" : "success",
+      // Completing the sweep is a SUCCESS even when it FINDS drift. Mapping
+      // DRIFT→"failed" left last_success_at permanently NULL, pinned the
+      // consecutive-failure counter, and would have masked a genuine future
+      // crash (audit H5). DRIFT is surfaced via errorMessage on a successful run
+      // + app_settings/data_reconciliation_log; "failed" is reserved for a
+      // thrown exception (the catch block below).
+      status: "success",
       startedAt,
       errorMessage:
         report.status === "DRIFT"
-          ? `${report.totalAnomalies} anomalies across ${drifting.length} stream(s): ${drifting.map((s) => s.stream).join(", ")}`
+          ? `DRIFT: ${report.totalAnomalies} anomalies across ${drifting.length} stream(s): ${drifting.map((s) => s.stream).join(", ")}`
           : null,
       details: {
         status: report.status,

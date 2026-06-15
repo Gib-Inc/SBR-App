@@ -409,13 +409,13 @@ export async function queryWastedSpend(db: DB, days: number) {
 
 export async function queryDailyRevenueSpark(db: DB, days: number) {
   const result = await db.execute(sql`
-    SELECT order_date::date::text as date,
+    SELECT (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date::text as date,
            COALESCE(SUM(total_amount), 0)::real as revenue,
            COUNT(*)::int as orders
     FROM sales_orders
     WHERE order_date >= current_date - make_interval(days => ${days})
       AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY order_date::date
+    GROUP BY (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date
     ORDER BY date
   `);
   return rows(result);
@@ -478,21 +478,28 @@ export async function queryRepeatPurchase(db: DB, days: number) {
 }
 
 export async function queryTopMetrics(db: DB) {
+  // Bucket by MOUNTAIN TIME, not UTC. order_date is a naive UTC timestamp; ::date
+  // alone splits the day at 6pm MT and mis-attributes evening orders (today inflated,
+  // yesterday deflated). Stamp UTC then convert to Denver. Matches daily-company-report.
   const today = await db.execute(sql`
     SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders
     FROM sales_orders
-    WHERE order_date::date = current_date AND status NOT IN ('CANCELLED', 'REFUNDED')
+    WHERE (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date = (now() AT TIME ZONE 'America/Denver')::date
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
   `);
   const yesterday = await db.execute(sql`
     SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders
     FROM sales_orders
-    WHERE order_date::date = current_date - 1 AND status NOT IN ('CANCELLED', 'REFUNDED')
+    WHERE (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date = (now() AT TIME ZONE 'America/Denver')::date - 1
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
   `);
   const mtd = await db.execute(sql`
     SELECT COALESCE(SUM(total_amount), 0)::real as revenue, COUNT(*)::int as orders,
            COALESCE(AVG(total_amount), 0)::real as aov
     FROM sales_orders
-    WHERE order_date >= date_trunc('month', current_date) AND status NOT IN ('CANCELLED', 'REFUNDED')
+    WHERE (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date
+            >= date_trunc('month', (now() AT TIME ZONE 'America/Denver')::date)::date
+      AND status NOT IN ('CANCELLED', 'REFUNDED')
   `);
   const t = rows(today)[0] || { revenue: 0, orders: 0 };
   const y = rows(yesterday)[0] || { revenue: 0, orders: 0 };
@@ -508,7 +515,7 @@ export async function queryTopMetrics(db: DB) {
 
 export async function queryMonthlySales(db: DB, months: number = 12) {
   const result = await db.execute(sql`
-    SELECT date_trunc('month', order_date)::date::text as month,
+    SELECT date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date::text as month,
            COALESCE(SUM(total_amount), 0)::real as revenue,
            COUNT(*)::int as orders,
            COALESCE(AVG(total_amount), 0)::real as aov,
@@ -516,7 +523,7 @@ export async function queryMonthlySales(db: DB, months: number = 12) {
     FROM sales_orders
     WHERE order_date >= current_date - make_interval(months => ${months})
       AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY date_trunc('month', order_date)
+    GROUP BY date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')
     ORDER BY month
   `);
   return rows(result);
@@ -568,13 +575,13 @@ export async function queryMonthlyAdSpend(db: DB, months: number = 12) {
 
 export async function queryMonthlyBlended(db: DB, months: number = 12) {
   const sales = await db.execute(sql`
-    SELECT date_trunc('month', order_date)::date::text as month,
+    SELECT date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date::text as month,
            COALESCE(SUM(total_amount), 0)::real as total_revenue,
            COUNT(DISTINCT COALESCE(customer_email, external_customer_id))::int as new_customers
     FROM sales_orders
     WHERE order_date >= current_date - make_interval(months => ${months})
       AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY date_trunc('month', order_date)
+    GROUP BY date_trunc('month', order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')
     ORDER BY month
   `);
   // Attributed ad revenue / conversions by month for shape (NOT spend).
@@ -634,13 +641,13 @@ export async function queryMonthlyBlended(db: DB, months: number = 12) {
 export async function querySalesVelocity(db: DB, days: number) {
   const result = await db.execute(sql`
     WITH daily AS (
-      SELECT order_date::date as day,
+      SELECT (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date as day,
              COALESCE(SUM(total_amount), 0)::real as revenue,
              COUNT(*)::int as orders
       FROM sales_orders
       WHERE order_date >= current_date - make_interval(days => ${days})
         AND status NOT IN ('CANCELLED', 'REFUNDED')
-      GROUP BY order_date::date
+      GROUP BY (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date
     )
     SELECT AVG(revenue)::real as avg_daily_revenue,
            AVG(orders)::real as avg_daily_orders,
@@ -652,13 +659,13 @@ export async function querySalesVelocity(db: DB, days: number) {
   `);
 
   const weekly = await db.execute(sql`
-    SELECT EXTRACT(DOW FROM order_date) as dow,
+    SELECT EXTRACT(DOW FROM order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver') as dow,
            COALESCE(AVG(total_amount), 0)::real as avg_order_value,
-           COUNT(*)::real / GREATEST(COUNT(DISTINCT order_date::date), 1) as avg_orders_per_day
+           COUNT(*)::real / GREATEST(COUNT(DISTINCT (order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')::date), 1) as avg_orders_per_day
     FROM sales_orders
     WHERE order_date >= current_date - make_interval(days => ${days})
       AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY EXTRACT(DOW FROM order_date)
+    GROUP BY EXTRACT(DOW FROM order_date AT TIME ZONE 'UTC' AT TIME ZONE 'America/Denver')
     ORDER BY dow
   `);
 

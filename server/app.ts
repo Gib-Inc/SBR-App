@@ -102,9 +102,54 @@ app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 // Serve uploaded damage photos statically
 app.use('/uploads', express.static('uploads'));
 
+// ── Deploy provenance: prove exactly which build is running ──────────────────
+// Railway sets RAILWAY_GIT_COMMIT_SHA to the deployed commit; we fall back to the
+// local .git HEAD (dev) so this is never blank. Resolved once, then cached.
+const SERVER_STARTED_AT = new Date();
+let __commitCache: string | null = null;
+async function resolveCommit(): Promise<string> {
+  if (__commitCache) return __commitCache;
+  const fromEnv = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT || process.env.SOURCE_VERSION;
+  if (fromEnv) return (__commitCache = fromEnv);
+  try {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const head = fs.readFileSync(path.join(process.cwd(), '.git', 'HEAD'), 'utf8').trim();
+    __commitCache = head.startsWith('ref:')
+      ? fs.readFileSync(path.join(process.cwd(), '.git', head.slice(5).trim()), 'utf8').trim()
+      : head;
+  } catch {
+    __commitCache = 'unknown';
+  }
+  return __commitCache;
+}
+
 // Public health check endpoint for Railway deployment
-app.get('/api/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  const commit = await resolveCommit();
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    commit: commit.slice(0, 7),
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
+// Deploy provenance — returns the exact commit + deploy metadata of the RUNNING
+// build so anyone (you, the dev team) can confirm what is actually live. Public.
+app.get('/api/version', async (_req, res) => {
+  const commit = await resolveCommit();
+  res.status(200).json({
+    commit,
+    commitShort: commit.slice(0, 7),
+    branch: process.env.RAILWAY_GIT_BRANCH || null,
+    deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null,
+    serviceName: process.env.RAILWAY_SERVICE_NAME || null,
+    environment: process.env.NODE_ENV || 'development',
+    node: process.version,
+    startedAt: SERVER_STARTED_AT.toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+  });
 });
 
 // Intuit-compliant security headers middleware

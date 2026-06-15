@@ -23362,7 +23362,7 @@ Generate only the email body text, no subject line.`;
       // real spend wins; an upload fills a platform with no live spend). This is the
       // same merge the Unified card uses, so an uploaded Meta CSV shows here too
       // instead of the card contradicting itself ("Meta $0" vs the unified "$11,733").
-      const { normalizeAdPlatform, mergeAdSpendByPlatform } = await import("./services/unified-performance-service");
+      const { normalizeAdPlatform, mergeAdSpendByPlatform, collapseOverlappingSnapshots } = await import("./services/unified-performance-service");
       const adStart = isoDaysAgo(30);
       const live: Record<string, { spend: number }> = {};
       for (const r of adRows) {
@@ -23374,10 +23374,22 @@ Generate only the email body text, no subject line.`;
       const windsorSpend: Record<string, { spend: number }> = {};
       try {
         const upRows = await storage.getMarketingSpendSnapshotsInRange(adStart, today);
+        // Collapse overlapping windows per (bucket, platform) before summing —
+        // Windsor's daily rolling-30d windows pile up and a blind SUM multi-counts
+        // them (the ~6.5x ad-spend bug). See ADSPEND-DEDUP-SPEC.md (Layer A).
+        const grp = new Map<string, any[]>();
         for (const s of upRows) {
           const p = String((s as any).platform || "OTHER").toUpperCase();
-          const bucket = String((s as any).source || "").toLowerCase().startsWith("windsor") ? windsorSpend : uploaded;
-          bucket[p] = { spend: (bucket[p]?.spend || 0) + (Number((s as any).spend) || 0) };
+          const bucketName = String((s as any).source || "").toLowerCase().startsWith("windsor") ? "windsor" : "uploaded";
+          const key = `${bucketName}|${p}`;
+          const g = grp.get(key);
+          if (g) g.push(s); else grp.set(key, [s]);
+        }
+        for (const [key, group] of Array.from(grp.entries())) {
+          const [bucketName, p] = key.split("|");
+          const bucket = bucketName === "windsor" ? windsorSpend : uploaded;
+          const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) => acc + (Number((s as any).spend) || 0), 0);
+          bucket[p] = { spend: (bucket[p]?.spend || 0) + sum };
         }
       } catch { /* no snapshots */ }
       const DISPLAY: Record<string, string> = { GOOGLE: "Google Ads", META: "Meta / Facebook", AMAZON: "Amazon Ads", PINTEREST: "Pinterest", MICROSOFT: "Microsoft / Bing", TIKTOK: "TikTok" };

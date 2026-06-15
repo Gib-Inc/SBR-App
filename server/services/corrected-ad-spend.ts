@@ -22,6 +22,7 @@ import { storage } from "../storage";
 import {
   normalizeAdPlatform,
   mergeAdSpendByPlatform,
+  collapseOverlappingSnapshots,
   type PlatformSpend,
   type MergedPlatform,
 } from "./unified-performance-service";
@@ -69,21 +70,32 @@ export async function getCorrectedAdSpendRange(
   }
 
   // SNAPSHOTS: split by source — Windsor (authoritative) vs manual upload (Meta
-  // CSV, etc.). getMarketingSpendSnapshotsInRange already excludes superseded
-  // re-uploads, so duplicate uploads never double-count.
+  // CSV, etc.). getMarketingSpendSnapshotsInRange excludes superseded rows, but
+  // Windsor writes a fresh rolling-30d window DAILY, so many OVERLAPPING active
+  // rows pile up per (source, platform). Collapse each group to one window BEFORE
+  // summing — a blind SUM here is the ~6.5x ad-spend over-count bug. Mirrors the
+  // safe path in getUnifiedPerformance. See ADSPEND-DEDUP-SPEC.md (Layer A).
   const uploaded: Record<string, PlatformSpend> = {};
   const windsor: Record<string, PlatformSpend> = {};
   try {
     const snaps = await storage.getMarketingSpendSnapshotsInRange(start, end);
+    const groups = new Map<string, any[]>(); // key: `${bucket}|${platform}`
     for (const s of snaps as any[]) {
       const p = String(s.platform || "OTHER").toUpperCase();
-      const bucket = String(s.source || "").toLowerCase().startsWith("windsor")
-        ? windsor
-        : uploaded;
+      const bucketName = String(s.source || "").toLowerCase().startsWith("windsor") ? "windsor" : "uploaded";
+      const key = `${bucketName}|${p}`;
+      const g = groups.get(key);
+      if (g) g.push(s); else groups.set(key, [s]);
+    }
+    for (const [key, group] of Array.from(groups.entries())) {
+      const [bucketName, p] = key.split("|");
+      const bucket = bucketName === "windsor" ? windsor : uploaded;
       const cur = bucket[p] || { spend: 0, impressions: 0, clicks: 0 };
-      cur.spend += Number(s.spend) || 0;
-      if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
-      if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
+      for (const s of collapseOverlappingSnapshots(group)) {
+        cur.spend += Number(s.spend) || 0;
+        if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
+        if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
+      }
       bucket[p] = cur;
     }
   } catch {
@@ -234,32 +246,36 @@ export async function getCorrectedMonthlyAdSpend(): Promise<Map<string, MonthlyP
   } catch {
     return out;
   }
-  // Per (month, platform) keep ONE source via the same hierarchy as the merge:
-  // windsor beats upload. Track the winning source so a later upload can't
-  // override an existing windsor figure.
-  const chosen = new Map<string, { spend: number; isWindsor: boolean }>();
+  // Group rows by (month, platform, tier), COLLAPSE overlapping windows within each
+  // group before summing (Layer A — stops Windsor's daily rolling-30d windows from
+  // multi-counting), THEN apply cross-tier precedence: windsor beats upload for the
+  // same (month, platform). See ADSPEND-DEDUP-SPEC.md.
+  const groups = new Map<string, any[]>(); // key: `${month}|${platform}|${tier}`
   for (const s of snaps) {
     const ps = String(s.periodStart || s.period_start || "");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ps)) continue;
     const month = ps.slice(0, 7); // YYYY-MM
     const platform = String(s.platform || "OTHER").toUpperCase();
-    const isWindsor = String(s.source || "").toLowerCase().startsWith("windsor");
-    const spend = Number(s.spend) || 0;
-    const key = `${month}|${platform}`;
-    const prev = chosen.get(key);
-    if (!prev || (isWindsor && !prev.isWindsor)) {
-      chosen.set(key, { spend, isWindsor });
-    } else if (isWindsor === prev.isWindsor) {
-      // same tier (e.g. two windsor months merged, or two uploads) → sum
-      chosen.set(key, { spend: prev.spend + spend, isWindsor });
-    }
-    // upload when a windsor already exists → ignored (windsor wins)
+    const tier = String(s.source || "").toLowerCase().startsWith("windsor") ? "windsor" : "upload";
+    const key = `${month}|${platform}|${tier}`;
+    const g = groups.get(key);
+    if (g) g.push(s); else groups.set(key, [s]);
   }
-  for (const [key, val] of Array.from(chosen.entries())) {
-    const [month, platform] = key.split("|");
+  const tierTotals = new Map<string, { windsor?: number; upload?: number }>(); // key: month|platform
+  for (const [key, group] of Array.from(groups.entries())) {
+    const [month, platform, tier] = key.split("|");
+    const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) => acc + (Number(s.spend) || 0), 0);
+    const mk = `${month}|${platform}`;
+    const t = tierTotals.get(mk) || {};
+    (t as any)[tier] = ((t as any)[tier] || 0) + sum;
+    tierTotals.set(mk, t);
+  }
+  for (const [mk, t] of Array.from(tierTotals.entries())) {
+    const [month, platform] = mk.split("|");
+    const val = t.windsor != null ? t.windsor : (t.upload || 0); // windsor beats upload
     const cur = out.get(month) || { byPlatform: {}, total: 0 };
-    cur.byPlatform[platform] = (cur.byPlatform[platform] || 0) + val.spend;
-    cur.total = r2(cur.total + val.spend);
+    cur.byPlatform[platform] = (cur.byPlatform[platform] || 0) + val;
+    cur.total = r2(cur.total + val);
     out.set(month, cur);
   }
   return out;

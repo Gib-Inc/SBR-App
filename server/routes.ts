@@ -23362,7 +23362,7 @@ Generate only the email body text, no subject line.`;
       // real spend wins; an upload fills a platform with no live spend). This is the
       // same merge the Unified card uses, so an uploaded Meta CSV shows here too
       // instead of the card contradicting itself ("Meta $0" vs the unified "$11,733").
-      const { normalizeAdPlatform, mergeAdSpendByPlatform, collapseOverlappingSnapshots } = await import("./services/unified-performance-service");
+      const { normalizeAdPlatform, mergeAdSpendByPlatform, collapseOverlappingSnapshots, overlapFraction } = await import("./services/unified-performance-service");
       const adStart = isoDaysAgo(30);
       const live: Record<string, { spend: number }> = {};
       for (const r of adRows) {
@@ -23388,7 +23388,10 @@ Generate only the email body text, no subject line.`;
         for (const [key, group] of Array.from(grp.entries())) {
           const [bucketName, p] = key.split("|");
           const bucket = bucketName === "windsor" ? windsorSpend : uploaded;
-          const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) => acc + (Number((s as any).spend) || 0), 0);
+          // Prorate each window to the last-30d range so a stale wide upload only
+          // partially inside the window doesn't count at full value.
+          const sum = collapseOverlappingSnapshots(group).reduce((acc, s: any) =>
+            acc + (Number((s as any).spend) || 0) * overlapFraction((s as any).periodStart, (s as any).periodEnd, adStart, today), 0);
           bucket[p] = { spend: (bucket[p]?.spend || 0) + sum };
         }
       } catch { /* no snapshots */ }

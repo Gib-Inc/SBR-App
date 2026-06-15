@@ -97,6 +97,32 @@ export function collapseOverlappingSnapshots<T extends { periodStart?: string | 
 }
 
 /**
+ * Fraction (0..1) of a snapshot window [periodStart, periodEnd] that falls inside a
+ * query range [rangeStart, rangeEnd], by inclusive day count. PRORATES wide windows
+ * that only partially overlap a range so e.g. "last 30 days" doesn't count a 3-week
+ * manual upload (mostly outside the range) at full value. A rolling/aggregate window
+ * fully inside the range → 1 (unchanged). Assumes ~uniform daily spend within a window
+ * (exact for rolling windows; an approximation for lumpy manual uploads — better than
+ * counting the whole window). Unparseable/degenerate input → 1 (fail safe, never drop).
+ */
+export function overlapFraction(
+  periodStart?: string | null,
+  periodEnd?: string | null,
+  rangeStart?: string | null,
+  rangeEnd?: string | null,
+): number {
+  if (!periodStart || !periodEnd || !rangeStart || !rangeEnd) return 1;
+  const d = (s: string) => Date.parse(String(s).slice(0, 10) + "T00:00:00Z");
+  const ps = d(periodStart), pe = d(periodEnd), rs = d(rangeStart), re = d(rangeEnd);
+  if ([ps, pe, rs, re].some(Number.isNaN) || pe < ps) return 1;
+  const DAY = 86400000;
+  const winDays = (pe - ps) / DAY + 1;
+  const ovDays = (Math.min(pe, re) - Math.max(ps, rs)) / DAY + 1;
+  if (ovDays <= 0) return 0;
+  return Math.min(1, ovDays / winDays);
+}
+
+/**
  * Map a raw ad_metrics_daily.platform value to a canonical AD platform, or null
  * if it is a traffic source (DIRECT, NOT SET, YAHOO, DUCKDUCKGO, organic
  * YOUTUBE/REDDIT/IG, etc.) rather than paid media. Mirrors the Finances overview

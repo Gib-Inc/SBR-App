@@ -23,6 +23,7 @@ import {
   normalizeAdPlatform,
   mergeAdSpendByPlatform,
   collapseOverlappingSnapshots,
+  overlapFraction,
   type PlatformSpend,
   type MergedPlatform,
 } from "./unified-performance-service";
@@ -92,9 +93,14 @@ export async function getCorrectedAdSpendRange(
       const bucket = bucketName === "windsor" ? windsor : uploaded;
       const cur = bucket[p] || { spend: 0, impressions: 0, clicks: 0 };
       for (const s of collapseOverlappingSnapshots(group)) {
-        cur.spend += Number(s.spend) || 0;
-        if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions);
-        if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks);
+        // PRORATE to the query range: a window only partially inside [start,end]
+        // contributes its in-range slice, not its full value (so a stale 3-week
+        // upload doesn't inflate a "last 30 days" total). Rolling windows fully in
+        // range → factor 1 (unchanged).
+        const f = overlapFraction(s.periodStart, s.periodEnd, start, end);
+        cur.spend += (Number(s.spend) || 0) * f;
+        if (s.impressions != null) cur.impressions = (cur.impressions || 0) + Number(s.impressions) * f;
+        if (s.clicks != null) cur.clicks = (cur.clicks || 0) + Number(s.clicks) * f;
       }
       bucket[p] = cur;
     }

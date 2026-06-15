@@ -4,8 +4,33 @@ import {
   computeUnifiedPerformance,
   normalizeAdPlatform,
   proratePLMarketing,
+  overlapFraction,
   type UnifiedInput,
 } from "./unified-performance-service";
+
+describe("overlapFraction (prorate windows to a query range)", () => {
+  const RS = "2026-05-16", RE = "2026-06-15"; // a ~last-30-days range
+  it("a window fully inside the range counts in full (factor 1)", () => {
+    // Windsor rolling 30d window 05-16..06-14 — must NOT be prorated down.
+    expect(overlapFraction("2026-05-16", "2026-06-14", RS, RE)).toBe(1);
+  });
+  it("a wide window only partially in range is prorated to its in-range slice", () => {
+    // Meta upload 04-27..05-19 (23 days); only 05-16..05-19 = 4 days are in range.
+    const f = overlapFraction("2026-04-27", "2026-05-19", RS, RE);
+    expect(f).toBeCloseTo(4 / 23, 4);
+    expect(Math.round(11733 * f)).toBe(2041); // $11,733 → ~$2,041, not full
+  });
+  it("a window fully inside but short counts in full", () => {
+    expect(overlapFraction("2026-05-26", "2026-05-31", RS, RE)).toBe(1);
+  });
+  it("a window entirely outside the range contributes nothing (0)", () => {
+    expect(overlapFraction("2026-01-01", "2026-01-31", RS, RE)).toBe(0);
+  });
+  it("missing/unparseable periods fail safe to 1 (never silently drop spend)", () => {
+    expect(overlapFraction(null, "2026-06-14", RS, RE)).toBe(1);
+    expect(overlapFraction("2026-05-16", "2026-06-14", null, RE)).toBe(1);
+  });
+});
 
 describe("proratePLMarketing", () => {
   it("takes a full month at face value", () => {

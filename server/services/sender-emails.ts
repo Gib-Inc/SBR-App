@@ -5,7 +5,7 @@
 // supplier respond directly to the human who sent the message.
 //
 // Emails added here are also used as the audit trail's "ordered by"
-// signature when Roger's PO-create notification is fired.
+// signature when the PO-create notification is fired.
 
 export const SENDER_EMAILS: Record<string, string> = {
   Clarence: "clarencerohbock@gmail.com",
@@ -21,8 +21,10 @@ export function emailForSender(name: string | null | undefined): string | null {
 }
 
 /**
- * Roger Christensen — owner who needs to know about every PO for accounting
- * follow-up. Hardcoded to a single mailbox; if Roger ever moves we change it
- * here and every PO-create path picks up the new value.
+ * Roger Christensen's PO-notification mailbox. Every time a PO is created,
+ * the app emails this address so accounting has the line items, totals, and
+ * who placed the order. This was previously rck1967@hotmail.com (his personal
+ * mailbox); it now goes to the SBR gmail. Change the VALUE below and every
+ * PO-create path picks up the new address.
  */
-export const ROGER_EMAIL = "rck1967@hotmail.com";
+export const ROGER_EMAIL = "stickerburrroller@gmail.com";

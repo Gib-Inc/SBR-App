@@ -537,7 +537,7 @@ function SupplierOrderTab() {
               data-testid="checkbox-notify-roger"
             />
             <Label htmlFor="notify-roger" className="cursor-pointer">
-              Notify Roger (rck1967@hotmail.com) when saved
+              Notify Roger (stickerburrroller@gmail.com) when saved
             </Label>
           </div>
 
@@ -551,7 +551,7 @@ function SupplierOrderTab() {
             <div className="text-muted-foreground">
               {notifyRoger ? (
                 <>
-                  Roger (rck1967@hotmail.com) WILL be emailed a copy because "Notify Roger" is checked. Sender shown to Roger: {orderedBy}.
+                  Roger (stickerburrroller@gmail.com) WILL be emailed a copy because "Notify Roger" is checked. Sender shown to Roger: {orderedBy}.
                 </>
               ) : (
                 <>

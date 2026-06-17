@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bucketAging, parseProfitAndLoss, computeConfidence, parseBalanceSheet, buildBillsDue } from "./qb-financial-service";
+import { bucketAging, parseProfitAndLoss, computeConfidence, parseBalanceSheet, buildBillsDue, parseExpenseDetail, summarizeExpenseDetail } from "./qb-financial-service";
 
 describe("bucketAging", () => {
   const asOf = new Date("2026-06-06T12:00:00");
@@ -180,5 +180,82 @@ describe("buildBillsDue", () => {
     const out = buildBillsDue([{ Balance: 100 }], asOf);
     expect(out[0].daysOverdue).toBe(0);
     expect(out[0].vendor).toBe("Unknown vendor");
+  });
+});
+
+describe("parseExpenseDetail + summarizeExpenseDetail", () => {
+  // Mirrors a QuickBooks ProfitAndLossDetail report: Columns carry ColKey
+  // metadata; Rows is a tree of account Sections, each with nested Data txns.
+  const report = {
+    Columns: {
+      Column: [
+        { ColTitle: "Date", ColType: "Date", MetaData: [{ Name: "ColKey", Value: "tx_date" }] },
+        { ColTitle: "Transaction Type", ColType: "String", MetaData: [{ Name: "ColKey", Value: "txn_type" }] },
+        { ColTitle: "Num", ColType: "String", MetaData: [{ Name: "ColKey", Value: "doc_num" }] },
+        { ColTitle: "Name", ColType: "String", MetaData: [{ Name: "ColKey", Value: "name" }] },
+        { ColTitle: "Memo", ColType: "String", MetaData: [{ Name: "ColKey", Value: "memo" }] },
+        { ColTitle: "Amount", ColType: "Money", MetaData: [{ Name: "ColKey", Value: "subt_nat_amount" }] },
+      ],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Memberships, Dues & Subscriptions" }] },
+          type: "Section",
+          Rows: {
+            Row: [
+              { type: "Data", ColData: [{ value: "2026-05-02" }, { value: "Expense" }, { value: "1" }, { value: "Shopify" }, { value: "plan" }, { value: "105.00" }] },
+              { type: "Data", ColData: [{ value: "2026-04-02" }, { value: "Expense" }, { value: "2" }, { value: "Shopify" }, { value: "plan" }, { value: "105.00" }] },
+              { type: "Data", ColData: [{ value: "2026-05-15" }, { value: "CC Expense" }, { value: "" }, { value: "GoHighLevel" }, { value: "" }, { value: "1,997.00" }] },
+              { type: "Data", ColData: [{ value: "2026-05-20" }, { value: "CC Expense" }, { value: "" }, { value: "" }, { value: "annual" }, { value: "(50.00)" }] },
+            ],
+          },
+          Summary: { ColData: [{ value: "Total" }, {}, {}, {}, {}, { value: "2157.00" }] },
+        },
+        {
+          Header: { ColData: [{ value: "Vehicle Expenses" }] },
+          type: "Section",
+          Rows: {
+            Row: [
+              { type: "Data", ColData: [{ value: "2026-05-09" }, { value: "Expense" }, { value: "9" }, { value: "Chevron" }, { value: "fuel" }, { value: "80.00" }] },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  it("flattens nested account sections into transaction lines", () => {
+    const { lines, rowCount } = parseExpenseDetail(report);
+    expect(rowCount).toBe(5);
+    expect(lines).toHaveLength(5);
+    const shopify = lines.filter((l) => l.payee === "Shopify");
+    expect(shopify).toHaveLength(2);
+    expect(shopify[0].account).toBe("Memberships, Dues & Subscriptions");
+    // parenthesized amount -> negative; blank payee -> "(no payee)"
+    const credit = lines.find((l) => l.amount === -50);
+    expect(credit?.payee).toBe("(no payee)");
+  });
+
+  it("aggregates by account then vendor, both sorted by total desc", () => {
+    const sum = summarizeExpenseDetail(parseExpenseDetail(report), { start: "2026-02-01", end: "2026-06-01" });
+    const memberships = sum.byAccount.find((a) => a.account.startsWith("Memberships"));
+    expect(memberships).toBeTruthy();
+    // 105 + 105 + 1997 - 50 = 2157
+    expect(memberships!.total).toBe(2157);
+    // GoHighLevel ($1,997) outranks Shopify ($210 over 2 charges)
+    expect(memberships!.vendors[0].payee).toBe("GoHighLevel");
+    expect(memberships!.vendors[1].payee).toBe("Shopify");
+    expect(memberships!.vendors[1].total).toBe(210);
+    expect(memberships!.vendors[1].count).toBe(2);
+    // account ordering: Memberships ($2,157) before Vehicle ($80)
+    expect(sum.byAccount[0].account.startsWith("Memberships")).toBe(true);
+    expect(sum.diagnostic.colKeys).toContain("subt_nat_amount");
+  });
+
+  it("returns empty (not a throw) on a null/garbage report", () => {
+    expect(parseExpenseDetail(null).lines).toEqual([]);
+    const sum = summarizeExpenseDetail(parseExpenseDetail(null), { start: "a", end: "b" });
+    expect(sum.byAccount).toEqual([]);
   });
 });

@@ -484,6 +484,41 @@ export class QuickBooksClient {
   }
 
   /**
+   * CIPH.R — pull a transaction-level expense breakdown (ProfitAndLossDetail) so
+   * the Playground can name WHICH vendor sits behind a category total — e.g. which
+   * subscriptions make up "Memberships, Dues & Subscriptions". READ-ONLY. Returns
+   * the raw QB report; parsing/aggregation lives in qb-financial-service (pure +
+   * unit-tested). Degrades to { report: null, error } — never throws to the caller.
+   * No `columns` param is sent on purpose: the default detail layout already
+   * carries Name (payee) + Amount, and forcing column keys risks a 400 that would
+   * gap the whole pull. We map columns from the returned ColKey metadata instead.
+   */
+  async fetchExpenseDetailRaw(
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{ report: any | null; periodStart: string; periodEnd: string; error: string | null }> {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const periodStart = fmt(startDate);
+    const periodEnd = fmt(endDate);
+    if (!this.auth) {
+      return { report: null, periodStart, periodEnd, error: "QuickBooks not authenticated" };
+    }
+    try {
+      const report = await this.apiRequest<any>(
+        `/reports/ProfitAndLossDetail?start_date=${periodStart}&end_date=${periodEnd}&accounting_method=Accrual`,
+      );
+      return { report, periodStart, periodEnd, error: null };
+    } catch (e: any) {
+      return {
+        report: null,
+        periodStart,
+        periodEnd,
+        error: `DATA GAPPED: Expense detail (P&L Detail) — ${e?.message ?? e}`,
+      };
+    }
+  }
+
+  /**
    * Test the QuickBooks connection
    */
   async testConnection(): Promise<{ success: boolean; message: string; companyName?: string }> {

@@ -211,6 +211,154 @@ export function buildBillsDue(openBills: any[] | null, asOf: Date = new Date()):
     .slice(0, 25);
 }
 
+// ── CIPH.R — transaction-level expense breakdown (who is behind each category) ──
+// Answers "what are these subscriptions FOR?" by naming the vendor on every
+// expense charge, grouped under its P&L account. Pure + unit-tested; the network
+// pull lives in QuickBooksClient.fetchExpenseDetailRaw.
+
+export interface ExpenseLine {
+  account: string;
+  payee: string;
+  txnType: string | null;
+  docNumber: string | null;
+  memo: string | null;
+  date: string | null;
+  amount: number;
+}
+
+export interface ExpenseVendorAgg {
+  payee: string;
+  total: number;
+  count: number;
+}
+
+export interface ExpenseAccountAgg {
+  account: string;
+  total: number;
+  txnCount: number;
+  vendors: ExpenseVendorAgg[];
+}
+
+export interface ExpenseDetailSummary {
+  window: { start: string; end: string };
+  byAccount: ExpenseAccountAgg[];
+  // Small diagnostic so a parser/shape mismatch is debuggable from the stored
+  // snapshot alone (no need to re-pull QB): which columns QB returned, how many
+  // data rows we saw, how many lines we extracted.
+  diagnostic: { colKeys: string[]; rowCount: number; lineCount: number };
+}
+
+/** Parse a "$1,234.56" / "(1,234.56)" / "" cell into a number (NaN if blank). */
+function parseMoney(raw: any): number {
+  if (raw == null || raw === "") return NaN;
+  const s = String(raw).replace(/[$,\s]/g, "");
+  const neg = /^\(.*\)$/.test(s);
+  const n = Number(s.replace(/[()]/g, ""));
+  return Number.isNaN(n) ? NaN : neg ? -n : n;
+}
+
+/**
+ * Walk a QuickBooks ProfitAndLossDetail report into flat transaction lines.
+ * QB returns Rows as a tree: each account is a Section (Header.ColData[0] = the
+ * account name) whose nested Rows are the individual "Data" transactions; columns
+ * are identified by ColKey metadata (tx_date, txn_type, doc_num, name, memo,
+ * account_name, subt_nat_amount) so we read by name, not fragile position.
+ */
+export function parseExpenseDetail(report: any): { lines: ExpenseLine[]; colKeys: string[]; rowCount: number } {
+  const lines: ExpenseLine[] = [];
+  if (!report) return { lines, colKeys: [], rowCount: 0 };
+
+  const cols: any[] = report?.Columns?.Column || [];
+  const idx: Record<string, number> = {};
+  const colKeys: string[] = cols.map((c, i) => {
+    const meta = (c?.MetaData || []).find((m: any) => m?.Name === "ColKey");
+    const key = meta?.Value ? String(meta.Value) : c?.ColType || c?.ColTitle || `col${i}`;
+    idx[key] = i;
+    return key;
+  });
+  const amountIdx = idx["subt_nat_amount"] ?? idx["subt_nat_home_amount"] ?? null;
+  const cell = (cd: any[], key: string): any => {
+    const i = idx[key];
+    return i == null ? undefined : cd?.[i]?.value;
+  };
+
+  let rowCount = 0;
+  const walk = (rows: any[], currentAccount: string) => {
+    for (const row of rows || []) {
+      let acct = currentAccount;
+      const headerVal = row?.Header?.ColData?.[0]?.value;
+      if (headerVal != null && String(headerVal).trim()) acct = String(headerVal).trim();
+
+      if (row?.type === "Data" && Array.isArray(row?.ColData)) {
+        rowCount++;
+        const cd = row.ColData;
+        // amount: prefer the natural-amount column, else last numeric cell in row
+        let amount = amountIdx != null ? parseMoney(cd[amountIdx]?.value) : NaN;
+        if (Number.isNaN(amount)) {
+          for (let i = cd.length - 1; i >= 0; i--) {
+            const n = parseMoney(cd[i]?.value);
+            if (!Number.isNaN(n)) { amount = n; break; }
+          }
+        }
+        if (!Number.isNaN(amount)) {
+          const rowAcct = cell(cd, "account_name");
+          const account = rowAcct && String(rowAcct).trim() ? String(rowAcct).trim() : acct;
+          const payeeRaw = cell(cd, "name");
+          const payee = payeeRaw && String(payeeRaw).trim() ? String(payeeRaw).trim() : "(no payee)";
+          const str = (k: string): string | null => {
+            const v = cell(cd, k);
+            return v != null && String(v).trim() ? String(v).trim() : null;
+          };
+          lines.push({
+            account: account || "(ungrouped)",
+            payee,
+            txnType: str("txn_type"),
+            docNumber: str("doc_num"),
+            memo: str("memo"),
+            date: str("tx_date"),
+            amount,
+          });
+        }
+      }
+
+      if (row?.Rows?.Row) walk(row.Rows.Row, acct);
+    }
+  };
+  walk(report?.Rows?.Row || [], "(ungrouped)");
+  return { lines, colKeys, rowCount };
+}
+
+/** Aggregate parsed expense lines into account → vendor totals (both sorted desc). */
+export function summarizeExpenseDetail(
+  parsed: { lines: ExpenseLine[]; colKeys: string[]; rowCount: number },
+  window: { start: string; end: string },
+): ExpenseDetailSummary {
+  const accounts = new Map<string, Map<string, { total: number; count: number }>>();
+  for (const ln of parsed.lines) {
+    if (!accounts.has(ln.account)) accounts.set(ln.account, new Map());
+    const vmap = accounts.get(ln.account)!;
+    const v = vmap.get(ln.payee) || { total: 0, count: 0 };
+    v.total = round2(v.total + ln.amount);
+    v.count += 1;
+    vmap.set(ln.payee, v);
+  }
+  const byAccount: ExpenseAccountAgg[] = Array.from(accounts.entries())
+    .map(([account, vmap]) => {
+      const vendors = Array.from(vmap.entries())
+        .map(([payee, v]) => ({ payee, total: v.total, count: v.count }))
+        .sort((a, b) => b.total - a.total);
+      const total = round2(vendors.reduce((s, v) => s + v.total, 0));
+      const txnCount = vendors.reduce((s, v) => s + v.count, 0);
+      return { account, total, txnCount, vendors };
+    })
+    .sort((a, b) => b.total - a.total);
+  return {
+    window,
+    byAccount,
+    diagnostic: { colKeys: parsed.colKeys, rowCount: parsed.rowCount, lineCount: parsed.lines.length },
+  };
+}
+
 const toNumericString = (n: number | null): string | null => (n == null ? null : round2(n).toFixed(2));
 
 /**
@@ -279,6 +427,23 @@ export async function captureFinancialSnapshot(
   }
   const billsDue = buildBillsDue(raw.openBills);
 
+  // Transaction-level expense breakdown (who is behind each category total).
+  // Trailing 120 days so a monthly vendor shows ~4 charges — enough to read a
+  // per-month rate from total/count. Read-only; a failure degrades to a gap.
+  let expenseDetail: ExpenseDetailSummary | null = null;
+  {
+    const endD = new Date();
+    const startD = new Date(endD.getTime() - 120 * 24 * 60 * 60 * 1000);
+    const ed = await client.fetchExpenseDetailRaw(startD, endD);
+    if (ed.error) gaps.push(ed.error);
+    if (ed.report) {
+      expenseDetail = summarizeExpenseDetail(parseExpenseDetail(ed.report), {
+        start: ed.periodStart,
+        end: ed.periodEnd,
+      });
+    }
+  }
+
   const toInsert: InsertQbFinancialSnapshot = {
     capturedAt: new Date(),
     cashOnHand: toNumericString(cashOnHand),
@@ -295,7 +460,7 @@ export async function captureFinancialSnapshot(
     realmId: raw.realmId,
     dataGaps: (gaps as unknown) ?? null,
     confidence,
-    raw: { qbBalanceSheet, billsDue } as any,
+    raw: { qbBalanceSheet, billsDue, expenseDetail } as any,
   };
 
   const saved = await storage.createQbFinancialSnapshot(toInsert);

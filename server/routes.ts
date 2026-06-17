@@ -23345,6 +23345,38 @@ Generate only the email body text, no subject line.`;
   // CIPH.R Finances tab — monthly P&L series + balance-sheet snapshot + the full
   // balance-sheet position (debt stack/equity). balanceSheet currently comes from
   // the seeded accountant export; switch to live QuickBooks once connected.
+  // CIPH.R — transaction-level expense breakdown from the latest live QB snapshot:
+  // names the vendor behind each P&L category total, so the Playground can show
+  // "which subscription to cut" instead of a mystery category lump. Read-only.
+  // Optional ?account=memberships filters to matching account name(s).
+  app.get("/api/finances/expense-detail", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const snap = await storage.getLatestQbLiveSnapshot();
+      const detail = (snap as any)?.raw?.expenseDetail ?? null;
+      if (!detail) {
+        return res.json({
+          available: false,
+          message: "No expense detail captured yet — it populates on the next QuickBooks financial sync.",
+          capturedAt: (snap as any)?.capturedAt ?? null,
+        });
+      }
+      const account = typeof req.query.account === "string" ? req.query.account.toLowerCase() : null;
+      let byAccount = detail.byAccount || [];
+      if (account) {
+        byAccount = byAccount.filter((a: any) => String(a.account || "").toLowerCase().includes(account));
+      }
+      res.json({
+        available: true,
+        capturedAt: (snap as any)?.capturedAt ?? null,
+        window: detail.window ?? null,
+        diagnostic: detail.diagnostic ?? null,
+        byAccount,
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to load expense detail" });
+    }
+  });
+
   app.get("/api/finances/overview", requireAuth, async (_req: Request, res: Response) => {
     try {
       const isoDaysAgo = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
-import { FlaskConical, RotateCcw, Scissors } from "lucide-react";
+import { FlaskConical, RotateCcw, Scissors, ChevronRight } from "lucide-react";
 import { deriveModel, projectScenario, runwayDays, runwayDaysFromCut, type MonthPoint } from "@/lib/projection";
 
 /**
@@ -22,20 +22,32 @@ interface MonthlyRow {
   expenseCategories: Record<string, number> | null;
 }
 
+interface VendorAgg { payee: string; total: number; count: number; }
+interface AccountAgg { account: string; total: number; txnCount: number; vendors: VendorAgg[]; }
+interface ExpenseDetail {
+  available?: boolean;
+  window?: { start: string; end: string } | null;
+  byAccount?: AccountAgg[];
+}
+
 const n = (v: any) => (v == null ? 0 : Number(v));
 const fmt = (v: number) => (v < 0 ? "-" : "") + "$" + Math.abs(Math.round(v)).toLocaleString();
 
-export function ProfitPlaygroundCard({ monthly, cash }: { monthly: MonthlyRow[]; cash: number }) {
+export function ProfitPlaygroundCard({ monthly, cash, expenseDetail }: { monthly: MonthlyRow[]; cash: number; expenseDetail?: ExpenseDetail }) {
+  // Exclude partial months (labeled like "Jun 2026 (1-13)") from the model fit and
+  // the cut rows — a mid-month upload would otherwise show 13-day costs as monthly
+  // and drag down the revenue-per-ad-dollar fit.
+  const completeMonthly = useMemo(() => monthly.filter((m) => !m.month.includes("(")), [monthly]);
   const points: MonthPoint[] = useMemo(
     () =>
-      monthly.map((m) => ({
+      completeMonthly.map((m) => ({
         adSpend: n(m.expenseCategories?.["Advertising & Marketing"]),
         revenue: n(m.totalIncome),
         grossProfit: m.grossProfit == null ? null : n(m.grossProfit),
         totalExpenses: m.totalExpenses == null ? null : n(m.totalExpenses),
         netIncome: m.netIncome == null ? null : n(m.netIncome),
       })),
-    [monthly],
+    [completeMonthly],
   );
   const model = useMemo(() => deriveModel(points, 12), [points]);
 
@@ -47,6 +59,16 @@ export function ProfitPlaygroundCard({ monthly, cash }: { monthly: MonthlyRow[];
   const [expensePct, setExpensePct] = useState(0);
   const dirty = adBudget !== defaultAd || expensePct !== 0;
 
+  // Map QB expense-detail accounts to the cut rows so a category can expand into
+  // the actual vendors behind it ("which subscription to cut").
+  const [openCut, setOpenCut] = useState<string | null>(null);
+  const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const vendorsByAccount = useMemo(() => {
+    const m = new Map<string, AccountAgg>();
+    for (const a of expenseDetail?.byAccount ?? []) m.set(normName(a.account), a);
+    return m;
+  }, [expenseDetail]);
+
   const proj = projectScenario(model, adBudget, expensePct);
   const projRunway = runwayDays(cash, proj.netIncome);
 
@@ -55,7 +77,7 @@ export function ProfitPlaygroundCard({ monthly, cash }: { monthly: MonthlyRow[];
     const ni = points.slice(-3).map((p) => p.netIncome ?? 0).map((x) => -x);
     return ni.length ? ni.reduce((s, v) => s + v, 0) / ni.length : 0;
   })();
-  const lastCats = monthly[monthly.length - 1]?.expenseCategories ?? {};
+  const lastCats = completeMonthly[completeMonthly.length - 1]?.expenseCategories ?? {};
   const cuts = Object.entries(lastCats)
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1])
@@ -108,12 +130,44 @@ export function ProfitPlaygroundCard({ monthly, cash }: { monthly: MonthlyRow[];
           <div>
             <div className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1.5"><Scissors className="h-3 w-3" /> Fastest ways to extend runway (cut a recurring cost)</div>
             <div className="space-y-1">
-              {cuts.map((c) => (
-                <div key={c.name} className="flex items-center justify-between text-xs" data-testid={`cut-${c.name}`}>
-                  <span className="truncate pr-2">{c.name} <span className="text-muted-foreground">({fmt(c.monthly)}/mo)</span></span>
-                  <span className="text-green-600 dark:text-green-400 whitespace-nowrap font-medium">+{c.daysIfCut} days</span>
-                </div>
-              ))}
+              {cuts.map((c) => {
+                const acct = vendorsByAccount.get(normName(c.name));
+                const isOpen = openCut === c.name;
+                return (
+                  <div key={c.name}>
+                    <div
+                      className={`flex items-center justify-between text-xs ${acct ? "cursor-pointer hover:text-foreground" : ""}`}
+                      onClick={() => acct && setOpenCut(isOpen ? null : c.name)}
+                      data-testid={`cut-${c.name}`}
+                    >
+                      <span className="truncate pr-2 flex items-center gap-1">
+                        {acct ? (
+                          <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                        ) : (
+                          <span className="w-3 shrink-0" />
+                        )}
+                        {c.name} <span className="text-muted-foreground">({fmt(c.monthly)}/mo)</span>
+                      </span>
+                      <span className="text-green-600 dark:text-green-400 whitespace-nowrap font-medium">+{c.daysIfCut} days</span>
+                    </div>
+                    {isOpen && acct && (
+                      <div className="ml-4 mt-1 mb-1.5 space-y-0.5 border-l pl-2" data-testid={`cut-detail-${c.name}`}>
+                        {acct.vendors.slice(0, 12).map((v) => (
+                          <div key={v.payee} className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span className="truncate pr-2">{v.payee} <span className="opacity-60">({v.count}×)</span></span>
+                            <span className="tabular-nums whitespace-nowrap">{fmt(v.total)}</span>
+                          </div>
+                        ))}
+                        {expenseDetail?.window && (
+                          <div className="text-[10px] opacity-60 pt-0.5">
+                            QuickBooks charges {expenseDetail.window.start} → {expenseDetail.window.end} · total over window, not per month
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <p className="text-[11px] text-muted-foreground mt-1">Extra runway if that monthly cost were eliminated, at the current {fmt(burn3)}/mo burn.</p>
           </div>

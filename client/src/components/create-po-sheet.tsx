@@ -83,6 +83,9 @@ export function CreatePOSheet({
   const [selectedItems, setSelectedItems] = useState<SelectedItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [notes, setNotes] = useState("");
+  // "Save for records only": create + finalize the PO without sending it (e.g.
+  // Uline — we order on their site, the PO is just for our records).
+  const [recordOnly, setRecordOnly] = useState(false);
   const [generatedContent, setGeneratedContent] = useState<{
     subject: string;
     body: string;
@@ -136,6 +139,7 @@ export function CreatePOSheet({
       sendVia: "EMAIL" | "SMS";
       notes: string;
       isNewSupplier: boolean;
+      recordOnly?: boolean;
     }) => {
       const res = await apiRequest("POST", '/api/purchase-orders/create-and-send', data);
       if (!res.ok) {
@@ -145,7 +149,12 @@ export function CreatePOSheet({
       return res.json();
     },
     onSuccess: (result: any) => {
-      if (result.ghlResult?.success) {
+      if (result.recordOnly) {
+        toast({
+          title: "PO Saved for Records",
+          description: `PO ${result.purchaseOrder?.poNumber} was saved. Nothing was sent to the supplier.`,
+        });
+      } else if (result.ghlResult?.success) {
         toast({
           title: "PO Created & Sent",
           description: `PO ${result.purchaseOrder?.poNumber} was sent via ${result.ghlResult.sentMethod}`,
@@ -185,6 +194,7 @@ export function CreatePOSheet({
     setSelectedItems([]);
     setSearchQuery("");
     setNotes("");
+    setRecordOnly(false);
     setGeneratedContent(null);
     setHasInitializedPrefill(false);
     onOpenChange(false);
@@ -245,9 +255,9 @@ export function CreatePOSheet({
 
   const canProceedFromSupplier = () => {
     if (isNewSupplier) {
-      return newSupplierName.trim() && (supplierEmail.trim() || supplierPhone.trim());
+      return newSupplierName.trim() && (recordOnly || supplierEmail.trim() || supplierPhone.trim());
     }
-    return selectedSupplierId && (selectedSupplier?.email || selectedSupplier?.phone || supplierEmail || supplierPhone);
+    return selectedSupplierId && (recordOnly || selectedSupplier?.email || selectedSupplier?.phone || supplierEmail || supplierPhone);
   };
 
   const canProceedFromItems = () => {
@@ -264,6 +274,7 @@ export function CreatePOSheet({
       sendVia: "EMAIL",
       notes,
       isNewSupplier,
+      recordOnly,
     });
   };
 
@@ -399,6 +410,22 @@ export function CreatePOSheet({
           )}
         </div>
       )}
+
+      {/* Save for records only — create + finalize the PO without sending it */}
+      <div className="flex items-start gap-2 pt-3 border-t">
+        <Checkbox
+          id="record-only"
+          checked={recordOnly}
+          onCheckedChange={(checked) => setRecordOnly(!!checked)}
+          data-testid="checkbox-record-only"
+        />
+        <div className="grid gap-0.5 leading-tight">
+          <Label htmlFor="record-only">Save for records only (don't send)</Label>
+          <p className="text-xs text-muted-foreground">
+            Creates and files the PO without emailing or texting the supplier — e.g. Uline, where you order on their site. No contact info required.
+          </p>
+        </div>
+      </div>
     </div>
   );
 
@@ -660,7 +687,7 @@ export function CreatePOSheet({
               ) : (
                 <>
                   <Send className="h-4 w-4 mr-2" />
-                  Create & Send PO
+                  {recordOnly ? "Create & Save PO" : "Create & Send PO"}
                 </>
               )}
             </Button>

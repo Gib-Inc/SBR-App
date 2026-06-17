@@ -14950,7 +14950,7 @@ Notes: ${po.notes || 'None'}
   app.post("/api/purchase-orders/create-and-send", requireAuth, async (req: Request, res: Response) => {
     let createdPOId: string | null = null;
     try {
-      const { 
+      const {
         supplierId,
         supplierName,
         supplierEmail,
@@ -14959,6 +14959,7 @@ Notes: ${po.notes || 'None'}
         sendVia,
         notes,
         isNewSupplier,
+        recordOnly,
       } = req.body;
 
       if (!items || !Array.isArray(items) || items.length === 0) {
@@ -14990,8 +14991,14 @@ Notes: ${po.notes || 'None'}
       const contactEmail = supplierEmail || supplier.email;
       const contactPhone = supplierPhone || supplier.phone;
 
-      if (!contactEmail && !contactPhone) {
-        return res.status(400).json({ error: "Supplier must have email or phone to receive PO" });
+      // A PO can be kept purely for our records (e.g. Uline — we order on their
+      // site; the PO is internal). In that mode we don't require a contact and we
+      // never try to send. Otherwise a supplier still needs email or phone.
+      if (!recordOnly && !contactEmail && !contactPhone) {
+        return res.status(400).json({
+          error: 'Supplier has no email or phone. Turn on "Save for records only" to keep the PO without sending it.',
+          canRecordOnly: true,
+        });
       }
 
       // Generate PO number
@@ -15120,6 +15127,44 @@ Notes: ${po.notes || 'None'}
         });
       } catch (logError) {
         console.warn('[PurchaseOrder] Failed to log PO creation:', logError);
+      }
+
+      // Record-only PO: finalize it as a saved record without generating an LLM
+      // message or sending anything. Status SENT so it behaves like a real,
+      // receivable PO; lastSendChannel marks WHY nothing went out.
+      if (recordOnly) {
+        const recordTimestamp = new Date();
+        await storage.updatePurchaseOrder(purchaseOrder.id, {
+          status: 'SENT',
+          sentAt: recordTimestamp,
+          lastSendChannel: 'RECORD_ONLY',
+          lastSendStatus: 'RECORDED',
+          lastSendTimestamp: recordTimestamp,
+          lastSendError: null,
+        });
+        await storage.createAuditLog({
+          actorType: 'USER',
+          actorId: req.session.userId,
+          eventType: 'PO_RECORDED',
+          entityType: 'PURCHASE_ORDER',
+          entityId: purchaseOrder.id,
+          purchaseOrderId: purchaseOrder.id,
+          supplierId: finalSupplierId,
+          success: true,
+          details: {
+            poNumber,
+            supplierName: supplier.name,
+            channel: 'RECORD_ONLY',
+            reason: 'Saved for records — not sent to supplier',
+          },
+        });
+        const recordedPO = await storage.getPurchaseOrder(purchaseOrder.id);
+        const recordedLines = await storage.getPurchaseOrderLinesByPOId(purchaseOrder.id);
+        return res.status(201).json({
+          purchaseOrder: { ...recordedPO, lines: recordedLines },
+          recordOnly: true,
+          ghlResult: { success: true, sentMethod: 'RECORD_ONLY' },
+        });
       }
 
       // Generate PO content via LLM

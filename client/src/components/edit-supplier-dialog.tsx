@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -50,6 +51,7 @@ const supplierFormSchema = z.object({
   notes: z.string().optional().nullable(),
   paymentTerms: z.string().optional().nullable(),
   catalogUrl: z.string().optional().nullable(),
+  recordOnlyDefault: z.boolean().optional(),
 });
 
 type SupplierFormData = z.infer<typeof supplierFormSchema>;
@@ -87,6 +89,7 @@ export function EditSupplierDialog({
       notes: "",
       paymentTerms: "",
       catalogUrl: "",
+      recordOnlyDefault: false,
     },
   });
 
@@ -106,6 +109,7 @@ export function EditSupplierDialog({
         notes: supplier.notes || "",
         paymentTerms: supplier.paymentTerms || "",
         catalogUrl: supplier.catalogUrl || "",
+        recordOnlyDefault: !!(supplier as any).recordOnlyDefault,
       });
     } else if (open && mode === "create") {
       form.reset({
@@ -122,6 +126,7 @@ export function EditSupplierDialog({
         notes: "",
         paymentTerms: "",
         catalogUrl: "",
+        recordOnlyDefault: false,
       });
     }
   }, [open, supplier, mode, form]);
@@ -143,6 +148,7 @@ export function EditSupplierDialog({
         notes: data.notes || null,
         paymentTerms: data.paymentTerms || null,
         catalogUrl: data.catalogUrl || null,
+        recordOnlyDefault: !!data.recordOnlyDefault,
       };
       
       if (mode === "edit" && supplier) {
@@ -553,6 +559,28 @@ function SupplierFormBody({
                         />
                       </FormControl>
                       <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="recordOnlyDefault"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start gap-2 rounded-md border p-3">
+                      <FormControl>
+                        <Checkbox
+                          checked={!!field.value}
+                          onCheckedChange={field.onChange}
+                          data-testid="checkbox-record-only-default"
+                        />
+                      </FormControl>
+                      <div className="grid gap-0.5 leading-tight">
+                        <FormLabel>Order on their site (PO for records only)</FormLabel>
+                        <p className="text-xs text-muted-foreground">
+                          New POs for this supplier default to "Save for records only" — filed but never emailed or texted (e.g. Uline, Amazon, Home Depot).
+                        </p>
+                      </div>
                     </FormItem>
                   )}
                 />

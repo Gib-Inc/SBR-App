@@ -34,6 +34,13 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     sql: `ALTER TABLE items ADD COLUMN IF NOT EXISTS wac_unit_cost real`,
   },
 
+  // "Order on their site" suppliers default the Create-PO sheet to record-only
+  // (file the PO, never send it). Set true for Uline/Amazon/Home Depot/etc.
+  {
+    name: "suppliers.record_only_default",
+    sql: `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS record_only_default boolean NOT NULL DEFAULT false`,
+  },
+
   // Duplicate-order guard. 2026-06 incidents: (1) a re-running sync cloned each
   // order ~10x; (2) the SAME Shopify order was stored under two channels
   // (SHOPIFY + a relabeled AMAZON twin), $27k double-counted. external_order_id

@@ -107,6 +107,7 @@ export function CreatePOSheet({
         setSelectedSupplierId(prefilledSupplierId);
         setSupplierEmail(supplier.email || "");
         setSupplierPhone(supplier.phone || "");
+        setRecordOnly(!!supplier.recordOnlyDefault);
       }
     }
     if (prefilledItems?.length) {
@@ -348,6 +349,7 @@ export function CreatePOSheet({
                 if (supplier) {
                   setSupplierEmail(supplier.email || "");
                   setSupplierPhone(supplier.phone || "");
+                  setRecordOnly(!!supplier.recordOnlyDefault);
                 }
               }}
             >

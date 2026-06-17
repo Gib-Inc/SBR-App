@@ -338,6 +338,11 @@ export const suppliers = pgTable("suppliers", {
   // creates a draft for Matt to review on the dashboard.
   autoSendBriefs: boolean("auto_send_briefs").notNull().default(false),
   lastForecastBriefSentAt: timestamp("last_forecast_brief_sent_at"),
+
+  // "We order on their site" suppliers (Uline, Amazon, Home Depot...). When true,
+  // the Create-PO sheet defaults to "Save for records only" — the PO is filed for
+  // our records and never emailed/texted. Still overridable per PO.
+  recordOnlyDefault: boolean("record_only_default").notNull().default(false),
 });
 
 export const insertSupplierSchema = createInsertSchema(suppliers).omit({ id: true });

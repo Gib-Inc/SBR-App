@@ -627,6 +627,7 @@ export interface IStorage {
 
   // QuickBooks Auth
   getQuickbooksAuth(userId: string): Promise<QuickbooksAuth | null>;
+  getConnectedQuickbooksUserId(): Promise<string | null>;
   getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]>;
   getAllQuickbooksAuths(): Promise<QuickbooksAuth[]>;
   createQuickbooksAuth(auth: InsertQuickbooksAuth): Promise<QuickbooksAuth>;
@@ -3675,6 +3676,9 @@ export class MemStorage implements IStorage {
 
   // QuickBooks Auth (not supported in MemStorage - returns null/throws)
   async getQuickbooksAuth(_userId: string): Promise<QuickbooksAuth | null> {
+    return null;
+  }
+  async getConnectedQuickbooksUserId(): Promise<string | null> {
     return null;
   }
 
@@ -7194,10 +7198,21 @@ export class PostgresStorage implements IStorage {
       refreshToken: auth.refreshToken && isEncrypted(auth.refreshToken) 
         ? decryptToken(auth.refreshToken) 
         : auth.refreshToken,
-      realmId: auth.realmId && isEncrypted(auth.realmId) 
-        ? decryptToken(auth.realmId) 
+      realmId: auth.realmId && isEncrypted(auth.realmId)
+        ? decryptToken(auth.realmId)
         : auth.realmId,
     };
+  }
+  // QuickBooks is a single company connection bound to whoever authorized it.
+  // Background/system callers (PO→Bill sync, schedulers) don't carry that user's
+  // id, so they resolve it here instead of guessing "system".
+  async getConnectedQuickbooksUserId(): Promise<string | null> {
+    const r = await this.db
+      .select({ userId: schema.quickbooksAuth.userId })
+      .from(schema.quickbooksAuth)
+      .where(eq(schema.quickbooksAuth.isConnected, true))
+      .limit(1);
+    return r[0]?.userId ?? null;
   }
 
   async getQuickbooksAuthsByUserId(userId: string): Promise<QuickbooksAuth[]> {

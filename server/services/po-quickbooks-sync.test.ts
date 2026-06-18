@@ -25,6 +25,9 @@ const h = vi.hoisted(() => {
     async getSupplier(id: string) {
       return suppliers.get(id);
     },
+    async getConnectedQuickbooksUserId() {
+      return null;
+    },
     async getAllItems() {
       return items;
     },

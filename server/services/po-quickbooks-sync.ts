@@ -67,7 +67,13 @@ export async function syncApprovedPOToQuickBooks(
       if (itemIds.has(item.id)) itemsMap.set(item.id, item);
     }
 
-    const client = new QuickBooksClient(storage, userId);
+    // QuickBooks is a single connection bound to whoever authorized it; the
+    // caller (a route's session user, or "system" from the backfill) usually
+    // isn't that user. Resolve the connected QB user so the auth lookup succeeds
+    // regardless of who triggers the push (this was the "QuickBooks not
+    // connected" failure on every send/backfill).
+    const qbUserId = (await storage.getConnectedQuickbooksUserId()) || userId;
+    const client = new QuickBooksClient(storage, qbUserId);
     const result = await client.createBillFromPurchaseOrder(po, poLines, supplier, itemsMap);
 
     if (!result.success || !result.billId) {
@@ -237,7 +243,8 @@ export async function markPOBillAsPaidInQuickBooks(
       };
     }
 
-    const client = new QuickBooksClient(storage, userId);
+    const qbUserId = (await storage.getConnectedQuickbooksUserId()) || userId;
+    const client = new QuickBooksClient(storage, qbUserId);
     const result = await client.markBillAsPaid(billRecord.quickbooksBillId);
 
     if (!result.success) {

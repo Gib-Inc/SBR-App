@@ -15269,6 +15269,11 @@ Notes: ${po.notes || 'None'}
           await storage.incrementSupplierPOSentCount(finalSupplierId);
         }
 
+        // Auto-push to QuickBooks as a Bill on send (idempotent, fire-and-forget).
+        void import("./services/po-quickbooks-sync").then(({ firePOBillSyncOnSend }) =>
+          firePOBillSyncOnSend(purchaseOrder.id, req.session.userId || 'system')
+        ).catch(() => {});
+
         // Write audit log for successful send
         await storage.createAuditLog({
           actorType: 'USER',
@@ -16338,6 +16343,11 @@ Notes: ${po.notes || 'None'}
         await storage.incrementSupplierPOSentCount(po.supplierId);
       }
 
+      // Auto-push to QuickBooks as a Bill on send (idempotent, fire-and-forget).
+      void import("./services/po-quickbooks-sync").then(({ firePOBillSyncOnSend }) =>
+        firePOBillSyncOnSend(id, req.session.userId || 'system')
+      ).catch(() => {});
+
       res.json(updated);
     } catch (error: any) {
       console.error("[PurchaseOrder] Error marking purchase order as sent:", error);
@@ -16658,7 +16668,13 @@ Notes: ${po.notes || 'None'}
       if (wasNotSent) {
         await storage.incrementSupplierPOSentCount(po.supplierId);
       }
-      
+
+      // Auto-push to QuickBooks as a Bill now that the PO is sent (idempotent +
+      // fire-and-forget — a QB hiccup never blocks or fails the send).
+      void import("./services/po-quickbooks-sync").then(({ firePOBillSyncOnSend }) =>
+        firePOBillSyncOnSend(id, req.session.userId || 'system')
+      ).catch(() => {});
+
       console.log(`[PurchaseOrder] PO ${po.poNumber} sent via email to ${emailResult.recipientEmail}`);
 
       // Sync to GHL (non-blocking, log errors but don't fail the request)

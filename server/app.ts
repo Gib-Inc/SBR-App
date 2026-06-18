@@ -267,6 +267,20 @@ export default async function runApp(
     }
   })();
 
+  // Drain any already-SENT POs that never reached QuickBooks (sent before
+  // auto-push-on-send existed). Idempotent — no-ops once the queue is empty.
+  // Delayed so QB token refresh + DB are warm; fire-and-forget.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { backfillUnsyncedSentPOs } = await import("./services/po-quickbooks-sync");
+        await backfillUnsyncedSentPOs();
+      } catch (err: any) {
+        console.error("[PurchaseOrder] QuickBooks backfill failed to run:", err?.message ?? err);
+      }
+    })();
+  }, 45_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

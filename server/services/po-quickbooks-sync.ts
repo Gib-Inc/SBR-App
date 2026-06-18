@@ -129,6 +129,64 @@ export async function billPOOnReceipt(
 }
 
 /**
+ * Fire-and-forget QB Bill push for a PO that just reached SENT. Matt opted into
+ * "bill QuickBooks when a PO is sent." Idempotent (syncApprovedPOToQuickBooks
+ * skips if a Bill is already linked) and never throws into the caller, so send
+ * routes can drop this right after the status update without awaiting it.
+ */
+export function firePOBillSyncOnSend(purchaseOrderId: string, userId: string): void {
+  syncApprovedPOToQuickBooks(purchaseOrderId, userId)
+    .then((r) => {
+      if (r.success && !r.skipped) {
+        console.log(`[PurchaseOrder] QuickBooks Bill created on send for PO ${purchaseOrderId} (bill ${r.billId}).`);
+      } else if (!r.success) {
+        console.warn(`[PurchaseOrder] QuickBooks Bill push on send did not complete for PO ${purchaseOrderId}: ${r.reason || r.error}`);
+      }
+    })
+    .catch((err) => {
+      console.error(`[PurchaseOrder] QuickBooks Bill auto-sync error for PO ${purchaseOrderId}:`, err?.message ?? err);
+    });
+}
+
+/**
+ * One-time backfill: push already-SENT/APPROVED POs that never reached
+ * QuickBooks (sent via a path that predated auto-push-on-send). Bounded +
+ * idempotent — syncApprovedPOToQuickBooks skips anything already linked, so this
+ * naturally no-ops once the queue is drained; a failed push simply retries next
+ * boot. Fire-and-forget from startup.
+ */
+export async function backfillUnsyncedSentPOs(
+  maxToPush = 25,
+): Promise<{ pushed: number; failed: number; skipped: number }> {
+  const out = { pushed: 0, failed: 0, skipped: 0 };
+  if (!isQuickBooksConfigured()) return out;
+  try {
+    const all = await storage.getAllPurchaseOrders();
+    const candidates = all
+      .filter((p) => (p.status === "SENT" || p.status === "APPROVED") && !p.externalAccountingId)
+      .slice(0, maxToPush);
+    for (const po of candidates) {
+      try {
+        const r = await syncApprovedPOToQuickBooks(po.id, "system");
+        if (r.success && !r.skipped) out.pushed++;
+        else if (r.skipped) out.skipped++;
+        else out.failed++;
+      } catch {
+        out.failed++;
+      }
+    }
+    if (candidates.length) {
+      console.log(
+        `[PurchaseOrder] QuickBooks backfill: ${out.pushed} pushed, ${out.skipped} skipped, ${out.failed} failed of ${candidates.length} unsynced sent POs.`,
+      );
+    }
+  } catch (err: any) {
+    console.error("[PurchaseOrder] QuickBooks backfill failed:", err?.message ?? err);
+  }
+  return out;
+}
+
+/**
  * Mark the QuickBooks Bill linked to this PO as paid by creating a BillPayment.
  * No-ops gracefully if no QB Bill exists for the PO.
  */

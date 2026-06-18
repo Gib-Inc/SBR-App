@@ -165,16 +165,20 @@ export async function backfillUnsyncedSentPOs(
     const candidates = all
       .filter((p) => (p.status === "SENT" || p.status === "APPROVED") && !p.externalAccountingId)
       .slice(0, maxToPush);
+    const detail: any[] = [];
     for (const po of candidates) {
       try {
         const r = await syncApprovedPOToQuickBooks(po.id, "system");
         if (r.success && !r.skipped) out.pushed++;
         else if (r.skipped) out.skipped++;
         else out.failed++;
-      } catch {
+        detail.push({ po: (po as any).poNumber, success: r.success, skipped: r.skipped, reason: r.reason, error: r.error });
+      } catch (e: any) {
         out.failed++;
+        detail.push({ po: (po as any).poNumber, threw: String(e?.message ?? e) });
       }
     }
+    (out as any).detail = detail;
     if (candidates.length) {
       console.log(
         `[PurchaseOrder] QuickBooks backfill: ${out.pushed} pushed, ${out.skipped} skipped, ${out.failed} failed of ${candidates.length} unsynced sent POs.`,

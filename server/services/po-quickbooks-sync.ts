@@ -180,8 +180,24 @@ export async function backfillUnsyncedSentPOs(
         `[PurchaseOrder] QuickBooks backfill: ${out.pushed} pushed, ${out.skipped} skipped, ${out.failed} failed of ${candidates.length} unsynced sent POs.`,
       );
     }
+    // Persist the outcome so a boot-time run is observable (console logs aren't
+    // queryable). Always logged — even 0 candidates confirms the job fired.
+    await storage.createSystemLog({
+      type: "SCHEDULER",
+      severity: out.failed > 0 ? "WARN" : "INFO",
+      code: "PO_QB_BACKFILL",
+      message: `QuickBooks PO backfill: ${out.pushed} pushed, ${out.skipped} skipped, ${out.failed} failed (${candidates.length} candidates)`,
+      details: out as any,
+    }).catch(() => {});
   } catch (err: any) {
     console.error("[PurchaseOrder] QuickBooks backfill failed:", err?.message ?? err);
+    await storage.createSystemLog({
+      type: "SCHEDULER",
+      severity: "ERROR",
+      code: "PO_QB_BACKFILL_ERROR",
+      message: `QuickBooks PO backfill threw: ${err?.message ?? err}`,
+      details: { error: String(err?.message ?? err) } as any,
+    }).catch(() => {});
   }
   return out;
 }

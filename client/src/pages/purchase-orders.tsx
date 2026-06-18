@@ -599,6 +599,35 @@ export default function PurchaseOrders() {
     },
   });
 
+  // Manual / retry push of a PO to QuickBooks. Surfaces the real result or error
+  // (the auto-push-on-send path is fire-and-forget and can't show you why it failed).
+  const pushQbMutation = useMutation({
+    mutationFn: async (poId: string) => {
+      const res = await apiRequest("POST", `/api/purchase-orders/${poId}/push-to-quickbooks`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to push to QuickBooks");
+      }
+      return res.json();
+    },
+    onSuccess: (result: any, poId: string) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", poId, "bill-status"] });
+      if (selectedPO?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders", selectedPO.id, "composite"] });
+      }
+      toast({
+        title: result?.skipped ? "Already in QuickBooks" : "Pushed to QuickBooks",
+        description: result?.skipped
+          ? (result.reason || "This PO already has a QuickBooks Bill.")
+          : `Bill ${result?.billNumber || result?.billId || ""} created.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({ title: "QuickBooks push failed", description: error.message, variant: "destructive" });
+    },
+  });
+
   const [editingShipping, setEditingShipping] = useState(false);
   const [editingOtherFees, setEditingOtherFees] = useState(false);
   const [shippingValue, setShippingValue] = useState<string>("");
@@ -1210,7 +1239,21 @@ export default function PurchaseOrders() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Accountant (QuickBooks)</p>
-                  <QbBillStatusBadge poId={poDetails.id} enabled={isDetailOpen} />
+                  <div className="flex items-center gap-2">
+                    <QbBillStatusBadge poId={poDetails.id} enabled={isDetailOpen} />
+                    {!(poDetails as any).externalAccountingId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => pushQbMutation.mutate(poDetails.id)}
+                        disabled={pushQbMutation.isPending}
+                        data-testid="button-push-quickbooks"
+                      >
+                        {pushQbMutation.isPending ? "Pushing…" : "Push to QuickBooks"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
 

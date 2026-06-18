@@ -22872,6 +22872,24 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // POST /api/purchase-orders/:id/push-to-quickbooks — manual / retry push of a PO
+  // to QuickBooks as a Bill. Uses the same idempotent sync as auto-push-on-send so
+  // it stamps externalAccountingId, but (unlike the fire-and-forget auto path) it
+  // awaits the result and surfaces the exact error to the UI.
+  app.post("/api/purchase-orders/:id/push-to-quickbooks", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { syncApprovedPOToQuickBooks } = await import("./services/po-quickbooks-sync");
+      const result = await syncApprovedPOToQuickBooks(req.params.id, req.session.userId || 'system');
+      if (!result.success && !result.skipped) {
+        return res.status(502).json({ success: false, error: result.error || 'QuickBooks push failed', reason: result.reason });
+      }
+      res.json(result);
+    } catch (error: any) {
+      console.error("[QuickBooks] Manual push error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to push to QuickBooks" });
+    }
+  });
+
   // GET /api/purchase-orders/:id/bill-status - Get QuickBooks Bill status for PO
   app.get("/api/purchase-orders/:id/bill-status", requireAuth, async (req: Request, res: Response) => {
     try {

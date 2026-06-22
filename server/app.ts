@@ -267,6 +267,17 @@ export default async function runApp(
     }
   })();
 
+  // COUNT.M — arm the weekly per-vendor reorder digest (Monday "what each vendor
+  // needs", draft-for-approval). Self-guards to once per week. Fire-and-forget.
+  void (async () => {
+    try {
+      const { startReorderDigestScheduler } = await import("./services/reorder-digest-service");
+      startReorderDigestScheduler();
+    } catch (err: any) {
+      console.error("[Reorder Digest] Failed to arm:", err?.message ?? err);
+    }
+  })();
+
   // Drain any already-SENT POs that never reached QuickBooks (sent before
   // auto-push-on-send existed). Idempotent — no-ops once the queue is empty.
   // Delayed so QB token refresh + DB are warm; fire-and-forget.

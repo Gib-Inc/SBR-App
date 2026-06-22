@@ -23462,6 +23462,27 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // COUNT.M — the weekly per-vendor reorder digest (Monday "what each vendor
+  // needs"). GET = latest; POST /run = force-generate this week's now.
+  app.get("/api/reorder/digest", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getLatestReorderDigest } = await import("./services/reorder-digest-service");
+      const digest = await getLatestReorderDigest();
+      if (!digest) return res.json({ available: false, message: "No reorder digest generated yet — run it or wait for Monday." });
+      res.json({ available: true, generatedAt: (digest as any).createdAt, ...((digest as any).details || {}) });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to load reorder digest" });
+    }
+  });
+  app.post("/api/reorder/digest/run", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { runWeeklyReorderDigest } = await import("./services/reorder-digest-service");
+      res.json(await runWeeklyReorderDigest({ force: true }));
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to run reorder digest" });
+    }
+  });
+
   // CIPH.R — transaction-level expense breakdown from the latest live QB snapshot:
   // names the vendor behind each P&L category total, so the Playground can show
   // "which subscription to cut" instead of a mystery category lump. Read-only.

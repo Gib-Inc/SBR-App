@@ -281,6 +281,20 @@ export default async function runApp(
     })();
   }, 45_000);
 
+  // One-shot: reconstruct December 2025's COGS transactions + inventory roll-
+  // forward from QuickBooks to settle whether the year-end spike was expensed
+  // replenishment or a real write-down. Self-guards to run only once. Read-only.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { runDecember2025Forensics } = await import("./services/qb-forensics");
+        await runDecember2025Forensics();
+      } catch (err: any) {
+        console.error("[Forensics] December pull failed:", err?.message ?? err);
+      }
+    })();
+  }, 60_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

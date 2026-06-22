@@ -519,6 +519,22 @@ export class QuickBooksClient {
   }
 
   /**
+   * Pull a Balance Sheet as of an arbitrary historical date (read-only). Lets a
+   * forensics pass reconstruct the inventory-asset roll-forward across past
+   * month-ends. Returns the raw QB report or null on failure.
+   */
+  async fetchBalanceSheetAsOf(endDate: string): Promise<any | null> {
+    if (!this.auth) return null;
+    try {
+      return await this.apiRequest<any>(
+        `/reports/BalanceSheet?end_date=${endDate}&accounting_method=Accrual`,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Test the QuickBooks connection
    */
   async testConnection(): Promise<{ success: boolean; message: string; companyName?: string }> {

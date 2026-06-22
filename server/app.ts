@@ -308,6 +308,19 @@ export default async function runApp(
     })();
   }, 80_000);
 
+  // Full-year inventory-account reconciliation: total bought-in vs total written
+  // off via "match Katana" adjustments, to size the recoverable component piece.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { runInventoryReconciliation } = await import("./services/qb-forensics");
+        await runInventoryReconciliation();
+      } catch (err: any) {
+        console.error("[Forensics] Inventory recon failed:", err?.message ?? err);
+      }
+    })();
+  }, 100_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

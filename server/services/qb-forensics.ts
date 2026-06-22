@@ -225,3 +225,67 @@ export async function runCutoffForensics(force = false): Promise<void> {
     }).catch(() => {});
   }
 }
+
+/**
+ * Full-period inventory-account reconciliation. Totals what was bought INTO the
+ * inventory asset (Bills/Checks/CC) vs what was written OUT via "match Katana" /
+ * "35% plug" journal entries, so we can size how much inventory is being expensed
+ * by manual adjustment rather than real cost-of-sales — the potential recoverable
+ * component write-off.
+ */
+export async function runInventoryReconciliation(force = false): Promise<void> {
+  if (!isQuickBooksConfigured()) return;
+  try {
+    if (!force) {
+      const prior = await storage.getAllSystemLogs({ type: "AUDIT" });
+      if (prior.some((l: any) => l.code === "INV_RECON")) return;
+    }
+    const userId = (await storage.getConnectedQuickbooksUserId()) || "system";
+    const client = new QuickBooksClient(storage, userId);
+    if (!(await client.initialize())) return;
+
+    const invAccts = await client.fetchInventoryAccountIds();
+    if (!invAccts.length) {
+      await storage.createSystemLog({ type: "AUDIT", severity: "WARN", code: "INV_RECON", message: "No inventory account found", details: {} as any }).catch(() => {});
+      return;
+    }
+    const gl = await client.fetchGeneralLedger("2025-01-01", "2026-06-20", invAccts.map((a) => a.id));
+    const parsed = gl ? parseExpenseDetail(gl) : { lines: [], colKeys: [], rowCount: 0 };
+
+    const byType: Record<string, { count: number; total: number }> = {};
+    for (const l of parsed.lines) {
+      const t = l.txnType || "(none)";
+      byType[t] = byType[t] || { count: 0, total: 0 };
+      byType[t].count++;
+      byType[t].total = Math.round((byType[t].total + l.amount) * 100) / 100;
+    }
+    const beginning = parsed.lines.find((l) => /beginning/i.test(String(l.date || "")));
+    const writedowns = parsed.lines
+      .filter((l) => l.txnType === "Journal Entry" && /katana|match 35|match 28|inventory adjust|write down|write-down/i.test(l.memo || ""))
+      .map((l) => ({ date: l.date, amount: l.amount, memo: (l.memo || "").slice(0, 130) }))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const totalWritedowns = Math.round(writedowns.reduce((s, w) => s + (w.amount || 0), 0) * 100) / 100;
+    const purchasesIn = Math.round(((byType["Bill"]?.total || 0) + (byType["Check"]?.total || 0) + (byType["Credit Card Expense"]?.total || 0)) * 100) / 100;
+
+    await storage.createSystemLog({
+      type: "AUDIT",
+      severity: "INFO",
+      code: "INV_RECON",
+      message: `Inv recon 2025-01..2026-06: purchasesIn=${purchasesIn}, writedowns=${totalWritedowns} (${writedowns.length} JEs), GL rows ${parsed.rowCount}`,
+      details: {
+        window: "2025-01-01..2026-06-20",
+        beginningBalance: beginning?.amount ?? null,
+        byTxnType: byType,
+        purchasesIntoInventory: purchasesIn,
+        totalKatanaWritedowns: totalWritedowns,
+        writedownEntries: writedowns,
+      } as any,
+    }).catch(() => {});
+  } catch (e: any) {
+    await storage.createSystemLog({
+      type: "AUDIT", severity: "ERROR", code: "INV_RECON_ERROR",
+      message: `Inventory reconciliation failed: ${e?.message ?? e}`,
+      details: { error: String(e?.message ?? e) } as any,
+    }).catch(() => {});
+  }
+}

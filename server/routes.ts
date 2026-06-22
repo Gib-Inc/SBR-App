@@ -23441,6 +23441,27 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
+  // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
+  app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeReorderNeeds, groupNeedsByVendor } = await import("./services/reorder-service");
+      const needs = await computeReorderNeeds(db);
+      const byVendor = groupNeedsByVendor(needs);
+      const summary = {
+        stockout: needs.filter((n) => n.urgency === "STOCKOUT").length,
+        critical: needs.filter((n) => n.urgency === "CRITICAL").length,
+        toOrder: needs.filter((n) => n.needed > 0).length,
+        estCost: Math.round(byVendor.reduce((s, v) => s + v.estCost, 0) * 100) / 100,
+      };
+      res.json({ summary, byVendor, needs });
+    } catch (err: any) {
+      console.error("[Reorder] needs error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute reorder needs" });
+    }
+  });
+
   // CIPH.R — transaction-level expense breakdown from the latest live QB snapshot:
   // names the vendor behind each P&L category total, so the Playground can show
   // "which subscription to cut" instead of a mystery category lump. Read-only.

@@ -19,6 +19,7 @@ interface DigestLine {
   suggestedOrderQty: number;
   urgency: string;
   weeksCover: number | null;
+  seasonalFactor?: number;
 }
 interface VendorNeeds {
   vendorId: string;
@@ -148,6 +149,12 @@ export function ReorderDigestCard() {
                             <span className="text-muted-foreground"> {l.name}</span>
                           </span>
                           <span className="shrink-0 whitespace-nowrap">
+                            {l.seasonalFactor != null && l.seasonalFactor >= 1.15 && (
+                              <span className="mr-1 text-amber-600 dark:text-amber-400" title={`Seasonal: ordering ${Math.round((l.seasonalFactor - 1) * 100)}% more to prep for the peak`}>↑{l.seasonalFactor}×</span>
+                            )}
+                            {l.seasonalFactor != null && l.seasonalFactor <= 0.85 && (
+                              <span className="mr-1 text-muted-foreground" title={`Seasonal: ordering ${Math.round((1 - l.seasonalFactor) * 100)}% less heading into the off-season`}>↓{l.seasonalFactor}×</span>
+                            )}
                             <span className={urgencyClass(l.urgency)}>order {l.suggestedOrderQty}</span>
                             {l.weeksCover != null && (
                               <span className="text-muted-foreground"> · {l.weeksCover}w left</span>

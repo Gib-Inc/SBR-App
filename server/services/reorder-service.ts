@@ -8,11 +8,13 @@
  * Vendor turns it into the per-vendor "weekly needs" list the digest sends.
  */
 import { sql } from "drizzle-orm";
+import { DEFAULT_SEASONAL_INDEX, seasonalAdjustmentFactor } from "./seasonal-index";
 
 type DB = any;
 const rows = (r: any) => r.rows || r;
 const num = (v: any) => (v == null ? 0 : Number(v) || 0);
 const r1 = (n: number) => Math.round(n * 10) / 10;
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export type Urgency = "STOCKOUT" | "CRITICAL" | "LOW" | "OK";
 const URGENCY_RANK: Record<Urgency, number> = { STOCKOUT: 0, CRITICAL: 1, LOW: 2, OK: 3 };
@@ -23,6 +25,9 @@ export interface ReorderNeed {
   leadTimeDays: number; reorderPoint: number; needed: number; suggestedOrderQty: number;
   vendorId: string | null; vendorName: string | null; moq: number; unitCost: number;
   estReorderCost: number; urgency: Urgency;
+  // Seasonal: raw velocity is weeklyDemand; the reorder math runs on the
+  // season-adjusted demand so orders anticipate the spring/fall peaks.
+  seasonalFactor: number; seasonalWeeklyDemand: number;
 }
 
 /**
@@ -97,6 +102,7 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
     WHERE i.type='component'
   `));
 
+  const now = new Date();
   const out: ReorderNeed[] = raw.map((r: any) => {
     const weeklyDemand = num(r.weekly_demand);
     const onHand = num(r.on_hand);
@@ -104,7 +110,11 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
     const leadTimeDays = num(r.lead_days) || 14;
     const moq = num(r.moq);
     const unitCost = num(r.unit_cost);
-    const calc = reorderLine({ weeklyDemand, onHand, onOrder, leadTimeDays, moq });
+    // Anticipate the season: scale current velocity to demand at mid-coverage
+    // (lead + review ahead) vs. the trailing window. Reorder math runs on this.
+    const seasonalFactor = seasonalAdjustmentFactor(DEFAULT_SEASONAL_INDEX, now, leadTimeDays);
+    const seasonalWeeklyDemand = weeklyDemand * seasonalFactor;
+    const calc = reorderLine({ weeklyDemand: seasonalWeeklyDemand, onHand, onOrder, leadTimeDays, moq });
     return {
       itemId: r.id, sku: r.sku, name: r.name,
       weeklyDemand: r1(weeklyDemand), onHand, onOrder, weeksCover: calc.weeksCover,
@@ -113,6 +123,7 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       vendorId: r.supplier_id ?? null, vendorName: r.vendor_name ?? null,
       moq, unitCost, estReorderCost: Math.round(calc.suggestedOrderQty * unitCost * 100) / 100,
       urgency: calc.urgency,
+      seasonalFactor: r2(seasonalFactor), seasonalWeeklyDemand: r1(seasonalWeeklyDemand),
     };
   });
 

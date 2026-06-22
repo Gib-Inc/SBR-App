@@ -62,7 +62,7 @@ export async function runWeeklyReorderDigest(
         byVendor: byVendor.map((v) => ({
           vendorId: v.vendorId, vendorName: v.vendorName, topUrgency: v.topUrgency,
           lineCount: v.lineCount, estCost: v.estCost,
-          lines: v.lines.map((l) => ({ sku: l.sku, name: l.name, suggestedOrderQty: l.suggestedOrderQty, urgency: l.urgency, weeksCover: l.weeksCover })),
+          lines: v.lines.map((l) => ({ sku: l.sku, name: l.name, suggestedOrderQty: l.suggestedOrderQty, urgency: l.urgency, weeksCover: l.weeksCover, seasonalFactor: l.seasonalFactor })),
         })),
       } as any,
     }).catch(() => {});

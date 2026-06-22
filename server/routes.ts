@@ -23462,6 +23462,32 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // COUNT.M — order frequency / reorder cadence per component: forward-projected
+  // "how often we'll order this" (velocity + MOQ) plus backward-looking actuals
+  // from our own purchase_orders (days between real POs, avg order size).
+  app.get("/api/reorder/cadence", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeOrderCadence } = await import("./services/reorder-service");
+      const cadence = await computeOrderCadence(db);
+      const withDemand = cadence.filter((c) => c.weeklyDemand > 0);
+      const opy = withDemand.map((c) => c.ordersPerYear).filter((x): x is number => x != null).sort((a, b) => a - b);
+      const medianOrdersPerYear = opy.length ? opy[Math.floor((opy.length - 1) / 2)] : null;
+      res.json({
+        cadence,
+        summary: {
+          components: cadence.length,
+          active: withDemand.length,
+          withPoHistory: cadence.filter((c) => c.poOrderCount > 0).length,
+          medianOrdersPerYear,
+        },
+      });
+    } catch (err: any) {
+      console.error("[Reorder] cadence error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute order cadence" });
+    }
+  });
+
   // COUNT.M — the weekly per-vendor reorder digest (Monday "what each vendor
   // needs"). GET = latest; POST /run = force-generate this week's now.
   app.get("/api/reorder/digest", requireAuth, async (_req: Request, res: Response) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reorderLine, groupNeedsByVendor, type ReorderNeed } from "./reorder-service";
+import { reorderLine, groupNeedsByVendor, orderCadence, type ReorderNeed } from "./reorder-service";
 
 describe("reorderLine", () => {
   it("flags a stockout and refills to target", () => {
@@ -28,6 +28,31 @@ describe("reorderLine", () => {
     const r = reorderLine({ weeklyDemand: 40, onHand: 0, onOrder: 200, leadTimeDays: 14, moq: 0 });
     expect(r.needed).toBe(0); // 200 on order already covers the 160 reorder point
     expect(r.urgency).toBe("OK");
+  });
+});
+
+describe("orderCadence", () => {
+  it("projects cadence from velocity when MOQ is not binding", () => {
+    // demand 40, 14d lead => batch = ceil(40 × (2+1+2)) = 200; every 5 weeks; ~10.4×/yr
+    const c = orderCadence({ weeklyDemand: 40, moq: 0, leadTimeDays: 14 });
+    expect(c.projectedOrderQty).toBe(200);
+    expect(c.weeksBetweenOrders).toBe(5);
+    expect(c.ordersPerYear).toBe(10.4);
+  });
+
+  it("orders rarely when MOQ dwarfs demand", () => {
+    // demand 5, 7d lead => batch = ceil(5 × 4) = 20, floored up to MOQ 500
+    const c = orderCadence({ weeklyDemand: 5, moq: 500, leadTimeDays: 7 });
+    expect(c.projectedOrderQty).toBe(500);
+    expect(c.weeksBetweenOrders).toBe(100);
+    expect(c.ordersPerYear).toBe(0.5);
+  });
+
+  it("returns nulls (not NaN) for a dead SKU", () => {
+    const c = orderCadence({ weeklyDemand: 0, moq: 50, leadTimeDays: 14 });
+    expect(c.projectedOrderQty).toBe(0);
+    expect(c.weeksBetweenOrders).toBeNull();
+    expect(c.ordersPerYear).toBeNull();
   });
 });
 

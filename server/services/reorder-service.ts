@@ -145,3 +145,77 @@ export function groupNeedsByVendor(needs: ReorderNeed[]): VendorNeeds[] {
   return Array.from(map.values()).sort((a, b) =>
     URGENCY_RANK[a.topUrgency] - URGENCY_RANK[b.topUrgency] || b.estCost - a.estCost);
 }
+
+// ── Order frequency / reorder cadence ──────────────────────────────────────
+// "How often do we order each component?" Two lenses:
+//  • FORWARD (projected): from velocity + MOQ — how often a buy will trigger at
+//    today's sell-through. Computable now; this is the actionable number.
+//  • BACKWARD (actual): from our own purchase_orders — days between real POs.
+//    Sparse until PO history accumulates (we have only weeks of POs today).
+
+export interface OrderCadence {
+  itemId: string; sku: string; name: string; vendorName: string | null;
+  weeklyDemand: number; projectedOrderQty: number;
+  weeksBetweenOrders: number | null; ordersPerYear: number | null;
+  poOrderCount: number; poFirstOrderDate: string | null; poLastOrderDate: string | null;
+  poAvgDaysBetween: number | null; poAvgOrderQty: number | null;
+}
+
+/**
+ * Forward-looking cadence for one component. A replenishment batch covers demand
+ * over (lead + 1 review + 2 safety) weeks, floored at MOQ; how often we reorder
+ * is that batch divided by weekly demand. MOQ that dwarfs demand => order rarely.
+ */
+export function orderCadence(input: { weeklyDemand: number; moq: number; leadTimeDays: number }):
+  { projectedOrderQty: number; weeksBetweenOrders: number | null; ordersPerYear: number | null } {
+  const demand = Math.max(0, input.weeklyDemand || 0);
+  const moq = Math.max(1, input.moq || 1);
+  const leadWeeks = Math.max(0, input.leadTimeDays || 14) / 7;
+  if (demand <= 0) return { projectedOrderQty: 0, weeksBetweenOrders: null, ordersPerYear: null };
+  let batch = Math.ceil(demand * (leadWeeks + 1 + 2));
+  if (batch < moq) batch = moq;
+  const weeksBetween = r1(batch / demand);
+  return {
+    projectedOrderQty: batch,
+    weeksBetweenOrders: weeksBetween,
+    ordersPerYear: weeksBetween > 0 ? r1(52 / weeksBetween) : null,
+  };
+}
+
+export async function computeOrderCadence(db: DB): Promise<OrderCadence[]> {
+  const needs = await computeReorderNeeds(db);
+
+  // Backward-looking PO actuals per component (cancelled POs excluded).
+  const poRows = rows(await db.execute(sql`
+    SELECT pol.item_id,
+           count(DISTINCT po.id)::int AS po_count,
+           min(po.order_date)::date::text AS first_order,
+           max(po.order_date)::date::text AS last_order,
+           round(avg(GREATEST(COALESCE(pol.qty_ordered,0),0))::numeric, 1) AS avg_qty,
+           CASE WHEN count(DISTINCT po.id) >= 2
+                THEN round((extract(epoch FROM (max(po.order_date) - min(po.order_date))) / 86400.0
+                            / NULLIF(count(DISTINCT po.id) - 1, 0))::numeric, 1)
+                ELSE NULL END AS avg_days_between
+    FROM purchase_order_lines pol JOIN purchase_orders po ON po.id = pol.purchase_order_id
+    WHERE COALESCE(po.status,'') NOT IN ('CANCELLED','cancelled','canceled')
+    GROUP BY pol.item_id`));
+  const poByItem = new Map<string, any>();
+  for (const r of poRows) poByItem.set(r.item_id, r);
+
+  return needs
+    .map((n) => {
+      const cad = orderCadence({ weeklyDemand: n.weeklyDemand, moq: n.moq, leadTimeDays: n.leadTimeDays });
+      const po = poByItem.get(n.itemId);
+      return {
+        itemId: n.itemId, sku: n.sku, name: n.name, vendorName: n.vendorName,
+        weeklyDemand: n.weeklyDemand, projectedOrderQty: cad.projectedOrderQty,
+        weeksBetweenOrders: cad.weeksBetweenOrders, ordersPerYear: cad.ordersPerYear,
+        poOrderCount: po ? num(po.po_count) : 0,
+        poFirstOrderDate: po?.first_order ?? null,
+        poLastOrderDate: po?.last_order ?? null,
+        poAvgDaysBetween: po?.avg_days_between != null ? num(po.avg_days_between) : null,
+        poAvgOrderQty: po?.avg_qty != null ? num(po.avg_qty) : null,
+      };
+    })
+    .sort((a, b) => (b.ordersPerYear ?? 0) - (a.ordersPerYear ?? 0));
+}

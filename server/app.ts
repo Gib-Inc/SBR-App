@@ -332,6 +332,21 @@ export default async function runApp(
     })();
   }, 100_000);
 
+  // COUNT.M — one-shot QuickBooks demand-history diagnostic: run the built-but-
+  // never-run 3-year sales sync once and log a readable summary (does QB carry
+  // item-level history, how deep, and what are the item names) so we can decide
+  // whether to wire QB seasonality into reorder. Self-guards to a single run.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { runQbDemandDiagnostic } = await import("./services/qb-demand-diagnostic");
+        await runQbDemandDiagnostic();
+      } catch (err: any) {
+        console.error("[QB-Diag] Demand diagnostic failed to run:", err?.message ?? err);
+      }
+    })();
+  }, 120_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

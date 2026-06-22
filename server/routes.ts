@@ -23424,6 +23424,23 @@ Generate only the email body text, no subject line.`;
   // CIPH.R Finances tab — monthly P&L series + balance-sheet snapshot + the full
   // balance-sheet position (debt stack/equity). balanceSheet currently comes from
   // the seeded accountant export; switch to live QuickBooks once connected.
+  // CIPH.R — real BOM-based COGS by month (from costed sales × item WAC) plus a
+  // budget at the measured cost rate. The measured number that retires the manual
+  // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
+  app.get("/api/finances/cogs-actual", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeMonthlyCogs, projectCogsBudget } = await import("./services/cogs-service");
+      const months = await computeMonthlyCogs(db);
+      const latest = months[months.length - 1];
+      const scenarioRevenue = _req.query.revenue ? Number(_req.query.revenue) : (latest?.lineRevenue || 0);
+      res.json({ months, budget: projectCogsBudget(months, scenarioRevenue), scenarioRevenue });
+    } catch (err: any) {
+      console.error("[Finances] cogs-actual error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute COGS" });
+    }
+  });
+
   // CIPH.R — transaction-level expense breakdown from the latest live QB snapshot:
   // names the vendor behind each P&L category total, so the Playground can show
   // "which subscription to cut" instead of a mystery category lump. Read-only.

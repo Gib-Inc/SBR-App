@@ -347,6 +347,25 @@ export default async function runApp(
     })();
   }, 120_000);
 
+  // COUNT.M — one-shot Shopify historical backfill: pull real per-SKU orders
+  // back to 2024 into sales_order_lines so reorder velocity / COGS / cadence
+  // can see actual seasonality (the app only holds ~4.5 months natively, and
+  // QuickBooks has no item-level history). Safe (pure inserts, isHistorical),
+  // idempotent per order, self-guards to one completed run, and probes the
+  // read_all_orders scope before paging. Fire-and-forget.
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { runShopifyHistoricalBackfill } = await import("./services/shopify-historical-backfill");
+        const r = await runShopifyHistoricalBackfill({ dateFrom: "2024-01-01" });
+        if (r.ran) console.log(`[Shopify Backfill] ${r.inserted} historical orders back to ${r.oldestOrderReturned}.`);
+        else if (r.scopeLimited) console.warn("[Shopify Backfill] Token scope-limited — CSV export needed.");
+      } catch (err: any) {
+        console.error("[Shopify Backfill] Failed to run:", err?.message ?? err);
+      }
+    })();
+  }, 150_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

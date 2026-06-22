@@ -534,6 +534,35 @@ export class QuickBooksClient {
     }
   }
 
+  /** Account IDs whose name or sub-type marks them as inventory (read-only). */
+  async fetchInventoryAccountIds(): Promise<Array<{ id: string; name: string }>> {
+    if (!this.auth) return [];
+    try {
+      const q = encodeURIComponent("SELECT * FROM Account WHERE Active = true MAXRESULTS 1000");
+      const r = await this.apiRequest<{ QueryResponse: { Account?: Array<{ Id: string; Name?: string; AccountSubType?: string }> } }>(
+        `/query?query=${q}`,
+      );
+      return (r.QueryResponse?.Account || [])
+        .filter((a) => /inventory/i.test(a.Name || "") || /inventory/i.test(a.AccountSubType || ""))
+        .map((a) => ({ id: a.Id, name: a.Name || a.Id }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** General Ledger detail for the given accounts over a date range (read-only). */
+  async fetchGeneralLedger(startDate: string, endDate: string, accountIds: string[]): Promise<any | null> {
+    if (!this.auth) return null;
+    try {
+      const acct = accountIds.length ? `&account=${encodeURIComponent(accountIds.join(","))}` : "";
+      return await this.apiRequest<any>(
+        `/reports/GeneralLedger?start_date=${startDate}&end_date=${endDate}&accounting_method=Accrual${acct}`,
+      );
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Test the QuickBooks connection
    */

@@ -295,6 +295,19 @@ export default async function runApp(
     })();
   }, 60_000);
 
+  // Cutoff + in-transit test: was the Dec-31-dated write-down built from a Jan-7
+  // count, and did replenishment / January sales get swept into December?
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { runCutoffForensics } = await import("./services/qb-forensics");
+        await runCutoffForensics();
+      } catch (err: any) {
+        console.error("[Forensics] Cutoff pull failed:", err?.message ?? err);
+      }
+    })();
+  }, 80_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

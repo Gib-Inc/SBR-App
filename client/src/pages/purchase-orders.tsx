@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ReorderDigestCard } from "@/components/reorder-digest-card";
 import {
   Select,
   SelectContent,
@@ -774,6 +775,8 @@ export default function PurchaseOrders() {
           )}
         </div>
       </div>
+
+      {activeTab === "live" && <ReorderDigestCard />}
 
       {activeTab === "live" && (
         <div className="grid shrink-0 gap-4 md:grid-cols-4">

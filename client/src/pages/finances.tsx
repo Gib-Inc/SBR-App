@@ -69,6 +69,7 @@ function Kpi({ label, value, sub, tone = "" }: { label: string; value: string; s
 
 export default function Finances() {
   const { data, isLoading } = useQuery<Overview>({ queryKey: ["/api/finances/overview"] });
+  const { data: expenseDetail } = useQuery<{ available?: boolean; window?: { start: string; end: string } | null; byAccount?: any[] }>({ queryKey: ["/api/finances/expense-detail"] });
   const monthly = data?.monthly ?? [];
   const bs = data?.balanceSheet;
 
@@ -234,7 +235,7 @@ export default function Finances() {
           <InventoryAnticipationCard />
 
           {/* Profit & savings playground */}
-          <ProfitPlaygroundCard monthly={monthly} cash={cash} />
+          <ProfitPlaygroundCard monthly={monthly} cash={cash} expenseDetail={expenseDetail} />
 
           {/* Debt stack */}
           {bs && (

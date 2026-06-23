@@ -9,6 +9,7 @@ import { SeasonalSpendForecastCard } from "@/components/seasonal-spend-forecast-
 import { ProductProfitabilityCard } from "@/components/product-profitability-card";
 import { SeasonalDemandCard } from "@/components/seasonal-demand-card";
 import { YoYCard } from "@/components/yoy-card";
+import { PathToProfitabilityCard } from "@/components/path-to-profitability-card";
 import { ShopifyCashCard } from "@/components/shopify-cash-card";
 import { CreditLinesCard } from "@/components/credit-lines-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
@@ -245,6 +246,9 @@ export default function Finances() {
 
           {/* Year-over-year sales vs ad spend (same-period) */}
           <YoYCard />
+
+          {/* Path to profitability — interactive standard-to-success */}
+          <PathToProfitabilityCard />
 
           {/* Per-SKU product profitability (real BOM cost) */}
           <ProductProfitabilityCard />

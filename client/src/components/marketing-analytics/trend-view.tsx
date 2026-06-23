@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { TrendingUp, TrendingDown, Minus, Megaphone, Layers, UploadCloud, Loader2 } from "lucide-react";
+import { BreakevenScoreboardCard } from "./breakeven-scoreboard-card";
 
 /**
  * TrendView — "are things getting better, month over month?" Channel and campaign
@@ -144,6 +145,8 @@ export function TrendView() {
 
   return (
     <div className="space-y-5">
+      <BreakevenScoreboardCard />
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base flex items-center gap-2"><Layers className="h-4 w-4" /> By channel — month over month</CardTitle>

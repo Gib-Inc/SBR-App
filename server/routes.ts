@@ -25405,6 +25405,19 @@ Generate only the email body text, no subject line.`;
 
   // VECT.R — month-over-month marketing trend (channel + campaign, with deltas vs
   // prior month and the 8x target). "Are things getting better?"
+  // CIPH.R — the ONE reconciled marketing number: settled revenue ÷ QB marketing
+  // (MER) and ÷ ad-platform media (media ROAS), both vs the 5x breakeven.
+  app.get("/api/marketing/breakeven-scoreboard", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getBreakevenScoreboard } = await import("./services/marketing-breakeven-service");
+      res.json({ success: true, ...(await getBreakevenScoreboard(db, Date.now())) });
+    } catch (error: any) {
+      console.error("[Breakeven] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load breakeven scoreboard" });
+    }
+  });
+
   app.get("/api/marketing/trend", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

@@ -242,6 +242,8 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS last_forecast_brief_sent_at TIMESTAMP`,
     // Deep-link template for online vendors (reorder list links each line to its product page).
     `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS product_url_template TEXT`,
+    // Build shops (FX/Acu-Form/Pednar) — their open POs show on the Builds page.
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS is_build_shop BOOLEAN NOT NULL DEFAULT FALSE`,
     // Per-item seasonal demand multiplier.
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS seasonal_multiplier REAL NOT NULL DEFAULT 1.0`,
     // Products page priority grouping ('core_build' | 'combo' |

@@ -322,6 +322,9 @@ export const suppliers = pgTable("suppliers", {
   // supplier_sku (vendor part number), e.g. "https://www.mcmaster.com/{sku}/".
   // Lets the reorder list link each line straight to its product page.
   productUrlTemplate: text("product_url_template"),
+  // Build shop (contract manufacturer/fabricator like FX, Acu-Form, Pednar): its
+  // open POs are tracked on the Builds page as "what's being built".
+  isBuildShop: boolean("is_build_shop").notNull().default(false),
   logoUrl: text("logo_url"),
   ghlContactId: text("ghl_contact_id"),
   // Supplier metrics for AI supplier selection

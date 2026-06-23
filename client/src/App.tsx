@@ -52,6 +52,7 @@ import RawMaterials from "@/pages/raw-materials";
 import CountInventory from "@/pages/count-inventory";
 import ReceiveStock from "@/pages/receive-stock";
 import Incoming from "@/pages/incoming";
+import Builds from "@/pages/builds";
 import SkuMappings from "@/pages/sku-mappings";
 import LogOrder from "@/pages/log-order";
 import Backorders from "@/pages/backorders";
@@ -162,6 +163,7 @@ function AuthenticatedApp() {
                     <Route path="/count-inventory" component={CountInventory} />
                     <Route path="/receive-stock" component={ReceiveStock} />
                     <Route path="/incoming" component={Incoming} />
+                    <Route path="/builds" component={Builds} />
                     <Route path="/sku-mappings" component={SkuMappings} />
                     <Route path="/log-order" component={LogOrder} />
                     <Route path="/in-house-shipping" component={InHouseShipping} />

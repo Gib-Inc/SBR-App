@@ -14721,6 +14721,34 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // COUNT.M Build Tracker — open builds at the build shops (FX/Acu-Form/Pednar),
+  // grouped by shop with stage + quantities + aging, plus the buildable item list.
+  app.get("/api/build-tracker", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getBuildTracker } = await import("./services/build-tracker-service");
+      const view = await getBuildTracker(db, Date.now());
+      res.json({ success: true, ...view });
+    } catch (error: any) {
+      console.error("[Build Tracker] Error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load build tracker" });
+    }
+  });
+
+  // Start a build — creates an open PO to the shop for an item + qty, at a build stage.
+  app.post("/api/build-tracker/start", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { startBuild } = await import("./services/build-tracker-service");
+      const { shopId, itemId, qty, dueDate, stage } = req.body || {};
+      const result = await startBuild(db, storage, { shopId, itemId, qty, dueDate, stage }, Date.now());
+      res.status(result.ok ? 201 : 400).json(result);
+    } catch (error: any) {
+      console.error("[Build Tracker] Start error:", error);
+      res.status(500).json({ ok: false, error: error.message || "Failed to start build" });
+    }
+  });
+
   app.post("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     let createdPOId: string | null = null;
     try {
@@ -15834,10 +15862,11 @@ Notes: ${po.notes || 'None'}
   // Closes the entire PO regardless of partial qty. Body:
   //   { quantityReceived: number, notes?: string }
   // For FX POs (supplierId='1') with finished_product lines, runs the
-  // RECEIVED_FROM_FX flow per line: fxInProcessQty -= line.qtyOrdered
-  // (floor 0), hildaleQty += quantityReceived (split evenly across finished
-  // lines if multiple). For component POs, currentStock += quantityReceived
-  // (split evenly across component lines).
+  // RECEIVED_FROM_FX flow per line: fxInProcessQty -= received (floor 0),
+  // hildaleQty += received — both use the actual received qty so partial
+  // receives conserve units. For component POs, currentStock += received.
+  // Each line's received qty is clamped to its remaining balance (no
+  // over-receiving), and an already-received PO is rejected (idempotent).
   //
   // The "received qty" is treated as a single number for the whole PO since
   // Clarence's typical case is single-line. For multi-line POs we do a
@@ -15855,6 +15884,12 @@ Notes: ${po.notes || 'None'}
 
       const po = await storage.getPurchaseOrder(id);
       if (!po) return res.status(404).json({ error: "Purchase order not found" });
+
+      // Idempotency: never move inventory twice. A PO already received here OR via the
+      // po-status PATCH (which sets po_status='received') must not receive again.
+      if ((po.status ?? "") === "RECEIVED" || ((po as any).poStatus ?? "") === "received") {
+        return res.status(409).json({ error: "This PO is already received." });
+      }
 
       const lines = await storage.getPurchaseOrderLinesByPOId(id);
       if (lines.length === 0) {
@@ -15890,15 +15925,19 @@ Notes: ${po.notes || 'None'}
       const applied: Array<{ sku: string; received: number; effect: string }> = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        const recv = Math.max(0, allocated[i] ?? 0);
+        // Clamp to the line's remaining balance — never receive more than was ordered
+        // (over-receiving would inject phantom stock).
+        const remainingForLine = Math.max(0, (line.qtyOrdered ?? 0) - (line.qtyReceived ?? 0));
+        const recv = Math.min(Math.max(0, allocated[i] ?? 0), remainingForLine);
         if (recv === 0) continue;
         const item = await storage.getItem(line.itemId);
         if (!item) continue;
 
         if (isFx && item.type === "finished_product") {
           const fxBefore = item.fxInProcessQty ?? 0;
-          const lineQty = line.qtyOrdered ?? 0;
-          const fxAfter = Math.max(0, fxBefore - lineQty);
+          // Decrement fx_in_process by what was actually received (symmetric with the
+          // hildale credit) so partial receives don't zero out units still in process.
+          const fxAfter = Math.max(0, fxBefore - recv);
           const hildaleAfter = (item.hildaleQty ?? 0) + recv;
           await storage.updateItem(item.id, {
             fxInProcessQty: fxAfter,

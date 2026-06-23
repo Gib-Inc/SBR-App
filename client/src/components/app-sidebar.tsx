@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing, ListOrdered, Link2, ClipboardEdit, DollarSign, FileUp, Gauge } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing, ListOrdered, Link2, ClipboardEdit, DollarSign, FileUp, Gauge, Hammer } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -43,6 +43,7 @@ const supplyChainItems = [
   { title: "Production",       url: "/production",       icon: Factory       },
   { title: "Receive Stock",    url: "/receive-stock",    icon: PackagePlus   },
   { title: "Incoming",         url: "/incoming",         icon: Truck         },
+  { title: "Builds",           url: "/builds",           icon: Hammer        },
   { title: "Reorder",          url: "/reorder-alerts",   icon: BellRing      },
   { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
   { title: "Suppliers",        url: "/suppliers",        icon: Building2     },

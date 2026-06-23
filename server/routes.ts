@@ -23881,6 +23881,21 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — LIVE current-period Shopify sales (replaces the static SHOPIFY_PERIOD
+  // snapshot). Reads sales_orders (Shopify channel) for this month-to-date so the
+  // card never goes stale. Shopify only — Amazon is excluded by design.
+  app.get("/api/finances/shopify-period", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeShopifyPeriod } = await import("./services/shopify-period-service");
+      const view = await computeShopifyPeriod(db, Date.now());
+      res.json({ success: true, ...view });
+    } catch (error: any) {
+      console.error('[CIPH.R] Shopify period error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load Shopify period' });
+    }
+  });
+
   // CIPH.R Unified Performance Hub — merged sales + ad performance for a window.
   // Blended ROAS, MER, and True Net Margin per SKU, with per-platform precedence
   // (live ad_metrics_daily wins; uploaded snapshots only fill missing platforms)

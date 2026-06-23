@@ -4,10 +4,13 @@
  * pivotQty (the Extensiv 3PL count); restocks update pivot but not afs, so afs
  * drifts low. This card flags those gaps so a count can true them up.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Scale, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Scale, AlertTriangle, Wand2 } from "lucide-react";
 
 type VarianceFlag = "OK" | "AFS_STALE" | "AFS_AHEAD" | "NEGATIVE";
 interface Row {
@@ -31,7 +34,22 @@ function flagBadge(flag: VarianceFlag) {
 }
 
 export function StockVarianceCard() {
+  const { toast } = useToast();
   const { data, isLoading } = useQuery<Resp>({ queryKey: ["/api/inventory/stock-variance"] });
+
+  const trueUp = useMutation({
+    mutationFn: async (itemId?: string) => {
+      const r = await apiRequest("POST", "/api/inventory/stock-variance/true-up", itemId ? { itemId } : {});
+      return r.json();
+    },
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory/stock-variance"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/inventory/items"] });
+      toast({ title: res?.trued ? `Trued up ${res.trued} product${res.trued === 1 ? "" : "s"} to the 3PL count` : "Nothing to true up" });
+    },
+    onError: (e: Error) => toast({ title: "True-up failed", description: e.message, variant: "destructive" }),
+  });
+
   if (isLoading || !data) return null;
   const flagged = data.rows.filter((r) => r.flag !== "OK");
   if (flagged.length === 0) {
@@ -47,11 +65,26 @@ export function StockVarianceCard() {
 
   return (
     <Card data-testid="card-stock-variance">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-base"><Scale className="h-4 w-4" /> Stock variance</CardTitle>
-        <CardDescription>
-          Where the app's sellable count drifted from the 3PL physical. These are units sitting at Pivot that the app isn't counting as sellable.
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base"><Scale className="h-4 w-4" /> Stock variance</CardTitle>
+          <CardDescription>
+            Where the app's sellable count drifted from the 3PL physical. These are units sitting at Pivot that the app isn't counting as sellable.
+          </CardDescription>
+        </div>
+        {data.summary.afsStale > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="shrink-0"
+            onClick={() => trueUp.mutate(undefined)}
+            disabled={trueUp.isPending}
+            data-testid="button-trueup-all"
+          >
+            <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+            True up all to 3PL
+          </Button>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
@@ -76,6 +109,7 @@ export function StockVarianceCard() {
                 <th className="px-2 py-1.5 text-right font-medium">Sellable</th>
                 <th className="px-2 py-1.5 text-right font-medium">Drift</th>
                 <th className="px-3 py-1.5 text-right font-medium">Flag</th>
+                <th className="px-2 py-1.5 text-right font-medium"></th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -92,6 +126,20 @@ export function StockVarianceCard() {
                     {r.drift > 0 ? "+" : ""}{r.drift}
                   </td>
                   <td className="px-3 py-1.5 text-right">{flagBadge(r.flag)}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    {r.flag === "AFS_STALE" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => trueUp.mutate(r.itemId)}
+                        disabled={trueUp.isPending}
+                        data-testid={`button-trueup-${r.sku}`}
+                      >
+                        True up
+                      </Button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -23440,6 +23440,45 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // COUNT.M — true the sellable counter up to the 3PL physical for stale items.
+  // Uses MANUAL_ADJUSTMENT at PIVOT (adjusts availableForSaleQty only, NO balance-
+  // sheet impact — the units already exist at the 3PL). Body: { itemId } for one,
+  // omitted for all AFS_STALE items.
+  app.post("/api/inventory/stock-variance/true-up", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeStockVariance } = await import("./services/stock-variance-service");
+      const inventoryMovement = new InventoryMovement(storage);
+      const userId = (req.session as any).userId;
+      const targetId = typeof req.body?.itemId === "string" ? req.body.itemId : null;
+
+      const { rows } = await computeStockVariance(db);
+      const targets = rows.filter((r) => r.flag === "AFS_STALE" && (!targetId || r.itemId === targetId));
+
+      const trued: any[] = [];
+      const failed: any[] = [];
+      for (const r of targets) {
+        const delta = r.pivot - r.afs;
+        if (delta <= 0) continue;
+        const result = await inventoryMovement.apply({
+          eventType: "MANUAL_ADJUSTMENT",
+          itemId: r.itemId,
+          quantity: delta,
+          location: "PIVOT",
+          source: "VARIANCE_TRUEUP",
+          userId,
+          notes: `Variance true-up: sellable set to 3PL physical (${r.afs} → ${r.pivot})`,
+        });
+        if (result.success) trued.push({ sku: r.sku, from: r.afs, to: r.pivot });
+        else failed.push({ sku: r.sku, error: result.error });
+      }
+      res.json({ trued: trued.length, items: trued, failed });
+    } catch (err: any) {
+      console.error("[Inventory] stock-variance true-up error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to true up stock variance" });
+    }
+  });
+
   // VECT.R — year-over-year sales + ad spend, same-period normalized (this YTD
   // vs the matching slice of last year). Are we up or down, and is spend
   // outpacing sales? Blended (no full prior-year per-channel history exists).

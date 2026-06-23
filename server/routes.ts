@@ -23477,6 +23477,19 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // COUNT.M — the seasonal demand index (12 monthly multipliers) for charting.
+  app.get("/api/reorder/seasonal-index", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { DEFAULT_SEASONAL_INDEX } = await import("./services/seasonal-index");
+      res.json({
+        index: DEFAULT_SEASONAL_INDEX,
+        basis: "Shopify net sales — calendar 2025 + Jul 2024–Jun 2025, detrended (annual avg = 1.0×)",
+      });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to load seasonal index" });
+    }
+  });
+
   // COUNT.M — order frequency / reorder cadence per component: forward-projected
   // "how often we'll order this" (velocity + MOQ) plus backward-looking actuals
   // from our own purchase_orders (days between real POs, avg order size).

@@ -8,6 +8,9 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine,
+} from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TrendingUp, AlertTriangle } from "lucide-react";
@@ -40,6 +43,15 @@ function marginClass(m: number | null): string {
   return "text-foreground";
 }
 
+// Health colors for the margin bars: red losing, amber thin, primary ok, emerald strong.
+function barColor(m: number | null): string {
+  if (m == null) return "hsl(var(--muted-foreground))";
+  if (m < 0) return "#dc2626";
+  if (m < 15) return "#d97706";
+  if (m < 40) return "hsl(var(--primary))";
+  return "#059669";
+}
+
 export function ProductProfitabilityCard() {
   const [period, setPeriod] = useState(PERIODS[0]);
   const { data, isLoading } = useQuery<ProfitResponse>({
@@ -49,6 +61,13 @@ export function ProductProfitabilityCard() {
   const s = data?.summary;
   const rows = data?.rows || [];
   const losers = rows.filter((r) => r.marginPct != null && r.marginPct < 0);
+  // Top sellers by revenue, drawn in margin order so winners and losers separate cleanly.
+  const chartRows = [...rows]
+    .filter((r) => r.marginPct != null)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 12)
+    .sort((a, b) => (b.marginPct ?? 0) - (a.marginPct ?? 0))
+    .map((r) => ({ label: r.sku, marginPct: r.marginPct as number }));
 
   return (
     <Card data-testid="card-product-profitability">
@@ -104,6 +123,32 @@ export function ProductProfitabilityCard() {
                   {losers.slice(0, 4).map((l) => `${l.sku} (${l.marginPct}%)`).join(" · ")}
                   {losers.length > 4 ? ` +${losers.length - 4} more` : ""}
                 </p>
+              </div>
+            )}
+
+            {chartRows.length > 0 && (
+              <div className="rounded-lg border p-2">
+                <p className="mb-1 px-1 text-xs text-muted-foreground">Margin by top product (revenue-weighted)</p>
+                <div style={{ height: chartRows.length * 26 + 24 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartRows} layout="vertical" margin={{ top: 0, right: 36, bottom: 0, left: 4 }}>
+                      <XAxis type="number" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} domain={["dataMin", "dataMax"]} />
+                      <YAxis type="category" dataKey="label" tick={{ fontSize: 10, fontFamily: "monospace" }} axisLine={false} tickLine={false} width={104} />
+                      <Tooltip
+                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                        cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+                        formatter={(value: number) => [`${value}% margin`, ""]}
+                      />
+                      <ReferenceLine x={0} stroke="hsl(var(--muted-foreground))" />
+                      <Bar dataKey="marginPct" radius={3} isAnimationActive={false}
+                        label={{ position: "right", fontSize: 10, formatter: (v: number) => `${v}%`, fill: "hsl(var(--muted-foreground))" }}>
+                        {chartRows.map((r) => (
+                          <Cell key={r.label} fill={barColor(r.marginPct)} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             )}
 

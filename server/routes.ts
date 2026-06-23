@@ -23427,6 +23427,20 @@ Generate only the email body text, no subject line.`;
   // CIPH.R — real BOM-based COGS by month (from costed sales × item WAC) plus a
   // budget at the measured cost rate. The measured number that retires the manual
   // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
+  // VECT.R — year-over-year sales + ad spend, same-period normalized (this YTD
+  // vs the matching slice of last year). Are we up or down, and is spend
+  // outpacing sales? Blended (no full prior-year per-channel history exists).
+  app.get("/api/finances/yoy-summary", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeYoYSummary } = await import("./services/yoy-service");
+      res.json(await computeYoYSummary(db));
+    } catch (err: any) {
+      console.error("[Finances] yoy-summary error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute year-over-year" });
+    }
+  });
+
   // CIPH.R — per-SKU product profitability from real BOM cost (revenue − units ×
   // build cost). Surfaces the money-losers Katana hides behind a flat 96% margin.
   app.get("/api/finances/product-profitability", requireAuth, async (req: Request, res: Response) => {

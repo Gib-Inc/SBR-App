@@ -7,6 +7,7 @@ import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { InventoryAnticipationCard } from "@/components/inventory-anticipation-card";
 import { ProductProfitabilityCard } from "@/components/product-profitability-card";
 import { SeasonalDemandCard } from "@/components/seasonal-demand-card";
+import { YoYCard } from "@/components/yoy-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
@@ -232,6 +233,9 @@ export default function Finances() {
 
           {/* Data Integrity & Sync Health (reconciliation visibility) */}
           <DataHealthCard />
+
+          {/* Year-over-year sales vs ad spend (same-period) */}
+          <YoYCard />
 
           {/* Per-SKU product profitability (real BOM cost) */}
           <ProductProfitabilityCard />

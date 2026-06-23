@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useBarcodeDetector } from "@/hooks/use-barcode-scanner";
+import { StockVarianceCard } from "@/components/stock-variance-card";
 import {
   ArrowLeft,
   ArrowRight,
@@ -302,6 +303,10 @@ function LocationPicker({
             </Card>
           );
         })}
+      </section>
+
+      <section className="mt-6" aria-label="Stock variance">
+        <StockVarianceCard />
       </section>
     </>
   );

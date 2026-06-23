@@ -23427,6 +23427,19 @@ Generate only the email body text, no subject line.`;
   // CIPH.R — real BOM-based COGS by month (from costed sales × item WAC) plus a
   // budget at the measured cost rate. The measured number that retires the manual
   // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
+  // COUNT.M — stock variance: where the app's sellable counter (afs) has drifted
+  // from the 3PL physical (pivot). Surfaces the afs-vs-Extensiv gap for true-up.
+  app.get("/api/inventory/stock-variance", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeStockVariance } = await import("./services/stock-variance-service");
+      res.json(await computeStockVariance(db));
+    } catch (err: any) {
+      console.error("[Inventory] stock-variance error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute stock variance" });
+    }
+  });
+
   // VECT.R — year-over-year sales + ad spend, same-period normalized (this YTD
   // vs the matching slice of last year). Are we up or down, and is spend
   // outpacing sales? Blended (no full prior-year per-channel history exists).

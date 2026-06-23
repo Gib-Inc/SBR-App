@@ -61,7 +61,7 @@ export async function runWeeklyReorderDigest(
         // Compact per-vendor list for the digest UI / email draft.
         byVendor: byVendor.map((v) => ({
           vendorId: v.vendorId, vendorName: v.vendorName, topUrgency: v.topUrgency,
-          lineCount: v.lineCount, estCost: v.estCost,
+          lineCount: v.lineCount, estCost: v.estCost, orderOnline: v.orderOnline, vendorUrl: v.vendorUrl,
           lines: v.lines.map((l) => ({ sku: l.sku, name: l.name, suggestedOrderQty: l.suggestedOrderQty, urgency: l.urgency, weeksCover: l.weeksCover, seasonalFactor: l.seasonalFactor })),
         })),
       } as any,

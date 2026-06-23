@@ -11,7 +11,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Package, AlertTriangle, RefreshCw, ChevronRight } from "lucide-react";
+import { Package, AlertTriangle, RefreshCw, ChevronRight, ShoppingCart, ExternalLink } from "lucide-react";
 
 interface DigestLine {
   sku: string;
@@ -28,6 +28,8 @@ interface VendorNeeds {
   lineCount: number;
   estCost: number;
   lines: DigestLine[];
+  orderOnline?: boolean;
+  vendorUrl?: string | null;
 }
 interface Digest {
   available: boolean;
@@ -54,6 +56,9 @@ function urgencyClass(u: string): string {
   if (u === "LOW") return "text-muted-foreground";
   return "text-muted-foreground";
 }
+
+const httpUrl = (u: string) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
+const prettyUrl = (u: string) => u.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 
 export function ReorderDigestCard() {
   const { data, isLoading } = useQuery<Digest>({ queryKey: ["/api/reorder/digest"] });
@@ -138,10 +143,29 @@ export function ReorderDigestCard() {
                         )}
                         <span className="truncate font-medium">{v.vendorName}</span>
                         <span className="shrink-0 text-xs text-muted-foreground">{v.lineCount} SKUs</span>
+                        {v.orderOnline && (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+                            <ShoppingCart className="h-3 w-3" /> buy online
+                          </span>
+                        )}
                       </span>
                       <span className="shrink-0 tabular-nums text-muted-foreground">{money(v.estCost)}</span>
                     </summary>
                     <div className="space-y-1 px-3 pb-2 pl-8">
+                      {v.orderOnline && (
+                        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                          <ShoppingCart className="h-3.5 w-3.5 shrink-0 text-blue-600 dark:text-blue-400" />
+                          <span className="text-muted-foreground">Self-serve — order this list at</span>
+                          {v.vendorUrl ? (
+                            <a href={httpUrl(v.vendorUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-medium text-blue-700 underline dark:text-blue-300" data-testid={`link-vendor-${v.vendorId}`}>
+                              {prettyUrl(v.vendorUrl)} <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : (
+                            <span className="font-medium">{v.vendorName}</span>
+                          )}
+                          <span className="text-muted-foreground">— no PO to send.</span>
+                        </div>
+                      )}
                       {v.lines.map((l) => (
                         <div key={l.sku} className="flex items-center justify-between gap-2 text-xs">
                           <span className="min-w-0 truncate">

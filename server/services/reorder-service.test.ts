@@ -62,6 +62,7 @@ describe("groupNeedsByVendor", () => {
     leadTimeDays: 14, reorderPoint: 40, needed, suggestedOrderQty: needed, vendorId, vendorName,
     moq: 0, unitCost: 1, estReorderCost: est, urgency,
     seasonalFactor: 1, seasonalWeeklyDemand: 10,
+    orderOnline: false, vendorUrl: null,
   });
 
   it("groups needed items by vendor, sums cost, and ranks by urgency", () => {

@@ -25,6 +25,9 @@ export interface ReorderNeed {
   leadTimeDays: number; reorderPoint: number; needed: number; suggestedOrderQty: number;
   vendorId: string | null; vendorName: string | null; moq: number; unitCost: number;
   estReorderCost: number; urgency: Urgency;
+  // Fulfillment: online suppliers (McMaster, Uline, Home Depot, Amazon) are
+  // self-served on a website — a shopping list + link, not a PO to send.
+  orderOnline: boolean; vendorUrl: string | null;
   // Seasonal: raw velocity is weeklyDemand; the reorder math runs on the
   // season-adjusted demand so orders anticipate the spring/fall peaks.
   seasonalFactor: number; seasonalWeeklyDemand: number;
@@ -93,7 +96,9 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       COALESCE(oo.on_order_qty,0)::float8 AS on_order,
       COALESCE(i.wac_unit_cost,0)::float8 AS unit_cost,
       dg.supplier_id, COALESCE(dg.lead_time_days,14)::float8 AS lead_days,
-      COALESCE(dg.moq,0)::float8 AS moq, s.name AS vendor_name
+      COALESCE(dg.moq,0)::float8 AS moq, s.name AS vendor_name,
+      s.ordering_method, COALESCE(s.record_only_default,false) AS record_only,
+      COALESCE(s.website, s.catalog_url) AS vendor_url
     FROM items i
     LEFT JOIN comp_demand d ON d.component_id=i.id
     LEFT JOIN on_order oo ON oo.item_id=i.id
@@ -124,6 +129,8 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       moq, unitCost, estReorderCost: Math.round(calc.suggestedOrderQty * unitCost * 100) / 100,
       urgency: calc.urgency,
       seasonalFactor: r2(seasonalFactor), seasonalWeeklyDemand: r1(seasonalWeeklyDemand),
+      orderOnline: r.record_only === true || /online|in-?store/i.test(String(r.ordering_method || "")),
+      vendorUrl: r.vendor_url ?? null,
     };
   });
 
@@ -136,6 +143,7 @@ export interface VendorNeeds {
   vendorId: string; vendorName: string;
   lines: ReorderNeed[]; lineCount: number; estCost: number;
   topUrgency: Urgency;
+  orderOnline: boolean; vendorUrl: string | null;
 }
 
 /** Group the items that actually need reordering into per-vendor order lists. */
@@ -145,7 +153,7 @@ export function groupNeedsByVendor(needs: ReorderNeed[]): VendorNeeds[] {
     const id = n.vendorId || "UNASSIGNED";
     let v = map.get(id);
     if (!v) {
-      v = { vendorId: id, vendorName: n.vendorName || "Unassigned vendor", lines: [], lineCount: 0, estCost: 0, topUrgency: "OK" };
+      v = { vendorId: id, vendorName: n.vendorName || "Unassigned vendor", lines: [], lineCount: 0, estCost: 0, topUrgency: "OK", orderOnline: n.orderOnline, vendorUrl: n.vendorUrl };
       map.set(id, v);
     }
     v.lines.push(n);

@@ -60,19 +60,27 @@ function urgencyClass(u: string): string {
 const httpUrl = (u: string) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
 const prettyUrl = (u: string) => u.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 
-export function ReorderDigestCard() {
-  const { data, isLoading } = useQuery<Digest>({ queryKey: ["/api/reorder/digest"] });
+export function ReorderDigestCard({ live = false }: { live?: boolean } = {}) {
+  // live=true reads the always-current reorder needs; otherwise the stored weekly
+  // digest. The page uses live so it never goes stale.
+  const endpoint = live ? "/api/reorder/needs" : "/api/reorder/digest";
+  const { data: raw, isLoading } = useQuery<any>({ queryKey: [endpoint] });
   const { data: cogs } = useQuery<CogsActual>({ queryKey: ["/api/finances/cogs-actual"] });
   const run = useMutation({
     mutationFn: async () => {
+      if (live) return { available: true };
       const r = await apiRequest("POST", "/api/reorder/digest/run", {});
       return r.json();
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/reorder/digest"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [endpoint] }),
   });
 
   if (isLoading) return null;
 
+  // Normalize live needs ({summary, byVendor}) into the digest shape.
+  const data: Digest | undefined = live
+    ? (raw ? { available: true, summary: raw.summary, byVendor: raw.byVendor, generatedAt: null } : undefined)
+    : raw;
   const summary = data?.summary;
   const vendors = data?.byVendor || [];
   const cogsRate = cogs?.budget?.measuredRatePct;

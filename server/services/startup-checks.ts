@@ -230,6 +230,9 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     // PO build-progress + FX confirmation fields. Belt-and-suspenders for
     // when drizzle-kit push hasn't run yet on a fresh deploy.
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS po_status TEXT NOT NULL DEFAULT 'ordered'`,
+    // Vendor confirmation-email -> draft PO: idempotency key + provenance.
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_order_number TEXT`,
+    `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS source TEXT`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS confirmed_qty INTEGER`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_completion_date TIMESTAMP`,
     // Supplier forecast-tier columns.
@@ -254,6 +257,8 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS entry_source TEXT NOT NULL DEFAULT 'manual'`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_image_url TEXT`,
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_total REAL`,
+    // Idempotency for vendor-email imports: one PO per (supplier, vendor order number).
+    `CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_supplier_vendor_order_unique_idx ON purchase_orders (supplier_id, vendor_order_number) WHERE vendor_order_number IS NOT NULL`,
     // SKU mappings — created here too in case drizzle-kit push hasn't run.
     `CREATE TABLE IF NOT EXISTS sku_mappings (
        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

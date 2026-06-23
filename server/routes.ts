@@ -14680,6 +14680,47 @@ Notes: ${po.notes || 'None'}
     }
   });
 
+  // Vendor confirmation email -> DRAFT PO. Parses the email (Claude), matches lines
+  // to our SKUs by vendor part number, and drops a draft for review. Dual auth: an
+  // authenticated session (the manual paste box) OR an n8n shared secret header
+  // (VENDOR_EMAIL_WEBHOOK_SECRET) so a Gmail watcher can POST confirmations.
+  app.post("/api/purchase-orders/from-vendor-email", async (req: Request, res: Response) => {
+    try {
+      const secret = process.env.VENDOR_EMAIL_WEBHOOK_SECRET;
+      const provided = req.headers["x-webhook-secret"];
+      // Constant-time compare (matches the other webhook-secret checks in this file).
+      const machineOk = !!secret && typeof provided === "string"
+        && Buffer.byteLength(provided) === Buffer.byteLength(secret)
+        && crypto.timingSafeEqual(Buffer.from(provided, "utf8"), Buffer.from(secret, "utf8"));
+      if (!machineOk && !req.session?.userId) {
+        return res.status(401).json({ ok: false, error: "Authentication required" });
+      }
+      const { subject, from, text, html } = req.body || {};
+      // Prefer plain text; fall back to stripping tags out of an HTML body (n8n/Gmail).
+      const body = (typeof text === "string" && text.trim())
+        ? text
+        : (typeof html === "string" ? html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ") : "");
+      if (!body.trim()) {
+        return res.status(400).json({ ok: false, reason: "empty_email", error: "No email text or html provided" });
+      }
+      const { createDraftPoFromVendorEmail } = await import("./services/vendor-email-po-service");
+      const result = await createDraftPoFromVendorEmail({ subject, from, text: body });
+      // 200 ok/duplicate; 422 parsed-but-needs-review; 503 transient (LLM down/unconfigured,
+      // so an automated caller retries); 400 for genuine bad input.
+      const code = result.ok
+        ? 200
+        : (result.reason === "supplier_not_found" || result.reason === "no_matched_lines")
+          ? 422
+          : (result.reason === "parse_failed" || result.reason === "llm_not_configured")
+            ? 503
+            : 400;
+      res.status(code).json(result);
+    } catch (error: any) {
+      console.error("[Vendor Email PO] Error:", error);
+      res.status(500).json({ ok: false, error: error.message || "Failed to create PO from email" });
+    }
+  });
+
   app.post("/api/purchase-orders", requireAuth, async (req: Request, res: Response) => {
     let createdPOId: string | null = null;
     try {

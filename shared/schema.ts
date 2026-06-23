@@ -529,6 +529,12 @@ export const purchaseOrders = pgTable("purchase_orders", {
   // AI Auto-Draft flag
   isAutoDraft: boolean("is_auto_draft").notNull().default(false), // true = created by AI system
 
+  // Vendor's own order/confirmation number (e.g. Uline "50837923"), captured when
+  // a PO is created from a vendor confirmation email. Used to de-dupe re-delivered
+  // emails so the same confirmation can't spawn two POs.
+  vendorOrderNumber: text("vendor_order_number"),
+  source: text("source"), // how the PO was created: manual, auto_draft, vendor_email
+
   // In-Transit / build-progress state for FX POs (parallel to `status`,
   // which tracks the procurement lifecycle DRAFT→SENT→RECEIVED). Values:
   // 'ordered' | 'confirmed' | 'in_production' | 'shipped' | 'received'.
@@ -564,6 +570,9 @@ export const purchaseOrders = pgTable("purchase_orders", {
   supplierIdIdx: index("purchase_orders_supplier_id_idx").on(table.supplierId),
   createdAtIdx: index("purchase_orders_created_at_idx").on(table.createdAt),
   isHistoricalIdx: index("purchase_orders_is_historical_idx").on(table.isHistorical),
+  // Idempotency for vendor-email imports: one PO per (supplier, vendor order number).
+  vendorOrderUniqueIdx: uniqueIndex("purchase_orders_supplier_vendor_order_unique_idx")
+    .on(table.supplierId, table.vendorOrderNumber).where(sql`vendor_order_number IS NOT NULL`),
 }));
 
 // PO Status enum for type safety

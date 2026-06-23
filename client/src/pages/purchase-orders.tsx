@@ -42,6 +42,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ReorderDigestCard } from "@/components/reorder-digest-card";
+import { VendorEmailImportDialog } from "@/components/vendor-email-import-dialog";
 import {
   Select,
   SelectContent,
@@ -416,6 +417,7 @@ export default function PurchaseOrders() {
   const [selectedPO, setSelectedPO] = useState<PurchaseOrderWithSupplier | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEmailImportOpen, setIsEmailImportOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingPO, setEditingPO] = useState<PurchaseOrderWithSupplier | null>(null);
   
@@ -768,10 +770,16 @@ export default function PurchaseOrders() {
             </TabsList>
           </Tabs>
           {activeTab === "live" && (
-            <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-po">
-              <Plus className="h-4 w-4 mr-2" />
-              Create PO
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setIsEmailImportOpen(true)} data-testid="button-import-vendor-email">
+                <Mail className="h-4 w-4 mr-2" />
+                Log from email
+              </Button>
+              <Button onClick={() => setIsCreateOpen(true)} data-testid="button-create-po">
+                <Plus className="h-4 w-4 mr-2" />
+                Create PO
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -1630,13 +1638,15 @@ export default function PurchaseOrders() {
         </DialogContent>
       </Dialog>
 
-      <CreatePODialog 
-        open={isCreateOpen} 
+      <CreatePODialog
+        open={isCreateOpen}
         onOpenChange={setIsCreateOpen}
         onPOCreated={(poId) => {
           queryClient.invalidateQueries({ queryKey: ["/api/purchase-orders"] });
         }}
       />
+
+      <VendorEmailImportDialog open={isEmailImportOpen} onOpenChange={setIsEmailImportOpen} />
 
       <EditPODialog
         open={isEditOpen}

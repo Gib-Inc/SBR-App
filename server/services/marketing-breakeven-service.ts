@@ -29,6 +29,10 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const MON = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
 
 export const BREAKEVEN_MER = 5;
+// SBR "started over" in May 2026: new Meta pixel, rebuilt campaigns, and Kevin
+// (~$10K/mo in-house) replaced by the Carpe Diem agency (~$1.8K/mo). Improvement is
+// measured from here.
+export const RESTART_MONTH = "2026-05";
 
 export interface MerMonth {
   month: string;            // YYYY-MM
@@ -38,10 +42,21 @@ export interface MerMonth {
   vsBreakeven: number | null; // mer - breakeven
   belowBreakeven: boolean;
   netIncome: number | null;
+  isRestart: boolean;       // the month SBR started over
+}
+export interface Trajectory {
+  restartMonth: string;
+  preRestartAvgMer: number | null;   // old regime
+  postRestartAvgMer: number | null;  // closed months since restart
+  trailingMer: number | null;        // current in-progress (provisional)
+  gapToBreakeven: number | null;     // breakeven - trailingMer
+  improving: boolean | null;         // trailing meaningfully above the old regime
 }
 export interface BreakevenScoreboard {
   breakeven: number;
-  // closed-month MER trend (audited QB)
+  restartMonth: string;
+  trajectory: Trajectory;
+  // month-by-month MER (audited QB), oldest→newest
   monthly: MerMonth[];
   monthsBelowBreakeven: number;
   // current in-progress window (settled revenue + platform media; QB pending)
@@ -69,12 +84,13 @@ export async function getBreakevenScoreboard(db: DB, nowMs: number): Promise<Bre
     SELECT year, month, revenue, ad_spend, net_income
     FROM historical_monthly_sales
     ORDER BY year, month`)) as any[];
-  const monthly: MerMonth[] = qb.slice(-6).map((m) => {
+  const monthly: MerMonth[] = qb.slice(-14).map((m) => {
+    const month = `${m.year}-${MON[(num(m.month) || 1) - 1]}`;
     const revenue = r2(num(m.revenue));
     const marketing = r2(num(m.ad_spend));
     const mer = marketing > 0 ? r2(revenue / marketing) : null;
     const st = merStatus(mer);
-    return { month: `${m.year}-${MON[(num(m.month) || 1) - 1]}`, revenue, marketing, mer, vsBreakeven: st.vs, belowBreakeven: st.below, netIncome: m.net_income == null ? null : r2(num(m.net_income)) };
+    return { month, revenue, marketing, mer, vsBreakeven: st.vs, belowBreakeven: st.below, netIncome: m.net_income == null ? null : r2(num(m.net_income)), isRestart: month === RESTART_MONTH };
   });
   const monthsBelowBreakeven = monthly.filter((m) => m.belowBreakeven).length;
   const qbRunRate = monthly.length ? monthly[monthly.length - 1].marketing : null;
@@ -105,8 +121,18 @@ export async function getBreakevenScoreboard(db: DB, nowMs: number): Promise<Bre
   const merEstimate = qbRunRate && qbRunRate > 0 ? r2(revenue / qbRunRate) : null;
   const agencyGap = qbRunRate != null ? r2(qbRunRate - mediaSpend) : null;
 
+  // 4) Trajectory vs the May restart — is the new regime improving toward 5x?
+  const avg = (xs: number[]) => (xs.length ? r2(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+  const preRestartAvgMer = avg(monthly.filter((m) => m.month < RESTART_MONTH && m.mer != null).map((m) => m.mer!));
+  const postRestartAvgMer = avg(monthly.filter((m) => m.month >= RESTART_MONTH && m.mer != null).map((m) => m.mer!));
+  const trailingMer = merEstimate;
+  const gapToBreakeven = trailingMer != null ? r2(BREAKEVEN_MER - trailingMer) : null;
+  const improving = trailingMer != null && preRestartAvgMer != null ? trailingMer > preRestartAvgMer + 0.2 : null;
+
   return {
     breakeven: BREAKEVEN_MER,
+    restartMonth: RESTART_MONTH,
+    trajectory: { restartMonth: RESTART_MONTH, preRestartAvgMer, postRestartAvgMer, trailingMer, gapToBreakeven, improving },
     monthly,
     monthsBelowBreakeven,
     current: { windowDays, revenue, mediaSpend, qbRunRate, mediaRoas, merEstimate, agencyGap, qbPending: true },

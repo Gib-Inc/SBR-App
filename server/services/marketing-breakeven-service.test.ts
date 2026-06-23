@@ -47,7 +47,13 @@ describe("getBreakevenScoreboard", () => {
     expect(s.current.mediaSpend).toBe(28393);
     expect(s.current.mediaRoas).toBeCloseTo(7.58, 1);    // revenue / media (flattering)
     expect(s.current.merEstimate).toBeCloseTo(4.24, 1);  // revenue / QB run-rate (50754)
-    expect(s.current.agencyGap).toBe(22361);             // 50754 - 28393 (agency + untracked)
+    expect(s.current.agencyGap).toBe(22361);             // 50754 - 28393 (under-reported + other)
+    // trajectory: May is the restart; pre = April (2.63x), trailing ~4.24x → improving
+    expect(s.restartMonth).toBe("2026-05");
+    expect(s.monthly.find((m) => m.month === "2026-05")!.isRestart).toBe(true);
+    expect(s.trajectory.preRestartAvgMer).toBeCloseTo(2.63, 1);
+    expect(s.trajectory.gapToBreakeven).toBeCloseTo(0.76, 1); // 5 - 4.24
+    expect(s.trajectory.improving).toBe(true);
   });
 
   it("collapses overlapping platform windows so media spend isn't double-counted", async () => {

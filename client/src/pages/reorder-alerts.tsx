@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { ReorderDigestCard } from "@/components/reorder-digest-card";
 
 type AlertStatus = "pending" | "sent" | "acknowledged" | "dismissed" | "received";
 
@@ -141,9 +142,9 @@ export default function ReorderAlerts() {
     <div className="p-6 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal">Reorder Alerts</h1>
+          <h1 className="text-2xl font-semibold tracking-normal">Reorder</h1>
           <p className="text-sm text-muted-foreground">
-            Components approaching stockout based on live component velocity.
+            What to order this week, per vendor — velocity × BOM, seasonally adjusted. Email alerts below.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -161,6 +162,8 @@ export default function ReorderAlerts() {
           </Button>
         </div>
       </div>
+
+      <ReorderDigestCard />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4">

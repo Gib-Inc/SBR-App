@@ -43,13 +43,13 @@ const supplyChainItems = [
   { title: "Production",       url: "/production",       icon: Factory       },
   { title: "Receive Stock",    url: "/receive-stock",    icon: PackagePlus   },
   { title: "Incoming",         url: "/incoming",         icon: Truck         },
+  { title: "Reorder",          url: "/reorder-alerts",   icon: BellRing      },
   { title: "Purchase Orders",  url: "/purchase-orders",  icon: ClipboardList },
   { title: "Suppliers",        url: "/suppliers",        icon: Building2     },
   { title: "Supplier Intel",   url: "/supplier-intel",   icon: ClipboardCheck },
 ];
 
 const toolItems = [
-  { title: "Reorder Alerts", url: "/reorder-alerts", icon: BellRing },
   { title: "Barcodes",   url: "/barcodes",   icon: Barcode  },
   { title: "Log Order",  url: "/log-order",  icon: ClipboardEdit },
   { title: "SKU Mappings", url: "/sku-mappings", icon: Link2 },

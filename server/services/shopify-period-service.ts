@@ -1,16 +1,16 @@
 /**
- * CIPH.R Finances — LIVE current-period Shopify sales.
+ * CIPH.R Finances — LIVE current-period channel sales (Shopify + Amazon).
  *
  * Replaces the old static "Jun 1-6" accountant snapshot (server/data/finance-docs
  * SHOPIFY_PERIOD), which was typed in once and never moved, so the card looked
- * frozen days into the month. This reads the app's own sales_orders (Shopify
- * channel) for the current calendar month-to-date, in America/Denver, so the
+ * frozen days into the month. This reads the app's own sales_orders for the
+ * requested channel, current calendar month-to-date, in America/Denver, so the
  * card always shows today. Gross = order grand totals (total_amount); refunds
  * come from total_refund_amount when present. A simple run-rate projects the
  * full month from the days elapsed.
  *
- * Shopify only — Amazon is a separate channel and is intentionally excluded so
- * this matches what Stacy/Christopher see in the Shopify admin.
+ * One channel per call — Shopify and Amazon are separate cards so each matches
+ * what Stacy/Christopher see in that channel's own admin.
  */
 import { sql } from "drizzle-orm";
 
@@ -18,6 +18,9 @@ type DB = any;
 const rows = (r: any) => r.rows || r;
 const num = (v: any) => (v == null ? 0 : Number(v) || 0);
 const r2 = (n: number) => Math.round(n * 100) / 100;
+
+export type SalesChannel = "SHOPIFY" | "AMAZON";
+const channelLabel = (c: SalesChannel) => (c === "AMAZON" ? "Amazon" : "Shopify");
 
 export interface ShopifyPeriodDay { date: string; orders: number; totalSales: number; }
 export interface ShopifyPeriodLive {
@@ -49,8 +52,9 @@ const fmtDay = (iso: string) => { const p = iso.split("-"); return `${MON[Number
  * Current calendar month-to-date Shopify sales, by day, in America/Denver.
  * nowMs is injectable for tests; defaults to wall clock in the route.
  */
-export async function computeShopifyPeriod(db: DB, nowMs: number): Promise<ShopifyPeriodLive> {
+export async function computeChannelPeriod(db: DB, channel: SalesChannel, nowMs: number): Promise<ShopifyPeriodLive> {
   const TZ = "America/Denver";
+  const label = channelLabel(channel);
   // Daily gross + refunds for the current month, store-local time.
   const res = await db.execute(sql`
     WITH d AS (
@@ -58,7 +62,7 @@ export async function computeShopifyPeriod(db: DB, nowMs: number): Promise<Shopi
              total_amount::numeric AS gross,
              COALESCE(total_refund_amount, 0)::numeric AS refund
       FROM sales_orders
-      WHERE channel = 'SHOPIFY'
+      WHERE channel = ${channel}
         AND COALESCE(status, '') NOT ILIKE 'cancel%'
         AND (order_date AT TIME ZONE 'UTC' AT TIME ZONE ${TZ})
             >= date_trunc('month', timezone(${TZ}, to_timestamp(${Math.floor(nowMs / 1000)})))
@@ -90,14 +94,14 @@ export async function computeShopifyPeriod(db: DB, nowMs: number): Promise<Shopi
   if (list.length === 0) {
     return {
       available: false,
-      source: "Live — sales_orders (Shopify channel)",
+      source: `Live — sales_orders (${label} channel)`,
       periodLabel: `${monthName} ${(periodStart || "2026-01-01").split("-")[0]}`,
       periodStart, periodEnd: today, currency: "USD",
       refreshedAt: meta.refreshed_at || "",
       totals: { totalSales: 0, netSales: 0, refunds: 0, orders: 0 },
       metrics: { days: 0, daysInMonth, avgDailyTotal: 0, avgOrderValue: 0, bestDay: null, slowestDay: null, projectedMonth: null },
       daily: [],
-      message: "No Shopify orders recorded yet this month.",
+      message: `No ${label} orders recorded yet this month.`,
     };
   }
 
@@ -119,7 +123,7 @@ export async function computeShopifyPeriod(db: DB, nowMs: number): Promise<Shopi
   const todayDom = parseInt((today || `${periodStart}`).split("-")[2], 10) || dayOfMonth;
   return {
     available: true,
-    source: "Live — sales_orders (Shopify channel)",
+    source: `Live — sales_orders (${label} channel)`,
     periodLabel: `${monthName} 1–${todayDom}, ${yr}`,
     periodStart,
     periodEnd: today,
@@ -138,3 +142,8 @@ export async function computeShopifyPeriod(db: DB, nowMs: number): Promise<Shopi
     daily,
   };
 }
+
+/** Current month-to-date Shopify sales (thin channel wrapper). */
+export const computeShopifyPeriod = (db: DB, nowMs: number) => computeChannelPeriod(db, "SHOPIFY", nowMs);
+/** Current month-to-date Amazon sales (thin channel wrapper). */
+export const computeAmazonPeriod = (db: DB, nowMs: number) => computeChannelPeriod(db, "AMAZON", nowMs);

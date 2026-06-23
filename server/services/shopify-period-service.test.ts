@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeShopifyPeriod } from "./shopify-period-service";
+import { computeShopifyPeriod, computeAmazonPeriod, computeChannelPeriod } from "./shopify-period-service";
 
 // Mock db.execute: first call returns the daily rows, second returns the period meta.
 function mockDb(daily: any[], meta: any) {
@@ -53,5 +53,20 @@ describe("computeShopifyPeriod", () => {
     expect(v.available).toBe(false);
     expect(v.message).toMatch(/no shopify orders/i);
     expect(v.totals.totalSales).toBe(0);
+  });
+
+  it("labels the channel in source + empty message (Amazon wrapper)", async () => {
+    const daily = [{ date: "2026-06-10", orders: 5, gross: 1000, refunds: 0 }];
+    const v = await computeAmazonPeriod(mockDb(daily, META), Date.UTC(2026, 5, 22, 18));
+    expect(v.source).toMatch(/Amazon channel/);
+    const empty = await computeAmazonPeriod(mockDb([], META), Date.UTC(2026, 5, 22, 18));
+    expect(empty.message).toMatch(/no amazon orders/i);
+  });
+
+  it("computeChannelPeriod parameterizes the channel directly", async () => {
+    const daily = [{ date: "2026-06-10", orders: 2, gross: 500, refunds: 0 }];
+    const v = await computeChannelPeriod(mockDb(daily, META), "SHOPIFY", Date.UTC(2026, 5, 22, 18));
+    expect(v.source).toMatch(/Shopify channel/);
+    expect(v.totals.totalSales).toBe(500);
   });
 });

@@ -154,6 +154,54 @@ export class ShopifyClient {
   }
 
   /**
+   * Open draft orders — SBR's B2B/wholesale quote pipeline (#D-numbered orders
+   * created in the Shopify admin that haven't been converted/paid yet). Requires
+   * the read_draft_orders scope — returns {available:false} if the app token lacks
+   * it, so the caller can show a "needs scope" state instead of erroring.
+   * Paginated via the Link header; capped so it can't run away.
+   */
+  async fetchOpenDraftOrders(maxDrafts: number = 5000): Promise<
+    | { available: true; drafts: Array<{ name: string; status: string; createdAt: string; updatedAt: string; totalPrice: number; currency: string }>; truncated: boolean }
+    | { available: false; reason: string }
+  > {
+    const headers = this.getHeaders();
+    const pageSize = 250;
+    const out: Array<{ name: string; status: string; createdAt: string; updatedAt: string; totalPrice: number; currency: string }> = [];
+    // maxDrafts is a runaway guard, set well above any real open-draft count.
+    let nextPageUrl: string | null =
+      `${this.getBaseUrl()}/draft_orders.json?status=open&limit=${pageSize}`;
+    let truncated = false;
+    try {
+      while (nextPageUrl && out.length < maxDrafts) {
+        const response = await fetch(nextPageUrl, { headers });
+        // 403 = authenticated but missing read_draft_orders scope; 401 = bad/revoked token.
+        if (response.status === 403) return { available: false, reason: "missing_draft_scope" };
+        if (response.status === 401) return { available: false, reason: "invalid_token" };
+        if (!response.ok) return { available: false, reason: `draft_orders_${response.status}` };
+        const data: any = await response.json();
+        const drafts = data.draft_orders || [];
+        for (const d of drafts) {
+          out.push({
+            name: d.name ?? "",
+            status: d.status ?? "open",
+            createdAt: d.created_at ?? "",
+            updatedAt: d.updated_at ?? d.created_at ?? "",
+            totalPrice: parseFloat(d.total_price ?? "0") || 0,
+            currency: d.currency ?? "USD",
+          });
+        }
+        nextPageUrl = this.extractNextLinkUrl(response.headers.get("Link"));
+        if (drafts.length < pageSize) break;
+        // Hit the guard with more pages still available → flag rather than silently undercount.
+        if (out.length >= maxDrafts && nextPageUrl) truncated = true;
+      }
+      return { available: true, drafts: out, truncated };
+    } catch (e: any) {
+      return { available: false, reason: e?.message ?? "error" };
+    }
+  }
+
+  /**
    * Fetch specific orders by their Shopify IDs (comma-separated).
    * Useful for checking fulfillment status of known orders.
    * Returns raw Shopify order objects (not normalized).

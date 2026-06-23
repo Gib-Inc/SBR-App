@@ -15,6 +15,8 @@ import { CreditLinesCard } from "@/components/credit-lines-card";
 import { DebtRunwayCard } from "@/components/debt-runway-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
+import { AmazonPeriodCard } from "@/components/amazon-period-card";
+import { DraftOrdersCard } from "@/components/draft-orders-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
 import { DataHealthCard } from "@/components/data-health-card";
 import { QuickBooksLiveCard, type QbLive } from "@/components/quickbooks-live-card";
@@ -142,8 +144,12 @@ export default function Finances() {
           {/* Accountant's Executive Summary (ITD narrative + ratios) */}
           <ExecutiveSummaryCard />
 
-          {/* Current-period Shopify sales snapshot */}
+          {/* Current-period sales by channel — live, month-to-date */}
           <ShopifyPeriodCard />
+          <AmazonPeriodCard />
+
+          {/* Draft orders — live B2B/wholesale quote pipeline */}
+          <DraftOrdersCard />
 
           {/* Existing live cards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

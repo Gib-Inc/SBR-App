@@ -23896,6 +23896,34 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — LIVE current-period Amazon sales. Same shape as the Shopify card,
+  // reading sales_orders (Amazon channel) for this month-to-date.
+  app.get("/api/finances/amazon-period", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeAmazonPeriod } = await import("./services/shopify-period-service");
+      const view = await computeAmazonPeriod(db, Date.now());
+      res.json({ success: true, ...view });
+    } catch (error: any) {
+      console.error('[CIPH.R] Amazon period error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load Amazon period' });
+    }
+  });
+
+  // CIPH.R — LIVE Shopify draft orders (B2B/wholesale quote pipeline). Fetched
+  // live from Shopify (drafts aren't in sales_orders). Degrades gracefully if the
+  // app token lacks the read_draft_orders scope.
+  app.get("/api/finances/draft-orders", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getDraftOrders } = await import("./services/draft-orders-service");
+      const view = await getDraftOrders(Date.now());
+      res.json({ success: true, ...view });
+    } catch (error: any) {
+      console.error('[CIPH.R] Draft orders error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to load draft orders' });
+    }
+  });
+
   // CIPH.R Unified Performance Hub — merged sales + ad performance for a window.
   // Blended ROAS, MER, and True Net Margin per SKU, with per-platform precedence
   // (live ad_metrics_daily wins; uploaded snapshots only fill missing platforms)

@@ -267,6 +267,19 @@ export default async function runApp(
     }
   })();
 
+  // CIPH.R — one-time backfill (then monthly refresh) of transaction-level
+  // expense detail (ProfitAndLossDetail) into qb_pl_detail + qb_vendor_expense.
+  // Self-guards: backfill only runs if the table is empty and QuickBooks is
+  // connected. Fire-and-forget; never wired to a request/page-load path.
+  void (async () => {
+    try {
+      const { startQbExpenseDetailBackfill } = await import("./services/qb-expense-detail-sync");
+      startQbExpenseDetailBackfill();
+    } catch (err: any) {
+      console.error("[QB ExpenseDetail] Failed to arm backfill:", err?.message ?? err);
+    }
+  })();
+
   // COUNT.M — arm the weekly per-vendor reorder digest (Monday "what each vendor
   // needs", draft-for-approval). Self-guards to once per week. Fire-and-forget.
   void (async () => {

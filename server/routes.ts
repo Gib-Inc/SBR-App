@@ -23484,6 +23484,29 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — sync transaction-level expense detail (ProfitAndLossDetail) into
+  // qb_pl_detail + qb_vendor_expense so spend is queryable by vendor and account.
+  // Read-only against QuickBooks. ?months=N (default 13, max 36).
+  app.post("/api/quickbooks/expense-detail/sync", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = (await storage.getConnectedQuickbooksUserId()) || req.session.userId || 'system';
+      const months = typeof req.query.months === 'string'
+        ? Math.min(Math.max(parseInt(req.query.months, 10) || 13, 1), 36)
+        : 13;
+      const end = new Date();
+      const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - (months - 1), 1));
+      const { syncQbExpenseDetail } = await import("./services/qb-expense-detail-sync");
+      const result = await syncQbExpenseDetail(userId, { startDate: start, endDate: end });
+      if (!result.ok) {
+        return res.status(409).json({ success: false, error: result.error });
+      }
+      res.json({ success: true, ...result });
+    } catch (error: any) {
+      console.error('[QB ExpenseDetail] sync error:', error);
+      res.status(500).json({ success: false, error: error.message || 'Failed to sync expense detail' });
+    }
+  });
+
   // CIPH.R Phase 2 — cash runway / burn-rate forecast. Returns the computed
   // forecast PLUS the per-scenario daily inputs so the dashboard's What-If
   // slider can recompute cash-out dates client-side without a round-trip.

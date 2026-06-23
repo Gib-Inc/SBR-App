@@ -177,6 +177,7 @@ import { randomUUID } from "crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
+import type { QbPlDetailRow, QbVendorExpenseRow } from "./services/qb-expense-detail-sync";
 import * as schema from "@shared/schema";
 
 // Row shape returned by the v_money_maker_health view (per-build capacity
@@ -680,6 +681,10 @@ export interface IStorage {
   getLatestQbLiveSnapshot(): Promise<QbFinancialSnapshot | undefined>;
   getLatestQbBalanceSheetSnapshot(): Promise<QbFinancialSnapshot | undefined>;
   getQbFinancialSnapshots(limit?: number): Promise<QbFinancialSnapshot[]>;
+  // QuickBooks expense detail (CIPH.R) — transaction-level P&L lines + vendor rollups
+  bulkInsertQbPlDetail(rows: QbPlDetailRow[]): Promise<number>;
+  upsertQbVendorExpense(rows: QbVendorExpenseRow[]): Promise<number>;
+  qbPlDetailHasRows(): Promise<boolean>;
   // CIPH.R Phase 2 — runway forecasts + ad-spend window query
   getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
   createFinancialRunwayForecast(forecast: InsertFinancialRunwayForecast): Promise<FinancialRunwayForecast>;
@@ -3806,6 +3811,15 @@ export class MemStorage implements IStorage {
   }
   async getQbFinancialSnapshots(_limit?: number): Promise<QbFinancialSnapshot[]> {
     return [];
+  }
+  async bulkInsertQbPlDetail(_rows: QbPlDetailRow[]): Promise<number> {
+    return 0;
+  }
+  async upsertQbVendorExpense(_rows: QbVendorExpenseRow[]): Promise<number> {
+    return 0;
+  }
+  async qbPlDetailHasRows(): Promise<boolean> {
+    return false;
   }
   async getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
     return Array.from(this.adMetricsDaily.values()).filter((m) => m.date >= startDate && m.date <= endDate);
@@ -7643,6 +7657,41 @@ export class PostgresStorage implements IStorage {
       .from(schema.qbFinancialSnapshots)
       .orderBy(desc(schema.qbFinancialSnapshots.capturedAt))
       .limit(limit);
+  }
+  async bulkInsertQbPlDetail(rows: QbPlDetailRow[]): Promise<number> {
+    if (!rows.length) return 0;
+    let inserted = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const chunk = rows.slice(i, i + 200);
+      const values = chunk.map(
+        (r) =>
+          drizzleSql`(${r.realmId}, ${r.txnDate}, ${r.txnType}, ${r.docNumber}, ${r.vendorOrPayee}, ${r.accountName}, ${r.memo}, ${r.amount}, ${r.periodStart}, ${r.periodEnd}, 'ProfitAndLossDetail')`,
+      );
+      await this.db.execute(drizzleSql`
+        INSERT INTO qb_pl_detail
+          (realm_id, txn_date, txn_type, doc_number, vendor_or_payee, account_name, memo, amount, period_start, period_end, source_report)
+        VALUES ${drizzleSql.join(values, drizzleSql`, `)}
+        ON CONFLICT DO NOTHING
+      `);
+      inserted += chunk.length;
+    }
+    return inserted;
+  }
+  async upsertQbVendorExpense(rows: QbVendorExpenseRow[]): Promise<number> {
+    if (!rows.length) return 0;
+    for (const r of rows) {
+      await this.db.execute(drizzleSql`
+        INSERT INTO qb_vendor_expense (realm_id, vendor, period_start, period_end, total_amount)
+        VALUES (${r.realmId}, ${r.vendor}, ${r.periodStart}, ${r.periodEnd}, ${r.totalAmount})
+        ON CONFLICT (realm_id, vendor, period_start, period_end)
+        DO UPDATE SET total_amount = EXCLUDED.total_amount, synced_at = now()
+      `);
+    }
+    return rows.length;
+  }
+  async qbPlDetailHasRows(): Promise<boolean> {
+    const r = await this.db.execute(drizzleSql`SELECT 1 FROM qb_pl_detail LIMIT 1`);
+    return (((r as any).rows?.length as number) ?? 0) > 0;
   }
   async getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]> {
     return await this.db

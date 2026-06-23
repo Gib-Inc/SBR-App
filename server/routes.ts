@@ -25435,7 +25435,48 @@ Generate only the email body text, no subject line.`;
         periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
         source: `upload:${fileName}`, campaigns: parsed.campaigns,
       });
-      res.json({ success: true, month: result.month, campaigns: result.inserted, totalSpend: parsed.totalSpend });
+
+      // Also feed the channel-level rollup (marketing_spend_snapshots) so this ONE
+      // upload updates the channel trend, Monthly tab, unified performance, and the
+      // September Rule — not just the per-campaign table. Supersede any overlapping
+      // active META snapshot for the period so it replaces, never double-counts.
+      let rollup: { superseded: number } = { superseded: 0 };
+      if (parsed.periodStart && parsed.periodEnd) {
+        const anyRevenue = parsed.campaigns.some((c) => c.revenue != null);
+        const anyPurchases = parsed.campaigns.some((c) => c.purchases != null);
+        const totalRevenue = Math.round(parsed.campaigns.reduce((s, c) => s + (c.revenue ?? 0), 0) * 100) / 100;
+        const totalPurchases = parsed.campaigns.reduce((s, c) => s + (c.purchases ?? 0), 0);
+        const totalImpressions = parsed.campaigns.reduce((s, c) => s + (c.impressions ?? 0), 0) || null;
+        const { hashMarketingSnapshot } = await import("./services/reconciliation-service");
+        const active = await storage.getActiveMarketingSpendSnapshots();
+        const overlapping = (active as any[]).filter((s) =>
+          String(s.platform || "").toUpperCase() === "META" &&
+          s.periodStart && s.periodEnd &&
+          s.periodStart <= parsed.periodEnd! && s.periodEnd >= parsed.periodStart!);
+        if (overlapping.length) {
+          await storage.markMarketingSpendSnapshotsSuperseded(overlapping.map((s: any) => s.id), `upload:${fileName}`);
+        }
+        await storage.createMarketingSpendSnapshot({
+          platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
+          spend: parsed.totalSpend, impressions: totalImpressions,
+          conversions: anyPurchases ? totalPurchases : null,
+          revenue: anyRevenue ? totalRevenue : null,
+          currency: "USD", source: `upload:${fileName}`, status: "OK",
+          sourceHash: hashMarketingSnapshot({ platform: "META", periodStart: parsed.periodStart, periodEnd: parsed.periodEnd, spend: parsed.totalSpend, impressions: totalImpressions, clicks: null }),
+          raw: { ingestedVia: "campaign-month", campaigns: parsed.campaigns.length } as unknown,
+        } as any);
+        rollup = { superseded: overlapping.length };
+        await storage.createDataReconciliationLog([{
+          dataType: "marketing_spend", entityKey: `META ${parsed.periodStart}..${parsed.periodEnd}`,
+          action: overlapping.length ? "SUPERSEDED" : "ADDED", field: "spend",
+          oldValue: overlapping.length ? String(overlapping.reduce((s: number, x: any) => s + (Number(x.spend) || 0), 0)) : null,
+          newValue: String(parsed.totalSpend),
+          reason: `Monthly campaigns upload: ${result.inserted} campaigns, $${parsed.totalSpend} spend${anyRevenue ? `, $${totalRevenue} attributed` : ""}.${overlapping.length ? ` Replaced ${overlapping.length} overlapping period(s).` : ""}`,
+          source: `upload:${fileName}`,
+        }]).catch(() => {});
+      }
+
+      res.json({ success: true, month: result.month, campaigns: result.inserted, totalSpend: parsed.totalSpend, rollupSuperseded: rollup.superseded });
     } catch (error: any) {
       console.error("[Marketing Trend] ingest error:", error);
       res.status(500).json({ success: false, error: error.message || "Failed to ingest campaigns" });

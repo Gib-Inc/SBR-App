@@ -53,7 +53,8 @@ export function parseMetaCampaignsCsv(buffer: Buffer, fileName = "", mime = ""):
   };
   const nameCol = col(["Campaign name", "Campaign"]);
   const spendCol = col(["Amount spent (USD)", "Amount spent", "Spend"]);
-  const roasCol = col(["Purchase ROAS (return on ad spend)", "Purchase ROAS", "ROAS"]);
+  // Purchase ROAS only — a bare "ROAS" match could pick up a website/other ROAS column.
+  const roasCol = col(["Purchase ROAS (return on ad spend)", "Purchase ROAS"]);
   const purCol = col(["Purchases", "Results"]);
   const impCol = col(["Impressions"]);
   const startCol = col(["Reporting starts", "Reporting start"]);

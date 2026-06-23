@@ -39,10 +39,10 @@ describe("getMarketingTrend", () => {
     return { execute: async () => ({ rows: call++ === 0 ? channelRows : campaignRows }) } as any;
   }
 
-  it("groups channels + campaigns and sorts months", async () => {
+  it("groups channels + campaigns and sorts months (raw snapshots → monthly)", async () => {
     const ch = [
-      { platform: "META", month: "2026-04", spend: 65000, revenue: null, purchases: null },
-      { platform: "META", month: "2026-06", spend: 11545, revenue: 41263, purchases: 104 },
+      { platform: "META", periodStart: "2026-04-01", periodEnd: "2026-04-30", spend: 65000, revenue: null, conversions: null },
+      { platform: "META", periodStart: "2026-05-24", periodEnd: "2026-06-22", spend: 11545, revenue: 41263, conversions: 104 },
     ];
     const cp = [
       { platform: "META", campaign: "Reel 7", month: "2026-04", spend: 14641, revenue: null, purchases: null },
@@ -54,7 +54,31 @@ describe("getMarketingTrend", () => {
     const meta = t.channels.find((c) => c.platform === "META")!;
     expect(meta.points.at(-1)!.roas).toBe(3.57);
     expect(meta.points.at(-1)!.cac).toBeCloseTo(111.01, 1);
+    expect(meta.points[0].roas).toBeNull(); // April = spend only
     const cd = t.campaigns.find((c) => c.campaign === "CD | Sales")!;
     expect(cd.latestRoas).toBe(4.25);
+  });
+
+  it("collapses two overlapping active snapshots in a month — no double-count", async () => {
+    // A full-month and a sub-window that overlap; the latest period_end wins.
+    const ch = [
+      { platform: "META", periodStart: "2026-06-01", periodEnd: "2026-06-30", spend: 10000, revenue: 35000, conversions: 90 },
+      { platform: "META", periodStart: "2026-06-15", periodEnd: "2026-06-22", spend: 5000, revenue: 18000, conversions: 40 },
+    ];
+    const t = await getMarketingTrend(mockDb(ch, []));
+    const june = t.channels[0].points.find((p) => p.month === "2026-06")!;
+    // collapse keeps the later period_end (06-30 full month = 10000), never 15000
+    expect(june.spend).toBe(10000);
+  });
+
+  it("shows spend-only when a month mixes revenue and revenue-null snapshots", async () => {
+    const ch = [
+      { platform: "GOOGLE", periodStart: "2026-06-01", periodEnd: "2026-06-07", spend: 2000, revenue: 8000, conversions: 20 },
+      { platform: "GOOGLE", periodStart: "2026-06-08", periodEnd: "2026-06-14", spend: 2000, revenue: null, conversions: null },
+    ];
+    const t = await getMarketingTrend(mockDb(ch, []));
+    const june = t.channels[0].points.find((p) => p.month === "2026-06")!;
+    expect(june.spend).toBe(4000);
+    expect(june.roas).toBeNull(); // not 8000/4000=2.0 (understated) — suppressed
   });
 });

@@ -91,12 +91,20 @@ function UploadCampaignsButton() {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
         body: JSON.stringify({ csv, fileName: "campaigns.csv" }),
       });
+      // The server always returns JSON (incl. its own 4xx). A non-JSON body means a
+      // proxy/gateway error — surface it instead of throwing on res.json().
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`${res.status} ${res.statusText}${txt ? ` — ${txt.slice(0, 120)}` : ""}`);
+      }
       return res.json();
     },
     onSuccess: (r: any) => {
-      if (r?.success) {
+      if (r?.success && typeof r.campaigns === "number" && r.month) {
         queryClient.invalidateQueries({ queryKey: ["/api/marketing/trend"] });
-        toast({ title: `Added ${r.campaigns} campaigns for ${r.month}`, description: `$${Math.round(r.totalSpend).toLocaleString()} spend ingested into the trend.` });
+        const spend = Number.isFinite(r.totalSpend) ? `$${Math.round(r.totalSpend).toLocaleString()} spend ingested into the trend.` : "Ingested into the trend.";
+        toast({ title: `Added ${r.campaigns} campaigns for ${r.month}`, description: spend });
       } else {
         toast({ title: "Couldn't read that file", description: r?.error || "Make sure it's a Meta campaigns export.", variant: "destructive" });
       }

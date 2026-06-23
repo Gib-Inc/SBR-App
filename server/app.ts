@@ -366,6 +366,24 @@ export default async function runApp(
     })();
   }, 150_000);
 
+  // CIPH.R — sync credit-line (liability) balances from QuickBooks shortly after
+  // boot, then every 6h, so the Credit Lines card shows live per-card balances.
+  // No-op until QuickBooks is connected. Fire-and-forget.
+  setTimeout(() => {
+    const tick = async () => {
+      try {
+        const { syncCreditLineBalances } = await import("./services/credit-lines-service");
+        const r = await syncCreditLineBalances();
+        if (r.synced) console.log(`[CreditLines] Synced ${r.synced} liability accounts from QuickBooks.`);
+      } catch (err: any) {
+        console.error("[CreditLines] Balance sync failed:", err?.message ?? err);
+      }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 6 * 60 * 60 * 1000);
+    if (typeof (t as any)?.unref === "function") (t as any).unref();
+  }, 130_000);
+
   // Arm the recurring schedulers (Extensiv sync, AI System Review,
   // Morning Trap, channel sync timers). These were previously declared
   // in scheduler-service.ts but startScheduler() was never called from

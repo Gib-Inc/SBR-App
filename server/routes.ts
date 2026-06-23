@@ -23439,6 +23439,49 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R — Credit lines: balances synced from QuickBooks liability accounts +
+  // operator-registered limit/APR/due → available credit, utilization, next due.
+  app.get("/api/finances/credit-lines", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { computeCreditLines } = await import("./services/credit-lines-service");
+      res.json(await computeCreditLines());
+    } catch (err: any) {
+      console.error("[Finances] credit-lines error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to load credit lines" });
+    }
+  });
+
+  app.post("/api/finances/credit-lines/sync", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { syncCreditLineBalances } = await import("./services/credit-lines-service");
+      res.json(await syncCreditLineBalances());
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to sync credit lines" });
+    }
+  });
+
+  app.post("/api/finances/credit-lines", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { createCreditLine } = await import("./services/credit-lines-service");
+      const { name, type, creditLimit, apr, dueDay } = req.body || {};
+      if (!name || typeof name !== "string") return res.status(400).json({ message: "name required" });
+      await createCreditLine({ name, type, creditLimit, apr, dueDay });
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to create credit line" });
+    }
+  });
+
+  app.patch("/api/finances/credit-lines/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { updateCreditLine } = await import("./services/credit-lines-service");
+      await updateCreditLine(req.params.id, req.body || {});
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err?.message || "Failed to update credit line" });
+    }
+  });
+
   // COUNT.M — stock variance: where the app's sellable counter (afs) has drifted
   // from the 3PL physical (pivot). Surfaces the afs-vs-Extensiv gap for true-up.
   app.get("/api/inventory/stock-variance", requireAuth, async (_req: Request, res: Response) => {

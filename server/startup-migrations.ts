@@ -296,6 +296,30 @@ const STARTUP_MIGRATIONS: { name: string; sql: string }[] = [
     name: "data_reconciliation_log.data_type_idx",
     sql: `CREATE INDEX IF NOT EXISTS data_reconciliation_log_data_type_idx ON data_reconciliation_log (data_type)`,
   },
+  {
+    name: "credit_lines.table",
+    sql: `CREATE TABLE IF NOT EXISTS credit_lines (
+            id text PRIMARY KEY DEFAULT (gen_random_uuid())::text,
+            name text NOT NULL,
+            type text NOT NULL DEFAULT 'card',
+            qb_account_id text,
+            qb_account_name text,
+            balance numeric DEFAULT 0,
+            credit_limit numeric,
+            apr numeric,
+            statement_day int,
+            due_day int,
+            notes text,
+            is_active boolean NOT NULL DEFAULT true,
+            balance_synced_at timestamptz,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now()
+          )`,
+  },
+  {
+    name: "credit_lines.qb_account_uidx",
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS ux_credit_lines_qb_account ON credit_lines (qb_account_id) WHERE qb_account_id IS NOT NULL`,
+  },
 ];
 
 export async function runStartupMigrations(): Promise<void> {

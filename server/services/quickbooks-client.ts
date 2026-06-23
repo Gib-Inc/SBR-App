@@ -550,6 +550,32 @@ export class QuickBooksClient {
     }
   }
 
+  /**
+   * Liability accounts (credit cards, lines of credit, loans) with live balances,
+   * for the Credit Lines dashboard. Read-only.
+   */
+  async fetchCreditLineAccounts(): Promise<Array<{ id: string; name: string; type: string; balance: number }>> {
+    const initialized = await this.initialize();
+    if (!initialized) return [];
+    try {
+      const q = encodeURIComponent(
+        "SELECT Id, Name, AccountType, AccountSubType, CurrentBalance FROM Account WHERE Active = true AND Classification = 'Liability' MAXRESULTS 200",
+      );
+      const r = await this.apiRequest<{ QueryResponse: { Account?: Array<{ Id: string; Name?: string; AccountType?: string; AccountSubType?: string; CurrentBalance?: number }> } }>(
+        `/query?query=${q}`,
+      );
+      return (r.QueryResponse?.Account || []).map((a) => ({
+        id: String(a.Id),
+        name: a.Name || String(a.Id),
+        type: a.AccountType || a.AccountSubType || "Liability",
+        balance: Number(a.CurrentBalance) || 0,
+      }));
+    } catch (e: any) {
+      console.error("[QuickBooks] fetchCreditLineAccounts failed:", e?.message ?? e);
+      return [];
+    }
+  }
+
   /** General Ledger detail for the given accounts over a date range (read-only). */
   async fetchGeneralLedger(startDate: string, endDate: string, accountIds: string[]): Promise<any | null> {
     if (!this.auth) return null;

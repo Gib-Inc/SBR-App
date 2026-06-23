@@ -116,6 +116,44 @@ export class ShopifyClient {
   }
 
   /**
+   * Shopify Payments "money on the way": current pending balance + any in-transit
+   * payouts. Requires the read_shopify_payments scope — returns {available:false}
+   * if the app token lacks it, so the caller can fall back to a sales estimate.
+   */
+  async fetchPayoutSummary(): Promise<
+    | { available: true; balance: number; inTransit: number; total: number; currency: string; nextPayoutDate: string | null }
+    | { available: false; reason: string }
+  > {
+    const headers = this.getHeaders();
+    try {
+      const balRes = await fetch(`${this.getBaseUrl()}/shopify_payments/balance.json`, { headers });
+      if (balRes.status === 401 || balRes.status === 403) return { available: false, reason: "missing_payments_scope" };
+      if (!balRes.ok) return { available: false, reason: `balance_${balRes.status}` };
+      const balJson: any = await balRes.json();
+      const bal = (balJson.balance || [])[0] || {};
+      const balance = parseFloat(bal.amount ?? "0") || 0;
+      const currency = bal.currency ?? "USD";
+
+      let inTransit = 0;
+      let nextPayoutDate: string | null = null;
+      try {
+        const poRes = await fetch(`${this.getBaseUrl()}/shopify_payments/payouts.json?limit=20`, { headers });
+        if (poRes.ok) {
+          const poJson: any = await poRes.json();
+          for (const p of (poJson.payouts || [])) {
+            if (p.status === "in_transit") inTransit += parseFloat(p.amount ?? "0") || 0;
+            if (p.status === "scheduled" && (!nextPayoutDate || (p.date && p.date < nextPayoutDate))) nextPayoutDate = p.date ?? null;
+          }
+        }
+      } catch { /* payouts list optional */ }
+
+      return { available: true, balance, inTransit, total: Math.round((balance + inTransit) * 100) / 100, currency, nextPayoutDate };
+    } catch (e: any) {
+      return { available: false, reason: e?.message ?? "error" };
+    }
+  }
+
+  /**
    * Fetch specific orders by their Shopify IDs (comma-separated).
    * Useful for checking fulfillment status of known orders.
    * Returns raw Shopify order objects (not normalized).

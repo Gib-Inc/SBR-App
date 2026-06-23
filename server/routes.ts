@@ -23427,6 +23427,18 @@ Generate only the email body text, no subject line.`;
   // CIPH.R — real BOM-based COGS by month (from costed sales × item WAC) plus a
   // budget at the measured cost rate. The measured number that retires the manual
   // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
+  // CIPH.R — Shopify cash on the way: exact Payments balance + in-transit payouts
+  // when the read_shopify_payments scope is granted, else a recent-sales estimate.
+  app.get("/api/finances/shopify-payouts", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { getShopifyCashOnTheWay } = await import("./services/shopify-payouts-service");
+      res.json(await getShopifyCashOnTheWay());
+    } catch (err: any) {
+      console.error("[Finances] shopify-payouts error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to load Shopify payouts" });
+    }
+  });
+
   // COUNT.M — stock variance: where the app's sellable counter (afs) has drifted
   // from the 3PL physical (pivot). Surfaces the afs-vs-Extensiv gap for true-up.
   app.get("/api/inventory/stock-variance", requireAuth, async (_req: Request, res: Response) => {

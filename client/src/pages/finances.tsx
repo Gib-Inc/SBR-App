@@ -8,6 +8,8 @@ import { InventoryAnticipationCard } from "@/components/inventory-anticipation-c
 import { ProductProfitabilityCard } from "@/components/product-profitability-card";
 import { SeasonalDemandCard } from "@/components/seasonal-demand-card";
 import { YoYCard } from "@/components/yoy-card";
+import { ShopifyCashCard } from "@/components/shopify-cash-card";
+import { CreditLinesCard } from "@/components/credit-lines-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
@@ -144,6 +146,12 @@ export default function Finances() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <FinancialPositionCard />
             <CashRunwayCard />
+          </div>
+
+          {/* Incoming cash + credit lines */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <ShopifyCashCard />
+            <CreditLinesCard balanceSheet={bs ?? null} />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

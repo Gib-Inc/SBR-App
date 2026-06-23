@@ -23427,6 +23427,21 @@ Generate only the email body text, no subject line.`;
   // CIPH.R — real BOM-based COGS by month (from costed sales × item WAC) plus a
   // budget at the measured cost rate. The measured number that retires the manual
   // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
+  // CIPH.R — per-SKU product profitability from real BOM cost (revenue − units ×
+  // build cost). Surfaces the money-losers Katana hides behind a flat 96% margin.
+  app.get("/api/finances/product-profitability", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeProductProfitability } = await import("./services/product-profitability-service");
+      const since = typeof req.query.since === "string" ? req.query.since : undefined;
+      const days = req.query.days ? Number(req.query.days) : undefined;
+      res.json(await computeProductProfitability(db, { since, days }));
+    } catch (err: any) {
+      console.error("[Finances] product-profitability error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute product profitability" });
+    }
+  });
+
   app.get("/api/finances/cogs-actual", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

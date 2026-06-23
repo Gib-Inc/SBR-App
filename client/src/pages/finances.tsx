@@ -5,6 +5,7 @@ import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
 import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { InventoryAnticipationCard } from "@/components/inventory-anticipation-card";
+import { ProductProfitabilityCard } from "@/components/product-profitability-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
@@ -230,6 +231,9 @@ export default function Finances() {
 
           {/* Data Integrity & Sync Health (reconciliation visibility) */}
           <DataHealthCard />
+
+          {/* Per-SKU product profitability (real BOM cost) */}
+          <ProductProfitabilityCard />
 
           {/* Inventory spend anticipation */}
           <InventoryAnticipationCard />

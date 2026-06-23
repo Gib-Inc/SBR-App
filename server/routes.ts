@@ -23808,6 +23808,21 @@ Generate only the email body text, no subject line.`;
   });
 
   // CIPH.R — anticipated inventory spend (upcoming restock cost + timing).
+  // COUNT.M — forward SEASONAL inventory-spend forecast: projects component
+  // purchasing $ for the next N months by re-applying each month's seasonal index,
+  // so the fall peak (and the long-lead build-up window) is visible months ahead.
+  app.get("/api/finances/seasonal-spend-forecast", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeSeasonalSpendForecast } = await import("./services/seasonal-spend-forecast-service");
+      const months = req.query.months ? Number(req.query.months) : 6;
+      res.json(await computeSeasonalSpendForecast(db, { months }));
+    } catch (err: any) {
+      console.error("[Finances] seasonal-spend-forecast error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute seasonal spend forecast" });
+    }
+  });
+
   app.get("/api/finances/inventory-anticipation", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { getInventorySpendAnticipation } = await import("./services/inventory-spend-service");

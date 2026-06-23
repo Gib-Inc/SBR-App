@@ -5,6 +5,7 @@ import { FinancialPositionCard } from "@/components/financial-position-card";
 import { CashRunwayCard } from "@/components/cash-runway-card";
 import { ProfitPlaygroundCard } from "@/components/profit-playground-card";
 import { InventoryAnticipationCard } from "@/components/inventory-anticipation-card";
+import { SeasonalSpendForecastCard } from "@/components/seasonal-spend-forecast-card";
 import { ProductProfitabilityCard } from "@/components/product-profitability-card";
 import { SeasonalDemandCard } from "@/components/seasonal-demand-card";
 import { YoYCard } from "@/components/yoy-card";
@@ -250,6 +251,9 @@ export default function Finances() {
 
           {/* Seasonal demand curve — the year at a glance */}
           <SeasonalDemandCard />
+
+          {/* Forward seasonal inventory-spend forecast */}
+          <SeasonalSpendForecastCard />
 
           {/* Inventory spend anticipation */}
           <InventoryAnticipationCard />

@@ -19,6 +19,21 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 export type Urgency = "STOCKOUT" | "CRITICAL" | "LOW" | "OK";
 const URGENCY_RANK: Record<Urgency, number> = { STOCKOUT: 0, CRITICAL: 1, LOW: 2, OK: 3 };
 
+/**
+ * Build a per-product deep link from a supplier's product_url_template and the
+ * vendor part number. "{sku}" in the template is replaced with the url-encoded
+ * part; a template without the token is treated as a fixed product URL. Returns
+ * null when we don't have enough to link (caller falls back to the vendor home).
+ */
+export function buildProductUrl(template: string | null | undefined, part: string | null | undefined): string | null {
+  const p = (part ?? "").trim();
+  const t = (template ?? "").trim();
+  if (!t) return null;
+  if (!t.includes("{sku}")) return t;
+  if (!p) return null;
+  return t.replace("{sku}", encodeURIComponent(p));
+}
+
 export interface ReorderNeed {
   itemId: string; sku: string; name: string;
   weeklyDemand: number; onHand: number; onOrder: number; weeksCover: number | null;
@@ -28,6 +43,9 @@ export interface ReorderNeed {
   // Fulfillment: online suppliers (McMaster, Uline, Home Depot, Amazon) are
   // self-served on a website — a shopping list + link, not a PO to send.
   orderOnline: boolean; vendorUrl: string | null;
+  // Deep link to this exact product on the vendor site (vendor part number +
+  // the supplier's product_url_template), so the line links straight to it.
+  vendorPart: string | null; productUrl: string | null;
   // Seasonal: raw velocity is weeklyDemand; the reorder math runs on the
   // season-adjusted demand so orders anticipate the spring/fall peaks.
   seasonalFactor: number; seasonalWeeklyDemand: number;
@@ -87,7 +105,8 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       GROUP BY pol.item_id
     ),
     designated AS (
-      SELECT DISTINCT ON (si.item_id) si.item_id, si.supplier_id, si.minimum_order_quantity AS moq, si.lead_time_days
+      SELECT DISTINCT ON (si.item_id) si.item_id, si.supplier_id, si.minimum_order_quantity AS moq, si.lead_time_days,
+             si.supplier_sku
       FROM supplier_items si WHERE si.is_designated_supplier ORDER BY si.item_id, si.price NULLS LAST
     )
     SELECT i.id, i.sku, i.name,
@@ -97,6 +116,7 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       COALESCE(i.wac_unit_cost,0)::float8 AS unit_cost,
       dg.supplier_id, COALESCE(dg.lead_time_days,14)::float8 AS lead_days,
       COALESCE(dg.moq,0)::float8 AS moq, s.name AS vendor_name,
+      dg.supplier_sku AS vendor_part, s.product_url_template AS product_url_template,
       s.ordering_method, COALESCE(s.record_only_default,false) AS record_only,
       COALESCE(s.website, s.catalog_url) AS vendor_url
     FROM items i
@@ -131,6 +151,8 @@ export async function computeReorderNeeds(db: DB): Promise<ReorderNeed[]> {
       seasonalFactor: r2(seasonalFactor), seasonalWeeklyDemand: r1(seasonalWeeklyDemand),
       orderOnline: r.record_only === true || /online|in-?store/i.test(String(r.ordering_method || "")),
       vendorUrl: r.vendor_url ?? null,
+      vendorPart: r.vendor_part ?? null,
+      productUrl: buildProductUrl(r.product_url_template, r.vendor_part),
     };
   });
 

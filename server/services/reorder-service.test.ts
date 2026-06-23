@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { reorderLine, groupNeedsByVendor, orderCadence, type ReorderNeed } from "./reorder-service";
+import { reorderLine, groupNeedsByVendor, orderCadence, buildProductUrl, type ReorderNeed } from "./reorder-service";
+
+describe("buildProductUrl", () => {
+  it("substitutes the url-encoded part number into the template", () => {
+    expect(buildProductUrl("https://www.mcmaster.com/{sku}/", "91257A592")).toBe("https://www.mcmaster.com/91257A592/");
+    expect(buildProductUrl("https://www.uline.com/Product/Detail/{sku}", "S-2961")).toBe("https://www.uline.com/Product/Detail/S-2961");
+  });
+  it("url-encodes parts with spaces/slashes", () => {
+    expect(buildProductUrl("https://x.com/s/{sku}", "Bowtie Cotter Pin")).toBe("https://x.com/s/Bowtie%20Cotter%20Pin");
+  });
+  it("returns null when template or part is missing, and passes through a tokenless template", () => {
+    expect(buildProductUrl(null, "S-2961")).toBeNull();
+    expect(buildProductUrl("https://www.mcmaster.com/{sku}/", null)).toBeNull();
+    expect(buildProductUrl("https://www.mcmaster.com/{sku}/", "  ")).toBeNull();
+    expect(buildProductUrl("https://vendor.com/catalog", "anything")).toBe("https://vendor.com/catalog");
+  });
+});
 
 describe("reorderLine", () => {
   it("flags a stockout and refills to target", () => {
@@ -62,7 +78,7 @@ describe("groupNeedsByVendor", () => {
     leadTimeDays: 14, reorderPoint: 40, needed, suggestedOrderQty: needed, vendorId, vendorName,
     moq: 0, unitCost: 1, estReorderCost: est, urgency,
     seasonalFactor: 1, seasonalWeeklyDemand: 10,
-    orderOnline: false, vendorUrl: null,
+    orderOnline: false, vendorUrl: null, vendorPart: null, productUrl: null,
   });
 
   it("groups needed items by vendor, sums cost, and ranks by urgency", () => {

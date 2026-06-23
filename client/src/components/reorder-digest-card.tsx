@@ -11,7 +11,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Package, AlertTriangle, RefreshCw, ChevronRight, ShoppingCart, ExternalLink } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { Package, AlertTriangle, RefreshCw, ChevronRight, ShoppingCart, ExternalLink, Copy } from "lucide-react";
 
 interface DigestLine {
   sku: string;
@@ -20,6 +21,8 @@ interface DigestLine {
   urgency: string;
   weeksCover: number | null;
   seasonalFactor?: number;
+  vendorPart?: string | null;
+  productUrl?: string | null;
 }
 interface VendorNeeds {
   vendorId: string;
@@ -64,7 +67,25 @@ export function ReorderDigestCard({ live = false }: { live?: boolean } = {}) {
   // live=true reads the always-current reorder needs; otherwise the stored weekly
   // digest. The page uses live so it never goes stale.
   const endpoint = live ? "/api/reorder/needs" : "/api/reorder/digest";
+  const { toast } = useToast();
   const { data: raw, isLoading } = useQuery<any>({ queryKey: [endpoint] });
+
+  // Copy a paste-ready "part-number<TAB>qty" list for a vendor's own quick-order
+  // box (Uline Speed Order, McMaster order-by-part). No vendor exposes a public
+  // add-to-cart URL, so this is the closest one-click path to filling the cart.
+  const copyList = async (v: VendorNeeds) => {
+    const items = (v.lines || []).filter((l) => l.suggestedOrderQty > 0);
+    const text = items.map((l) => `${l.vendorPart || l.sku}\t${l.suggestedOrderQty}`).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({
+        title: `Copied ${items.length} item${items.length === 1 ? "" : "s"}`,
+        description: `Paste into ${v.vendorName}'s quick-order box — part number + quantity per line.`,
+      });
+    } catch {
+      toast({ title: "Couldn't copy", description: "Clipboard was blocked by the browser.", variant: "destructive" });
+    }
+  };
   const { data: cogs } = useQuery<CogsActual>({ queryKey: ["/api/finances/cogs-actual"] });
   const run = useMutation({
     mutationFn: async () => {
@@ -172,13 +193,40 @@ export function ReorderDigestCard({ live = false }: { live?: boolean } = {}) {
                             <span className="font-medium">{v.vendorName}</span>
                           )}
                           <span className="text-muted-foreground">— no PO to send.</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[11px]"
+                            onClick={() => copyList(v)}
+                            data-testid={`button-copy-list-${v.vendorId}`}
+                          >
+                            <Copy className="mr-1 h-3 w-3" /> Copy order list
+                          </Button>
                         </div>
                       )}
                       {v.lines.map((l) => (
                         <div key={l.sku} className="flex items-center justify-between gap-2 text-xs">
                           <span className="min-w-0 truncate">
-                            <span className="font-mono">{l.sku}</span>
-                            <span className="text-muted-foreground"> {l.name}</span>
+                            {l.productUrl ? (
+                              <a
+                                href={l.productUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-0.5 font-medium text-blue-700 underline dark:text-blue-300"
+                                data-testid={`link-product-${l.sku}`}
+                                title={l.vendorPart ? `Vendor part ${l.vendorPart}` : undefined}
+                              >
+                                {l.name} <ExternalLink className="h-3 w-3 shrink-0" />
+                              </a>
+                            ) : (
+                              <>
+                                <span className="font-mono">{l.sku}</span>
+                                <span className="text-muted-foreground"> {l.name}</span>
+                              </>
+                            )}
+                            {l.vendorPart && (
+                              <span className="ml-1 font-mono text-[10px] text-muted-foreground">· {l.vendorPart}</span>
+                            )}
                           </span>
                           <span className="shrink-0 whitespace-nowrap">
                             {l.seasonalFactor != null && l.seasonalFactor >= 1.15 && (

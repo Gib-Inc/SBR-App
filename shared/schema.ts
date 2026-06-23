@@ -318,6 +318,10 @@ export const suppliers = pgTable("suppliers", {
   notes: text("notes"),
   paymentTerms: text("payment_terms"),
   catalogUrl: text("catalog_url"),
+  // Deep-link template for online vendors: "{sku}" is replaced with the
+  // supplier_sku (vendor part number), e.g. "https://www.mcmaster.com/{sku}/".
+  // Lets the reorder list link each line straight to its product page.
+  productUrlTemplate: text("product_url_template"),
   logoUrl: text("logo_url"),
   ghlContactId: text("ghl_contact_id"),
   // Supplier metrics for AI supplier selection

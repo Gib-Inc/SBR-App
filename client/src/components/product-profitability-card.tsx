@@ -61,11 +61,12 @@ export function ProductProfitabilityCard() {
   const s = data?.summary;
   const rows = data?.rows || [];
   const losers = rows.filter((r) => r.marginPct != null && r.marginPct < 0);
-  // Top sellers by revenue, drawn in margin order so winners and losers separate cleanly.
-  const chartRows = [...rows]
-    .filter((r) => r.marginPct != null)
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 12)
+  // Top sellers by revenue + every money-loser, drawn in margin order so the
+  // healthy bars and the red losers separate cleanly.
+  const withMargin = rows.filter((r) => r.marginPct != null);
+  const topByRev = [...withMargin].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+  const extraLosers = withMargin.filter((r) => (r.marginPct as number) < 0 && !topByRev.includes(r));
+  const chartRows = [...topByRev, ...extraLosers]
     .sort((a, b) => (b.marginPct ?? 0) - (a.marginPct ?? 0))
     .map((r) => ({ label: r.sku, marginPct: r.marginPct as number }));
 

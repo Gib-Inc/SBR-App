@@ -25441,6 +25441,50 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // CIPH.R Budget & P&L — categorized P&L from QuickBooks line items + budget-vs-actual.
+  app.get("/api/finances/budget-scorecard", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getBudgetScorecard } = await import("./services/finance-pnl-service");
+      res.json({ success: true, ...(await getBudgetScorecard(db)) });
+    } catch (error: any) {
+      console.error("[Budget] scorecard error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load budget scorecard" });
+    }
+  });
+
+  // Drill-down: the vendors behind one expense category over the trailing window.
+  app.get("/api/finances/category-vendors", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const account = String(req.query.account ?? "");
+      if (!account) return res.status(400).json({ success: false, error: "account is required" });
+      const { db } = await import("./db");
+      const { getCategoryVendors } = await import("./services/finance-pnl-service");
+      res.json({ success: true, account, vendors: await getCategoryVendors(db, account) });
+    } catch (error: any) {
+      console.error("[Budget] category-vendors error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load category vendors" });
+    }
+  });
+
+  // Set a category's target % of net sales.
+  app.put("/api/finances/budget-target", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const account = typeof req.body?.account === "string" ? req.body.account : "";
+      const targetPct = Number(req.body?.targetPct);
+      if (!account || !Number.isFinite(targetPct) || targetPct < 0 || targetPct > 100) {
+        return res.status(400).json({ success: false, error: "account and a targetPct between 0 and 100 are required" });
+      }
+      const { db } = await import("./db");
+      const { setBudgetTarget } = await import("./services/finance-pnl-service");
+      await setBudgetTarget(db, account, targetPct);
+      res.json({ success: true, account, targetPct });
+    } catch (error: any) {
+      console.error("[Budget] set-target error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to set budget target" });
+    }
+  });
+
   app.get("/api/marketing/trend", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

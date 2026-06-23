@@ -37,6 +37,7 @@ import Login from "@/pages/login";
 import POAcknowledge from "@/pages/po-acknowledge";
 import Reports from "@/pages/reports";
 import Finances from "@/pages/finances";
+import Budget from "@/pages/budget";
 import Health from "@/pages/health";
 import FinOps from "@/pages/finops";
 import ReorderAlerts from "@/pages/reorder-alerts";
@@ -140,6 +141,7 @@ function AuthenticatedApp() {
                   <Switch>
                     <Route path="/" component={Reports} />
                     <Route path="/finances" component={Finances} />
+                    <Route path="/budget" component={Budget} />
                     <Route path="/health" component={Health} />
                     <Route path="/finops" component={FinOps} />
                     <Route path="/reorder-alerts" component={ReorderAlerts} />

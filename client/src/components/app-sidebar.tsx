@@ -1,4 +1,4 @@
-import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing, ListOrdered, Link2, ClipboardEdit, DollarSign, FileUp, Gauge, Hammer } from "lucide-react";
+import { Package, Barcode, Brain, Settings, Building2, PackageOpen, ShoppingCart, ClipboardList, BarChart3, Workflow, Factory, ClipboardCheck, PackageCheck, Megaphone, Warehouse, Boxes, Truck, ListChecks, PackagePlus, Activity, BellRing, ListOrdered, Link2, ClipboardEdit, DollarSign, FileUp, Gauge, Hammer, Wallet } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -23,6 +23,7 @@ import {
 const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Finances",   url: "/finances",    icon: DollarSign },
+  { title: "Budget",     url: "/budget",      icon: Wallet     },
   { title: "Health",     url: "/health",      icon: Activity   },
   { title: "FinOps",     url: "/finops",      icon: Gauge      },
   { title: "Inventory",  url: "/inventory",   icon: Warehouse  },

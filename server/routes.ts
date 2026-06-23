@@ -23808,6 +23808,19 @@ Generate only the email body text, no subject line.`;
   });
 
   // CIPH.R — anticipated inventory spend (upcoming restock cost + timing).
+  // CIPH.R — Debt runway: projects the Shopify Capital advance to $0 from the live
+  // Shopify sales pace (17% of Shopify sales) → the payoff date + paydown schedule.
+  app.get("/api/finances/debt-runway", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeDebtRunway } = await import("./services/debt-runway-service");
+      res.json(await computeDebtRunway(db));
+    } catch (err: any) {
+      console.error("[Finances] debt-runway error:", err?.message ?? err);
+      res.status(500).json({ message: err?.message || "Failed to compute debt runway" });
+    }
+  });
+
   // CIPH.R — Path-to-Profitability model: cost structure derived from the QB P&L
   // + remaining-year revenue (last year's same months) for live ROAS/revenue
   // scenarios → full-year net and the breakeven ("standard to success") ROAS.

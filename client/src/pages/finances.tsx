@@ -12,6 +12,7 @@ import { YoYCard } from "@/components/yoy-card";
 import { PathToProfitabilityCard } from "@/components/path-to-profitability-card";
 import { ShopifyCashCard } from "@/components/shopify-cash-card";
 import { CreditLinesCard } from "@/components/credit-lines-card";
+import { DebtRunwayCard } from "@/components/debt-runway-card";
 import { ExecutiveSummaryCard } from "@/components/executive-summary-card";
 import { ShopifyPeriodCard } from "@/components/shopify-period-card";
 import { UnifiedPerformanceCard } from "@/components/unified-performance-card";
@@ -155,6 +156,9 @@ export default function Finances() {
             <ShopifyCashCard />
             <CreditLinesCard balanceSheet={bs ?? null} />
           </div>
+
+          {/* Debt runway — Shopify Capital payoff date */}
+          <DebtRunwayCard />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Where the money goes */}

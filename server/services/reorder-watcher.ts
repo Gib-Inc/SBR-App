@@ -596,6 +596,13 @@ async function buildCandidates(): Promise<Candidate[]> {
 }
 
 function hasRecentCooldown(candidate: Candidate, alerts: ReorderAlert[], communications: VendorCommunication[]): boolean {
+  // An UNRESOLVED pending alert for this item already represents the need — never
+  // stack a second one on top, regardless of age or supplier. (Without this, once
+  // the cooldown window lapsed the watcher created a fresh pending alert every
+  // cycle, and with auto-send paused they never cleared — 65 dupes for 14 items.)
+  const openPending = alerts.some((alert) => alert.itemId === candidate.item.id && alert.alertStatus === "pending");
+  if (openPending) return true;
+
   const recentAlert = alerts.find((alert) =>
     alert.itemId === candidate.item.id &&
     alert.supplierId === candidate.supplier.id &&

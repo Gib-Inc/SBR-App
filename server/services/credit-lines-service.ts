@@ -12,11 +12,17 @@ import { QuickBooksClient } from "./quickbooks-client";
 const rows = (r: any) => r.rows || r;
 const n = (v: any) => (v == null ? null : Number(v));
 
-/** Map a QuickBooks account type to our line type. */
+// Operational liabilities that are NOT credit lines (A/P, taxes, payroll, etc.).
+const OPERATIONAL = /accounts?\s*payable|\ba\/p\b|sales\s*tax|payroll|deferred\s*revenue|remittance|employee\s*advance|direct\s*deposit|accrued|child\s*support|income\s*tax|unemployment|\b94[0-4]\b|corporate\s*tax|^other current liabilities$/i;
+export function isOperationalLiability(name: string): boolean {
+  return OPERATIONAL.test(name || "");
+}
+
+/** Map a QuickBooks account to our credit-line type (card | loc | loan | liability). */
 function lineType(qbType: string, name: string): string {
-  if (/credit\s*card/i.test(qbType)) return "card";
-  if (/line\s*of\s*credit|revolv/i.test(name) || /line\s*of\s*credit/i.test(qbType)) return "loc";
-  if (/long\s*term|loan|note/i.test(qbType)) return "loan";
+  if (/credit\s*card/i.test(qbType) || /visa|amex|american express|discover|home\s*depot|capital one|capital on tap|mastercard|shopify credit/i.test(name)) return "card";
+  if (/line\s*of\s*credit|heloc|\bloc\b/i.test(name)) return "loc";
+  if (/long\s*term|loan|note/i.test(qbType) || /loan|sba|mortgage|notes?\s*payable|funding|\bcapital\b|paypal|loanbuilder|uncapped/i.test(name)) return "loan";
   return "liability";
 }
 
@@ -30,12 +36,14 @@ export async function syncCreditLineBalances(): Promise<{ synced: number; skippe
 
   let synced = 0;
   for (const a of accounts) {
+    if (isOperationalLiability(a.name)) continue; // taxes, payroll, A/P — not credit lines
     const t = lineType(a.type, a.name);
+    const owed = Math.abs(a.balance); // QB returns liabilities credit-negative; show amount owed
     await db.execute(sql`
       INSERT INTO credit_lines (name, type, qb_account_id, qb_account_name, balance, balance_synced_at)
-      VALUES (${a.name}, ${t}, ${a.id}, ${a.name}, ${a.balance}, now())
+      VALUES (${a.name}, ${t}, ${a.id}, ${a.name}, ${owed}, now())
       ON CONFLICT (qb_account_id) WHERE qb_account_id IS NOT NULL
-      DO UPDATE SET balance = EXCLUDED.balance, qb_account_name = EXCLUDED.qb_account_name,
+      DO UPDATE SET balance = EXCLUDED.balance, type = EXCLUDED.type, qb_account_name = EXCLUDED.qb_account_name,
                     balance_synced_at = now(), updated_at = now()
     `).catch((e: any) => console.error(`[CreditLines] upsert ${a.name} failed:`, e?.message ?? e));
     synced++;

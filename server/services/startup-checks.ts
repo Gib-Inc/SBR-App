@@ -261,6 +261,10 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS invoice_total REAL`,
     // Idempotency for vendor-email imports: one PO per (supplier, vendor order number).
     `CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_supplier_vendor_order_unique_idx ON purchase_orders (supplier_id, vendor_order_number) WHERE vendor_order_number IS NOT NULL`,
+    // Per-campaign monthly ad performance (month-over-month trend by campaign).
+    `CREATE TABLE IF NOT EXISTS ad_campaign_performance (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), platform text NOT NULL, campaign_name text NOT NULL, month text NOT NULL, period_start date, period_end date, spend real NOT NULL DEFAULT 0, revenue real, purchases integer, impressions integer, source text, superseded boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS ad_campaign_perf_platform_campaign_month_idx ON ad_campaign_performance (platform, lower(campaign_name), month) WHERE superseded = false`,
+    `CREATE INDEX IF NOT EXISTS ad_campaign_perf_month_idx ON ad_campaign_performance (month)`,
     // SKU mappings — created here too in case drizzle-kit push hasn't run.
     `CREATE TABLE IF NOT EXISTS sku_mappings (
        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),

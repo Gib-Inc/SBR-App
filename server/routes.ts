@@ -25403,6 +25403,45 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // VECT.R — month-over-month marketing trend (channel + campaign, with deltas vs
+  // prior month and the 8x target). "Are things getting better?"
+  app.get("/api/marketing/trend", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getMarketingTrend } = await import("./services/marketing-trend-service");
+      res.json({ success: true, ...(await getMarketingTrend(db)) });
+    } catch (error: any) {
+      console.error("[Marketing Trend] error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load marketing trend" });
+    }
+  });
+
+  // Ingest a Meta Ads Manager "Campaigns" CSV (raw text) into the per-campaign
+  // monthly trend. Re-uploading the same month replaces it (no double-count).
+  app.post("/api/marketing/campaign-month/ingest", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+      const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "campaigns.csv";
+      if (!csv.trim()) return res.status(400).json({ success: false, error: "Paste or upload a Meta campaigns CSV." });
+      const { parseMetaCampaignsCsv } = await import("./services/meta-campaigns-parser");
+      const parsed = parseMetaCampaignsCsv(Buffer.from(csv, "utf8"), fileName, "text/csv");
+      if (!parsed.ok || !parsed.month) {
+        return res.status(422).json({ success: false, error: parsed.error || "Could not read campaigns from that file." });
+      }
+      const { db } = await import("./db");
+      const { ingestCampaignMonth } = await import("./services/marketing-trend-service");
+      const result = await ingestCampaignMonth(db, {
+        platform: parsed.platform, month: parsed.month,
+        periodStart: parsed.periodStart, periodEnd: parsed.periodEnd,
+        source: `upload:${fileName}`, campaigns: parsed.campaigns,
+      });
+      res.json({ success: true, month: result.month, campaigns: result.inserted, totalSpend: parsed.totalSpend });
+    } catch (error: any) {
+      console.error("[Marketing Trend] ingest error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to ingest campaigns" });
+    }
+  });
+
   app.get("/api/system-integrity", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { getLatestIntegrityReport } = await import("./services/system-integrity-service");

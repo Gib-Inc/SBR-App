@@ -15,6 +15,7 @@ import { CustomerSplitView } from '@/components/marketing-analytics/customer-spl
 import { GeographicView } from '@/components/marketing-analytics/geographic-view';
 import { CreativeFatigueView } from '@/components/marketing-analytics/creative-fatigue-view';
 import { MonthlyPerformanceView } from '@/components/marketing-analytics/monthly-performance-view';
+import { TrendView } from '@/components/marketing-analytics/trend-view';
 import { SalesVelocityView } from '@/components/marketing-analytics/sales-velocity-view';
 import { MultiYearView } from '@/components/marketing-analytics/multi-year-view';
 import { CMOHistoryView } from '@/components/marketing-analytics/cmo-history-view';
@@ -59,6 +60,7 @@ export default function MarketingAnalytics() {
       <Tabs defaultValue="command">
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="command">Command Center</TabsTrigger>
+          <TabsTrigger value="trend">Trend</TabsTrigger>
           <TabsTrigger value="monthly">Monthly</TabsTrigger>
           <TabsTrigger value="velocity">Velocity</TabsTrigger>
           <TabsTrigger value="years">Year/Year</TabsTrigger>
@@ -76,6 +78,7 @@ export default function MarketingAnalytics() {
           <TabsTrigger value="seasonal">Seasonal</TabsTrigger>
         </TabsList>
         <TabsContent value="command"><CommandCenterView days={days} /></TabsContent>
+        <TabsContent value="trend"><TrendView /></TabsContent>
         <TabsContent value="monthly"><MonthlyPerformanceView /></TabsContent>
         <TabsContent value="velocity"><SalesVelocityView days={days} /></TabsContent>
         <TabsContent value="years"><MultiYearView /></TabsContent>

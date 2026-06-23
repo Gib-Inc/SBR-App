@@ -177,7 +177,7 @@ import { randomUUID } from "crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
-import type { QbPlDetailRow, QbVendorExpenseRow } from "./services/qb-expense-detail-sync";
+import type { QbPlDetailRow } from "./services/qb-expense-detail-sync";
 import * as schema from "@shared/schema";
 
 // Row shape returned by the v_money_maker_health view (per-build capacity
@@ -683,7 +683,7 @@ export interface IStorage {
   getQbFinancialSnapshots(limit?: number): Promise<QbFinancialSnapshot[]>;
   // QuickBooks expense detail (CIPH.R) — transaction-level P&L lines + vendor rollups
   bulkInsertQbPlDetail(rows: QbPlDetailRow[]): Promise<number>;
-  upsertQbVendorExpense(rows: QbVendorExpenseRow[]): Promise<number>;
+  rebuildQbVendorExpense(realmId: string): Promise<number>;
   qbPlDetailHasRows(): Promise<boolean>;
   // CIPH.R Phase 2 — runway forecasts + ad-spend window query
   getAdMetricsInRange(startDate: string, endDate: string): Promise<AdMetricsDaily[]>;
@@ -3815,7 +3815,7 @@ export class MemStorage implements IStorage {
   async bulkInsertQbPlDetail(_rows: QbPlDetailRow[]): Promise<number> {
     return 0;
   }
-  async upsertQbVendorExpense(_rows: QbVendorExpenseRow[]): Promise<number> {
+  async rebuildQbVendorExpense(_realmId: string): Promise<number> {
     return 0;
   }
   async qbPlDetailHasRows(): Promise<boolean> {
@@ -7677,17 +7677,23 @@ export class PostgresStorage implements IStorage {
     }
     return inserted;
   }
-  async upsertQbVendorExpense(rows: QbVendorExpenseRow[]): Promise<number> {
-    if (!rows.length) return 0;
-    for (const r of rows) {
-      await this.db.execute(drizzleSql`
-        INSERT INTO qb_vendor_expense (realm_id, vendor, period_start, period_end, total_amount)
-        VALUES (${r.realmId}, ${r.vendor}, ${r.periodStart}, ${r.periodEnd}, ${r.totalAmount})
-        ON CONFLICT (realm_id, vendor, period_start, period_end)
-        DO UPDATE SET total_amount = EXCLUDED.total_amount, synced_at = now()
-      `);
-    }
-    return rows.length;
+  async rebuildQbVendorExpense(realmId: string): Promise<number> {
+    // Aggregate per-vendor monthly totals straight from the persisted detail —
+    // can't silently fail from in-memory state, and always matches qb_pl_detail.
+    const r = await this.db.execute(drizzleSql`
+      INSERT INTO qb_vendor_expense (realm_id, vendor, period_start, period_end, total_amount)
+      SELECT realm_id,
+             vendor_or_payee,
+             date_trunc('month', txn_date)::date AS period_start,
+             (date_trunc('month', txn_date) + interval '1 month' - interval '1 day')::date AS period_end,
+             round(sum(amount)::numeric, 2) AS total_amount
+      FROM qb_pl_detail
+      WHERE realm_id = ${realmId} AND vendor_or_payee IS NOT NULL AND txn_date IS NOT NULL
+      GROUP BY realm_id, vendor_or_payee, date_trunc('month', txn_date)
+      ON CONFLICT (realm_id, vendor, period_start, period_end)
+      DO UPDATE SET total_amount = EXCLUDED.total_amount, synced_at = now()
+    `);
+    return ((r as any).rowCount as number) ?? 0;
   }
   async qbPlDetailHasRows(): Promise<boolean> {
     const r = await this.db.execute(drizzleSql`SELECT 1 FROM qb_pl_detail LIMIT 1`);

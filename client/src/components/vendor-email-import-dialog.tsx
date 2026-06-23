@@ -17,6 +17,7 @@ interface MatchedLine { sku: string; itemName: string; vendorPart: string | null
 interface UnmatchedLine { description: string; vendorPart: string | null; qty: number; unitCost: number; }
 interface Result {
   ok: boolean; reason?: string; duplicate?: boolean; poId?: string; poNumber?: string;
+  poStatus?: string; autoOrdered?: boolean;
   supplier?: { id: string; name: string }; orderNumber?: string | null;
   matched: MatchedLine[]; unmatched: UnmatchedLine[];
   totals?: { subtotal: number | null; shipping: number | null; tax: number | null; total: number | null };
@@ -119,10 +120,14 @@ function ResultPanel({ result, onReset }: { result: Result; onReset: () => void 
   if (result.ok) {
     const matchedSubtotal = result.matched.reduce((s, l) => s + l.qty * l.unitCost, 0);
     const parsedTotal = result.totals?.total ?? null;
+    const ordered = result.autoOrdered === true;
     return (
       <div className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm dark:border-green-900/40 dark:bg-green-950/30" data-testid="vendor-email-result-ok">
         <div className="flex items-center gap-2 font-medium text-green-800 dark:text-green-300">
-          <CheckCircle2 className="h-4 w-4" /> Draft PO {result.poNumber} created for {result.supplier?.name}
+          <CheckCircle2 className="h-4 w-4" />
+          {ordered
+            ? `Order ${result.poNumber} logged for ${result.supplier?.name}`
+            : `Draft PO ${result.poNumber} created for ${result.supplier?.name}`}
         </div>
         <p className="mt-1 text-green-700 dark:text-green-300/80">
           {result.matched.length} line{result.matched.length === 1 ? "" : "s"} matched · {money(matchedSubtotal)} subtotal
@@ -131,7 +136,12 @@ function ResultPanel({ result, onReset }: { result: Result; onReset: () => void 
           )}
         </p>
         {result.unmatched.length > 0 && <UnmatchedList lines={result.unmatched} />}
-        <p className="mt-2 text-xs text-muted-foreground">Review it on the Purchase Orders list, then confirm to receive. <button className="underline" onClick={onReset}>Log another</button></p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {ordered
+            ? "Every line matched, so it's logged as ordered — it's in the Incoming queue, ready to Mark Received when it lands."
+            : "Some lines need mapping, so it's held as a draft on the Purchase Orders list. Map the parts, then it's ready to receive."}{" "}
+          <button className="underline" onClick={onReset}>Log another</button>
+        </p>
       </div>
     );
   }

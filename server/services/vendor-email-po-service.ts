@@ -4,9 +4,14 @@
  * Online vendors (Uline, McMaster-Carr, Home Depot, Silver Fox, Austin Enterprises)
  * are bought on their websites, so those purchases never hit the PO system and the
  * app is blind to that spend + incoming stock. This closes the gap: feed it a vendor
- * order-confirmation email, it parses the lines with Claude, matches them to our SKUs
- * by vendor part number, and drops a DRAFT PO for review (never auto-finalized — a
- * misread or re-sent email must not create live inventory/spend on its own).
+ * order-confirmation email, it parses the lines with Claude and matches them to our
+ * SKUs by vendor part number.
+ *
+ * A confirmation email means the order is ALREADY placed, so when the vendor is
+ * recognized and EVERY line matches a SKU there is nothing to confirm — it is logged
+ * straight as "ordered" (status SENT) and lands in the Incoming queue. Only an
+ * unmatched line or an unresolved vendor holds it as a DRAFT for review. Either way
+ * nothing touches live inventory or QuickBooks until it is marked received.
  *
  * Delivery-agnostic: the same entry point serves the manual "paste an email" box and
  * an n8n Gmail watcher POSTing to /api/purchase-orders/from-vendor-email. Re-delivery
@@ -237,11 +242,13 @@ export async function parseVendorOrderEmail(input: { subject?: string; from?: st
 
 export interface VendorEmailPoResult {
   ok: boolean;
-  reason?: string;          // when ok=false (empty_email | parse_failed | no_line_items | supplier_not_found | no_matched_lines)
+  reason?: string;          // when ok=false (empty_email | llm_not_configured | parse_failed | no_line_items | supplier_not_found | no_matched_lines)
   duplicate?: boolean;
   existingPoId?: string;
   poId?: string;
   poNumber?: string;
+  poStatus?: string;        // "SENT" when auto-ordered (clean match), "DRAFT" when held for review
+  autoOrdered?: boolean;    // true = known vendor + every line matched → logged as ordered, no review
   supplier?: SupplierLite;
   orderNumber?: string | null;
   matched: MatchedLine[];
@@ -253,7 +260,7 @@ export interface VendorEmailPoResult {
  * Orchestrator (impure): parse a vendor email → resolve supplier → de-dupe on
  * (supplier, orderNumber) → match lines → create a DRAFT PO with the matched lines.
  * Unmatched lines are reported, never invented (purchase_order_lines.item_id is
- * NOT NULL). Never finalizes — the PO lands as DRAFT for review.
+ * NOT NULL). Clean match (no unmatched lines) → status SENT/ordered; otherwise DRAFT.
  */
 export async function createDraftPoFromVendorEmail(input: { subject?: string; from?: string; text: string }): Promise<VendorEmailPoResult> {
   const empty = { matched: [] as MatchedLine[], unmatched: [] as UnmatchedLine[] };
@@ -297,11 +304,17 @@ export async function createDraftPoFromVendorEmail(input: { subject?: string; fr
     WHERE supplier_id = ${supplier.id} AND vendor_order_number = ${idemKey} LIMIT 1`))[0];
   if (existing) return dupResult(existing);
 
+  // Confidence gate: a known vendor with EVERY line matched to a SKU needs no
+  // review — the order is already placed, so log it straight to "ordered" (lands
+  // in the Incoming queue, ready to receive). Any unmatched line holds it as a
+  // DRAFT so a human maps the parts first. Either way QuickBooks only bills on
+  // receive, and "ordered" counts as on-order for the reorder engine.
+  const clean = unmatched.length === 0;
   const { storage } = await import("../storage");
   const subtotal = Math.round(matched.reduce((s, l) => s + l.qty * l.unitCost, 0) * 100) / 100;
   const poNumber = await storage.getNextPONumber();
   const noteBits = [
-    `Imported from ${supplier.name} email`,
+    clean ? `Auto-logged from ${supplier.name} email` : `Imported from ${supplier.name} email`,
     parsed.orderNumber ? `order ${parsed.orderNumber}` : null,
     unmatched.length ? `${unmatched.length} line(s) unmatched — review` : null,
   ].filter(Boolean);
@@ -313,8 +326,10 @@ export async function createDraftPoFromVendorEmail(input: { subject?: string; fr
       supplierId: supplier.id,
       supplierName: supplier.name,
       currency: "USD",
-      status: "DRAFT",
-      isAutoDraft: true,
+      status: clean ? "SENT" : "DRAFT",
+      poStatus: clean ? "ordered" : undefined,
+      sentAt: clean ? new Date() : undefined,
+      isAutoDraft: !clean,           // clean = a real ordered PO; messy = a draft to review (amber flag)
       source: "vendor_email",
       vendorOrderNumber: idemKey,
       subtotal,
@@ -348,5 +363,9 @@ export async function createDraftPoFromVendorEmail(input: { subject?: string; fr
     } as any);
   }
 
-  return { ok: true, poId: po.id, poNumber: po.poNumber, supplier, orderNumber: parsed.orderNumber, matched, unmatched, totals };
+  return {
+    ok: true, poId: po.id, poNumber: po.poNumber,
+    poStatus: clean ? "SENT" : "DRAFT", autoOrdered: clean,
+    supplier, orderNumber: parsed.orderNumber, matched, unmatched, totals,
+  };
 }

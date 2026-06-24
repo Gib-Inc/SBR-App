@@ -31,13 +31,15 @@ export interface PnlMonth {
   month: string; netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null;
   totalExpenses: number; netIncome: number; netMarginPct: number | null;
 }
+export type BudgetStatus = "open" | "in_progress" | "structural" | "fixed";
 export interface BudgetCategory {
   account: string; group: AcctGroup; actual: number; monthlyAvg: number; actualPct: number | null;
   targetPct: number | null; targetDollars: number | null; variance: number | null; over: boolean;
+  status: BudgetStatus; note: string | null;
 }
 export interface SavingsOpportunity {
   category: string; currentPct: number | null; targetPct: number | null;
-  monthlyOver: number; annualOver: number;
+  monthlyOver: number; annualOver: number; status: BudgetStatus; note: string | null;
 }
 export interface BudgetScorecard {
   monthly: PnlMonth[];
@@ -49,6 +51,7 @@ export interface BudgetScorecard {
     totalExpenses: number; netIncome: number; netMarginPct: number | null;
     overBudgetTotal: number; toBreakeven: number;
     annualizedNetIncome: number; potentialAnnualSavings: number; pctOfLossClosed: number | null;
+    actionableAnnualSavings: number; inProgressAnnualSavings: number;
   };
 }
 
@@ -113,8 +116,8 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
     catMap.set(it.account, cur);
   }
 
-  const targets = rows(await db.execute(sql`SELECT account_name, target_pct, sort_order FROM budget_targets`)) as Array<{ account_name: string; target_pct: any; sort_order: any }>;
-  const targetMap = new Map(targets.map((t) => [t.account_name, { pct: num(t.target_pct), sort: num(t.sort_order) }]));
+  const targets = rows(await db.execute(sql`SELECT account_name, target_pct, sort_order, COALESCE(status,'open') AS status, note FROM budget_targets`)) as Array<{ account_name: string; target_pct: any; sort_order: any; status: any; note: any }>;
+  const targetMap = new Map(targets.map((t) => [t.account_name, { pct: num(t.target_pct), sort: num(t.sort_order), status: (t.status || "open") as BudgetStatus, note: t.note ?? null }]));
 
   const n = basisMonthKeys.length || 1;
   const categories: BudgetCategory[] = Array.from(catMap.entries()).map(([account, v]) => {
@@ -126,6 +129,7 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
       account, group: v.group, actual: r2(v.amount), monthlyAvg: r2(v.amount / n),
       actualPct: pct(v.amount, agg.netSales), targetPct, targetDollars,
       variance, over: variance != null && variance > 0,
+      status: t?.status ?? "open", note: t?.note ?? null,
     };
   }).sort((a, b) => {
     const sa = targetMap.get(a.account)?.sort ?? 999;
@@ -141,9 +145,12 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
   const annualize = 12 / (basisMonthKeys.length || 1);
   const opportunities: SavingsOpportunity[] = categories
     .filter((c) => c.over && c.variance != null)
-    .map((c) => ({ category: c.account, currentPct: c.actualPct, targetPct: c.targetPct, monthlyOver: r2((c.variance ?? 0) / n), annualOver: r2((c.variance ?? 0) * annualize) }))
+    .map((c) => ({ category: c.account, currentPct: c.actualPct, targetPct: c.targetPct, monthlyOver: r2((c.variance ?? 0) / n), annualOver: r2((c.variance ?? 0) * annualize), status: c.status, note: c.note }))
     .sort((a, b) => b.annualOver - a.annualOver);
   const potentialAnnualSavings = r2(opportunities.reduce((s, o) => s + o.annualOver, 0));
+  // "Actionable now" = open lines only (exclude fixed/structural/in-progress already being worked).
+  const actionableAnnualSavings = r2(opportunities.filter((o) => o.status === "open").reduce((s, o) => s + o.annualOver, 0));
+  const inProgressAnnualSavings = r2(opportunities.filter((o) => o.status === "in_progress").reduce((s, o) => s + o.annualOver, 0));
   const annualizedNetIncome = r2(agg.netIncome * annualize);
   const pctOfLossClosed = annualizedNetIncome < 0 ? r2((potentialAnnualSavings / -annualizedNetIncome) * 100) : null;
 
@@ -156,6 +163,7 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
       netSales: agg.netSales, cogs: agg.cogs, grossProfit: agg.grossProfit, grossMarginPct: pct(agg.grossProfit, agg.netSales),
       totalExpenses: agg.totalExpenses, netIncome: agg.netIncome, netMarginPct: pct(agg.netIncome, agg.netSales),
       overBudgetTotal, toBreakeven, annualizedNetIncome, potentialAnnualSavings, pctOfLossClosed,
+      actionableAnnualSavings, inProgressAnnualSavings,
     },
   };
 }

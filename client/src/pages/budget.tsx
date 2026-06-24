@@ -13,11 +13,11 @@ import { Wallet, ChevronRight, AlertTriangle, TrendingDown, Scissors, Truck } fr
 
 interface PnlMonth { month: string; netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; }
 interface BudgetCategory { account: string; group: string; actual: number; monthlyAvg: number; actualPct: number | null; targetPct: number | null; targetDollars: number | null; variance: number | null; over: boolean; }
-interface Opportunity { category: string; currentPct: number | null; targetPct: number | null; monthlyOver: number; annualOver: number; }
+interface Opportunity { category: string; currentPct: number | null; targetPct: number | null; monthlyOver: number; annualOver: number; status: string; note: string | null; }
 interface Resp {
   success: boolean; monthly: PnlMonth[]; basis: { label: string; months: number; netSales: number };
   categories: BudgetCategory[]; opportunities: Opportunity[];
-  summary: { netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; overBudgetTotal: number; toBreakeven: number; annualizedNetIncome: number; potentialAnnualSavings: number; pctOfLossClosed: number | null };
+  summary: { netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; overBudgetTotal: number; toBreakeven: number; annualizedNetIncome: number; potentialAnnualSavings: number; pctOfLossClosed: number | null; actionableAnnualSavings: number; inProgressAnnualSavings: number };
 }
 interface Vendor { vendor: string; amount: number; lines: number; }
 interface TopVendor { vendor: string; amount: number; monthlyAvg: number; pctOfNetSales: number | null; topAccount: string | null; lines: number; }
@@ -79,23 +79,26 @@ export default function Budget() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2"><Scissors className="h-4 w-4" /> Savings opportunities — where to cut</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Every over-budget category, annualized and ranked by $. Bringing all to target frees <span className="font-semibold text-foreground">{money(s.potentialAnnualSavings)}/yr</span>
-              {s.pctOfLossClosed != null && <> — about <span className="font-semibold text-foreground">{Math.round(s.pctOfLossClosed)}%</span> of the {money(-s.annualizedNetIncome)}/yr loss.</>}
+              <span className="font-semibold text-green-700 dark:text-green-400">{money(s.actionableAnnualSavings)}/yr</span> open &amp; controllable now ·
+              {" "}<span className="font-semibold text-blue-700 dark:text-blue-400">{money(s.inProgressAnnualSavings)}/yr</span> already in progress ·
+              {" "}{money(s.potentialAnnualSavings)}/yr total identified{s.pctOfLossClosed != null && <> vs the {money(-s.annualizedNetIncome)}/yr loss</>}.
             </p>
           </CardHeader>
           <CardContent>
             <div className="space-y-1">
               {data.opportunities.map((o, i) => (
-                <div key={o.category} className="flex items-center gap-3 px-2 py-1.5 rounded hover-elevate text-sm" data-testid={`opp-${o.category}`}>
-                  <span className="w-5 text-xs text-muted-foreground text-right">{i + 1}</span>
-                  <span className="flex-1 min-w-0 truncate">{o.category}</span>
-                  <span className="w-24 text-right text-xs text-muted-foreground">{o.currentPct != null ? `${o.currentPct}%` : "—"} → {o.targetPct != null ? `${o.targetPct}%` : "—"}</span>
-                  <span className="w-20 text-right text-[11px] text-muted-foreground">{money(o.monthlyOver)}/mo</span>
-                  <span className="w-24 text-right tabular-nums font-semibold text-green-600 dark:text-green-400">{money(o.annualOver)}/yr</span>
+                <div key={o.category} className="px-2 py-1.5 rounded hover-elevate text-sm" data-testid={`opp-${o.category}`}>
+                  <div className="flex items-center gap-3">
+                    <span className="w-5 text-xs text-muted-foreground text-right">{i + 1}</span>
+                    <span className="flex-1 min-w-0 truncate flex items-center gap-1.5">{o.category}<StatusBadge status={o.status} /></span>
+                    <span className="w-24 text-right text-xs text-muted-foreground hidden sm:inline">{o.currentPct != null ? `${o.currentPct}%` : "—"} → {o.targetPct != null ? `${o.targetPct}%` : "—"}</span>
+                    <span className="w-24 text-right tabular-nums font-semibold text-green-600 dark:text-green-400">{money(o.annualOver)}/yr</span>
+                  </div>
+                  {o.note && <div className="pl-8 text-[11px] text-muted-foreground">{o.note}</div>}
                 </div>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground pt-2">These are the cuts that save the company, biggest first. Adjust a category target below to change what counts as "over."</p>
+            <p className="text-[11px] text-muted-foreground pt-2">Green badges are open cuts you can take now. Blue are already being worked (marketing restart, contract-labor cuts, loan refi). The loss closes through the stack — the open cuts plus marketing reaching its target.</p>
           </CardContent>
         </Card>
       )}
@@ -215,6 +218,17 @@ export default function Budget() {
       </Card>
     </div>
   );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    open: { label: "open", cls: "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300" },
+    in_progress: { label: "in progress", cls: "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300" },
+    structural: { label: "structural", cls: "bg-muted text-muted-foreground" },
+    fixed: { label: "fixed", cls: "bg-muted text-muted-foreground" },
+  };
+  const m = map[status] ?? map.open;
+  return <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${m.cls}`}>{m.label}</span>;
 }
 
 function Tile({ label, value, sub, alert }: { label: string; value: string; sub?: string; alert?: boolean }) {

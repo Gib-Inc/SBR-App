@@ -36,13 +36,12 @@ describe("requireFinanceUnlock", () => {
     const r: any = { statusCode: 0, body: null, status(c: number) { this.statusCode = c; return this; }, json(b: any) { this.body = b; return this; } };
     return r;
   }
-  it("423 + configured:false when no PIN is set (fail-closed)", () => {
+  it("is dormant (open) when no PIN is configured", () => {
     delete process.env.FINANCE_PIN;
     const res = mockRes(); let nexted = false;
     requireFinanceUnlock({ session: {} } as any, res, () => { nexted = true; });
-    expect(nexted).toBe(false);
-    expect(res.statusCode).toBe(423);
-    expect(res.body.configured).toBe(false);
+    expect(nexted).toBe(true);
+    expect(res.statusCode).toBe(0);
   });
   it("423 when PIN set but session locked", () => {
     process.env.FINANCE_PIN = "letmein-2026";

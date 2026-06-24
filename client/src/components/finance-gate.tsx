@@ -27,26 +27,20 @@ export function FinanceGate({ children }: { children: ReactNode }) {
   });
 
   if (status.isLoading) return <div className="p-6 text-sm text-muted-foreground">Checking access…</div>;
-  if (status.data?.unlocked) return <>{children}</>;
+  // Dormant until a FINANCE_PIN is set: render normally unless the lock is configured AND this session is locked.
+  if (!status.data || status.data.unlocked || !status.data.configured) return <>{children}</>;
 
-  const configured = status.data?.configured;
   return (
     <div className="p-6 max-w-md mx-auto">
       <Card>
         <CardContent className="p-6 space-y-3">
           <div className="flex items-center gap-2 text-base font-semibold"><Lock className="h-4 w-4" /> Finances are locked</div>
-          {configured ? (
-            <>
-              <p className="text-sm text-muted-foreground">This area shows financials and compensation. Enter the finance PIN to continue. It stays unlocked for the rest of this session.</p>
-              <form onSubmit={(e) => { e.preventDefault(); if (pin) unlock.mutate(); }} className="space-y-2">
-                <Input type="password" autoFocus value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Finance PIN" data-testid="finance-pin" />
-                {err && <p className="text-xs text-red-600 dark:text-red-400" data-testid="finance-pin-error">{err}</p>}
-                <Button type="submit" disabled={unlock.isPending || !pin} className="w-full" data-testid="finance-unlock">{unlock.isPending ? "Checking…" : "Unlock"}</Button>
-              </form>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">No finance PIN is set yet, so this area is locked for everyone. An owner needs to set <code className="rounded bg-muted px-1 text-xs">FINANCE_PIN</code> in Railway → SBR-App → Variables, then reload this page and enter it here.</p>
-          )}
+          <p className="text-sm text-muted-foreground">This area shows financials and compensation. Enter the finance PIN to continue. It stays unlocked for the rest of this session.</p>
+          <form onSubmit={(e) => { e.preventDefault(); if (pin) unlock.mutate(); }} className="space-y-2">
+            <Input type="password" autoFocus value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Finance PIN" data-testid="finance-pin" />
+            {err && <p className="text-xs text-red-600 dark:text-red-400" data-testid="finance-pin-error">{err}</p>}
+            <Button type="submit" disabled={unlock.isPending || !pin} className="w-full" data-testid="finance-unlock">{unlock.isPending ? "Checking…" : "Unlock"}</Button>
+          </form>
         </CardContent>
       </Card>
     </div>

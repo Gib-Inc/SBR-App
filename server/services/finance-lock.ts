@@ -7,8 +7,8 @@
  * database, never sent to the client. The client posts an attempt to /api/finance-lock/
  * unlock; the server compares it constant-time and, on success, flags the session.
  *
- * Fail-closed: if FINANCE_PIN is unset, the finance pages are locked for everyone until
- * an owner sets it. That way a missing config never silently exposes compensation.
+ * Dormant until configured: if FINANCE_PIN is unset the lock is OFF and finances are
+ * open (paused). Setting FINANCE_PIN in Railway activates the lock for every session.
  */
 import crypto from "crypto";
 import type { Request, Response, NextFunction } from "express";
@@ -40,12 +40,9 @@ export function financeUnlocked(req: Request): boolean {
 
 /** Middleware: block finance routes unless the session is unlocked (and a PIN exists). */
 export function requireFinanceUnlock(req: Request, res: Response, next: NextFunction) {
-  if (!financePinConfigured()) {
-    return res.status(423).json({
-      success: false, locked: true, configured: false,
-      error: "Finance access is locked. An owner must set FINANCE_PIN in Railway to enable it.",
-    });
-  }
+  // Paused: with no FINANCE_PIN configured the lock is dormant (open). Setting
+  // FINANCE_PIN in Railway activates it; after that, sessions must unlock to pass.
+  if (!financePinConfigured()) return next();
   if (financeUnlocked(req)) return next();
   return res.status(423).json({
     success: false, locked: true, configured: true,

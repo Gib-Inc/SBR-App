@@ -8662,10 +8662,10 @@ export class PostgresStorage implements IStorage {
     const rows = await this.db.execute(drizzleSql`
       SELECT
         platform,
-        SUM(total_spend)::float    AS total_spend,
+        SUM(ad_spend)::float       AS total_spend,
         SUM(pixel_revenue)::float  AS pixel_revenue,
         CASE
-          WHEN SUM(total_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(total_spend)::float
+          WHEN SUM(ad_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(ad_spend)::float
           ELSE 0
         END AS pixel_roas
       FROM v_roas_guardian_by_platform

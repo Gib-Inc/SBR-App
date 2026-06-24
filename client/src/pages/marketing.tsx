@@ -1514,8 +1514,10 @@ function RoasGuardianTab() {
             </table>
           )}
           <p className="text-xs italic text-muted-foreground mt-3">
-            Pixel ROAS uses each platform's own attribution. Real attributed revenue is higher
-            due to cross-channel halo (Meta drives Amazon sales, etc).
+            Pixel ROAS uses each platform&apos;s own attribution (directional, not P&amp;L). Amazon spend is live from Windsor.
+            Google&apos;s tracked spend here can over-count from a known sync-duplication issue in the raw feed, so trust the
+            Breakeven Scoreboard (Marketing Analytics) for authoritative spend and the blended MER. Meta is from your
+            uploaded CSV, never Windsor.
           </p>
         </CardContent>
       </Card>

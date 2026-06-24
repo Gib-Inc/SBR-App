@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Wallet, ChevronRight, AlertTriangle, TrendingDown, Scissors, Truck } from "lucide-react";
+import { Wallet, ChevronRight, AlertTriangle, TrendingDown, Scissors, Truck, LineChart } from "lucide-react";
 
 /**
  * Budget — categorized P&L from QuickBooks line items + budget-vs-actual (% of net
@@ -22,9 +22,19 @@ interface Resp {
 interface Vendor { vendor: string; amount: number; lines: number; }
 interface TopVendor { vendor: string; amount: number; monthlyAvg: number; pctOfNetSales: number | null; topAccount: string | null; lines: number; }
 interface VendorResp { success: boolean; basis: { months: number }; netSales: number; vendors: TopVendor[]; fulfillment: { vendor: string; amount: number; monthlyAvg: number; orders: number; costPerOrder: number | null; pctOfNetSales: number | null } | null; }
+interface ProjMonth { month: string; netSales: number; cogs: number; expenses: number; netIncome: number; cumulativeNetIncome: number; }
+interface ProjCategory { account: string; group: string; driver: string; ratePct: number | null; fixedAmount: number | null; source: string; trailingTotal: number; trailingMonthlyAvg: number; trailingPctOfSales: number | null; monthly: number[]; annualTotal: number; }
+interface ProjResp {
+  success: boolean; startMonth: string; months: number; baseMethod: string; growthPct: number; revenueBase: number;
+  forecast: ProjMonth[]; categories: ProjCategory[];
+  reclassification: { to: string; vendorLike: string; trailingAmount: number }[];
+  summary: { annualRevenue: number; annualCogs: number; annualExpenses: number; annualNetIncome: number; avgMonthlyNetIncome: number; netMarginPct: number | null; firstProfitableMonth: string | null; cumulativeBreakevenMonth: string | null; startingMonthlyNetIncome: number; endingMonthlyNetIncome: number };
+}
 
+const OWNER_COMP_LABEL = "Owner Compensation (Zo)";
 const money = (n: number) => (n < 0 ? "-" : "") + "$" + Math.abs(Math.round(n)).toLocaleString();
 const fmtMonth = (m: string) => { const [y, mo] = m.split("-"); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-US", { month: "short" }); };
+const fmtFull = (m: string) => { const [y, mo] = m.split("-"); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-US", { month: "short", year: "2-digit" }); };
 
 export default function Budget() {
   const { toast } = useToast();
@@ -44,6 +54,23 @@ export default function Budget() {
       (await apiRequest("PUT", "/api/finances/budget-target", { account, targetPct })).json(),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/finances/budget-scorecard"] }); toast({ title: "Target updated" }); },
     onError: (e: Error) => toast({ title: "Couldn't save target", description: e.message, variant: "destructive" }),
+  });
+
+  // Forward projection: revenue settings persist server-side; the controls drive saved settings.
+  const projection = useQuery<ProjResp>({ queryKey: ["/api/finances/projection"] });
+  const [growth, setGrowth] = useState("");
+  const [asmEdits, setAsmEdits] = useState<Record<string, string>>({});
+  const saveSettings = useMutation({
+    mutationFn: async (body: { baseMethod?: string; growthPct?: number }) =>
+      (await apiRequest("PUT", "/api/finances/projection-settings", body)).json(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/finances/projection"] }),
+    onError: (e: Error) => toast({ title: "Couldn't save settings", description: e.message, variant: "destructive" }),
+  });
+  const saveAssumption = useMutation({
+    mutationFn: async (body: { account: string; driver: string; ratePct?: number | null; fixedAmount?: number | null }) =>
+      (await apiRequest("PUT", "/api/finances/projection-assumption", body)).json(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/finances/projection"] }),
+    onError: (e: Error) => toast({ title: "Couldn't save assumption", description: e.message, variant: "destructive" }),
   });
 
   if (isLoading || !data) return <div className="p-6 text-sm text-muted-foreground">Loading budget…</div>;
@@ -216,6 +243,108 @@ export default function Budget() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Forward 12-month projection — path to breakeven */}
+      {projection.data?.success && (() => {
+        const p = projection.data;
+        const ps = p.summary;
+        const maxAbs = Math.max(...p.forecast.map((m) => Math.abs(m.netIncome)), 1);
+        const be = ps.firstProfitableMonth;
+        const setDriver = (c: ProjCategory, driver: "variable" | "fixed") => {
+          setAsmEdits((pp) => { const n = { ...pp }; delete n[c.account]; return n; });
+          saveAssumption.mutate(driver === "variable"
+            ? { account: c.account, driver, ratePct: c.ratePct ?? c.trailingPctOfSales ?? 0 }
+            : { account: c.account, driver, fixedAmount: c.fixedAmount ?? c.trailingMonthlyAvg });
+        };
+        return (
+          <Card className="border-2 border-indigo-300 dark:border-indigo-900/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2"><LineChart className="h-4 w-4" /> Forward 12-month projection — path to breakeven</CardTitle>
+              <p className="text-xs text-muted-foreground">Each category projected off the trailing 12 months (variable = % of forecast sales, fixed = $/mo). Forecast starts {fmtFull(p.startMonth)}.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap items-end gap-4">
+                <div>
+                  <div className="text-[11px] text-muted-foreground mb-1">Revenue base</div>
+                  <div className="flex gap-1">
+                    {([["trailing3", "3-mo avg"], ["trailing6", "6-mo avg"], ["lastMonth", "last mo"]] as const).map(([v, l]) => (
+                      <button key={v} onClick={() => saveSettings.mutate({ baseMethod: v })}
+                        className={`rounded px-2 py-1 text-xs border ${p.baseMethod === v ? "bg-foreground text-background" : "hover-elevate"}`} data-testid={`base-${v}`}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[11px] text-muted-foreground mb-1">Growth %/mo</div>
+                  <Input type="number" step="0.5" className="h-7 w-20 text-right text-xs"
+                    value={growth !== "" ? growth : String(p.growthPct ?? 0)}
+                    onChange={(e) => setGrowth(e.target.value)}
+                    onBlur={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v !== p.growthPct) saveSettings.mutate({ growthPct: v }); }}
+                    data-testid="growth-input" />
+                </div>
+                <div className="text-xs text-muted-foreground pb-1.5">Base <span className="font-semibold text-foreground">{money(p.revenueBase)}</span>/mo</div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Tile label="Proj. annual revenue" value={money(ps.annualRevenue)} sub="next 12 mo" />
+                <Tile label="Proj. annual net income" value={money(ps.annualNetIncome)} sub={ps.netMarginPct != null ? `${ps.netMarginPct}% margin` : ""} alert={ps.annualNetIncome < 0} />
+                <Tile label="Avg / month" value={money(ps.avgMonthlyNetIncome)} alert={ps.avgMonthlyNetIncome < 0} />
+                <Tile label="Turns profitable" value={be ? fmtFull(be) : "not in 12 mo"} sub={be ? "first profitable month" : "raise growth or cut costs"} alert={!be} />
+              </div>
+
+              {p.reclassification.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">Honest classification: {money(p.reclassification.reduce((s, r) => s + r.trailingAmount, 0))} of Zo&apos;s pay (Lucid Earth + Gamerzdojo) was pulled out of marketing/charity into Owner Compensation before projecting, so a %-of-sales line never scales fixed pay with revenue.</p>
+              )}
+
+              <div className="space-y-1">
+                {p.forecast.map((m) => {
+                  const loss = m.netIncome < 0;
+                  const isBE = m.month === be;
+                  return (
+                    <div key={m.month} className={`flex items-center gap-2 text-sm px-1 rounded ${isBE ? "bg-green-50 dark:bg-green-950/20" : ""}`} data-testid={`proj-${m.month}`}>
+                      <span className="w-14 text-xs text-muted-foreground">{fmtFull(m.month)}</span>
+                      <div className="flex-1 flex items-center">
+                        <div className="w-1/2 flex justify-end">{loss && <div className="h-3 bg-red-500 rounded-l" style={{ width: `${(Math.abs(m.netIncome) / maxAbs) * 100}%` }} />}</div>
+                        <div className="w-1/2">{!loss && <div className="h-3 bg-green-500 rounded-r" style={{ width: `${(m.netIncome / maxAbs) * 100}%` }} />}</div>
+                      </div>
+                      <span className={`w-20 text-right tabular-nums font-medium ${loss ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>{money(m.netIncome)}</span>
+                      <span className="w-20 text-right text-[11px] text-muted-foreground hidden sm:inline">cum {money(m.cumulativeNetIncome)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div>
+                <div className="flex items-center gap-3 px-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                  <span className="flex-1">Category</span><span className="text-right">Driver / rate</span><span className="text-right w-14">Trailing</span><span className="text-right w-24">Proj. annual</span>
+                </div>
+                {p.categories.map((c) => (
+                  <div key={c.account} className="flex items-center gap-3 px-2 py-1 rounded hover-elevate text-sm" data-testid={`pcat-${c.account}`}>
+                    <span className="flex-1 truncate min-w-0">{c.account}{c.account === OWNER_COMP_LABEL && <span className="ml-1 rounded bg-amber-100 dark:bg-amber-950/40 px-1 text-[10px] text-amber-700 dark:text-amber-300">reclassified</span>}</span>
+                    <span className="flex items-center justify-end gap-1">
+                      <button onClick={() => setDriver(c, "variable")} className={`rounded px-1.5 py-0.5 text-[10px] border ${c.driver === "variable" ? "bg-foreground text-background" : "hover-elevate"}`}>% sales</button>
+                      <button onClick={() => setDriver(c, "fixed")} className={`rounded px-1.5 py-0.5 text-[10px] border ${c.driver === "fixed" ? "bg-foreground text-background" : "hover-elevate"}`}>fixed</button>
+                      {c.driver === "variable" ? (
+                        <Input type="number" step="0.5" className="h-6 w-14 text-right text-xs px-1"
+                          value={asmEdits[c.account] ?? (c.ratePct != null ? String(c.ratePct) : "")}
+                          onChange={(e) => setAsmEdits((pp) => ({ ...pp, [c.account]: e.target.value }))}
+                          onBlur={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v !== c.ratePct) saveAssumption.mutate({ account: c.account, driver: "variable", ratePct: v }); }} />
+                      ) : (
+                        <Input type="number" step="100" className="h-6 w-20 text-right text-xs px-1"
+                          value={asmEdits[c.account] ?? (c.fixedAmount != null ? String(c.fixedAmount) : "")}
+                          onChange={(e) => setAsmEdits((pp) => ({ ...pp, [c.account]: e.target.value }))}
+                          onBlur={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v !== c.fixedAmount) saveAssumption.mutate({ account: c.account, driver: "fixed", fixedAmount: v }); }} />
+                      )}
+                    </span>
+                    <span className="w-14 text-right tabular-nums text-muted-foreground">{c.trailingPctOfSales != null ? `${c.trailingPctOfSales}%` : "—"}</span>
+                    <span className="w-24 text-right tabular-nums font-medium">{money(c.annualTotal)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">Toggle each line between %-of-sales and fixed and edit its rate. Variable lines scale with the revenue forecast; fixed lines stay flat. The green row is the first month SBR turns profitable.</p>
+            </CardContent>
+          </Card>
+        );
+      })()}
     </div>
   );
 }

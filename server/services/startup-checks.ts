@@ -265,6 +265,9 @@ async function ensureColumnsExist(client: pg.PoolClient): Promise<void> {
     `CREATE TABLE IF NOT EXISTS budget_targets (account_name text PRIMARY KEY, target_pct real NOT NULL, sort_order integer NOT NULL DEFAULT 100, updated_at timestamptz NOT NULL DEFAULT now())`,
     `ALTER TABLE budget_targets ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'open'`,
     `ALTER TABLE budget_targets ADD COLUMN IF NOT EXISTS note text`,
+    // Forward 12-month budget projection: per-category driver (variable %/fixed $) + revenue settings.
+    `CREATE TABLE IF NOT EXISTS projection_assumptions (account_name text PRIMARY KEY, driver text NOT NULL DEFAULT 'fixed', rate_pct numeric, fixed_amount numeric, updated_at timestamptz NOT NULL DEFAULT now())`,
+    `CREATE TABLE IF NOT EXISTS projection_settings (id integer PRIMARY KEY DEFAULT 1, base_method text NOT NULL DEFAULT 'trailing3', growth_pct numeric NOT NULL DEFAULT 0, overrides jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now())`,
     // Per-campaign monthly ad performance (month-over-month trend by campaign).
     `CREATE TABLE IF NOT EXISTS ad_campaign_performance (id varchar PRIMARY KEY DEFAULT gen_random_uuid(), platform text NOT NULL, campaign_name text NOT NULL, month text NOT NULL, period_start date, period_end date, spend real NOT NULL DEFAULT 0, revenue real, purchases integer, impressions integer, source text, superseded boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now())`,
     `CREATE UNIQUE INDEX IF NOT EXISTS ad_campaign_perf_platform_campaign_month_idx ON ad_campaign_performance (platform, lower(campaign_name), month) WHERE superseded = false`,

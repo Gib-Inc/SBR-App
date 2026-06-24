@@ -25497,6 +25497,69 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Forward 12-month budget projection (revenue forecast + per-category driver → path to breakeven).
+  app.get("/api/finances/projection", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getProjection } = await import("./services/finance-projection-service");
+      const months = req.query.months != null ? Number(req.query.months) : undefined;
+      const growthPct = req.query.growthPct != null ? Number(req.query.growthPct) : undefined;
+      const baseMethod = typeof req.query.baseMethod === "string" ? req.query.baseMethod : undefined;
+      res.json({ success: true, ...(await getProjection(db, {
+        months: Number.isFinite(months) ? months : undefined,
+        growthPct: Number.isFinite(growthPct) ? growthPct : undefined,
+        baseMethod,
+      })) });
+    } catch (error: any) {
+      console.error("[Budget] projection error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to build projection" });
+    }
+  });
+
+  // Save a per-category projection assumption (driver + rate or fixed amount).
+  app.put("/api/finances/projection-assumption", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const account = typeof req.body?.account === "string" ? req.body.account : "";
+      const driver = req.body?.driver === "variable" ? "variable" : "fixed";
+      const ratePct = req.body?.ratePct != null ? Number(req.body.ratePct) : null;
+      const fixedAmount = req.body?.fixedAmount != null ? Number(req.body.fixedAmount) : null;
+      if (!account) return res.status(400).json({ success: false, error: "account is required" });
+      if (driver === "variable" && (ratePct == null || !Number.isFinite(ratePct) || ratePct < 0)) {
+        return res.status(400).json({ success: false, error: "variable driver needs a ratePct >= 0" });
+      }
+      if (driver === "fixed" && (fixedAmount == null || !Number.isFinite(fixedAmount) || fixedAmount < 0)) {
+        return res.status(400).json({ success: false, error: "fixed driver needs a fixedAmount >= 0" });
+      }
+      const { db } = await import("./db");
+      const { setProjectionAssumption } = await import("./services/finance-projection-service");
+      await setProjectionAssumption(db, account, { driver, ratePct, fixedAmount });
+      res.json({ success: true, account, driver, ratePct, fixedAmount });
+    } catch (error: any) {
+      console.error("[Budget] projection-assumption error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to save assumption" });
+    }
+  });
+
+  // Save the revenue forecast settings (base method, monthly growth %, per-month overrides).
+  app.put("/api/finances/projection-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const baseMethod = typeof req.body?.baseMethod === "string" ? req.body.baseMethod : undefined;
+      const growthPct = req.body?.growthPct != null ? Number(req.body.growthPct) : undefined;
+      const overrides = req.body?.overrides && typeof req.body.overrides === "object" ? req.body.overrides : undefined;
+      const { db } = await import("./db");
+      const { setProjectionSettings } = await import("./services/finance-projection-service");
+      await setProjectionSettings(db, {
+        baseMethod,
+        growthPct: Number.isFinite(growthPct as number) ? (growthPct as number) : undefined,
+        overrides,
+      });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Budget] projection-settings error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to save settings" });
+    }
+  });
+
   app.get("/api/marketing/trend", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { db } = await import("./db");

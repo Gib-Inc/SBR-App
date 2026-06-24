@@ -28,6 +28,7 @@ import { GoHighLevelClient } from "./services/gohighlevel-client";
 // PhantomBusterClient import removed - V2 placeholder only, no real integration in V1
 import { AuditLogger } from "./services/audit-logger";
 import { requireAuth, requireRole } from "./middleware/auth";
+import { requireFinanceUnlock, financePinConfigured, verifyFinancePin, financeUnlocked } from "./services/finance-lock";
 import bcrypt from "bcrypt";
 import Anthropic from "@anthropic-ai/sdk";
 import multer from "multer";
@@ -23532,6 +23533,26 @@ Generate only the email body text, no subject line.`;
   // "match 35% of income" plug. Optional ?revenue=<n> sizes the budget scenario.
   // CIPH.R — Shopify cash on the way: exact Payments balance + in-transit payouts
   // when the read_shopify_payments scope is granted, else a recent-sales estimate.
+  // Finance PIN lock — gate ALL /api/finances/* behind a per-session unlock so financials
+  // and compensation aren't visible to ops/warehouse staff who share the owner login. The
+  // PIN lives only in the FINANCE_PIN env var (Railway), never in the DB or the client.
+  // (lock endpoints live under /api/finance-lock/* so they stay reachable while locked.)
+  app.get("/api/finance-lock/status", requireAuth, (req: Request, res: Response) => {
+    res.json({ success: true, configured: financePinConfigured(), unlocked: financeUnlocked(req) });
+  });
+  app.post("/api/finance-lock/unlock", requireAuth, async (req: Request, res: Response) => {
+    const pin = typeof req.body?.pin === "string" ? req.body.pin : "";
+    if (!financePinConfigured()) return res.status(423).json({ success: false, error: "No finance PIN is configured. An owner must set FINANCE_PIN in Railway." });
+    if (!verifyFinancePin(pin)) { await new Promise((r) => setTimeout(r, 400)); return res.status(401).json({ success: false, error: "Incorrect PIN." }); }
+    (req.session as any).financeUnlocked = true;
+    res.json({ success: true });
+  });
+  app.post("/api/finance-lock/lock", requireAuth, (req: Request, res: Response) => {
+    if (req.session) (req.session as any).financeUnlocked = false;
+    res.json({ success: true });
+  });
+  app.use("/api/finances", requireFinanceUnlock);
+
   app.get("/api/finances/shopify-payouts", requireAuth, async (_req: Request, res: Response) => {
     try {
       const { getShopifyCashOnTheWay } = await import("./services/shopify-payouts-service");

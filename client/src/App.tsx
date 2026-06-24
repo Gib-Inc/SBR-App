@@ -40,6 +40,7 @@ import Finances from "@/pages/finances";
 import Budget from "@/pages/budget";
 import Health from "@/pages/health";
 import FinOps from "@/pages/finops";
+import { FinanceGate } from "@/components/finance-gate";
 import ReorderAlerts from "@/pages/reorder-alerts";
 import NotFound from "@/pages/not-found";
 import LegalEULA from "@/pages/legal-eula";
@@ -140,10 +141,10 @@ function AuthenticatedApp() {
                 <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
                   <Switch>
                     <Route path="/" component={Reports} />
-                    <Route path="/finances" component={Finances} />
-                    <Route path="/budget" component={Budget} />
+                    <Route path="/finances"><FinanceGate><Finances /></FinanceGate></Route>
+                    <Route path="/budget"><FinanceGate><Budget /></FinanceGate></Route>
                     <Route path="/health" component={Health} />
-                    <Route path="/finops" component={FinOps} />
+                    <Route path="/finops"><FinanceGate><FinOps /></FinanceGate></Route>
                     <Route path="/reorder-alerts" component={ReorderAlerts} />
                     <Route path="/products" component={Products} />
                     <Route path="/production" component={Production} />

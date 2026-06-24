@@ -85,6 +85,11 @@ function aggregate(rows: WindsorRow[]): Map<string, InsertAdMetricsDaily> {
     const campaign = (r.campaign && String(r.campaign).trim()) || "_all";
     const device = normalizeDevice(r.device);
     const country = (r.country && String(r.country).trim().toUpperCase()) || "_all";
+    // Single canonical grain: campaign-level totals only. The feed also returns
+    // device/country breakdowns that exactly decompose the campaign total (verified ~0.2%),
+    // and every campaign that has breakdowns also carries its own _all total — so storing
+    // the breakdowns would double-count any naive SUM while adding no spend. Skip them.
+    if (device !== "_all" || country !== "_all") continue;
     const key = `${platform}|${sku}|${date}|${campaign}|${device}|${country}`;
 
     const existing = out.get(key);

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { Wallet, ChevronRight, AlertTriangle, TrendingDown } from "lucide-react";
+import { Wallet, ChevronRight, AlertTriangle, TrendingDown, Scissors, Truck } from "lucide-react";
 
 /**
  * Budget — categorized P&L from QuickBooks line items + budget-vs-actual (% of net
@@ -13,12 +13,15 @@ import { Wallet, ChevronRight, AlertTriangle, TrendingDown } from "lucide-react"
 
 interface PnlMonth { month: string; netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; }
 interface BudgetCategory { account: string; group: string; actual: number; monthlyAvg: number; actualPct: number | null; targetPct: number | null; targetDollars: number | null; variance: number | null; over: boolean; }
+interface Opportunity { category: string; currentPct: number | null; targetPct: number | null; monthlyOver: number; annualOver: number; }
 interface Resp {
   success: boolean; monthly: PnlMonth[]; basis: { label: string; months: number; netSales: number };
-  categories: BudgetCategory[];
-  summary: { netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; overBudgetTotal: number; toBreakeven: number };
+  categories: BudgetCategory[]; opportunities: Opportunity[];
+  summary: { netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null; totalExpenses: number; netIncome: number; netMarginPct: number | null; overBudgetTotal: number; toBreakeven: number; annualizedNetIncome: number; potentialAnnualSavings: number; pctOfLossClosed: number | null };
 }
 interface Vendor { vendor: string; amount: number; lines: number; }
+interface TopVendor { vendor: string; amount: number; monthlyAvg: number; pctOfNetSales: number | null; topAccount: string | null; lines: number; }
+interface VendorResp { success: boolean; basis: { months: number }; netSales: number; vendors: TopVendor[]; fulfillment: { vendor: string; amount: number; monthlyAvg: number; orders: number; costPerOrder: number | null; pctOfNetSales: number | null } | null; }
 
 const money = (n: number) => (n < 0 ? "-" : "") + "$" + Math.abs(Math.round(n)).toLocaleString();
 const fmtMonth = (m: string) => { const [y, mo] = m.split("-"); return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-US", { month: "short" }); };
@@ -26,6 +29,7 @@ const fmtMonth = (m: string) => { const [y, mo] = m.split("-"); return new Date(
 export default function Budget() {
   const { toast } = useToast();
   const { data, isLoading } = useQuery<Resp>({ queryKey: ["/api/finances/budget-scorecard"] });
+  const vendorsView = useQuery<VendorResp>({ queryKey: ["/api/finances/top-vendors"] });
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
 
@@ -67,6 +71,63 @@ export default function Budget() {
           <div className="flex items-center gap-2 font-medium text-red-700 dark:text-red-300"><TrendingDown className="h-4 w-4" /> Running a {money(s.netIncome)} loss over {data.basis.months} months ({s.netMarginPct}% margin)</div>
           <p className="mt-1 text-muted-foreground">Categories over their target total <span className="font-semibold text-foreground">{money(s.overBudgetTotal)}</span>. Bringing the over-budget categories below to target closes most of the {money(s.toBreakeven)} gap to breakeven.</p>
         </div>
+      )}
+
+      {/* Savings opportunities — the ranked cuts */}
+      {data.opportunities.length > 0 && (
+        <Card className="border-2 border-amber-300 dark:border-amber-900/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2"><Scissors className="h-4 w-4" /> Savings opportunities — where to cut</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Every over-budget category, annualized and ranked by $. Bringing all to target frees <span className="font-semibold text-foreground">{money(s.potentialAnnualSavings)}/yr</span>
+              {s.pctOfLossClosed != null && <> — about <span className="font-semibold text-foreground">{Math.round(s.pctOfLossClosed)}%</span> of the {money(-s.annualizedNetIncome)}/yr loss.</>}
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              {data.opportunities.map((o, i) => (
+                <div key={o.category} className="flex items-center gap-3 px-2 py-1.5 rounded hover-elevate text-sm" data-testid={`opp-${o.category}`}>
+                  <span className="w-5 text-xs text-muted-foreground text-right">{i + 1}</span>
+                  <span className="flex-1 min-w-0 truncate">{o.category}</span>
+                  <span className="w-24 text-right text-xs text-muted-foreground">{o.currentPct != null ? `${o.currentPct}%` : "—"} → {o.targetPct != null ? `${o.targetPct}%` : "—"}</span>
+                  <span className="w-20 text-right text-[11px] text-muted-foreground">{money(o.monthlyOver)}/mo</span>
+                  <span className="w-24 text-right tabular-nums font-semibold text-green-600 dark:text-green-400">{money(o.annualOver)}/yr</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground pt-2">These are the cuts that save the company, biggest first. Adjust a category target below to change what counts as "over."</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Top vendors & fulfillment spotlight */}
+      {vendorsView.data && (
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Truck className="h-4 w-4" /> Top vendors &amp; fulfillment</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {vendorsView.data.fulfillment && (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="text-xs font-medium text-muted-foreground mb-1">Pyvott fulfillment</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                  <div><div className="text-[11px] text-muted-foreground">Spend</div><div className="font-semibold">{money(vendorsView.data.fulfillment.amount)}</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">Per month</div><div className="font-semibold">{money(vendorsView.data.fulfillment.monthlyAvg)}</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">Cost / order</div><div className="font-semibold">{vendorsView.data.fulfillment.costPerOrder != null ? money(vendorsView.data.fulfillment.costPerOrder) : "—"}</div></div>
+                  <div><div className="text-[11px] text-muted-foreground">% of net sales</div><div className="font-semibold">{vendorsView.data.fulfillment.pctOfNetSales != null ? `${vendorsView.data.fulfillment.pctOfNetSales}%` : "—"}</div></div>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1.5">~90% of this is carrier postage you'd pay anywhere; the ~10% of fees (incl. the storage charge) is the cuttable part. The pull-behind in-house split recovers ~$22K/yr of freight premium.</p>
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {vendorsView.data.vendors.map((v) => (
+                <div key={v.vendor} className="flex items-center gap-3 px-2 py-1 text-sm" data-testid={`vendor-${v.vendor}`}>
+                  <span className="flex-1 min-w-0 truncate">{v.vendor}<span className="text-muted-foreground text-xs"> · {v.topAccount}</span></span>
+                  <span className="w-16 text-right text-[11px] text-muted-foreground">{v.pctOfNetSales != null ? `${v.pctOfNetSales}%` : ""}</span>
+                  <span className="w-20 text-right tabular-nums font-medium">{money(v.amount)}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Budget vs actual by category */}

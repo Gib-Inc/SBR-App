@@ -35,14 +35,20 @@ export interface BudgetCategory {
   account: string; group: AcctGroup; actual: number; monthlyAvg: number; actualPct: number | null;
   targetPct: number | null; targetDollars: number | null; variance: number | null; over: boolean;
 }
+export interface SavingsOpportunity {
+  category: string; currentPct: number | null; targetPct: number | null;
+  monthlyOver: number; annualOver: number;
+}
 export interface BudgetScorecard {
   monthly: PnlMonth[];
   basis: { label: string; months: number; netSales: number };
   categories: BudgetCategory[];
+  opportunities: SavingsOpportunity[];
   summary: {
     netSales: number; cogs: number; grossProfit: number; grossMarginPct: number | null;
     totalExpenses: number; netIncome: number; netMarginPct: number | null;
     overBudgetTotal: number; toBreakeven: number;
+    annualizedNetIncome: number; potentialAnnualSavings: number; pctOfLossClosed: number | null;
   };
 }
 
@@ -130,14 +136,26 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
   const overBudgetTotal = r2(categories.filter((c) => c.over).reduce((s, c) => s + (c.variance ?? 0), 0));
   const toBreakeven = agg.netIncome < 0 ? r2(-agg.netIncome) : 0;
 
+  // Ranked savings opportunities: every over-budget category, annualized — the
+  // "where to cut to save the company" list, sorted by $ impact.
+  const annualize = 12 / (basisMonthKeys.length || 1);
+  const opportunities: SavingsOpportunity[] = categories
+    .filter((c) => c.over && c.variance != null)
+    .map((c) => ({ category: c.account, currentPct: c.actualPct, targetPct: c.targetPct, monthlyOver: r2((c.variance ?? 0) / n), annualOver: r2((c.variance ?? 0) * annualize) }))
+    .sort((a, b) => b.annualOver - a.annualOver);
+  const potentialAnnualSavings = r2(opportunities.reduce((s, o) => s + o.annualOver, 0));
+  const annualizedNetIncome = r2(agg.netIncome * annualize);
+  const pctOfLossClosed = annualizedNetIncome < 0 ? r2((potentialAnnualSavings / -annualizedNetIncome) * 100) : null;
+
   return {
     monthly,
     basis: { label: basisMonthKeys.length ? `${basisMonthKeys[0]} – ${basisMonthKeys[basisMonthKeys.length - 1]}` : "—", months: basisMonthKeys.length, netSales: agg.netSales },
     categories,
+    opportunities,
     summary: {
       netSales: agg.netSales, cogs: agg.cogs, grossProfit: agg.grossProfit, grossMarginPct: pct(agg.grossProfit, agg.netSales),
       totalExpenses: agg.totalExpenses, netIncome: agg.netIncome, netMarginPct: pct(agg.netIncome, agg.netSales),
-      overBudgetTotal, toBreakeven,
+      overBudgetTotal, toBreakeven, annualizedNetIncome, potentialAnnualSavings, pctOfLossClosed,
     },
   };
 }
@@ -153,6 +171,61 @@ export async function getCategoryVendors(db: DB, account: string, monthsBack = 3
       AND txn_date <  date_trunc('month', now())
     GROUP BY 1 ORDER BY abs(sum(amount)) DESC`)) as any[];
   return r.map((x: any) => ({ vendor: x.vendor, amount: r2(num(x.amount)), lines: num(x.lines) }));
+}
+
+export interface TopVendor { vendor: string; amount: number; monthlyAvg: number; pctOfNetSales: number | null; topAccount: string | null; lines: number; }
+export interface VendorView {
+  basis: { months: number };
+  netSales: number;
+  vendors: TopVendor[];
+  fulfillment: { vendor: string; amount: number; monthlyAvg: number; orders: number; costPerOrder: number | null; pctOfNetSales: number | null } | null;
+}
+
+/** Top spend vendors over the trailing window + a Pyvott fulfillment spotlight (cost/order). */
+export async function getTopVendors(db: DB, monthsBack = 3, limit = 15): Promise<VendorView> {
+  const since = sql`(date_trunc('month', now()) - (${monthsBack} || ' months')::interval)`;
+  const until = sql`date_trunc('month', now())`;
+  const notIncome = sql`account_name NOT ILIKE '%gross sales%' AND account_name NOT ILIKE '%discount%' AND account_name NOT ILIKE '%return%' AND account_name NOT ILIKE '%refund%'`;
+
+  const vrows = rows(await db.execute(sql`
+    SELECT COALESCE(vendor_or_payee, '(unlabeled)') AS vendor,
+           round(sum(amount)::numeric, 2) AS amount, count(*) AS lines,
+           (array_agg(account_name ORDER BY abs(amount) DESC))[1] AS top_account
+    FROM qb_pl_detail
+    WHERE txn_date >= ${since} AND txn_date < ${until} AND ${notIncome}
+    GROUP BY 1 HAVING sum(amount) > 0
+    ORDER BY sum(amount) DESC LIMIT ${limit}`)) as any[];
+
+  const nsRow = rows(await db.execute(sql`
+    SELECT round(sum(amount)::numeric, 2) AS net_sales FROM qb_pl_detail
+    WHERE txn_date >= ${since} AND txn_date < ${until}
+      AND (account_name ILIKE '%gross sales%' OR account_name ILIKE '%discount%' OR account_name ILIKE '%return%' OR account_name ILIKE '%refund%')`))[0];
+  const netSales = r2(num(nsRow?.net_sales));
+
+  const vendors: TopVendor[] = vrows.map((v: any) => ({
+    vendor: v.vendor, amount: r2(num(v.amount)), monthlyAvg: r2(num(v.amount) / (monthsBack || 1)),
+    pctOfNetSales: pct(num(v.amount), netSales), topAccount: v.top_account ?? null, lines: num(v.lines),
+  }));
+
+  // Pyvott fulfillment spotlight — cost per order over the same window.
+  const pyvRow = rows(await db.execute(sql`
+    SELECT round(sum(amount)::numeric, 2) AS amount FROM qb_pl_detail
+    WHERE txn_date >= ${since} AND txn_date < ${until} AND vendor_or_payee ILIKE '%pyvott%'`))[0];
+  const pyvAmount = r2(num(pyvRow?.amount));
+  let fulfillment: VendorView["fulfillment"] = null;
+  if (pyvAmount > 0) {
+    const ordRow = rows(await db.execute(sql`
+      SELECT count(*)::int AS orders FROM sales_orders
+      WHERE COALESCE(status,'') NOT ILIKE 'cancel%'
+        AND order_date >= ${since} AND order_date < ${until}`))[0];
+    const orders = num(ordRow?.orders);
+    fulfillment = {
+      vendor: "Pyvott", amount: pyvAmount, monthlyAvg: r2(pyvAmount / (monthsBack || 1)),
+      orders, costPerOrder: orders > 0 ? r2(pyvAmount / orders) : null, pctOfNetSales: pct(pyvAmount, netSales),
+    };
+  }
+
+  return { basis: { months: monthsBack }, netSales, vendors, fulfillment };
 }
 
 /** Update a category's target % of net sales (in-app editing). */

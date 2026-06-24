@@ -25453,6 +25453,18 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Top spend vendors + the Pyvott fulfillment spotlight (cost/order).
+  app.get("/api/finances/top-vendors", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { getTopVendors } = await import("./services/finance-pnl-service");
+      res.json({ success: true, ...(await getTopVendors(db)) });
+    } catch (error: any) {
+      console.error("[Budget] top-vendors error:", error);
+      res.status(500).json({ success: false, error: error.message || "Failed to load vendors" });
+    }
+  });
+
   // Drill-down: the vendors behind one expense category over the trailing window.
   app.get("/api/finances/category-vendors", requireAuth, async (req: Request, res: Response) => {
     try {

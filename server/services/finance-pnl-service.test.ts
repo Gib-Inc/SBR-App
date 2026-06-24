@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyAccount, getBudgetScorecard } from "./finance-pnl-service";
+import { classifyAccount, getBudgetScorecard, getTopVendors } from "./finance-pnl-service";
 
 describe("classifyAccount", () => {
   it("classifies QB P&L accounts into groups", () => {
@@ -50,6 +50,10 @@ describe("getBudgetScorecard", () => {
     expect(mkt.variance).toBeCloseTo(50754 - 0.25 * netSales, 0); // ~13456 over
     // sorted by target sort_order: COGS(10) before Marketing(20) before Shipping(30)
     expect(s.categories.map((c) => c.account)).toEqual(["Cost of Goods Sold", "Advertising & Marketing", "Shipping, Freight & Delivery"]);
+    // savings opportunities: ranked by annualized $ over, marketing biggest
+    expect(s.opportunities[0].category).toBe("Advertising & Marketing");
+    expect(s.opportunities[0].annualOver).toBeGreaterThan(s.opportunities[1].annualOver);
+    expect(s.summary.potentialAnnualSavings).toBeGreaterThan(0);
   });
 
   it("reports the gap to breakeven when net income is negative", async () => {
@@ -62,5 +66,32 @@ describe("getBudgetScorecard", () => {
     const s = await getBudgetScorecard(mockDb(data, []), 6, 3);
     expect(s.summary.netIncome).toBe(-15000); // 100k - 40k - 75k
     expect(s.summary.toBreakeven).toBe(15000);
+  });
+});
+
+describe("getTopVendors", () => {
+  // db.execute order: (1) vendors, (2) net sales, (3) pyvott amount, (4) order count
+  function mockDb(vendors: any[], netSales: number, pyvott: number, orders: number) {
+    let call = 0;
+    return {
+      execute: async () => {
+        call += 1;
+        if (call === 1) return { rows: vendors };
+        if (call === 2) return { rows: [{ net_sales: netSales }] };
+        if (call === 3) return { rows: [{ amount: pyvott }] };
+        return { rows: [{ orders }] };
+      },
+    } as any;
+  }
+
+  it("ranks vendors and computes Pyvott cost per order", async () => {
+    const vendors = [
+      { vendor: "Pyvott", amount: 67000, lines: 12, top_account: "Shipping, Freight & Delivery" },
+      { vendor: "Facebook", amount: 25000, lines: 10, top_account: "Advertising & Marketing" },
+    ];
+    const v = await getTopVendors(mockDb(vendors, 825645, 67000, 1500), 3, 15);
+    expect(v.vendors[0].vendor).toBe("Pyvott");
+    expect(v.vendors[0].pctOfNetSales).toBeCloseTo(8.1, 1);
+    expect(v.fulfillment?.costPerOrder).toBeCloseTo(44.67, 1); // 67000 / 1500
   });
 });

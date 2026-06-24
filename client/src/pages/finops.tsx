@@ -302,7 +302,7 @@ function DirectiveSummaryCard() {
               <div className="text-sm font-medium">{d.headline}</div>
             </div>
             <div className="text-xs text-muted-foreground">
-              Blended {a.blendedRoas30d}x (30d) on {fmt$(a.adSpend30d)} spend / {fmt$(a.revenue30d)} revenue
+              Media ROAS {a.blendedRoas30d}x (30d) on {fmt$(a.adSpend30d)} spend / {fmt$(a.revenue30d)} revenue
             </div>
           </>
         )}
@@ -348,8 +348,9 @@ function DailyCompanyReportCard() {
             {report.sales?.crossCheck && (
               <div className="text-xs text-muted-foreground">Sales cross-check ({report.forDate}): {report.sales.crossCheck}</div>
             )}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div><div className="font-semibold">{report.financials?.blendedRoas != null ? `${Number(report.financials.blendedRoas).toFixed(1)}x` : "—"}</div><div className="text-xs text-muted-foreground">Blended ROAS</div></div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+              <div><div className={`font-semibold ${report.financials?.blendedMer != null && report.financials.blendedMer < (report.financials?.breakeven ?? 5) ? "text-red-600 dark:text-red-400" : ""}`}>{report.financials?.blendedMer != null ? `${Number(report.financials.blendedMer).toFixed(1)}x` : "—"}</div><div className="text-xs text-muted-foreground">Blended MER (vs {report.financials?.breakeven ?? 5}x)</div></div>
+              <div><div className="font-semibold">{report.financials?.blendedRoas != null ? `${Number(report.financials.blendedRoas).toFixed(1)}x` : "—"}</div><div className="text-xs text-muted-foreground">Media ROAS (ads)</div></div>
               <div><div className="font-semibold">{report.financials?.adSpend30d != null ? `$${Math.round(report.financials.adSpend30d).toLocaleString()}` : "—"}</div><div className="text-xs text-muted-foreground">Ad spend (30d)</div></div>
               <div><div className="font-semibold">{report.inventory?.assetValueAtWac != null ? `$${Math.round(report.inventory.assetValueAtWac).toLocaleString()}` : "—"}</div><div className="text-xs text-muted-foreground">Inventory @ WAC</div></div>
               <div><div className="font-semibold">{report.freshness?.staleCount ?? 0}</div><div className="text-xs text-muted-foreground">Stale feeds</div></div>

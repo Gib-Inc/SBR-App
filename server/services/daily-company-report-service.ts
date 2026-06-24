@@ -149,21 +149,31 @@ export async function runDailyCompanyReport(opts?: { skipRefresh?: boolean }): P
     anomalies.push(`integrity sweep failed: ${e?.message ?? e}`);
   }
 
-  // 4. FINANCIALS — cash/runway + the TRUE (collapsed) ad spend & blended ROAS.
+  // 4. FINANCIALS — cash/runway + collapsed ad spend. Report BOTH the media ROAS (ads
+  // only, flatters) and the blended MER (net sales / QB marketing — the breakeven truth).
+  // The guardrail must judge MER, not media ROAS: they straddle the 5x line opposite ways.
   try {
     const runway: any = await import("./runway-service").then((m) => m.computeRunway());
     const perf: any = await import("./unified-performance-service").then((m) => m.getUnifiedPerformance(30, now.getTime()));
+    const scoreboard: any = await import("./marketing-breakeven-service").then((m) => m.getBreakevenScoreboard(db, now.getTime())).catch(() => null);
+    const mer = scoreboard?.current?.merEstimate ?? null;
+    const breakeven = scoreboard?.breakeven ?? 5;
     report.financials = {
       cashOnHand: runway?.data?.scenarioInputs?.realistic?.cashOnHand ?? null,
       runwayDaysRealistic: runway?.data?.forecast?.realisticDays ?? null,
       runwayStatus: runway?.data?.forecast?.status ?? runway?.error ?? null,
       adSpend30d: perf?.totalAdSpend ?? null,
       revenue30d: perf?.totalRevenue ?? null,
-      blendedRoas: perf?.blendedRoas ?? null,
+      blendedRoas: perf?.blendedRoas ?? null,   // media ROAS (ads only) — kept for back-compat
+      mediaRoas: perf?.blendedRoas ?? null,
+      blendedMer: mer,                          // the breakeven number (net sales / QB marketing)
+      breakeven,
       dataGaps: (perf?.dataGaps ?? []).length,
     };
-    if (perf?.blendedRoas != null && perf.totalAdSpend > 1000 && perf.blendedRoas < 5) {
-      anomalies.push(`Blended ROAS ${Number(perf.blendedRoas).toFixed(1)}x is below the 5x escalate line — route to budget review.`);
+    // Judge the BREAKEVEN MER, not the media ROAS. Media ROAS (~7x) sits above 5x while
+    // the true blended MER (~4x) is below it — the old check stayed silent on a real loss.
+    if (mer != null && perf?.totalAdSpend > 1000 && mer < breakeven) {
+      anomalies.push(`Blended MER ${Number(mer).toFixed(1)}x is below the ${breakeven}x breakeven — marketing is under the P&L break-even line; route to budget review.`);
     }
   } catch (e: any) {
     anomalies.push(`financials snapshot failed: ${e?.message ?? e}`);

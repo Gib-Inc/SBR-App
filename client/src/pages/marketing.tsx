@@ -1514,10 +1514,9 @@ function RoasGuardianTab() {
             </table>
           )}
           <p className="text-xs italic text-muted-foreground mt-3">
-            Pixel ROAS uses each platform&apos;s own attribution (directional, not P&amp;L). Amazon spend is live from Windsor.
-            Google&apos;s tracked spend here can over-count from a known sync-duplication issue in the raw feed, so trust the
-            Breakeven Scoreboard (Marketing Analytics) for authoritative spend and the blended MER. Meta is from your
-            uploaded CSV, never Windsor.
+            Spend is the reconciled Windsor figure (matches the Breakeven Scoreboard). Pixel ROAS uses each platform&apos;s
+            own attribution and is directional: Amazon is clean; Google&apos;s attributed revenue can be overstated; Meta&apos;s
+            comes from your uploaded CSV (shows 0 until it&apos;s refreshed). For the blended P&amp;L truth, use the Breakeven Scoreboard.
           </p>
         </CardContent>
       </Card>

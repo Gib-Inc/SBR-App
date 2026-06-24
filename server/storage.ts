@@ -8659,19 +8659,44 @@ export class PostgresStorage implements IStorage {
   async getRoasByPlatform(params?: { from?: string; to?: string }): Promise<any[]> {
     const from = params?.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
     const to   = params?.to   ?? new Date().toISOString().slice(0, 10);
+    // Ad spend = marketing_spend_snapshots (deduped/reconciled — the authoritative source the
+    // Breakeven Scoreboard uses). ad_metrics_daily under-reports AND double-counts (two ingestion
+    // paths + grain/sentinel duplication), so it's used ONLY for the platform's directional
+    // attributed revenue. Meta attributed revenue comes from the uploaded CSV, never Windsor.
     const rows = await this.db.execute(drizzleSql`
-      SELECT
-        platform,
-        SUM(ad_spend)::float       AS total_spend,
-        SUM(pixel_revenue)::float  AS pixel_revenue,
-        CASE
-          WHEN SUM(ad_spend) > 0 THEN SUM(pixel_revenue)::float / SUM(ad_spend)::float
-          ELSE 0
-        END AS pixel_roas
-      FROM v_roas_guardian_by_platform
-      WHERE date >= ${from}::date AND date <= ${to}::date
-      GROUP BY platform
-      ORDER BY total_spend DESC
+      WITH spend AS (
+        SELECT upper(platform) AS platform,
+               (array_agg(spend ORDER BY period_end DESC NULLS LAST))[1]::float AS total_spend
+        FROM marketing_spend_snapshots
+        WHERE COALESCE(superseded,false) = false
+          AND COALESCE(period_end, period_start) >= ${from}::date
+        GROUP BY upper(platform)
+      ),
+      rev AS (
+        SELECT CASE WHEN upper(platform) LIKE '%AMAZON%' THEN 'AMAZON'
+                    WHEN upper(platform) LIKE '%GOOGLE%' THEN 'GOOGLE' END AS platform,
+               SUM(revenue)::float AS pixel_revenue
+        FROM ad_metrics_daily
+        WHERE date >= ${from}::date AND date <= ${to}::date
+          AND (upper(platform) LIKE '%AMAZON%' OR upper(platform) LIKE '%GOOGLE%')
+        GROUP BY 1
+      ),
+      meta_rev AS (
+        SELECT 'META'::text AS platform, SUM(conversion_value)::float AS pixel_revenue
+        FROM meta_ads_performance
+        WHERE date >= ${from}::date AND date <= ${to}::date
+      )
+      SELECT s.platform,
+             s.total_spend AS total_spend,
+             COALESCE(r.pixel_revenue, mr.pixel_revenue, 0)::float AS pixel_revenue,
+             CASE WHEN s.total_spend > 0
+                  THEN COALESCE(r.pixel_revenue, mr.pixel_revenue, 0)::float / s.total_spend
+                  ELSE 0 END AS pixel_roas
+      FROM spend s
+      LEFT JOIN rev r ON r.platform = s.platform
+      LEFT JOIN meta_rev mr ON mr.platform = s.platform
+      WHERE s.total_spend > 0
+      ORDER BY s.total_spend DESC
     `);
     return (rows as any).rows ?? (rows as any);
   }

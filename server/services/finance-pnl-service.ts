@@ -116,6 +116,29 @@ export async function getBudgetScorecard(db: DB, monthsBack = 6, basisMonths = 3
     catMap.set(it.account, cur);
   }
 
+  // Reclassify owner compensation out of the accounts it hides in (consistent with the forward
+  // projection): "Lucid Earth LLC" (Advertising & Marketing) + "Gamerzdojo Foundation"
+  // (Charitable Contributions) are the marketing manager's pay, not marketing/charity. Move them
+  // to an Owner Compensation line so the budget-vs-actual on those lines is honest.
+  const OWNER_COMP = "Owner Compensation (Zo)";
+  const reclass = rows(await db.execute(sql`
+    SELECT account_name AS account, round(sum(amount)::numeric, 2) AS amount
+    FROM qb_pl_detail
+    WHERE txn_date >= (date_trunc('month', now()) - (${basisMonths} || ' months')::interval)
+      AND txn_date <  date_trunc('month', now())
+      AND (vendor_or_payee ILIKE '%lucid%' OR vendor_or_payee ILIKE '%gamerz%' OR vendor_or_payee ILIKE '%dojo%')
+    GROUP BY 1`)) as Array<{ account: string; amount: any }>;
+  let ownerComp = 0;
+  for (const rc of reclass) {
+    const amt = num(rc.amount);
+    if (amt === 0) continue;
+    const cur = catMap.get(rc.account);
+    if (cur) cur.amount = r2(cur.amount - amt);   // pull comp out of A&M / Charitable
+    ownerComp += amt;
+  }
+  if (ownerComp > 0.5) catMap.set(OWNER_COMP, { amount: r2(ownerComp), group: "expense" });
+  for (const [k, v] of Array.from(catMap.entries())) if (Math.abs(v.amount) < 0.5) catMap.delete(k);
+
   const targets = rows(await db.execute(sql`SELECT account_name, target_pct, sort_order, COALESCE(status,'open') AS status, note FROM budget_targets`)) as Array<{ account_name: string; target_pct: any; sort_order: any; status: any; note: any }>;
   const targetMap = new Map(targets.map((t) => [t.account_name, { pct: num(t.target_pct), sort: num(t.sort_order), status: (t.status || "open") as BudgetStatus, note: t.note ?? null }]));
 

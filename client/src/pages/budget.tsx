@@ -42,6 +42,7 @@ export default function Budget() {
   const vendorsView = useQuery<VendorResp>({ queryKey: ["/api/finances/top-vendors"] });
   const [expanded, setExpanded] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [selectedCuts, setSelectedCuts] = useState<Set<string>>(new Set());
 
   const vendors = useQuery<{ vendors: Vendor[] }>({
     queryKey: ["/api/finances/category-vendors", expanded],
@@ -113,19 +114,46 @@ export default function Budget() {
           </CardHeader>
           <CardContent>
             <div className="space-y-1">
-              {data.opportunities.map((o, i) => (
-                <div key={o.category} className="px-2 py-1.5 rounded hover-elevate text-sm" data-testid={`opp-${o.category}`}>
-                  <div className="flex items-center gap-3">
-                    <span className="w-5 text-xs text-muted-foreground text-right">{i + 1}</span>
-                    <span className="flex-1 min-w-0 truncate flex items-center gap-1.5">{o.category}<StatusBadge status={o.status} /></span>
-                    <span className="w-24 text-right text-xs text-muted-foreground hidden sm:inline">{o.currentPct != null ? `${o.currentPct}%` : "—"} → {o.targetPct != null ? `${o.targetPct}%` : "—"}</span>
-                    <span className="w-24 text-right tabular-nums font-semibold text-green-600 dark:text-green-400">{money(o.annualOver)}/yr</span>
+              {data.opportunities.map((o, i) => {
+                const sel = selectedCuts.has(o.category);
+                return (
+                  <div key={o.category} className={`px-2 py-1.5 rounded text-sm ${sel ? "bg-green-50 dark:bg-green-950/20" : "hover-elevate"}`} data-testid={`opp-${o.category}`}>
+                    <div className="flex items-center gap-3">
+                      <input type="checkbox" checked={sel} onChange={() => setSelectedCuts((prev) => { const n = new Set(prev); if (n.has(o.category)) n.delete(o.category); else n.add(o.category); return n; })} className="h-3.5 w-3.5 shrink-0 accent-green-600" data-testid={`cut-${o.category}`} />
+                      <span className="w-4 text-xs text-muted-foreground text-right">{i + 1}</span>
+                      <span className="flex-1 min-w-0 truncate flex items-center gap-1.5">{o.category}<StatusBadge status={o.status} /></span>
+                      <span className="w-24 text-right text-xs text-muted-foreground hidden sm:inline">{o.currentPct != null ? `${o.currentPct}%` : "—"} → {o.targetPct != null ? `${o.targetPct}%` : "—"}</span>
+                      <span className="w-24 text-right tabular-nums font-semibold text-green-600 dark:text-green-400">{money(o.annualOver)}/yr</span>
+                    </div>
+                    {o.note && <div className="pl-9 text-[11px] text-muted-foreground">{o.note}</div>}
                   </div>
-                  {o.note && <div className="pl-8 text-[11px] text-muted-foreground">{o.note}</div>}
-                </div>
-              ))}
+                );
+              })}
             </div>
-            <p className="text-[11px] text-muted-foreground pt-2">Green badges are open cuts you can take now. Blue are already being worked (marketing restart, contract-labor cuts, loan refi). The loss closes through the stack — the open cuts plus marketing reaching its target.</p>
+
+            {/* Cut simulator — live impact of the selected cuts on the annual loss */}
+            {selectedCuts.size > 0 && (() => {
+              const selectedSavings = data.opportunities.filter((o) => selectedCuts.has(o.category)).reduce((sum, o) => sum + o.annualOver, 0);
+              const projected = s.annualizedNetIncome + selectedSavings;
+              const loss = -s.annualizedNetIncome;
+              const pctClosed = loss > 0 ? Math.min(100, (selectedSavings / loss) * 100) : null;
+              return (
+                <div className="mt-3 rounded-lg border-2 border-green-300 bg-green-50 p-3 dark:border-green-900/40 dark:bg-green-950/20">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium flex items-center gap-2"><Scissors className="h-4 w-4" /> Cut simulator — {selectedCuts.size} selected</div>
+                    <button className="text-[11px] text-muted-foreground underline" onClick={() => setSelectedCuts(new Set())}>clear</button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mt-2 text-sm">
+                    <div><div className="text-[11px] text-muted-foreground">Annual savings</div><div className="font-bold text-green-700 dark:text-green-400">{money(selectedSavings)}</div></div>
+                    <div><div className="text-[11px] text-muted-foreground">Net income becomes</div><div className={`font-bold ${projected < 0 ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>{money(projected)}/yr</div></div>
+                    <div><div className="text-[11px] text-muted-foreground">Loss closed</div><div className="font-bold">{pctClosed != null ? `${Math.round(pctClosed)}%` : "—"}{projected >= 0 && loss > 0 && " · breakeven"}</div></div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1.5">{projected >= 0 ? "These cuts get SBR to breakeven on an annualized basis." : `Still ${money(-projected)}/yr short of breakeven — select more cuts or grow revenue.`}</p>
+                </div>
+              );
+            })()}
+
+            <p className="text-[11px] text-muted-foreground pt-2">Check the cuts you'd make to model the impact. Green badges are open cuts you can take now; blue are already in progress (marketing restart, contract-labor cuts, loan refi).</p>
           </CardContent>
         </Card>
       )}

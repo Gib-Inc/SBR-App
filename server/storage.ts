@@ -8645,10 +8645,55 @@ export class PostgresStorage implements IStorage {
     const start = params?.startDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
     const end   = params?.endDate   ?? new Date().toISOString().slice(0, 10);
     const channel = params?.channel;
-    const rows = channel
-      ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
-      : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions, gross_profit::float AS gross_profit, net_profit::float AS net_profit, gross_roas::float AS gross_roas, net_roas::float AS net_roas FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
-    return (rows as any).rows ?? (rows as any);
+    const res = channel
+      ? await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date AND channel = ${channel} ORDER BY date DESC, revenue DESC`)
+      : await this.db.execute(drizzleSql`SELECT sku, channel, date::text AS date, revenue::float AS revenue, cogs::float AS cogs, units, ad_spend::float AS ad_spend, clicks, conversions FROM v_roas_guardian_by_channel WHERE date >= ${start}::date AND date <= ${end}::date ORDER BY date DESC, revenue DESC`);
+    const rows = (((res as any).rows ?? res) as any[]) || [];
+
+    // Reconcile ad spend to the authoritative snapshot totals. The per-SKU rows carry the
+    // relative SHAPE but unreliable absolute spend (ad_metrics_daily is multi-source); scale
+    // each channel's spend so it sums to the deduped marketing_spend_snapshots total
+    // (amazon = Amazon; shopify = Google + Meta). Same allocateBreakdownToTotal pattern the
+    // per-SKU margin table uses. Window assumes the default trailing ~30d.
+    const snapRes = await this.db.execute(drizzleSql`
+      SELECT upper(platform) AS platform,
+             (array_agg(spend ORDER BY period_end DESC NULLS LAST))[1]::float AS total_spend
+      FROM marketing_spend_snapshots
+      WHERE COALESCE(superseded,false) = false
+        AND COALESCE(period_end, period_start) >= ${start}::date
+      GROUP BY upper(platform)`);
+    const snaps = (((snapRes as any).rows ?? snapRes) as Array<{ platform: string; total_spend: number }>) || [];
+    const channelTotal: Record<string, number> = {};
+    for (const s of snaps) {
+      const sp = Number(s.total_spend) || 0;
+      if (s.platform === "AMAZON") channelTotal.amazon = (channelTotal.amazon ?? 0) + sp;
+      else if (s.platform === "GOOGLE" || s.platform === "META") channelTotal.shopify = (channelTotal.shopify ?? 0) + sp;
+    }
+
+    const { allocateBreakdownToTotal } = await import("./services/corrected-ad-spend");
+    const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+    const groups = new Map<string, any[]>();
+    for (const r of rows) { const arr = groups.get(r.channel) ?? []; arr.push(r); groups.set(r.channel, arr); }
+    const out: any[] = [];
+    for (const [ch, items] of Array.from(groups.entries())) {
+      const target = ch in channelTotal ? channelTotal[ch] : null;
+      const scaled = allocateBreakdownToTotal(items.map((it) => ({ ...it, spend: Number(it.ad_spend) || 0 })), target);
+      for (const s of scaled) {
+        const adSpend = round2(s.spend);
+        const grossProfit = round2((Number(s.revenue) || 0) - (Number(s.cogs) || 0));
+        const netProfit = round2(grossProfit - adSpend);
+        out.push({
+          sku: s.sku, channel: s.channel, date: s.date,
+          revenue: Number(s.revenue) || 0, cogs: Number(s.cogs) || 0, units: s.units,
+          ad_spend: adSpend, clicks: s.clicks, conversions: s.conversions,
+          gross_profit: grossProfit, net_profit: netProfit,
+          gross_roas: adSpend > 0 ? round2((Number(s.revenue) || 0) / adSpend) : null,
+          net_roas: adSpend > 0 ? round2(grossProfit / adSpend) : null,
+          allocated: s.allocated,
+        });
+      }
+    }
+    return out;
   }
 
   // Per-ad-platform rollup. Hits the v_roas_guardian_by_platform view that

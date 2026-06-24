@@ -38,7 +38,7 @@ export function ChannelMixView({ days }: { days: number }) {
           <div className="text-2xl font-semibold text-green-600">{fmt(data.totalRevenue)}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4 pb-3">
-          <div className="text-xs text-muted-foreground mb-1">Blended ROAS</div>
+          <div className="text-xs text-muted-foreground mb-1">Media ROAS (attributed)</div>
           <div className="text-2xl font-semibold text-violet-600">{data.blendedRoas ? `${data.blendedRoas.toFixed(1)}x` : 'N/A'}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4 pb-3">

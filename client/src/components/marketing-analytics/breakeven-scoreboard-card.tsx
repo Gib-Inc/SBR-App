@@ -56,7 +56,7 @@ export function BreakevenScoreboardCard() {
         {/* Headline: MER vs breakeven, media ROAS beside it */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className={`rounded-xl border-2 p-3 ${merBelow ? "border-red-300 bg-red-50 dark:border-red-900/40 dark:bg-red-950/20" : "border-green-300 bg-green-50 dark:border-green-900/40 dark:bg-green-950/20"}`}>
-            <div className="text-xs text-muted-foreground">MER — revenue ÷ all marketing</div>
+            <div className="text-xs text-muted-foreground">MER — net sales ÷ all marketing</div>
             <div className={`text-2xl font-bold mt-1 ${merBelow ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
               {c.merEstimate != null ? `${c.merEstimate.toFixed(2)}×` : "—"}
             </div>
@@ -70,32 +70,40 @@ export function BreakevenScoreboardCard() {
             <div className="text-[11px] text-muted-foreground">excludes agency fee — flatters MER</div>
           </div>
           <div className="rounded-xl border p-3">
-            <div className="text-xs text-muted-foreground">Settled revenue · {c.windowDays}d</div>
+            <div className="text-xs text-muted-foreground">Net settled sales · {c.windowDays}d</div>
             <div className="text-2xl font-bold mt-1">{k(c.revenue)}</div>
-            <div className="text-[11px] text-muted-foreground">real orders (Shopify + Amazon)</div>
+            <div className="text-[11px] text-muted-foreground">net of refunds (Shopify + Amazon)</div>
           </div>
         </div>
 
         {/* Spend reconciliation — WHY the numbers differ */}
         <div className="rounded-lg border bg-muted/30 p-3">
           <div className="text-xs font-medium text-muted-foreground mb-1.5">Where your marketing cost actually is</div>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="rounded bg-background border px-2 py-1"><span className="text-muted-foreground">Tracker-reported media</span> <span className="font-semibold">{k(c.mediaSpend)}</span></span>
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="rounded bg-amber-50 border border-amber-200 px-2 py-1 dark:bg-amber-950/30 dark:border-amber-900/40"><span className="text-muted-foreground">+ under-reported &amp; other</span> <span className="font-semibold text-amber-700 dark:text-amber-300">{c.agencyGap != null ? k(c.agencyGap) : "—"}</span></span>
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="rounded bg-background border px-2 py-1"><span className="text-muted-foreground">= QuickBooks total</span> <span className="font-semibold">{c.qbRunRate != null ? k(c.qbRunRate) : "—"}</span></span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1.5">
-            The tracker shows only {k(c.mediaSpend)}, but QuickBooks books {c.qbRunRate != null ? k(c.qbRunRate) : "more"}. The gap is mostly ad spend the connector under-reports (Windsor misses roughly half), plus the small Carpe Diem fee (~$1.8K) and other marketing. MER divides by the full QuickBooks cost — that's the honest denominator, and why it&apos;s lower than the tracker-only ROAS.
-            {c.qbPending && " The current month isn't closed in QuickBooks yet, so MER uses your last verified month as the run-rate."}
-          </p>
+          {c.agencyGap != null && c.agencyGap >= 0 ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="rounded bg-background border px-2 py-1"><span className="text-muted-foreground">Tracker-reported media</span> <span className="font-semibold">{k(c.mediaSpend)}</span></span>
+                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="rounded bg-amber-50 border border-amber-200 px-2 py-1 dark:bg-amber-950/30 dark:border-amber-900/40"><span className="text-muted-foreground">+ under-reported &amp; other</span> <span className="font-semibold text-amber-700 dark:text-amber-300">{k(c.agencyGap)}</span></span>
+                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="rounded bg-background border px-2 py-1"><span className="text-muted-foreground">= QuickBooks total</span> <span className="font-semibold">{c.qbRunRate != null ? k(c.qbRunRate) : "—"}</span></span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                The tracker reports {k(c.mediaSpend)} of media, but QuickBooks books {c.qbRunRate != null ? k(c.qbRunRate) : "more"}. The {k(c.agencyGap)} gap is ad spend the connector under-reports plus the Carpe Diem fee (~$1.8K) and other marketing. MER divides by the full QuickBooks cost — the honest denominator, and why it sits below the tracker-only media ROAS.
+                {c.qbPending && " The current month isn't closed in QuickBooks yet, so MER uses your last verified month as the run-rate."}
+              </p>
+            </>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Tracker-reported media ({k(c.mediaSpend)}) currently exceeds the last booked QuickBooks marketing month ({c.qbRunRate != null ? k(c.qbRunRate) : "—"}). MER uses the QuickBooks figure as the honest denominator; the current month reconciles once QuickBooks closes it.
+            </p>
+          )}
         </div>
 
         {/* Closed-month MER trend vs breakeven */}
         <div>
           <div className="flex items-center justify-between mb-1">
-            <div className="text-xs font-medium text-muted-foreground">MER by month (QuickBooks-verified) vs {be}× breakeven</div>
+            <div className="text-xs font-medium text-muted-foreground">MER by month — net sales ÷ QB marketing, vs {be}× breakeven</div>
             {data.monthsBelowBreakeven > 0 && (
               <span className="inline-flex items-center gap-1 text-[11px] text-red-600 dark:text-red-400">
                 <AlertTriangle className="h-3 w-3" /> {data.monthsBelowBreakeven} of {data.monthly.length} months below breakeven

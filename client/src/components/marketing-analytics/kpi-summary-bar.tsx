@@ -21,7 +21,7 @@ export function KPISummaryBar() {
   const kpis = [
     { label: 'Ad Spend (30d)', value: fmt(data?.mtd_spend ?? null), icon: DollarSign, color: 'text-red-600' },
     { label: 'Revenue (30d)', value: fmt(data?.mtd_revenue ?? null), icon: TrendingUp, color: 'text-green-600' },
-    { label: 'Blended ROAS', value: data?.blended_roas ? `${data.blended_roas.toFixed(1)}x` : 'N/A', icon: Target, color: 'text-violet-600' },
+    { label: 'Media ROAS (ads)', value: data?.blended_roas ? `${data.blended_roas.toFixed(1)}x` : 'N/A', icon: Target, color: 'text-violet-600' },
     { label: 'Orders (30d)', value: data?.total_conversions?.toLocaleString() ?? '0', icon: Users, color: 'text-blue-600' },
     { label: 'Cost / Order', value: data?.avg_cpa ? `$${data.avg_cpa.toFixed(2)}` : 'N/A', icon: DollarSign, color: 'text-amber-600' },
   ];

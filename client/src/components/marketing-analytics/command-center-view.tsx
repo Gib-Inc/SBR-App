@@ -252,7 +252,7 @@ function AdSpendByChannelCard({ days }: { days: number }) {
                 <div className="text-lg font-bold">{totalRevenue != null ? fmt(totalRevenue) : '—'}</div>
               </div>
               <div className="text-right">
-                <div className="text-xs text-muted-foreground">Blended ROAS</div>
+                <div className="text-xs text-muted-foreground">Media ROAS (ads only)</div>
                 <div className={`text-lg font-bold ${blendedRoas != null && blendedRoas >= 1 ? 'text-green-600' : 'text-foreground'}`}>
                   {blendedRoas != null ? `${blendedRoas.toFixed(1)}x` : 'N/A'}
                 </div>

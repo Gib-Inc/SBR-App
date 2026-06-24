@@ -5,7 +5,8 @@
  * spend source, and attribution. This anchors on the P&L truth so there's a single
  * answer to "are we at the 5x breakeven?":
  *
- *   • Revenue   = SETTLED orders (daily_sales_snapshots), never platform-attributed.
+ *   • Revenue   = SETTLED NET sales (net_revenue / QB total_income = gross − discounts −
+ *                 returns), never platform-attributed and never gross.
  *   • Marketing = QuickBooks "Advertising & Marketing" for CLOSED months (audited,
  *                 includes the Carpe Diem/CDUK agency fee + everything). The current
  *                 open month isn't booked yet, so it's shown with platform-tracked
@@ -81,12 +82,14 @@ export function merStatus(mer: number | null, breakeven = BREAKEVEN_MER): { vs: 
 export async function getBreakevenScoreboard(db: DB, nowMs: number): Promise<BreakevenScoreboard> {
   // 1) Closed-month MER from QuickBooks (the audited truth).
   const qb = rows(await db.execute(sql`
-    SELECT year, month, revenue, ad_spend, net_income
+    SELECT year, month, revenue, total_income, ad_spend, net_income
     FROM historical_monthly_sales
     ORDER BY year, month`)) as any[];
   const monthly: MerMonth[] = qb.slice(-14).map((m) => {
     const month = `${m.year}-${MON[(num(m.month) || 1) - 1]}`;
-    const revenue = r2(num(m.revenue));
+    // NET settled sales (gross − discounts − returns). total_income is the QB net; fall
+    // back to the gross `revenue` column only for older rows that predate the net field.
+    const revenue = r2(num(m.total_income != null ? m.total_income : m.revenue));
     const marketing = r2(num(m.ad_spend));
     const mer = marketing > 0 ? r2(revenue / marketing) : null;
     const st = merStatus(mer);
@@ -98,16 +101,20 @@ export async function getBreakevenScoreboard(db: DB, nowMs: number): Promise<Bre
   // 2) Current trailing-30d settled revenue (real orders, not platform-attributed).
   const windowDays = 30;
   const revRow = rows(await db.execute(sql`
-    SELECT round(sum(total_revenue)::numeric, 0) AS revenue
+    SELECT round(sum(COALESCE(net_revenue, total_revenue))::numeric, 0) AS revenue
     FROM daily_sales_snapshots
     WHERE date >= (timezone('America/Denver', to_timestamp(${Math.floor(nowMs / 1000)}))::date - ${windowDays})`))[0];
   const revenue = r2(num(revRow?.revenue));
 
   // 3) Current platform-tracked media spend (collapse overlapping windows per platform).
+  // Bound to the trailing window: Windsor writes a fresh rolling-window snapshot daily, so
+  // without this filter stale monthly snapshots pile on and inflate spend (multi-month, not 30d).
   const snaps = rows(await db.execute(sql`
     SELECT platform, to_char(period_start,'YYYY-MM-DD') AS "periodStart", to_char(period_end,'YYYY-MM-DD') AS "periodEnd", spend
     FROM marketing_spend_snapshots
-    WHERE COALESCE(superseded,false) = false AND COALESCE(period_end, period_start) IS NOT NULL`)) as any[];
+    WHERE COALESCE(superseded,false) = false
+      AND COALESCE(period_end, period_start) IS NOT NULL
+      AND COALESCE(period_end, period_start) >= (timezone('America/Denver', to_timestamp(${Math.floor(nowMs / 1000)}))::date - ${windowDays})`)) as any[];
   const byPlatform = new Map<string, any[]>();
   for (const s of snaps) { const a = byPlatform.get(s.platform) ?? []; a.push(s); byPlatform.set(s.platform, a); }
   let mediaSpend = 0;

@@ -1273,7 +1273,19 @@ function RoasGuardianTab() {
     );
   }, [rows]);
 
-  const netRoas = totals.ad_spend > 0 ? totals.net_profit / totals.ad_spend : 0;
+  // Blend ONLY over sales where ad spend is actually tracked. Amazon ad spend isn't synced
+  // into ad_metrics_daily, so including its (near-organic) revenue would divide all-channel
+  // profit by Shopify-only spend and massively inflate the ratio (the old "$580K / 237x" bug).
+  const tracked = rows.reduce(
+    (acc, r) => {
+      if ((Number(r.ad_spend) || 0) <= 0) return acc;
+      acc.net_profit += Number(r.net_profit) || 0;
+      acc.ad_spend += Number(r.ad_spend) || 0;
+      return acc;
+    },
+    { net_profit: 0, ad_spend: 0 }
+  );
+  const netRoas = tracked.ad_spend > 0 ? tracked.net_profit / tracked.ad_spend : 0;
 
   const byChannel = useMemo(() => {
     const map = new Map<string, { revenue: number; ad_spend: number; net_profit: number }>();
@@ -1307,6 +1319,11 @@ function RoasGuardianTab() {
       .map(([sku, v]) => ({ sku, ...v, net_roas: v.ad_spend > 0 ? v.net_profit / v.ad_spend : 0 }))
       .sort((a, b) => b.revenue - a.revenue);
   }, [rows]);
+
+  // Channels with real settled revenue but no synced ad spend (Amazon today) — excluded
+  // from the blended Net ROAS so they don't inflate it; surfaced in a caveat instead.
+  const untrackedChannels = byChannel.filter((c) => c.ad_spend <= 0 && c.revenue > 0);
+  const untrackedRevenue = untrackedChannels.reduce((s, c) => s + c.revenue, 0);
 
   const fmt$ = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
   const fmtRoas = (n: number) => `${n.toFixed(2)}x`;
@@ -1394,16 +1411,24 @@ function RoasGuardianTab() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription>Net ROAS</CardDescription>
+            <CardDescription>Net ROAS · ad-tracked sales</CardDescription>
             <CardTitle className="text-2xl">
               {fmtRoas(netRoas)}{" "}
               <Badge variant={netRoas >= 3 ? "default" : "destructive"}>
                 {netRoas >= 3 ? "Healthy" : "Watch"}
               </Badge>
             </CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-1">net profit ÷ tracked ad spend, channels with synced spend only</p>
           </CardHeader>
         </Card>
       </div>
+
+      {untrackedChannels.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-900/40 dark:bg-amber-950/20">
+          <span className="font-medium text-amber-800 dark:text-amber-300">Heads up:</span>{" "}
+          {untrackedChannels.map((c) => c.channel).join(", ")} {untrackedChannels.length === 1 ? "has" : "have"} {fmt$(untrackedRevenue)} of settled revenue but no synced ad spend, so {untrackedChannels.length === 1 ? "it is" : "they are"} excluded from the blended Net ROAS above — otherwise that revenue would divide by Shopify-only spend and overstate the ratio. For the true blended number across all marketing cost, use the Breakeven Scoreboard (MER) on Marketing Analytics.
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -1428,7 +1453,9 @@ function RoasGuardianTab() {
                   <td className="py-2 text-right">{fmt$(c.ad_spend)}</td>
                   <td className="py-2 text-right">{fmt$(c.net_profit)}</td>
                   <td className="py-2 text-right">
-                    <Badge variant={c.net_roas >= 3 ? "default" : "destructive"}>{fmtRoas(c.net_roas)}</Badge>
+                    {c.ad_spend > 0
+                      ? <Badge variant={c.net_roas >= 3 ? "default" : "destructive"}>{fmtRoas(c.net_roas)}</Badge>
+                      : <span className="text-xs text-muted-foreground">spend not synced</span>}
                   </td>
                 </tr>
               ))}
@@ -1518,7 +1545,9 @@ function RoasGuardianTab() {
                   <td className="py-2 text-right">{fmt$(s.ad_spend)}</td>
                   <td className="py-2 text-right">{fmt$(s.net_profit)}</td>
                   <td className="py-2 text-right">
-                    <Badge variant={s.net_roas >= 3 ? "default" : "destructive"}>{fmtRoas(s.net_roas)}</Badge>
+                    {s.ad_spend > 0
+                      ? <Badge variant={s.net_roas >= 3 ? "default" : "destructive"}>{fmtRoas(s.net_roas)}</Badge>
+                      : <span className="text-xs text-muted-foreground">—</span>}
                   </td>
                 </tr>
               ))}

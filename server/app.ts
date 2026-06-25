@@ -211,6 +211,45 @@ app.get('/api/version', async (_req, res) => {
   });
 });
 
+// TEMP diagnostic: sample heap allocations for N seconds to locate the leak's hot spot.
+// Returns the top allocating call frames (function + bundled location, sizes only — no
+// user data). Remove once the leak is found.
+app.get('/api/debug/allocprofile', async (req, res) => {
+  const seconds = Math.min(Math.max(parseInt(String((req.query as any).seconds ?? '45'), 10) || 45, 5), 120);
+  try {
+    const { Session } = await import('node:inspector');
+    const session: any = new Session();
+    session.connect();
+    const post = (method: string, params?: any) => new Promise<any>((resolve, reject) =>
+      session.post(method, params ?? {}, (err: any, result: any) => (err ? reject(err) : resolve(result))));
+    await post('HeapProfiler.enable');
+    await post('HeapProfiler.startSampling', { samplingInterval: 65536 });
+    await new Promise((r) => setTimeout(r, seconds * 1000));
+    const { profile } = await post('HeapProfiler.stopSampling');
+    session.disconnect();
+    const agg = new Map<string, { bytes: number; fn: string; loc: string }>();
+    const walk = (node: any) => {
+      const cf = node.callFrame || {};
+      const fn = cf.functionName || '(anonymous)';
+      const loc = `${String(cf.url || '?').replace(/^file:\/\//, '')}:${cf.lineNumber ?? '?'}`;
+      const key = `${fn}@${loc}`;
+      const cur = agg.get(key) || { bytes: 0, fn, loc };
+      cur.bytes += node.selfSize || 0;
+      agg.set(key, cur);
+      for (const c of node.children || []) walk(c);
+    };
+    walk(profile.head);
+    const top = Array.from(agg.values())
+      .filter((x) => x.bytes > 0)
+      .sort((a, b) => b.bytes - a.bytes)
+      .slice(0, 30)
+      .map((x) => ({ kb: Math.round(x.bytes / 1024), fn: x.fn, loc: x.loc }));
+    res.status(200).json({ sampledSeconds: seconds, rssMB: Math.round(process.memoryUsage().rss / 1048576), top });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) });
+  }
+});
+
 // Intuit-compliant security headers middleware
 app.use(securityHeadersMiddleware);
 

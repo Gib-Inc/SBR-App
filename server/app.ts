@@ -190,6 +190,14 @@ app.get('/api/health', async (_req, res) => {
       heapTotal: Math.round(m.heapTotal / 1048576),
       external: Math.round(m.external / 1048576),
     },
+    activeResources: (() => {
+      try {
+        const list: string[] = (process as any).getActiveResourcesInfo?.() ?? [];
+        const counts: Record<string, number> = {};
+        for (const t of list) counts[t] = (counts[t] ?? 0) + 1;
+        return counts;
+      } catch { return null; }
+    })(),
   });
 });
 

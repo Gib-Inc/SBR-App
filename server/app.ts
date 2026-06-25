@@ -79,7 +79,7 @@ process.on("uncaughtException", (err: any) => {
 // climbs steadily and the OS eventually SIGKILLs it mid-request — silent, no
 // logs, hard downtime. Instead, watch RSS and exit cleanly above a safe ceiling
 // so Railway restarts us in ~1 min with a logged reason. Tune via MEM_RESTART_MB.
-const MEM_RESTART_MB = Number(process.env.MEM_RESTART_MB || 2600);
+const MEM_RESTART_MB = Number(process.env.MEM_RESTART_MB || 1900);
 const __memWatchdog = setInterval(() => {
   const rssMB = Math.round(process.memoryUsage().rss / 1048576);
   if (rssMB > MEM_RESTART_MB) {

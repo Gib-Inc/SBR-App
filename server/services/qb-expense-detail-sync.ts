@@ -160,6 +160,10 @@ export function startQbExpenseDetailBackfill(): void {
   };
 
   setTimeout(() => { void refresh(14, true); }, 45_000); // initial backfill after boot settles
-  const t = setInterval(() => { void refresh(12, false); }, 30 * 24 * 60 * 60 * 1000); // monthly
+  // CRITICAL: setInterval/setTimeout clamp any delay > TIMEOUT_MAX (2^31-1 ms ≈ 24.8 days)
+  // down to 1ms. 30*24*60*60*1000 = 2,592,000,000 ms exceeds that, so this "monthly" timer
+  // actually fired refresh() ~1000x/SECOND, overlapping QB syncs until the process OOM'd.
+  // Use a safe weekly interval (refresh is idempotent and bounded — ON CONFLICT DO NOTHING).
+  const t = setInterval(() => { void refresh(12, false); }, 7 * 24 * 60 * 60 * 1000); // weekly (safe: 604.8M ms < TIMEOUT_MAX)
   if (typeof (t as any)?.unref === "function") (t as any).unref();
 }

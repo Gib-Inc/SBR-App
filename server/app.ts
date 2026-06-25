@@ -75,6 +75,30 @@ process.on("uncaughtException", (err: any) => {
   })();
 });
 
+// Memory watchdog (stopgap while a memory leak is root-caused). The app's RSS
+// climbs steadily and the OS eventually SIGKILLs it mid-request — silent, no
+// logs, hard downtime. Instead, watch RSS and exit cleanly above a safe ceiling
+// so Railway restarts us in ~1 min with a logged reason. Tune via MEM_RESTART_MB.
+const MEM_RESTART_MB = Number(process.env.MEM_RESTART_MB || 2600);
+const __memWatchdog = setInterval(() => {
+  const rssMB = Math.round(process.memoryUsage().rss / 1048576);
+  if (rssMB > MEM_RESTART_MB) {
+    console.error(`[MemWatchdog] RSS ${rssMB}MB exceeded ${MEM_RESTART_MB}MB — exiting for a clean restart.`);
+    void (async () => {
+      try {
+        const { storage } = await import("./storage");
+        await storage.createSystemLog({
+          type: "SCHEDULER", severity: "ERROR", code: "MEM_RESTART",
+          message: `RSS ${rssMB}MB exceeded ${MEM_RESTART_MB}MB — clean restart`,
+          details: { rssMB, limitMB: MEM_RESTART_MB },
+        });
+      } catch { /* never block the restart on logging */ }
+      process.exit(1);
+    })();
+  }
+}, 30_000);
+if (typeof (__memWatchdog as any)?.unref === "function") (__memWatchdog as any).unref();
+
 const securityValidation = validateSecurityConfig();
 if (securityValidation.warnings.length > 0) {
   securityValidation.warnings.forEach(w => console.warn(`[Intuit Security] Warning: ${w}`));

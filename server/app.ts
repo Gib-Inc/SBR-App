@@ -154,11 +154,18 @@ async function resolveCommit(): Promise<string> {
 // Public health check endpoint for Railway deployment
 app.get('/api/health', async (_req, res) => {
   const commit = await resolveCommit();
+  const m = process.memoryUsage();
   res.status(200).json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     commit: commit.slice(0, 7),
     uptimeSeconds: Math.round(process.uptime()),
+    memoryMB: {
+      rss: Math.round(m.rss / 1048576),
+      heapUsed: Math.round(m.heapUsed / 1048576),
+      heapTotal: Math.round(m.heapTotal / 1048576),
+      external: Math.round(m.external / 1048576),
+    },
   });
 });
 

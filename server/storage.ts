@@ -176,6 +176,7 @@ import {
 import { randomUUID } from "crypto";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { attachPoolErrorHandler } from "./pool-error-handler";
 import { eq, and, count, isNull, isNotNull, gt, gte, lt, lte, desc, or, ilike, sql as drizzleSql, inArray, notInArray, not } from "drizzle-orm";
 import type { QbPlDetailRow } from "./services/qb-expense-detail-sync";
 import * as schema from "@shared/schema";
@@ -4475,6 +4476,7 @@ export class PostgresStorage implements IStorage {
 
   constructor(connectionString: string) {
     const pool = new pg.Pool({ connectionString });
+    attachPoolErrorHandler(pool, "storage");
     this.db = drizzle(pool, { schema });
   }
 

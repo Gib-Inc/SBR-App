@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import multer from 'multer';
 import { parse as csvParse } from 'csv-parse/sync';
 import * as schema from '@shared/schema';
+import { attachPoolErrorHandler } from '../pool-error-handler';
 import { storage } from '../storage';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -293,7 +294,9 @@ let cachedDb: ReturnType<typeof drizzle> | null = null;
 const getDb = () => {
   if (!cachedDb) {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
-    cachedDb = drizzle(new pg.Pool({ connectionString: process.env.DATABASE_URL }), { schema });
+    const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    attachPoolErrorHandler(pool, "cmo-analytics");
+    cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;
 };

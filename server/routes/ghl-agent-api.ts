@@ -3,6 +3,7 @@ import { z } from "zod";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
+import { attachPoolErrorHandler } from "../pool-error-handler";
 import { items, salesOrders, salesOrderLines, purchaseOrders, purchaseOrderLines, suppliers, supplierItems, returnItems, type Item, type SalesOrder, type SalesOrderLine, type Supplier } from "@shared/schema";
 import { eq, ilike, and, or, lt, desc } from "drizzle-orm";
 import { GoHighLevelClient } from "../services/gohighlevel-client";
@@ -20,6 +21,7 @@ const getDb = () => {
       throw new Error("DATABASE_URL is not set");
     }
     const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    attachPoolErrorHandler(pool, "ghl-agent");
     cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;

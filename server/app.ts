@@ -20,6 +20,7 @@ import {
   redactSensitiveData
 } from "./middleware/intuit-security";
 import { intuitSecurityConfig, validateSecurityConfig } from "./config/intuit-security";
+import { attachPoolErrorHandler } from "./pool-error-handler";
 
 const PgSession = connectPgSimple(session);
 
@@ -49,6 +50,31 @@ process.on("unhandledRejection", (reason: any) => {
   })();
 });
 
+// Last line of defense for a SYNCHRONOUS throw that escapes every try/catch.
+// The most important case is a pg Pool 'error' (a dropped idle DB connection)
+// on a pool with no listener, which Node would otherwise rethrow here and use
+// to kill the process. The per-pool handlers (attachPoolErrorHandler) handle
+// that case gracefully; this is the backstop so a missed one can never hard-down
+// the whole app. Log best-effort and keep serving.
+process.on("uncaughtException", (err: any) => {
+  const message = err?.message ?? String(err);
+  console.error("[Process] uncaughtException:", message, err?.stack ?? "");
+  void (async () => {
+    try {
+      const { storage } = await import("./storage");
+      await storage.createSystemLog({
+        type: "SCHEDULER",
+        severity: "ERROR",
+        code: "UNCAUGHT_EXCEPTION",
+        message: `uncaughtException: ${message}`,
+        details: { stack: err?.stack ?? null },
+      });
+    } catch {
+      // never crash inside the crash handler
+    }
+  })();
+});
+
 const securityValidation = validateSecurityConfig();
 if (securityValidation.warnings.length > 0) {
   securityValidation.warnings.forEach(w => console.warn(`[Intuit Security] Warning: ${w}`));
@@ -61,6 +87,7 @@ if (securityValidation.errors.length > 0) {
 const sessionPool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
+attachPoolErrorHandler(sessionPool, "session");
 
 declare module "express-session" {
   interface SessionData {

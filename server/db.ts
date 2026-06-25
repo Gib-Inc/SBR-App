@@ -1,6 +1,7 @@
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@shared/schema";
+import { attachPoolErrorHandler } from "./pool-error-handler";
 
 /**
  * Shared Drizzle instance for code paths that query the database directly
@@ -13,4 +14,5 @@ import * as schema from "@shared/schema";
  * anything reused; this exists so direct-query routes don't crash.
  */
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+attachPoolErrorHandler(pool, "shared-db");
 export const db = drizzle(pool, { schema });

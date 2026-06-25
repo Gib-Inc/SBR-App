@@ -26,6 +26,7 @@ import {
 } from "@shared/schema";
 import { eq, and, desc, sql as drizzleSql } from "drizzle-orm";
 import { logService } from "./log-service";
+import { attachPoolErrorHandler } from "../pool-error-handler";
 
 // Cached database connection for commerce attribution tables (reuses single connection)
 let cachedDb: ReturnType<typeof drizzle> | null = null;
@@ -35,6 +36,7 @@ const getDb = () => {
       throw new Error("DATABASE_URL is not set");
     }
     const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    attachPoolErrorHandler(pool, "commerce-attribution");
     cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;

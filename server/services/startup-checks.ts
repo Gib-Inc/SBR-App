@@ -691,6 +691,7 @@ export async function runStartupChecks(): Promise<void> {
   }
 
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  pool.on("error", (err: any) => console.error("[Pool:startup-checks] idle client error (handled):", err?.message ?? err));
   let client: pg.PoolClient | null = null;
   try {
     client = await pool.connect();

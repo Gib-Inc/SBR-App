@@ -13,6 +13,7 @@
 import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from '@shared/schema';
+import { attachPoolErrorHandler } from '../pool-error-handler';
 import { storage } from '../storage';
 import { GoHighLevelClient } from './gohighlevel-client';
 import {
@@ -24,7 +25,9 @@ let cachedDb: ReturnType<typeof drizzle> | null = null;
 function getDb() {
   if (!cachedDb) {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
-    cachedDb = drizzle(new pg.Pool({ connectionString: process.env.DATABASE_URL }), { schema });
+    const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    attachPoolErrorHandler(pool, "weekly-digest");
+    cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;
 }

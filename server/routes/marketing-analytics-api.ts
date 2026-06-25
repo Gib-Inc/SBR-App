@@ -7,6 +7,7 @@ import express, { type Request, type Response } from 'express';
 import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from '@shared/schema';
+import { attachPoolErrorHandler } from '../pool-error-handler';
 import { requireAuth } from '../middleware/auth';
 import {
   querySpendPacing,
@@ -22,6 +23,7 @@ const getDb = () => {
   if (!cachedDb) {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set');
     const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+    attachPoolErrorHandler(pool, "marketing-analytics");
     cachedDb = drizzle(pool, { schema });
   }
   return cachedDb;

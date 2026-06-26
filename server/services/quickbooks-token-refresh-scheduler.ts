@@ -240,9 +240,6 @@ export async function runTokenRefresh(): Promise<RefreshResult> {
     // Get all QuickBooks auth records that are connected AND have complete token data
     const allAuths = await storage.getAllQuickbooksAuths();
     const connectedAuths = allAuths.filter(auth => {
-      // Must be connected
-      if (!auth.isConnected) return false;
-      
       // Must have valid tokens and expiry timestamps - skip skeleton records
       if (!auth.accessToken || !auth.refreshToken) {
         console.log(`[QB Token Refresh] Skipping ${auth.companyName || auth.realmId}: missing tokens (incomplete auth record)`);
@@ -252,7 +249,18 @@ export async function runTokenRefresh(): Promise<RefreshResult> {
         console.log(`[QB Token Refresh] Skipping ${auth.companyName || auth.realmId}: missing expiry timestamps`);
         return false;
       }
-      
+      // Refresh if connected, OR if disconnected but the refresh token is still valid.
+      // The latter SELF-HEALS the deadlock where a missed refresh (e.g. during an outage)
+      // lets the access token expire and flips is_connected=false — after which this job
+      // would otherwise skip the account forever even though the refresh token is good.
+      // refreshTokensForAuth sets is_connected=true again on a successful refresh, and
+      // returns "manual reconnection required" if the refresh token is genuinely expired.
+      const refreshTokenValid = new Date(auth.refreshTokenExpiresAt) > new Date();
+      if (!auth.isConnected && !refreshTokenValid) {
+        console.log(`[QB Token Refresh] Skipping ${auth.companyName || auth.realmId}: disconnected and refresh token expired — needs manual reconnect`);
+        return false;
+      }
+
       return true;
     });
     

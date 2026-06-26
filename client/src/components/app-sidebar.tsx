@@ -24,6 +24,7 @@ const dashboardItems = [
   { title: "Reports",    url: "/",            icon: BarChart3  },
   { title: "Finances",   url: "/finances",    icon: DollarSign },
   { title: "Budget",     url: "/budget",      icon: Wallet     },
+  { title: "Cash Flow",  url: "/cash-flow",   icon: ListOrdered },
   { title: "Health",     url: "/health",      icon: Activity   },
   { title: "FinOps",     url: "/finops",      icon: Gauge      },
   { title: "Inventory",  url: "/inventory",   icon: Warehouse  },

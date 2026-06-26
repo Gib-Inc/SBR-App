@@ -23742,6 +23742,42 @@ Generate only the email body text, no subject line.`;
     }
   });
 
+  // Green Line L1 — operating expense as % of net sales, by month (creep monitor).
+  app.get("/api/finances/opex-creep", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeOpexCreep } = await import("./services/green-line-service");
+      res.json({ success: true, ...(await computeOpexCreep(db)) });
+    } catch (err: any) {
+      console.error("[Finances] opex-creep error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute opex creep" });
+    }
+  });
+
+  // Green Line L6 — spend-leak detector: vendors by share of opex + rising fast.
+  app.get("/api/finances/spend-leaks", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeSpendLeaks } = await import("./services/green-line-service");
+      res.json({ success: true, ...(await computeSpendLeaks(db)) });
+    } catch (err: any) {
+      console.error("[Finances] spend-leaks error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute spend leaks" });
+    }
+  });
+
+  // Green Line L4 — debt-avalanche planner: facilities ranked by true cost (MCA first).
+  app.get("/api/finances/debt-avalanche", requireAuth, async (_req: Request, res: Response) => {
+    try {
+      const { db } = await import("./db");
+      const { computeDebtAvalanche } = await import("./services/green-line-service");
+      res.json({ success: true, ...(await computeDebtAvalanche(db)) });
+    } catch (err: any) {
+      console.error("[Finances] debt-avalanche error:", err?.message ?? err);
+      res.status(500).json({ success: false, message: err?.message || "Failed to compute debt avalanche" });
+    }
+  });
+
   // COUNT.M — weekly reorder needs: per-component "needed this week" (velocity ×
   // BOM vs on-hand + on-order) plus the per-vendor grouping the digest sends.
   app.get("/api/reorder/needs", requireAuth, async (_req: Request, res: Response) => {

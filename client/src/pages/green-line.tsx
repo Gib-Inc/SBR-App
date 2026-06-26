@@ -92,6 +92,36 @@ export default function GreenLine() {
         <Tile label="Total debt" value={money(g?.totalDebt)} sub={`${money(g?.mcaBucket)} MCA`} tone={(g?.totalDebt ?? 0) > 0 ? "WARNING" : "HEALTHY"} />
       </div>
 
+      {/* What to pay first — the #1 turnaround lever, shown first */}
+      <Card className="border-2">
+        <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Layers className="h-4 w-4" /> What to pay first — debt payoff priority</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          {debt.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : debt.data && debt.data.facilities.length > 0 ? (<>
+            <p className="text-xs text-muted-foreground">Every spare dollar goes to <span className="font-medium text-foreground">#1</span> first, then down the list. Clear the MCA bucket before the SBA and bank loans: MCAs auto-debit daily, so each one retired immediately frees cash and lifts runway.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {debt.data.byBucket.map((b) => (
+                <div key={b.tier} className="rounded-md border p-2">
+                  <div className="text-[11px] text-muted-foreground">{b.bucket}</div>
+                  <div className="text-lg font-bold tabular-nums">{money(b.total)}</div>
+                  <div className="text-[11px] text-muted-foreground">{b.count} facilities</div>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-1">
+              {debt.data.facilities.map((f) => (
+                <div key={f.name} className="flex items-center gap-2 text-sm">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[11px] font-semibold shrink-0 tabular-nums">{f.payoffOrder}</span>
+                  <Badge className={`${TIER_CLASS[f.tier] ?? TIER_CLASS.tier3} text-[10px]`}>{f.tier}</Badge>
+                  <span className="flex-1 truncate">{f.name}</span>
+                  <span className="tabular-nums font-medium">{money(f.balance)}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground">Ranked by true cost (MCA &gt; bank loan &gt; card/LOC), then balance. Interest trend (6 mo): {debt.data.interestTrend.map((t) => money(t.interest)).join(" → ")}. Recommends a payoff order; it never moves money.</p>
+          </>) : <p className="text-sm text-muted-foreground">No active facilities found.</p>}
+        </CardContent>
+      </Card>
+
       {/* Net income trend */}
       {g?.netIncomeTrend && g.netIncomeTrend.length > 0 && (
         <Card>
@@ -125,35 +155,6 @@ export default function GreenLine() {
               ))}
             </ul>
             <div className="text-[11px] text-muted-foreground pt-1">MER basis: {money(gov.data.netRevenue30d)} net ÷ {money(gov.data.qbMarketing30d)} QB marketing (30d). September streak: {gov.data.septemberStreak} days &lt;8x. Ad data {gov.data.dataFresh ? "fresh" : "stale"}{gov.data.adDataLatest ? ` (${gov.data.adDataLatest})` : ""}.</div>
-          </>) : <p className="text-sm text-muted-foreground">Unavailable.</p>}
-        </CardContent>
-      </Card>
-
-      {/* Debt avalanche */}
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Layers className="h-4 w-4" /> Debt avalanche — pay highest true-cost first</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          {debt.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : debt.data ? (<>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              {debt.data.byBucket.map((b) => (
-                <div key={b.tier} className="rounded-md border p-2">
-                  <div className="text-[11px] text-muted-foreground">{b.bucket}</div>
-                  <div className="text-lg font-bold tabular-nums">{money(b.total)}</div>
-                  <div className="text-[11px] text-muted-foreground">{b.count} facilities</div>
-                </div>
-              ))}
-            </div>
-            <div className="space-y-1">
-              {debt.data.facilities.slice(0, 8).map((f) => (
-                <div key={f.name} className="flex items-center gap-2 text-sm">
-                  <span className="text-[11px] text-muted-foreground w-5 text-right">{f.payoffOrder}</span>
-                  <Badge className={`${TIER_CLASS[f.tier] ?? TIER_CLASS.tier3} text-[10px]`}>{f.tier}</Badge>
-                  <span className="flex-1 truncate">{f.name}</span>
-                  <span className="tabular-nums font-medium">{money(f.balance)}</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-[11px] text-muted-foreground">Retire the MCA / daily-debit bucket first. Each one paid stops a daily auto-debit and lifts runway. Interest trend: {debt.data.interestTrend.map((t) => money(t.interest)).join(" → ")}.</p>
           </>) : <p className="text-sm text-muted-foreground">Unavailable.</p>}
         </CardContent>
       </Card>
